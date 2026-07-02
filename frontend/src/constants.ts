@@ -1,0 +1,32 @@
+import type { ConnectionForm } from './types';
+
+export const API = 'http://localhost:8080/api';
+
+export const DB_TYPE_OPTIONS = [
+  { value: 'h2', label: 'H2', url: 'jdbc:h2:mem:testdb' },
+  { value: 'mysql', label: 'MySQL', url: 'jdbc:mysql://localhost:3306/demo' },
+  { value: 'postgresql', label: 'PostgreSQL', url: 'jdbc:postgresql://localhost:5432/demo' },
+  { value: 'oracle', label: 'Oracle', url: 'jdbc:oracle:thin:@//localhost:1521/ORCLPDB1' },
+  { value: 'sqlserver', label: 'SQL Server', url: 'jdbc:sqlserver://localhost:1433;databaseName=demo' },
+  { value: 'sqlite', label: 'SQLite', url: 'jdbc:sqlite:/tmp/demo.db' },
+  { value: 'mariadb', label: 'MariaDB', url: 'jdbc:mariadb://localhost:3306/demo' },
+  { value: 'clickhouse', label: 'ClickHouse', url: 'jdbc:clickhouse://localhost:8123/default' }
+];
+
+export const ENVIRONMENT_OPTIONS = [
+  { value: 'dev', label: '开发' },
+  { value: 'test', label: '测试' },
+  { value: 'prod', label: '生产' }
+];
+
+export const PASSWORD_MASK = '******';
+
+export const EMPTY_FORM: ConnectionForm = {
+  name: '本地 H2',
+  dbType: 'h2',
+  jdbcUrl: 'jdbc:h2:mem:testdb',
+  username: 'sa',
+  password: '',
+  environment: 'dev',
+  readonly: false
+};

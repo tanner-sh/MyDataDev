@@ -14,6 +14,8 @@ body {
 
 .app-shell {
   min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
   background: #ffffff;
 }
 
@@ -44,8 +46,15 @@ body {
 }
 
 .app-content {
+  flex: 1 1 0;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   background: #ffffff;
+}
+
+.app-shell.ant-layout-has-sider > .app-content {
+  width: 0;
 }
 
 .full-width {
@@ -188,10 +197,17 @@ body {
 }
 
 .workspace {
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
   display: grid;
   grid-template-rows: 52px 38px minmax(260px, 42vh) 34px minmax(0, 1fr);
+  overflow: hidden;
   background: #ffffff;
+}
+
+.workspace > * {
+  min-width: 0;
 }
 
 .table-workspace {
@@ -245,13 +261,31 @@ body {
 }
 
 .data-grid {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: #ffffff;
 }
 
+.data-grid.ant-table-wrapper,
+.data-grid .ant-table-wrapper,
+.data-grid .ant-spin-nested-loading,
+.data-grid .ant-spin-container,
+.data-grid .ant-table,
+.data-grid .ant-table-container {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .data-grid .ant-table {
   border-radius: 0;
+}
+
+.data-grid .ant-table-content {
+  overflow-x: auto !important;
 }
 
 .editable-grid .ant-table-cell {
@@ -357,6 +391,7 @@ body {
 @media (max-width: 1180px) {
   .app-shell {
     display: block;
+    overflow-x: hidden;
   }
 
   .app-sider,
@@ -370,6 +405,19 @@ body {
   }
 
   .workspace {
+    width: 100%;
+    min-width: 0;
     min-height: 720px;
+  }
+
+  .app-content {
+    flex: none;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .app-shell.ant-layout-has-sider > .app-content {
+    width: 100%;
   }
 }
