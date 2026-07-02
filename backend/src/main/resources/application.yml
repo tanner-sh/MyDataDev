@@ -1,0 +1,23 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+  h2:
+    console:
+      enabled: true
+  sql:
+    init:
+      mode: always
+
+app:
+  crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
+  sql:
+    max-rows: 1000
+    timeout-seconds: 60
+  backup:
+    directory: ./backups

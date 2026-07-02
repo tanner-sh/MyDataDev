@@ -1,0 +1,8 @@
+.DS_Store
+
+backend/target/
+backend/data/
+backend/backups/
+
+frontend/node_modules/
+frontend/dist/

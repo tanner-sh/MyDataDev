@@ -1,0 +1,99 @@
+package com.example.dbadmin.service;
+
+import com.example.dbadmin.dto.ApiDtos.ConnectionRequest;
+import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
+import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
+import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.ConnectionRepository;
+import org.springframework.stereotype.Service;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.time.Instant;
+import java.util.List;
+import java.util.Properties;
+
+@Service
+public class ConnectionService {
+    private final ConnectionRepository repository;
+    private final CryptoService crypto;
+    private final AuditRepository audit;
+
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit) {
+        this.repository = repository;
+        this.crypto = crypto;
+        this.audit = audit;
+    }
+
+    public List<ConnectionResponse> list() {
+        return repository.findAll().stream().map(this::toResponse).toList();
+    }
+
+    public ConnectionResponse create(ConnectionRequest request, String actor) {
+        DbConnection c = toModel(0, request, crypto.encrypt(request.password()));
+        long id = repository.insert(c);
+        audit.log(actor, "CONNECTION_CREATE", request.name(), request.jdbcUrl());
+        return toResponse(repository.findById(id).orElseThrow());
+    }
+
+    public ConnectionResponse update(long id, ConnectionRequest request, String actor) {
+        DbConnection old = require(id);
+        String secret = request.password() == null || request.password().isBlank()
+                ? old.encryptedPassword()
+                : crypto.encrypt(request.password());
+        repository.update(id, toModel(id, request, secret));
+        audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
+        return toResponse(repository.findById(id).orElseThrow());
+    }
+
+    public void delete(long id, String actor) {
+        DbConnection c = require(id);
+        repository.delete(id);
+        audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
+    }
+
+    public void test(TestConnectionRequest request) throws Exception {
+        try (Connection ignored = DriverManager.getConnection(request.jdbcUrl(), props(request.username(), request.password()))) {
+        }
+    }
+
+    public Connection open(long id) throws Exception {
+        DbConnection c = require(id);
+        return DriverManager.getConnection(c.jdbcUrl(), props(c.username(), crypto.decrypt(c.encryptedPassword())));
+    }
+
+    public DbConnection require(long id) {
+        return repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Connection not found: " + id));
+    }
+
+    private Properties props(String username, String password) {
+        Properties props = new Properties();
+        if (username != null) {
+            props.put("user", username);
+        }
+        if (password != null) {
+            props.put("password", password);
+        }
+        return props;
+    }
+
+    private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword) {
+        return new DbConnection(
+                id,
+                r.name(),
+                r.dbType(),
+                r.jdbcUrl(),
+                r.username(),
+                encryptedPassword,
+                r.environment() == null || r.environment().isBlank() ? "default" : r.environment(),
+                r.readonly(),
+                Instant.now(),
+                Instant.now()
+        );
+    }
+
+    private ConnectionResponse toResponse(DbConnection c) {
+        return new ConnectionResponse(c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), c.environment(), c.readonly());
+    }
+}
