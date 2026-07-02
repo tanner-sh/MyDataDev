@@ -5,6 +5,7 @@ import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionRepository;
 import org.springframework.stereotype.Service;
 
@@ -19,11 +20,13 @@ public class ConnectionService {
     private final ConnectionRepository repository;
     private final CryptoService crypto;
     private final AuditRepository audit;
+    private final BackupTaskRepository backupTasks;
 
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit) {
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
+        this.backupTasks = backupTasks;
     }
 
     public List<ConnectionResponse> list() {
@@ -49,12 +52,21 @@ public class ConnectionService {
 
     public void delete(long id, String actor) {
         DbConnection c = require(id);
+        int refs = backupTasks.countByConnectionId(id);
+        if (refs > 0) {
+            throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
+        }
         repository.delete(id);
         audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
     }
 
     public void test(TestConnectionRequest request) throws Exception {
         try (Connection ignored = DriverManager.getConnection(request.jdbcUrl(), props(request.username(), request.password()))) {
+        }
+    }
+
+    public void testExisting(long id) throws Exception {
+        try (Connection ignored = open(id)) {
         }
     }
 

@@ -45,4 +45,10 @@ public class ConnectionController {
         service.test(request);
         return new MessageResponse(true, "connection ok");
     }
+
+    @PostMapping("/{id}/test")
+    public MessageResponse testExisting(@PathVariable long id) throws Exception {
+        service.testExisting(id);
+        return new MessageResponse(true, "connection ok");
+    }
 }

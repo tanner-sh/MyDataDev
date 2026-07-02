@@ -45,6 +45,11 @@ public class BackupTaskRepository {
         return rows.stream().findFirst();
     }
 
+    public int countByConnectionId(long connectionId) {
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM backup_task WHERE connection_id = ?", Integer.class, connectionId);
+        return count == null ? 0 : count;
+    }
+
     public long insert(BackupTask task) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {

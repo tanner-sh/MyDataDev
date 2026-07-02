@@ -84,6 +84,55 @@ button:disabled {
   background: #ffffff;
 }
 
+.connection-card {
+  border: 1px solid #ccd4e1;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.connection-card.selected {
+  border-color: #1f6feb;
+  background: #eff6ff;
+}
+
+.connection-main {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 11px 7px;
+  display: grid;
+  align-items: start;
+  text-align: left;
+}
+
+.connection-main span:last-child {
+  color: #98a2b3;
+}
+
+.connection-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+
+.connection-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 5px 4px;
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.danger {
+  color: #b42318;
+  border-color: #fecdca;
+  background: #fff7f6;
+}
+
 .list span, .toolbar span, .backup span {
   color: #667085;
   font-size: 12px;
@@ -99,6 +148,18 @@ button:disabled {
   margin: 18px 0 10px;
   font-size: 14px;
   color: #101828;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 18px 0 10px;
+}
+
+.section-title h2 {
+  margin: 0;
 }
 
 .objects {
@@ -223,6 +284,16 @@ label {
   font-size: 12px;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-label input {
+  width: auto;
+}
+
 input, select {
   width: 100%;
   border: 1px solid #ccd4e1;
@@ -303,6 +374,12 @@ input, select {
   color: #667085;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.form-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 @media (max-width: 1100px) {

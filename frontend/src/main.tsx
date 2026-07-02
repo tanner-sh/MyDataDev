@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor from '@monaco-editor/react';
-import { Database, Play, Plus, RefreshCw, Save, Table2, Trash2 } from 'lucide-react';
+import { Copy, Database, Pencil, Play, Plus, RefreshCw, Save, Table2, Trash2 } from 'lucide-react';
 import './styles.css';
 
 const API = 'http://localhost:8080/api';
@@ -51,6 +51,17 @@ type ActiveTable = { schemaName?: string; tableName: string };
 type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; deleted?: boolean; inserted?: boolean };
 type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean };
 type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; key?: Record<string, unknown>; values?: Record<string, unknown> };
+type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
+
+const EMPTY_FORM: ConnectionForm = {
+  name: '本地 H2',
+  dbType: 'h2',
+  jdbcUrl: 'jdbc:h2:mem:testdb',
+  username: 'sa',
+  password: '',
+  environment: 'dev',
+  readonly: false
+};
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
@@ -73,7 +84,8 @@ function App() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [backups, setBackups] = useState<BackupTask[]>([]);
-  const [form, setForm] = useState({ name: '本地 H2', dbType: 'h2', jdbcUrl: 'jdbc:h2:mem:testdb', username: 'sa', password: '', environment: 'dev' });
+  const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
+  const [editingConnectionId, setEditingConnectionId] = useState<number | null>(null);
   const [mode, setMode] = useState<'sql' | 'table'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [tableData, setTableData] = useState<TableData | null>(null);
@@ -98,18 +110,113 @@ function App() {
     setBackups(await api<BackupTask[]>('/backups'));
   }
 
-  async function createConnection() {
+  async function saveConnection() {
     setLoading(true);
     try {
-      const created = await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
-      setSelected(created);
-      setMessage(`已创建连接：${created.name}`);
+      const saved = editingConnectionId
+        ? await api<Connection>(`/connections/${editingConnectionId}`, { method: 'PUT', body: JSON.stringify(form) })
+        : await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
+      setSelected(saved);
+      setEditingConnectionId(saved.id);
+      setMessage(editingConnectionId ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
       await refreshConnections();
     } catch (e) {
       setMessage(localizeMessage((e as Error).message));
     } finally {
       setLoading(false);
     }
+  }
+
+  async function testConnection(target = form) {
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>('/connections/test', {
+        method: 'POST',
+        body: JSON.stringify({ jdbcUrl: target.jdbcUrl, username: target.username, password: target.password })
+      });
+      setMessage(`连接测试成功：${target.name || target.jdbcUrl}`);
+    } catch (e) {
+      setMessage(`连接测试失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function testSavedConnection(connection: Connection) {
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
+      setMessage(`连接测试成功：${connection.name}`);
+    } catch (e) {
+      setMessage(`连接测试失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteConnection(connection: Connection) {
+    if (!window.confirm(`确定删除连接“${connection.name}”吗？有关联备份任务的连接会被后端拒绝删除。`)) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
+      setMessage(`已删除连接：${connection.name}`);
+      setConnections((rows) => rows.filter((row) => row.id !== connection.id));
+      if (selected?.id === connection.id) {
+        setSelected(null);
+        setMetadata(null);
+        setMode('sql');
+      }
+      if (editingConnectionId === connection.id) {
+        resetConnectionForm();
+      }
+      await refreshConnections();
+    } catch (e) {
+      setMessage(localizeMessage((e as Error).message));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function selectConnection(connection: Connection) {
+    setSelected(connection);
+    setMetadata(null);
+    setMode('sql');
+  }
+
+  function editConnection(connection: Connection) {
+    selectConnection(connection);
+    setEditingConnectionId(connection.id);
+    setForm({
+      name: connection.name,
+      dbType: connection.dbType,
+      jdbcUrl: connection.jdbcUrl,
+      username: connection.username || '',
+      password: '',
+      environment: connection.environment || 'default',
+      readonly: connection.readonly
+    });
+    setMessage(`正在编辑连接：${connection.name}。密码留空表示不修改。`);
+  }
+
+  function duplicateConnection(connection: Connection) {
+    setEditingConnectionId(null);
+    setForm({
+      name: `${connection.name} 副本`,
+      dbType: connection.dbType,
+      jdbcUrl: connection.jdbcUrl,
+      username: connection.username || '',
+      password: '',
+      environment: connection.environment || 'default',
+      readonly: connection.readonly
+    });
+    setMessage('已复制连接配置，请输入密码后保存为新连接。');
+  }
+
+  function resetConnectionForm() {
+    setEditingConnectionId(null);
+    setForm(EMPTY_FORM);
   }
 
   async function loadMetadata(conn = selected) {
@@ -280,10 +387,19 @@ function App() {
         <button className="primary" onClick={refreshConnections}><RefreshCw size={15} /> 刷新连接</button>
         <div className="list">
           {connections.map((c) => (
-            <button key={c.id} className={selected?.id === c.id ? 'selected' : ''} onClick={() => { setSelected(c); setMetadata(null); setMode('sql'); }}>
-              <strong>{c.name}</strong>
-              <span>{c.dbType} · {c.environment}</span>
-            </button>
+            <div key={c.id} className={`connection-card ${selected?.id === c.id ? 'selected' : ''}`}>
+              <button className="connection-main" onClick={() => editConnection(c)}>
+                <strong>{c.name}</strong>
+                <span>{dbTypeLabel(c.dbType)} · {c.environment}</span>
+                <span>{c.jdbcUrl}</span>
+              </button>
+              <div className="connection-actions">
+                <button onClick={() => testSavedConnection(c)} disabled={loading}>测试</button>
+                <button onClick={() => editConnection(c)} disabled={loading}><Pencil size={13} /> 编辑</button>
+                <button onClick={() => duplicateConnection(c)} disabled={loading}><Copy size={13} /> 复制</button>
+                <button className="danger" onClick={() => deleteConnection(c)} disabled={loading}><Trash2 size={13} /> 删除</button>
+              </div>
+            </div>
           ))}
         </div>
         <section className="compact">
@@ -338,7 +454,10 @@ function App() {
 
       <aside className="inspector">
         <section>
-          <h2>新建连接</h2>
+          <div className="section-title">
+            <h2>{editingConnectionId ? '编辑连接' : '新建连接'}</h2>
+            <button onClick={resetConnectionForm} disabled={loading}><Plus size={13} /> 新建</button>
+          </div>
           <label>{FIELD_LABELS.name}<input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           <label>{FIELD_LABELS.dbType}
             <select value={form.dbType} onChange={(e) => changeDbType(e.target.value)}>
@@ -349,8 +468,13 @@ function App() {
           <label>{FIELD_LABELS.username}<input type="text" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
           <label>{FIELD_LABELS.password}<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
           <label>{FIELD_LABELS.environment}<input type="text" value={form.environment} onChange={(e) => setForm({ ...form, environment: e.target.value })} /></label>
+          <label className="checkbox-label"><input type="checkbox" checked={form.readonly} onChange={(e) => setForm({ ...form, readonly: e.target.checked })} /> 只读连接</label>
           {form.dbType === 'oracle' && <p className="hint">Oracle Service Name 示例：jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID 示例：jdbc:oracle:thin:@localhost:1521:ORCL</p>}
-          <button className="primary" onClick={createConnection} disabled={loading}><Save size={15} /> 保存连接</button>
+          {editingConnectionId && <p className="hint">编辑已有连接时，密码留空表示沿用原密码。</p>}
+          <div className="form-actions">
+            <button onClick={() => testConnection()} disabled={loading}>测试连接</button>
+            <button className="primary" onClick={saveConnection} disabled={loading}><Save size={15} /> {editingConnectionId ? '保存修改' : '保存连接'}</button>
+          </div>
         </section>
         <section>
           <h2>备份任务</h2>
@@ -480,6 +604,10 @@ function backupStatusLabel(status?: string) {
   return status;
 }
 
+function dbTypeLabel(dbType: string) {
+  return DB_TYPE_OPTIONS.find((option) => option.value === dbType)?.label || dbType;
+}
+
 function objectTypeLabel(type: string) {
   const normalized = type.toUpperCase();
   if (normalized.includes('TABLE')) return '表';
@@ -493,6 +621,8 @@ function localizeMessage(message: string) {
   if (message.includes('Physical backup adapter is not implemented')) return '当前数据库类型暂未实现物理备份适配器。';
   if (message.includes('MySQL backup task prepared')) return 'MySQL 备份任务已准备完成，请在服务端配置物理备份命令。';
   if (message.includes('Connection not found')) return '未找到数据库连接。';
+  if (message.includes('backup task')) return '该连接存在关联备份任务，请先处理备份任务后再删除。';
+  if (message.includes('connection ok')) return '连接测试成功。';
   if (message.includes('No pending changes')) return '没有待提交的变更。';
   return message;
 }
