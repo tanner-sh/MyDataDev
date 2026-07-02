@@ -3,10 +3,15 @@ server:
 
 spring:
   datasource:
-    url: jdbc:h2:file:./data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE
+    url: jdbc:h2:file:./data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE;FILE_LOCK=FS;TRACE_LEVEL_FILE=0
     username: sa
     password:
     driver-class-name: org.h2.Driver
+    hikari:
+      connection-timeout: 5000
+      initialization-fail-timeout: 5000
+      maximum-pool-size: 5
+      minimum-idle: 1
   h2:
     console:
       enabled: true

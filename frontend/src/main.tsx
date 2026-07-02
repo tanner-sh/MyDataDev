@@ -171,6 +171,7 @@ function App() {
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const selectedIdRef = useRef<number | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const executeRef = useRef<() => void>(() => undefined);
@@ -637,13 +638,13 @@ function App() {
   return (
     <ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1f6feb', borderRadius: 6 } }}>
       <Layout className="app-shell">
-        <Sider width={320} className="app-sider" theme="light">
-          <Space direction="vertical" size={12} className="full-width">
+        <Sider width={280} className="app-sider" theme="light">
+          <Space direction="vertical" size={10} className="full-width">
             <div className="brand">
               <DatabaseOutlined />
               <span>数据库管理工具</span>
             </div>
-            <Button type="primary" icon={<ReloadOutlined />} block loading={connectionsLoading} onClick={() => refreshConnections()}>
+            <Button type="primary" size="small" icon={<ReloadOutlined />} block loading={connectionsLoading} onClick={() => refreshConnections()}>
               刷新连接
             </Button>
             <ConnectionList
@@ -659,8 +660,8 @@ function App() {
               onDelete={deleteConnection}
             />
             <Card size="small" title="数据库对象" className="panel-card">
-              <Space direction="vertical" size={10} className="full-width">
-                <Button icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata()}>
+              <Space direction="vertical" size={8} className="full-width">
+                <Button size="small" icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata()}>
                   加载对象
                 </Button>
                 <ObjectTree objects={objects} onOpenTable={openTable} />
@@ -709,20 +710,42 @@ function App() {
           )}
         </Content>
 
-        <Sider width={360} className="app-inspector" theme="light">
-          <Space direction="vertical" size={12} className="full-width">
-            <ConnectionFormPanel
-              form={form}
-              editing={Boolean(editingConnectionId)}
-              loading={loading}
-              onChange={setForm}
-              onDbTypeChange={changeDbType}
-              onReset={resetConnectionForm}
-              onTest={() => testConnection()}
-              onSave={saveConnection}
-            />
-            <BackupPanel backups={backups} selected={selected} loading={loading} onCreate={createBackup} onRun={runBackup} />
-          </Space>
+        <Sider
+          width={340}
+          className="app-inspector"
+          theme="light"
+          collapsible
+          collapsed={inspectorCollapsed}
+          collapsedWidth={0}
+          onCollapse={setInspectorCollapsed}
+        >
+          <Tabs
+            className="inspector-tabs"
+            defaultActiveKey="connection"
+            items={[
+              {
+                key: 'connection',
+                label: '连接配置',
+                children: (
+                  <ConnectionFormPanel
+                    form={form}
+                    editing={Boolean(editingConnectionId)}
+                    loading={loading}
+                    onChange={setForm}
+                    onDbTypeChange={changeDbType}
+                    onReset={resetConnectionForm}
+                    onTest={() => testConnection()}
+                    onSave={saveConnection}
+                  />
+                )
+              },
+              {
+                key: 'backup',
+                label: '备份任务',
+                children: <BackupPanel backups={backups} selected={selected} loading={loading} onCreate={createBackup} onRun={runBackup} />
+              }
+            ]}
+          />
         </Sider>
       </Layout>
       <SqlHistoryDrawer
@@ -774,19 +797,19 @@ function ConnectionList({ connections, selectedId, connectionsLoading, connectio
         dataSource={connections}
         renderItem={(connection) => (
           <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
-            <Space direction="vertical" size={8} className="full-width">
-              <button className="connection-title-button" onClick={() => onEdit(connection)}>
-                <Space direction="vertical" size={2} className="full-width">
-                  <Space size={6} wrap>
-                    <Text strong>{connection.name}</Text>
-                    <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
-                    <Tag>{environmentLabel(connection.environment)}</Tag>
-                    {connection.readonly && <Tag color="orange">只读</Tag>}
-                  </Space>
-                  <Text type="secondary" className="ellipsis-text">{connection.jdbcUrl}</Text>
+            <div className="connection-row">
+              <button className="connection-title-button connection-main-info" onClick={() => onEdit(connection)}>
+                <div className="connection-name-row">
+                  <Text strong className="ellipsis-text">{connection.name}</Text>
+                  {connection.readonly && <Tag color="orange">只读</Tag>}
+                </div>
+                <Space size={4} wrap className="connection-tags">
+                  <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
+                  <Tag>{environmentLabel(connection.environment)}</Tag>
                 </Space>
+                <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
               </button>
-              <Space size={4} wrap>
+              <Space size={4} wrap className="connection-actions">
                 <Button size="small" loading={testingConnectionId === connection.id} onClick={() => onTest(connection)}>测试</Button>
                 <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)}>编辑</Button>
                 <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)}>复制</Button>
@@ -801,7 +824,7 @@ function ConnectionList({ connections, selectedId, connectionsLoading, connectio
                   <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
                 </Popconfirm>
               </Space>
-            </Space>
+            </div>
           </List.Item>
         )}
       />
@@ -878,9 +901,9 @@ function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMessage, l
           <Text strong>{selected ? selected.name : '未选择连接'}</Text>
           <Text type="secondary" className="ellipsis-text">{selected?.jdbcUrl || '请选择左侧数据库连接'}</Text>
         </div>
-        <Space>
-          <Button onClick={onFormat}>格式化</Button>
-          <Button icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
+        <Space size={8} wrap>
+          <Button size="small" onClick={onFormat}>格式化</Button>
+          <Button size="small" icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
           <Dropdown
             menu={{
               items: [
@@ -890,10 +913,10 @@ function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMessage, l
               onClick: ({ key }) => onExport(key as 'csv' | 'json')
             }}
           >
-            <Button icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
+            <Button size="small" icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
           </Dropdown>
-          <Button disabled={!selected || loading} onClick={onExplain}>执行计划</Button>
-          <Button type="primary" icon={<PlayCircleOutlined />} disabled={!selected || loading} loading={loading} onClick={onExecute}>执行</Button>
+          <Button size="small" disabled={!selected || loading} onClick={onExplain}>执行计划</Button>
+          <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={!selected || loading} loading={loading} onClick={onExecute}>执行</Button>
         </Space>
       </Header>
       <Tabs
@@ -981,12 +1004,12 @@ function TableWorkspace({ activeTable, tableData, tableRows, previewSql, pending
           <Text strong>{tableName}</Text>
           <Text type="secondary">{tableData?.editable ? `可编辑，行定位字段：${tableData.keyColumns.join(', ')}` : '当前表没有主键或唯一索引，只允许新增数据'}</Text>
         </div>
-        <Space wrap>
-          <Button onClick={onBackToSql}>查询工作台</Button>
-          <Button icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>重新加载</Button>
-          <Button icon={<PlusOutlined />} disabled={!tableData || loading} onClick={onAddRow}>新增行</Button>
-          <Button disabled={!pendingCount || loading} onClick={onPreview}>预览语句</Button>
-          <Button type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading} loading={loading} onClick={onCommit}>提交</Button>
+        <Space size={8} wrap>
+          <Button size="small" onClick={onBackToSql}>查询工作台</Button>
+          <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>重新加载</Button>
+          <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading} onClick={onAddRow}>新增行</Button>
+          <Button size="small" disabled={!pendingCount || loading} onClick={onPreview}>预览语句</Button>
+          <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading} loading={loading} onClick={onCommit}>提交</Button>
         </Space>
       </Header>
       <Alert className="status-alert" type={loading ? 'info' : 'success'} message={statusMessage} showIcon />
@@ -1007,13 +1030,12 @@ function ConnectionFormPanel({ form, editing, loading, onChange, onDbTypeChange,
   onSave: () => void;
 }) {
   return (
-    <Card
-      size="small"
-      title={editing ? '编辑连接' : '新建连接'}
-      extra={<Button size="small" icon={<PlusOutlined />} onClick={onReset}>新建</Button>}
-      className="panel-card"
-    >
-      <Form layout="vertical" size="middle">
+    <section className="inspector-section">
+      <div className="inspector-section-header">
+        <Text strong>{editing ? '编辑连接' : '新建连接'}</Text>
+        <Button size="small" icon={<PlusOutlined />} onClick={onReset}>新建</Button>
+      </div>
+      <Form layout="vertical" size="small" className="compact-form">
         <Form.Item label="连接名称">
           <Input value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} />
         </Form.Item>
@@ -1036,21 +1058,17 @@ function ConnectionFormPanel({ form, editing, loading, onChange, onDbTypeChange,
           <Checkbox checked={form.readonly} onChange={(event) => onChange({ ...form, readonly: event.target.checked })}>只读连接</Checkbox>
         </Form.Item>
         {form.dbType === 'oracle' && (
-          <Alert
-            className="form-hint"
-            type="info"
-            showIcon
-            message="Oracle 连接示例"
-            description="Service Name：jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID：jdbc:oracle:thin:@localhost:1521:ORCL"
-          />
+          <Text type="secondary" className="form-hint-text">
+            Oracle 示例：Service Name 使用 jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID 使用 jdbc:oracle:thin:@localhost:1521:ORCL。
+          </Text>
         )}
-        {editing && <Alert className="form-hint" type="warning" showIcon message="编辑已有连接时，密码为 ****** 或留空都表示沿用原密码。" />}
+        {editing && <Text type="secondary" className="form-hint-text">编辑已有连接时，密码为 ****** 或留空都表示沿用原密码。</Text>}
         <Space className="form-actions" size={8}>
           <Button block onClick={onTest} loading={loading}>测试连接</Button>
           <Button block type="primary" icon={<SaveOutlined />} onClick={onSave} loading={loading}>{editing ? '保存修改' : '保存连接'}</Button>
         </Space>
       </Form>
-    </Card>
+    </section>
   );
 }
 
@@ -1062,9 +1080,12 @@ function BackupPanel({ backups, selected, loading, onCreate, onRun }: {
   onRun: (id: number) => void;
 }) {
   return (
-    <Card size="small" title="备份任务" className="panel-card">
+    <section className="inspector-section">
+      <div className="inspector-section-header">
+        <Text strong>备份任务</Text>
+      </div>
       <Space direction="vertical" size={10} className="full-width">
-        <Button block disabled={!selected || loading} onClick={onCreate}>创建全量备份任务</Button>
+        <Button size="small" block disabled={!selected || loading} onClick={onCreate}>创建全量备份任务</Button>
         <List
           size="small"
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无备份任务" /> }}
@@ -1086,7 +1107,7 @@ function BackupPanel({ backups, selected, loading, onCreate, onRun }: {
           )}
         />
       </Space>
-    </Card>
+    </section>
   );
 }
 
@@ -1166,7 +1187,7 @@ function ResultGrid({ result }: { result: SqlResult | null }) {
           setPageSize(nextPageSize);
         }
       }}
-      scroll={{ x: true, y: 'calc(100vh - 540px)' }}
+      scroll={{ x: true, y: 'calc(100vh - 440px)' }}
     />
   );
 }
@@ -1218,7 +1239,7 @@ function EditableTable({ data, rows, onEdit, onDelete }: {
       rowKey="id"
       pagination={false}
       rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : ''}
-      scroll={{ x: true, y: 'calc(100vh - 380px)' }}
+      scroll={{ x: true, y: 'calc(100vh - 330px)' }}
     />
   );
 }

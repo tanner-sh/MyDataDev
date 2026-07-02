@@ -1,6 +1,6 @@
 :root {
   color: #172033;
-  background: #f5f7fb;
+  background: #ffffff;
   font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -14,14 +14,14 @@ body {
 
 .app-shell {
   min-height: 100vh;
-  background: #f5f7fb;
+  background: #ffffff;
 }
 
 .app-sider,
 .app-inspector {
   height: 100vh;
   overflow: auto;
-  padding: 16px;
+  padding: 12px;
   background: #fbfcff !important;
 }
 
@@ -33,9 +33,19 @@ body {
   border-left: 1px solid #dde3ee;
 }
 
+.app-inspector.ant-layout-sider-collapsed {
+  padding: 0;
+  overflow: visible;
+}
+
+.app-inspector .ant-layout-sider-zero-width-trigger {
+  top: 12px;
+  right: -36px;
+}
+
 .app-content {
   min-width: 0;
-  background: #f5f7fb;
+  background: #ffffff;
 }
 
 .full-width {
@@ -43,7 +53,7 @@ body {
 }
 
 .brand {
-  height: 36px;
+  height: 32px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -58,24 +68,74 @@ body {
 
 .connection-list {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .connection-list .ant-list-items {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .connection-item {
-  padding: 10px !important;
+  position: relative;
+  padding: 8px 8px 8px 10px !important;
   border: 1px solid #dde3ee !important;
-  border-radius: 8px;
+  border-radius: 6px;
   background: #ffffff;
 }
 
 .connection-item.selected {
-  border-color: #1f6feb !important;
-  background: #eff6ff;
+  border-color: #bfd4ff !important;
+  background: #ffffff;
+}
+
+.connection-item.selected::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: #1f6feb;
+}
+
+.connection-row {
+  width: 100%;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.connection-main-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-name-row {
+  min-width: 0;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.connection-tags {
+  margin-top: 4px;
+}
+
+.connection-tags .ant-tag,
+.connection-name-row .ant-tag {
+  margin-inline-end: 0;
+}
+
+.connection-url {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.connection-actions {
+  width: 112px;
+  justify-content: flex-end;
 }
 
 .connection-title-button {
@@ -101,6 +161,15 @@ body {
   background: transparent;
 }
 
+.object-collapse .ant-collapse-header {
+  align-items: center !important;
+  padding: 6px 8px !important;
+}
+
+.object-collapse .ant-collapse-content-box {
+  padding: 6px 10px !important;
+}
+
 .object-label {
   max-width: 100%;
 }
@@ -115,22 +184,24 @@ body {
 }
 
 .column-item {
-  padding: 4px 0 !important;
+  padding: 3px 0 !important;
 }
 
 .workspace {
   min-height: 100vh;
   display: grid;
-  grid-template-rows: 64px 44px 42vh 48px minmax(0, 1fr);
+  grid-template-rows: 52px 38px minmax(260px, 42vh) 34px minmax(0, 1fr);
+  background: #ffffff;
 }
 
 .table-workspace {
-  grid-template-rows: 64px 48px minmax(0, 1fr) 172px;
+  grid-template-rows: 52px 34px minmax(0, 1fr) 150px;
 }
 
 .workspace-toolbar {
   height: auto;
-  padding: 10px 14px;
+  min-height: 52px;
+  padding: 7px 12px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -151,7 +222,7 @@ body {
 }
 
 .sql-tabs {
-  padding: 6px 12px 0;
+  padding: 3px 10px 0;
   background: #ffffff;
   border-bottom: 1px solid #dde3ee;
 }
@@ -161,9 +232,16 @@ body {
 }
 
 .status-alert {
+  min-height: 34px;
+  padding: 5px 12px;
   border-radius: 0;
   border-left: 0;
   border-right: 0;
+  font-size: 12px;
+}
+
+.status-alert .ant-alert-message {
+  font-size: 12px;
 }
 
 .data-grid {
@@ -191,7 +269,7 @@ body {
 }
 
 .empty-state {
-  min-height: 220px;
+  min-height: 140px;
   display: grid;
   place-content: center;
   background: #ffffff;
@@ -227,14 +305,49 @@ body {
   font-size: 12px;
 }
 
-.form-hint {
-  margin-bottom: 12px;
+.inspector-tabs .ant-tabs-nav {
+  margin-bottom: 10px;
+}
+
+.inspector-tabs .ant-tabs-content-holder {
+  min-width: 0;
+}
+
+.inspector-section {
+  padding: 10px;
+  border: 1px solid #dde3ee;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.inspector-section-header {
+  min-height: 28px;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.compact-form .ant-form-item {
+  margin-bottom: 10px;
+}
+
+.form-hint-text {
+  display: block;
+  margin: -2px 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .form-actions {
   width: 100%;
   display: grid;
   grid-template-columns: 1fr 1fr;
+  position: sticky;
+  bottom: 0;
+  padding-top: 8px;
+  background: #ffffff;
 }
 
 .form-actions .ant-space-item {
