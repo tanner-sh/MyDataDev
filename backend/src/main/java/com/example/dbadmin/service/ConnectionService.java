@@ -17,6 +17,8 @@ import java.util.Properties;
 
 @Service
 public class ConnectionService {
+    public static final String PASSWORD_MASK = "******";
+
     private final ConnectionRepository repository;
     private final CryptoService crypto;
     private final AuditRepository audit;
@@ -42,7 +44,7 @@ public class ConnectionService {
 
     public ConnectionResponse update(long id, ConnectionRequest request, String actor) {
         DbConnection old = require(id);
-        String secret = request.password() == null || request.password().isBlank()
+        String secret = reusesStoredPassword(request.password())
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
         repository.update(id, toModel(id, request, secret));
@@ -70,6 +72,19 @@ public class ConnectionService {
         }
     }
 
+    public void testExisting(long id, ConnectionRequest request) throws Exception {
+        if (request == null) {
+            testExisting(id);
+            return;
+        }
+        DbConnection old = require(id);
+        String password = reusesStoredPassword(request.password())
+                ? crypto.decrypt(old.encryptedPassword())
+                : request.password();
+        try (Connection ignored = DriverManager.getConnection(request.jdbcUrl(), props(request.username(), password))) {
+        }
+    }
+
     public Connection open(long id) throws Exception {
         DbConnection c = require(id);
         return DriverManager.getConnection(c.jdbcUrl(), props(c.username(), crypto.decrypt(c.encryptedPassword())));
@@ -90,6 +105,10 @@ public class ConnectionService {
         return props;
     }
 
+    private boolean reusesStoredPassword(String password) {
+        return password == null || password.isBlank() || PASSWORD_MASK.equals(password);
+    }
+
     private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword) {
         return new DbConnection(
                 id,
@@ -98,7 +117,7 @@ public class ConnectionService {
                 r.jdbcUrl(),
                 r.username(),
                 encryptedPassword,
-                r.environment() == null || r.environment().isBlank() ? "default" : r.environment(),
+                normalizeEnvironment(r.environment()),
                 r.readonly(),
                 Instant.now(),
                 Instant.now()
@@ -106,6 +125,13 @@ public class ConnectionService {
     }
 
     private ConnectionResponse toResponse(DbConnection c) {
-        return new ConnectionResponse(c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), c.environment(), c.readonly());
+        return new ConnectionResponse(c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), normalizeEnvironment(c.environment()), c.readonly());
+    }
+
+    private String normalizeEnvironment(String environment) {
+        if ("test".equals(environment) || "prod".equals(environment)) {
+            return environment;
+        }
+        return "dev";
     }
 }

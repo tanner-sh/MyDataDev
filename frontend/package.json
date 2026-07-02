@@ -9,9 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ant-design/icons": "^6.3.2",
     "@monaco-editor/react": "latest",
     "@vitejs/plugin-react": "latest",
-    "lucide-react": "latest",
+    "antd": "^6.5.0",
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",
