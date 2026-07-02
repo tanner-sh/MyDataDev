@@ -55,11 +55,27 @@ public class SqlController {
     @PostMapping("/export")
     public ResponseEntity<String> export(@Valid @RequestBody ExportRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
         String body = exportService.export(request.connectionId(), request.sql(), request.format(), actor);
-        String format = request.format().equalsIgnoreCase("json") ? "json" : "csv";
-        MediaType contentType = request.format().equalsIgnoreCase("json") ? MediaType.APPLICATION_JSON : MediaType.parseMediaType("text/csv");
+        String format = normalizedExportFormat(request.format());
         return ResponseEntity.ok()
-                .contentType(contentType)
+                .contentType(exportContentType(format))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"query-result." + format + "\"")
                 .body(body);
+    }
+
+    private String normalizedExportFormat(String format) {
+        String normalized = format == null ? "" : format.toLowerCase();
+        if (java.util.Set.of("csv", "json", "sql", "xml").contains(normalized)) {
+            return normalized;
+        }
+        throw new IllegalArgumentException("不支持的导出格式：" + format);
+    }
+
+    private MediaType exportContentType(String format) {
+        return switch (format) {
+            case "json" -> MediaType.APPLICATION_JSON;
+            case "xml" -> MediaType.APPLICATION_XML;
+            case "sql" -> MediaType.TEXT_PLAIN;
+            default -> MediaType.parseMediaType("text/csv");
+        };
     }
 }

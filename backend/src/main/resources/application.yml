@@ -22,7 +22,7 @@ spring:
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
   sql:
-    max-rows: 1000
+    max-rows: 10000
     timeout-seconds: 60
   backup:
     directory: ./backups

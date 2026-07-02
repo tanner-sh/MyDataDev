@@ -2,7 +2,7 @@ import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Typography } from 'antd';
 import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import type { Connection, SqlTab } from '../types';
+import type { Connection, ExportFormat, SqlTab } from '../types';
 import { ResultGrid } from './ResultGrid';
 
 const { Header } = Layout;
@@ -23,7 +23,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMes
   onFormat: () => void;
   onExplain: () => void;
   onExecute: () => void;
-  onExport: (format: 'csv' | 'json') => void;
+  onExport: (format: ExportFormat) => void;
   onOpenHistory: () => void;
 }) {
   return (
@@ -38,12 +38,14 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMes
           <Button size="small" icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
           <Dropdown
             menu={{
-              items: [
-                { key: 'csv', label: '导出 CSV' },
-                { key: 'json', label: '导出 JSON' }
-              ],
-              onClick: ({ key }) => onExport(key as 'csv' | 'json')
-            }}
+              items: [
+                { key: 'csv', label: '导出 CSV' },
+                { key: 'json', label: '导出 JSON' },
+                { key: 'sql', label: '导出 SQL' },
+                { key: 'xml', label: '导出 XML' }
+              ],
+              onClick: ({ key }) => onExport(key as ExportFormat)
+            }}
           >
             <Button size="small" icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
           </Dropdown>

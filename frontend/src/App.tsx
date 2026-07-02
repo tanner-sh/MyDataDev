@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
-import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, Metadata, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -267,7 +267,7 @@ export default function App() {
     setHistoryOpen(true);
   }
 
-  async function exportSql(format: 'csv' | 'json') {
+  async function exportSql(format: ExportFormat) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接' });
       return;
