@@ -56,6 +56,15 @@ public final class ApiDtos {
     public record SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
     }
 
+    public record SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs, String errorMessage, String actor, String createdAt) {
+    }
+
+    public record SqlCompletionRequest(@NotNull Long connectionId, String sql, Integer cursorPosition) {
+    }
+
+    public record SqlCompletionItem(String label, String kind, String insertText, String detail) {
+    }
+
     public record FormatRequest(@NotBlank String sql) {
     }
 

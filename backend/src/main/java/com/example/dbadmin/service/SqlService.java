@@ -2,9 +2,15 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.core.DialectRegistry;
+import com.example.dbadmin.dto.ApiDtos.DbObject;
+import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
+import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
+import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.SqlHistoryRepository;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
@@ -14,10 +20,12 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class SqlService {
@@ -25,12 +33,16 @@ public class SqlService {
     private final AppProperties properties;
     private final AuditRepository audit;
     private final DialectRegistry dialectRegistry;
+    private final SqlHistoryRepository history;
+    private final MetadataService metadata;
 
-    public SqlService(ConnectionService connections, AppProperties properties, AuditRepository audit, DialectRegistry dialectRegistry) {
+    public SqlService(ConnectionService connections, AppProperties properties, AuditRepository audit, DialectRegistry dialectRegistry, SqlHistoryRepository history, MetadataService metadata) {
         this.connections = connections;
         this.properties = properties;
         this.audit = audit;
         this.dialectRegistry = dialectRegistry;
+        this.history = history;
+        this.metadata = metadata;
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
@@ -43,22 +55,65 @@ public class SqlService {
             long elapsedMs = (System.nanoTime() - started) / 1_000_000;
             audit.log(actor, "SQL_EXECUTE", "connection:" + connectionId, abbreviate(sql));
             if (!hasResult) {
-                return new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false);
+                SqlResult result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false);
+                history.insert(connectionId, sql, "EXECUTE", "SUCCESS", elapsedMs, null, actor);
+                return result;
             }
             try (ResultSet rs = st.getResultSet()) {
-                return readResult(rs, elapsedMs);
+                SqlResult result = readResult(rs, elapsedMs);
+                history.insert(connectionId, sql, "EXECUTE", "SUCCESS", elapsedMs, null, actor);
+                return result;
             }
+        } catch (Exception e) {
+            long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+            history.insert(connectionId, sql, "EXECUTE", "FAILED", elapsedMs, abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), actor);
+            throw e;
         }
     }
 
     public SqlResult explain(long connectionId, String sql, String actor) throws Exception {
+        long started = System.nanoTime();
         DbConnection dbConnection = connections.require(connectionId);
         try (Connection connection = connections.open(connectionId)) {
             SqlResult result = dialectRegistry.dialectFor(dbConnection)
                     .explain(connection, sql, properties.getSql().getMaxRows(), properties.getSql().getTimeoutSeconds());
             audit.log(actor, "SQL_EXPLAIN", "connection:" + connectionId, abbreviate(sql));
+            history.insert(connectionId, sql, "EXPLAIN", "SUCCESS", (System.nanoTime() - started) / 1_000_000, null, actor);
             return result;
+        } catch (Exception e) {
+            history.insert(connectionId, sql, "EXPLAIN", "FAILED", (System.nanoTime() - started) / 1_000_000, abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), actor);
+            throw e;
         }
+    }
+
+    public List<SqlHistoryResponse> history(long connectionId, Integer limit) {
+        return history.findRecent(connectionId, limit == null ? 50 : limit);
+    }
+
+    public List<SqlCompletionItem> completions(SqlCompletionRequest request) {
+        List<SqlCompletionItem> items = new ArrayList<>();
+        for (String keyword : sqlKeywords()) {
+            items.add(new SqlCompletionItem(keyword, "KEYWORD", keyword, "SQL 关键字"));
+        }
+        try {
+            MetadataResponse response = metadata.inspect(request.connectionId(), null);
+            Set<String> schemas = new LinkedHashSet<>(response.schemas());
+            for (String schema : schemas) {
+                items.add(new SqlCompletionItem(schema, "SCHEMA", schema, "数据库 Schema"));
+            }
+            for (DbObject object : response.objects()) {
+                String tableLabel = object.schemaName() == null || object.schemaName().isBlank()
+                        ? object.name()
+                        : object.schemaName() + "." + object.name();
+                items.add(new SqlCompletionItem(tableLabel, "TABLE", tableLabel, "数据库" + objectTypeLabel(object.type())));
+                for (var column : object.columns()) {
+                    items.add(new SqlCompletionItem(column.name(), "COLUMN", column.name(), object.name() + " 字段 · " + column.type()));
+                }
+            }
+        } catch (Exception ignored) {
+            // Connection metadata may be unavailable while typing; keyword completion should still work.
+        }
+        return items.stream().limit(300).toList();
     }
 
     public String format(String sql) {
@@ -99,6 +154,27 @@ public class SqlService {
     }
 
     private String abbreviate(String sql) {
+        if (sql == null) {
+            return "";
+        }
         return sql.length() <= 2000 ? sql : sql.substring(0, 2000);
+    }
+
+    private List<String> sqlKeywords() {
+        return List.of(
+                "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN",
+                "GROUP BY", "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO",
+                "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "ALTER", "DROP", "TABLE",
+                "VIEW", "INDEX", "PRIMARY KEY", "AND", "OR", "NOT", "NULL", "IS", "IN",
+                "BETWEEN", "LIKE", "COUNT", "SUM", "AVG", "MIN", "MAX"
+        );
+    }
+
+    private String objectTypeLabel(String type) {
+        String normalized = type == null ? "" : type.toUpperCase(Locale.ROOT);
+        if (normalized.contains("VIEW")) {
+            return "视图";
+        }
+        return "表";
     }
 }

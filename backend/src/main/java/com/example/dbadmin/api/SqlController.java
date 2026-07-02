@@ -3,6 +3,9 @@ package com.example.dbadmin.api;
 import com.example.dbadmin.dto.ApiDtos.ExportRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
+import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
+import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.service.ExportService;
@@ -37,6 +40,16 @@ public class SqlController {
     @PostMapping("/format")
     public FormatResponse format(@Valid @RequestBody FormatRequest request) {
         return new FormatResponse(sqlService.format(request.sql()));
+    }
+
+    @GetMapping("/history")
+    public java.util.List<SqlHistoryResponse> history(@RequestParam long connectionId, @RequestParam(required = false) Integer limit) {
+        return sqlService.history(connectionId, limit);
+    }
+
+    @PostMapping("/completions")
+    public java.util.List<SqlCompletionItem> completions(@Valid @RequestBody SqlCompletionRequest request) {
+        return sqlService.completions(request);
     }
 
     @PostMapping("/export")

@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor from '@monaco-editor/react';
+import type { OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import {
   Alert,
   Button,
@@ -8,6 +10,8 @@ import {
   Checkbox,
   Collapse,
   ConfigProvider,
+  Drawer,
+  Dropdown,
   Empty,
   Form,
   Input,
@@ -15,8 +19,10 @@ import {
   List,
   Popconfirm,
   Select,
+  Skeleton,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography
 } from 'antd';
@@ -26,7 +32,9 @@ import {
   CopyOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
+  HistoryOutlined,
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -86,8 +94,12 @@ type TableRow = { id: string; values: Record<string, unknown>; original?: Record
 type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean };
 type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; key?: Record<string, unknown>; values?: Record<string, unknown> };
 type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
+type SqlTab = { id: string; title: string; sql: string; result: SqlResult | null; message: string };
+type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; createdAt: string };
+type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
 type ResultRow = { key: string } & Record<string, unknown>;
 type EditableRow = TableRow;
+type RefreshConnectionsOptions = { retry?: boolean };
 
 const EMPTY_FORM: ConnectionForm = {
   name: '本地 H2',
@@ -98,6 +110,10 @@ const EMPTY_FORM: ConnectionForm = {
   environment: 'dev',
   readonly: false
 };
+
+function createSqlTab(index: number): SqlTab {
+  return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', result: null, message: '' };
+}
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
@@ -111,14 +127,40 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function timestamp() {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const now = new Date();
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
 function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
-  const [sql, setSql] = useState('select 1 as val');
-  const [result, setResult] = useState<SqlResult | null>(null);
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', result: null, message: '' }]);
+  const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [sqlLoading, setSqlLoading] = useState(false);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState('');
+  const [connectionsReady, setConnectionsReady] = useState(false);
+  const [testingConnectionId, setTestingConnectionId] = useState<number | null>(null);
   const [backups, setBackups] = useState<BackupTask[]>([]);
   const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
   const [editingConnectionId, setEditingConnectionId] = useState<number | null>(null);
@@ -127,23 +169,66 @@ function App() {
   const [tableData, setTableData] = useState<TableData | null>(null);
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
+  const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const selectedIdRef = useRef<number | null>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const executeRef = useRef<() => void>(() => undefined);
+  const formatRef = useRef<() => void>(() => undefined);
+  const sqlTabSeqRef = useRef(1);
 
   const objects = useMemo(() => metadata?.objects || [], [metadata]);
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
+  const activeSqlTab = useMemo(() => sqlTabs.find((tab) => tab.id === activeSqlTabId) || sqlTabs[0], [activeSqlTabId, sqlTabs]);
 
   useEffect(() => {
-    refreshConnections();
-    refreshBackups();
+    refreshConnections({ retry: true });
+    refreshBackups().catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
   }, []);
 
-  async function refreshConnections() {
-    const rows = await api<Connection[]>('/connections');
-    setConnections(rows);
-    setSelected((current: Connection | null) => current || rows[0] || null);
+  useEffect(() => {
+    selectedIdRef.current = selected?.id || null;
+  }, [selected]);
+
+  async function refreshConnections(options: RefreshConnectionsOptions = {}) {
+    const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
+    setConnectionsLoading(true);
+    setConnectionsError('');
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt] > 0) {
+        setConnectionsError('后端服务可能还在启动，正在重试...');
+        await sleep(delays[attempt]);
+      }
+      try {
+        const rows = await api<Connection[]>('/connections');
+        setConnections(rows);
+        setSelected((current: Connection | null) => current || rows[0] || null);
+        setConnectionsError('');
+        setConnectionsReady(true);
+        setConnectionsLoading(false);
+        return;
+      } catch (e) {
+        if (attempt === delays.length - 1) {
+          setConnectionsError(`连接后端失败，请确认服务已启动：${localizeMessage((e as Error).message)}`);
+          setConnectionsReady(true);
+          setConnectionsLoading(false);
+          return;
+        }
+      }
+    }
   }
 
   async function refreshBackups() {
     setBackups(await api<BackupTask[]>('/backups'));
+  }
+
+  async function refreshSqlHistory(conn = selected) {
+    if (!conn) {
+      setSqlHistory([]);
+      return;
+    }
+    const rows = await api<SqlHistory[]>(`/sql/history?connectionId=${conn.id}&limit=50`);
+    setSqlHistory(rows);
   }
 
   async function saveConnection() {
@@ -186,14 +271,14 @@ function App() {
   }
 
   async function testSavedConnection(connection: Connection) {
-    setLoading(true);
+    setTestingConnectionId(connection.id);
     try {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
       setMessage(`连接测试成功：${connection.name}`);
     } catch (e) {
       setMessage(`连接测试失败：${localizeMessage((e as Error).message)}`);
     } finally {
-      setLoading(false);
+      setTestingConnectionId(null);
     }
   }
 
@@ -214,6 +299,7 @@ function App() {
       await refreshConnections();
     } catch (e) {
       setMessage(localizeMessage((e as Error).message));
+      await refreshSqlHistory(selected);
     } finally {
       setLoading(false);
     }
@@ -278,23 +364,147 @@ function App() {
       setMessage('请先选择一个数据库连接');
       return;
     }
+    const target = sqlExecutionTarget();
+    if (!target.sql.trim()) {
+      updateActiveSqlTab({ message: '请输入要执行的 SQL' });
+      return;
+    }
     setMode('sql');
-    setLoading(true);
+    setSqlLoading(true);
     try {
-      const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql, maxRows: 500 }) });
-      setResult(data);
-      setMessage(data.resultSet ? `返回 ${data.rows.length} 行，用时 ${data.elapsedMs}ms` : `影响 ${data.affectedRows} 行`);
+      const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
+      const nextMessage = data.resultSet
+        ? `${target.selected ? '已执行选中 SQL，' : '已执行全部 SQL，'}返回 ${data.rows.length} 行，用时 ${data.elapsedMs}ms`
+        : `${target.selected ? '已执行选中 SQL，' : '已执行全部 SQL，'}影响 ${data.affectedRows} 行`;
+      updateActiveSqlTab({ result: data, message: nextMessage });
+      await refreshSqlHistory(selected);
     } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
+      updateActiveSqlTab({ message: localizeMessage((e as Error).message) });
+      await refreshSqlHistory(selected);
     } finally {
-      setLoading(false);
+      setSqlLoading(false);
     }
   }
 
   async function formatSql() {
-    const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql }) });
-    setSql(data.sql);
+    const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: activeSqlTab.sql }) });
+    updateActiveSqlTab({ sql: data.sql });
   }
+
+  async function openSqlHistory() {
+    await refreshSqlHistory();
+    setHistoryOpen(true);
+  }
+
+  async function exportSql(format: 'csv' | 'json') {
+    if (!selected) {
+      updateActiveSqlTab({ message: '请先选择一个数据库连接' });
+      return;
+    }
+    const target = sqlExecutionTarget();
+    if (!target.sql.trim()) {
+      updateActiveSqlTab({ message: '请输入要导出的 SQL' });
+      return;
+    }
+    setSqlLoading(true);
+    try {
+      const response = await fetch(`${API}/sql/export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-User': 'admin' },
+        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: response.statusText }));
+        throw new Error(err.message || response.statusText);
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, `query-result-${timestamp()}.${format}`);
+      updateActiveSqlTab({ message: `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}` });
+    } catch (e) {
+      updateActiveSqlTab({ message: `导出失败：${localizeMessage((e as Error).message)}` });
+    } finally {
+      setSqlLoading(false);
+    }
+  }
+
+  function updateActiveSqlTab(patch: Partial<SqlTab>) {
+    setSqlTabs((tabs) => tabs.map((tab) => tab.id === activeSqlTab.id ? { ...tab, ...patch } : tab));
+  }
+
+  function addSqlTab() {
+    const nextIndex = sqlTabSeqRef.current + 1;
+    sqlTabSeqRef.current = nextIndex;
+    const tab = createSqlTab(nextIndex);
+    setSqlTabs((tabs) => [...tabs, tab]);
+    setActiveSqlTabId(tab.id);
+  }
+
+  function closeSqlTab(targetId: string) {
+    setSqlTabs((tabs) => {
+      if (tabs.length === 1) {
+        return tabs;
+      }
+      const targetIndex = tabs.findIndex((tab) => tab.id === targetId);
+      const nextTabs = tabs.filter((tab) => tab.id !== targetId);
+      if (targetId === activeSqlTabId) {
+        const nextActive = nextTabs[Math.max(0, targetIndex - 1)] || nextTabs[0];
+        setActiveSqlTabId(nextActive.id);
+      }
+      return nextTabs;
+    });
+  }
+
+  function sqlExecutionTarget() {
+    const selection = editorRef.current?.getSelection();
+    const model = editorRef.current?.getModel();
+    const selectedText = selection && model ? model.getValueInRange(selection).trim() : '';
+    return { sql: selectedText || activeSqlTab.sql, selected: Boolean(selectedText) };
+  }
+
+  useEffect(() => {
+    executeRef.current = () => execute();
+    formatRef.current = () => formatSql();
+  });
+
+  const handleEditorMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
+    monaco.languages.registerCompletionItemProvider('sql', {
+      triggerCharacters: ['.', ' '],
+      provideCompletionItems: async (model: Monaco.editor.ITextModel, position: Monaco.Position) => {
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn
+        };
+        const connectionId = selectedIdRef.current;
+        const fallbackItems = sqlKeywordCompletionItems(monaco, range);
+        if (!connectionId) {
+          return { suggestions: fallbackItems };
+        }
+        try {
+          const items = await api<SqlCompletionItem[]>('/sql/completions', {
+            method: 'POST',
+            body: JSON.stringify({ connectionId, sql: model.getValue(), cursorPosition: model.getOffsetAt(position) })
+          });
+          return {
+            suggestions: items.map((item) => ({
+              label: item.label,
+              kind: completionKind(monaco, item.kind),
+              insertText: item.insertText,
+              detail: item.detail,
+              range
+            }))
+          };
+        } catch {
+          return { suggestions: fallbackItems };
+        }
+      }
+    });
+  };
 
   async function openTable(object: DbObject) {
     if (!selected || object.type.toUpperCase().includes('VIEW')) {
@@ -420,7 +630,9 @@ function App() {
     await refreshBackups();
   }
 
-  const statusMessage = loading ? '处理中...' : message || '就绪';
+  const baseStatusMessage = activeSqlTab.message || message || '就绪';
+  const sqlStatusMessage = sqlLoading ? '处理中...' : baseStatusMessage;
+  const operationStatusMessage = loading ? '处理中...' : baseStatusMessage;
 
   return (
     <ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1f6feb', borderRadius: 6 } }}>
@@ -431,13 +643,16 @@ function App() {
               <DatabaseOutlined />
               <span>数据库管理工具</span>
             </div>
-            <Button type="primary" icon={<ReloadOutlined />} block loading={loading} onClick={refreshConnections}>
+            <Button type="primary" icon={<ReloadOutlined />} block loading={connectionsLoading} onClick={() => refreshConnections()}>
               刷新连接
             </Button>
             <ConnectionList
               connections={connections}
               selectedId={selected?.id}
-              loading={loading}
+              connectionsLoading={connectionsLoading}
+              connectionsError={connectionsError}
+              connectionsReady={connectionsReady}
+              testingConnectionId={testingConnectionId}
               onEdit={editConnection}
               onTest={testSavedConnection}
               onDuplicate={duplicateConnection}
@@ -458,14 +673,21 @@ function App() {
           {mode === 'sql' ? (
             <SqlWorkspace
               selected={selected}
-              sql={sql}
-              result={result}
-              statusMessage={statusMessage}
-              loading={loading}
-              onSqlChange={setSql}
+              tabs={sqlTabs}
+              activeTabId={activeSqlTab.id}
+              activeTab={activeSqlTab}
+              statusMessage={sqlStatusMessage}
+              loading={sqlLoading}
+              onTabChange={setActiveSqlTabId}
+              onTabAdd={addSqlTab}
+              onTabClose={closeSqlTab}
+              onSqlChange={(sql) => updateActiveSqlTab({ sql })}
+              onEditorMount={handleEditorMount}
               onFormat={formatSql}
               onExplain={() => execute('/sql/explain')}
               onExecute={() => execute()}
+              onExport={exportSql}
+              onOpenHistory={openSqlHistory}
             />
           ) : (
             <TableWorkspace
@@ -474,7 +696,7 @@ function App() {
               tableRows={tableRows}
               previewSql={previewSql}
               pendingCount={pendingChanges.length}
-              statusMessage={`${statusMessage} · 待提交变更：${pendingChanges.length}`}
+              statusMessage={`${operationStatusMessage} · 待提交变更：${pendingChanges.length}`}
               loading={loading}
               onBackToSql={() => setMode('sql')}
               onReload={() => loadTable()}
@@ -503,59 +725,87 @@ function App() {
           </Space>
         </Sider>
       </Layout>
+      <SqlHistoryDrawer
+        open={historyOpen}
+        history={sqlHistory}
+        onClose={() => setHistoryOpen(false)}
+        onPick={(historyItem) => {
+          updateActiveSqlTab({ sql: historyItem.sql });
+          setHistoryOpen(false);
+        }}
+      />
     </ConfigProvider>
   );
 }
 
-function ConnectionList({ connections, selectedId, loading, onEdit, onTest, onDuplicate, onDelete }: {
+function ConnectionList({ connections, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onEdit, onTest, onDuplicate, onDelete }: {
   connections: Connection[];
   selectedId?: number;
-  loading: boolean;
+  connectionsLoading: boolean;
+  connectionsError: string;
+  connectionsReady: boolean;
+  testingConnectionId: number | null;
   onEdit: (connection: Connection) => void;
   onTest: (connection: Connection) => void;
   onDuplicate: (connection: Connection) => void;
   onDelete: (connection: Connection) => void;
 }) {
+  if (connectionsLoading && connections.length === 0) {
+    return (
+      <Card size="small">
+        <Skeleton active paragraph={{ rows: 4 }} title={{ width: '60%' }} />
+      </Card>
+    );
+  }
+  if (connectionsError && connections.length === 0) {
+    return <Alert type="warning" showIcon message={connectionsError} />;
+  }
+  if (!connectionsReady) {
+    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在准备连接列表" /></Card>;
+  }
   if (connections.length === 0) {
     return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /></Card>;
   }
   return (
-    <List
-      className="connection-list"
-      dataSource={connections}
-      renderItem={(connection) => (
-        <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
-          <Space direction="vertical" size={8} className="full-width">
-            <button className="connection-title-button" onClick={() => onEdit(connection)}>
-              <Space direction="vertical" size={2} className="full-width">
-                <Space size={6} wrap>
-                  <Text strong>{connection.name}</Text>
-                  <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
-                  <Tag>{environmentLabel(connection.environment)}</Tag>
-                  {connection.readonly && <Tag color="orange">只读</Tag>}
+    <Space direction="vertical" size={8} className="full-width">
+      {connectionsError && <Alert type="warning" showIcon message={connectionsError} />}
+      <List
+        className="connection-list"
+        dataSource={connections}
+        renderItem={(connection) => (
+          <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
+            <Space direction="vertical" size={8} className="full-width">
+              <button className="connection-title-button" onClick={() => onEdit(connection)}>
+                <Space direction="vertical" size={2} className="full-width">
+                  <Space size={6} wrap>
+                    <Text strong>{connection.name}</Text>
+                    <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
+                    <Tag>{environmentLabel(connection.environment)}</Tag>
+                    {connection.readonly && <Tag color="orange">只读</Tag>}
+                  </Space>
+                  <Text type="secondary" className="ellipsis-text">{connection.jdbcUrl}</Text>
                 </Space>
-                <Text type="secondary" className="ellipsis-text">{connection.jdbcUrl}</Text>
+              </button>
+              <Space size={4} wrap>
+                <Button size="small" loading={testingConnectionId === connection.id} onClick={() => onTest(connection)}>测试</Button>
+                <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)}>编辑</Button>
+                <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)}>复制</Button>
+                <Popconfirm
+                  title="删除连接"
+                  description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => onDelete(connection)}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
               </Space>
-            </button>
-            <Space size={4} wrap>
-              <Button size="small" loading={loading} onClick={() => onTest(connection)}>测试</Button>
-              <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)}>编辑</Button>
-              <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)}>复制</Button>
-              <Popconfirm
-                title="删除连接"
-                description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
-                okText="删除"
-                cancelText="取消"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => onDelete(connection)}
-              >
-                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
             </Space>
-          </Space>
-        </List.Item>
-      )}
-    />
+          </List.Item>
+        )}
+      />
+    </Space>
   );
 }
 
@@ -603,16 +853,23 @@ function ObjectTree({ objects, onOpenTable }: { objects: DbObject[]; onOpenTable
   );
 }
 
-function SqlWorkspace({ selected, sql, result, statusMessage, loading, onSqlChange, onFormat, onExplain, onExecute }: {
+function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMessage, loading, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onExport, onOpenHistory }: {
   selected: Connection | null;
-  sql: string;
-  result: SqlResult | null;
+  tabs: SqlTab[];
+  activeTabId: string;
+  activeTab: SqlTab;
   statusMessage: string;
   loading: boolean;
+  onTabChange: (tabId: string) => void;
+  onTabAdd: () => void;
+  onTabClose: (tabId: string) => void;
   onSqlChange: (sql: string) => void;
+  onEditorMount: OnMount;
   onFormat: () => void;
   onExplain: () => void;
   onExecute: () => void;
+  onExport: (format: 'csv' | 'json') => void;
+  onOpenHistory: () => void;
 }) {
   return (
     <div className="workspace">
@@ -623,16 +880,80 @@ function SqlWorkspace({ selected, sql, result, statusMessage, loading, onSqlChan
         </div>
         <Space>
           <Button onClick={onFormat}>格式化</Button>
+          <Button icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
+          <Dropdown
+            menu={{
+              items: [
+                { key: 'csv', label: '导出 CSV' },
+                { key: 'json', label: '导出 JSON' }
+              ],
+              onClick: ({ key }) => onExport(key as 'csv' | 'json')
+            }}
+          >
+            <Button icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
+          </Dropdown>
           <Button disabled={!selected || loading} onClick={onExplain}>执行计划</Button>
           <Button type="primary" icon={<PlayCircleOutlined />} disabled={!selected || loading} loading={loading} onClick={onExecute}>执行</Button>
         </Space>
       </Header>
+      <Tabs
+        className="sql-tabs"
+        type="editable-card"
+        activeKey={activeTabId}
+        onChange={onTabChange}
+        onEdit={(targetKey, action) => {
+          if (action === 'add') {
+            onTabAdd();
+          } else {
+            onTabClose(String(targetKey));
+          }
+        }}
+        hideAdd={false}
+        items={tabs.map((tab) => ({ key: tab.id, label: tab.title, closable: tabs.length > 1 }))}
+      />
       <div className="editor">
-        <Editor height="100%" language="sql" value={sql} onChange={(value) => onSqlChange(value || '')} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14 }} />
+        <Editor height="100%" language="sql" value={activeTab.sql} onMount={onEditorMount} onChange={(value) => onSqlChange(value || '')} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14 }} />
       </div>
       <Alert className="status-alert" type={loading ? 'info' : 'success'} message={statusMessage} showIcon />
-      <ResultGrid result={result} />
+      <ResultGrid result={activeTab.result} />
     </div>
+  );
+}
+
+function SqlHistoryDrawer({ open, history, onClose, onPick }: {
+  open: boolean;
+  history: SqlHistory[];
+  onClose: () => void;
+  onPick: (history: SqlHistory) => void;
+}) {
+  return (
+    <Drawer title="SQL 执行历史" width={520} open={open} onClose={onClose}>
+      <List
+        dataSource={history}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 SQL 历史" /> }}
+        renderItem={(item) => (
+          <List.Item
+            actions={[<Button key="use" size="small" onClick={() => onPick(item)}>回填</Button>]}
+          >
+            <List.Item.Meta
+              title={(
+                <Space size={6} wrap>
+                  <Tag color={item.type === 'EXPLAIN' ? 'purple' : 'blue'}>{item.type === 'EXPLAIN' ? '执行计划' : '执行'}</Tag>
+                  <Tag color={item.status === 'SUCCESS' ? 'green' : 'red'}>{item.status === 'SUCCESS' ? '成功' : '失败'}</Tag>
+                  <Text type="secondary">{formatHistoryTime(item.createdAt)} · {item.elapsedMs}ms</Text>
+                </Space>
+              )}
+              description={(
+                <Space direction="vertical" size={4} className="full-width">
+                  <pre className="history-sql">{item.sql}</pre>
+                  {item.errorMessage && <Text type="danger">{item.errorMessage}</Text>}
+                </Space>
+              )}
+            />
+          </List.Item>
+        )}
+      />
+    </Drawer>
   );
 }
 
@@ -802,17 +1123,52 @@ function removeEmptyValues(values: Record<string, unknown>) {
 }
 
 function ResultGrid({ result }: { result: SqlResult | null }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [result]);
+
   if (!result) return <Empty className="empty-state" description="执行查询后查看结果。" />;
   if (!result.resultSet) return <Empty className="empty-state" description={`影响 ${result.affectedRows} 行。`} />;
-  const columns: ColumnsType<ResultRow> = result.columns.map((column) => ({
-    title: column,
-    dataIndex: column,
-    key: column,
-    ellipsis: true,
-    render: (value: unknown) => String(value ?? '')
-  }));
+  const columns: ColumnsType<ResultRow> = [
+    {
+      title: '序号',
+      key: '__index',
+      width: 70,
+      fixed: 'left',
+      render: (_value, _row, index) => (currentPage - 1) * pageSize + index + 1
+    },
+    ...result.columns.map((column) => ({
+      title: column,
+      dataIndex: column,
+      key: column,
+      ellipsis: true,
+      render: (value: unknown) => String(value ?? '')
+    }))
+  ];
   const rows = result.rows.map((row, index) => ({ key: String(index), ...row }));
-  return <Table<ResultRow> size="small" className="data-grid" columns={columns} dataSource={rows} pagination={false} scroll={{ x: true, y: 'calc(100vh - 500px)' }} />;
+  return (
+    <Table<ResultRow>
+      size="small"
+      className="data-grid"
+      columns={columns}
+      dataSource={rows}
+      pagination={{
+        current: currentPage,
+        pageSize,
+        showSizeChanger: true,
+        pageSizeOptions: ['50', '100', '200'],
+        showTotal: (total) => `共 ${total} 行`,
+        onChange: (page, nextPageSize) => {
+          setCurrentPage(nextPageSize !== pageSize ? 1 : page);
+          setPageSize(nextPageSize);
+        }
+      }}
+      scroll={{ x: true, y: 'calc(100vh - 540px)' }}
+    />
+  );
 }
 
 function EditableTable({ data, rows, onEdit, onDelete }: {
@@ -886,6 +1242,31 @@ function backupStatusLabel(status?: string) {
   if (status === 'SUCCESS') return '执行成功';
   if (status === 'FAILED') return '执行失败';
   return status;
+}
+
+function sqlKeywordCompletionItems(monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
+  return [
+    'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN',
+    'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'INSERT', 'UPDATE', 'DELETE'
+  ].map((keyword) => ({
+    label: keyword,
+    kind: monaco.languages.CompletionItemKind.Keyword,
+    insertText: keyword,
+    detail: 'SQL 关键字',
+    range
+  }));
+}
+
+function completionKind(monaco: Parameters<OnMount>[1], kind: string) {
+  if (kind === 'TABLE') return monaco.languages.CompletionItemKind.Class;
+  if (kind === 'COLUMN') return monaco.languages.CompletionItemKind.Field;
+  if (kind === 'SCHEMA') return monaco.languages.CompletionItemKind.Module;
+  return monaco.languages.CompletionItemKind.Keyword;
+}
+
+function formatHistoryTime(value: string) {
+  if (!value) return '';
+  return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
 function dbTypeLabel(dbType: string) {
