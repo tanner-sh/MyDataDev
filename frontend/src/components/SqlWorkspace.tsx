@@ -2,13 +2,13 @@ import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Typography } from 'antd';
 import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import type { Connection, ExportFormat, SqlTab } from '../types';
+import type { Connection, ExportFormat, SqlStatementResult, SqlTab } from '../types';
 import { ResultGrid } from './ResultGrid';
 
 const { Header } = Layout;
 const { Text } = Typography;
 
-export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMessage, loading, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onExport, onOpenHistory }: {
+export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMessage, loading, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onExport, onOpenHistory, onResultTabChange }: {
   selected: Connection | null;
   tabs: SqlTab[];
   activeTabId: string;
@@ -22,11 +22,19 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMes
   onEditorMount: OnMount;
   onFormat: () => void;
   onExplain: () => void;
-  onExecute: () => void;
+  onExecute: () => void;
   onExport: (format: ExportFormat) => void;
-  onOpenHistory: () => void;
-}) {
-  return (
+  onOpenHistory: () => void;
+  onResultTabChange: (key: string) => void;
+}) {
+  const resultItems = activeTab.results.map((result) => ({
+    key: statementResultKey(result),
+    label: result.status === 'FAILED' ? `错误 ${result.index}` : result.result.resultSet ? `结果 ${result.index}` : `影响 ${result.index}`,
+    children: <StatementResultPanel result={result} />
+  }));
+  const activeResultKey = activeTab.activeResultKey || resultItems[0]?.key;
+
+  return (
     <div className="workspace">
       <Header className="workspace-toolbar">
         <div className="toolbar-title">
@@ -68,11 +76,35 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMes
         hideAdd={false}
         items={tabs.map((tab) => ({ key: tab.id, label: tab.title, closable: tabs.length > 1 }))}
       />
-      <div className="editor">
-        <Editor height="100%" language="sql" value={activeTab.sql} onMount={onEditorMount} onChange={(value) => onSqlChange(value || '')} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14 }} />
-      </div>
-      <Alert className="status-alert" type={loading ? 'info' : 'success'} message={statusMessage} showIcon />
-      <ResultGrid result={activeTab.result} />
-    </div>
-  );
+      <div className="editor">
+        <Editor height="100%" language="sql" value={activeTab.sql} onMount={onEditorMount} onChange={(value) => onSqlChange(value || '')} theme="vs-dark" options={{ minimap: { enabled: false }, fontSize: 14 }} />
+      </div>
+      <Alert className="status-alert" type={loading ? 'info' : 'success'} message={statusMessage} showIcon />
+      {resultItems.length > 0 ? (
+        <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
+      ) : (
+        <ResultGrid result={null} />
+      )}
+    </div>
+  );
+}
+
+function StatementResultPanel({ result }: { result: SqlStatementResult }) {
+  return (
+    <div className="statement-result-panel">
+      <div className="statement-result-meta">
+        <Text type="secondary">第 {result.index} 条 · 用时 {result.result.elapsedMs}ms</Text>
+        <pre className="statement-sql">{result.sql}</pre>
+      </div>
+      {result.status === 'FAILED' ? (
+        <Alert type="error" showIcon message={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
+      ) : (
+        <ResultGrid result={result.result} />
+      )}
+    </div>
+  );
+}
+
+function statementResultKey(result: SqlStatementResult) {
+  return `statement-${result.index}`;
 }

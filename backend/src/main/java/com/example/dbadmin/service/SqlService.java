@@ -8,9 +8,12 @@ import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
+import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlStatementResult;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlHistoryRepository;
+import com.example.dbadmin.service.SqlScriptSplitter.StatementSegment;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
@@ -35,14 +38,16 @@ public class SqlService {
     private final DialectRegistry dialectRegistry;
     private final SqlHistoryRepository history;
     private final MetadataService metadata;
+    private final SqlScriptSplitter scriptSplitter;
 
-    public SqlService(ConnectionService connections, AppProperties properties, AuditRepository audit, DialectRegistry dialectRegistry, SqlHistoryRepository history, MetadataService metadata) {
+    public SqlService(ConnectionService connections, AppProperties properties, AuditRepository audit, DialectRegistry dialectRegistry, SqlHistoryRepository history, MetadataService metadata, SqlScriptSplitter scriptSplitter) {
         this.connections = connections;
         this.properties = properties;
         this.audit = audit;
         this.dialectRegistry = dialectRegistry;
         this.history = history;
         this.metadata = metadata;
+        this.scriptSplitter = scriptSplitter;
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
@@ -67,6 +72,59 @@ public class SqlService {
         } catch (Exception e) {
             long elapsedMs = (System.nanoTime() - started) / 1_000_000;
             history.insert(connectionId, sql, "EXECUTE", "FAILED", elapsedMs, abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), actor);
+            throw e;
+        }
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
+        List<StatementSegment> statements = scriptSplitter.split(sql);
+        if (statements.isEmpty()) {
+            throw new IllegalArgumentException("请输入要执行的 SQL");
+        }
+        if (statements.size() > 50) {
+            throw new IllegalArgumentException("一次最多执行 50 条 SQL");
+        }
+
+        int maxRows = Math.min(requestedMaxRows == null ? properties.getSql().getMaxRows() : requestedMaxRows, properties.getSql().getMaxRows());
+        long scriptStarted = System.nanoTime();
+        List<SqlStatementResult> results = new ArrayList<>();
+        String status = "SUCCESS";
+        String errorMessage = null;
+
+        try (Connection c = connections.open(connectionId); Statement st = c.createStatement()) {
+            st.setQueryTimeout(properties.getSql().getTimeoutSeconds());
+            st.setMaxRows(maxRows);
+            for (int i = 0; i < statements.size(); i++) {
+                StatementSegment statement = statements.get(i);
+                long statementStarted = System.nanoTime();
+                try {
+                    boolean hasResult = st.execute(statement.sql());
+                    long elapsedMs = (System.nanoTime() - statementStarted) / 1_000_000;
+                    SqlResult result;
+                    if (hasResult) {
+                        try (ResultSet rs = st.getResultSet()) {
+                            result = readResult(rs, elapsedMs);
+                        }
+                    } else {
+                        result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false);
+                    }
+                    results.add(new SqlStatementResult(i + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
+                } catch (Exception e) {
+                    long elapsedMs = (System.nanoTime() - statementStarted) / 1_000_000;
+                    errorMessage = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                    SqlResult result = new SqlResult(List.of(), List.of(), -1, elapsedMs, false);
+                    results.add(new SqlStatementResult(i + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), result));
+                    status = "FAILED";
+                    break;
+                }
+            }
+            long elapsedMs = (System.nanoTime() - scriptStarted) / 1_000_000;
+            audit.log(actor, "SQL_EXECUTE_SCRIPT", "connection:" + connectionId, abbreviate(sql));
+            history.insert(connectionId, sql, "EXECUTE_SCRIPT", status, elapsedMs, errorMessage == null ? null : abbreviate(errorMessage), actor);
+            return new SqlScriptResponse(status, elapsedMs, results.size(), results);
+        } catch (Exception e) {
+            long elapsedMs = (System.nanoTime() - scriptStarted) / 1_000_000;
+            history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsedMs, abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), actor);
             throw e;
         }
     }

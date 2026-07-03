@@ -59,6 +59,15 @@ public final class ApiDtos {
     public record SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
     }
 
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {
+    }
+
+    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results) {
+    }
+
+    public record SqlStatementResult(int index, String sql, int startOffset, int endOffset, String status, String errorMessage, SqlResult result) {
+    }
+
     public record SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs, String errorMessage, String actor, String createdAt) {
     }
 

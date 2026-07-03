@@ -3,8 +3,8 @@ import type * as Monaco from 'monaco-editor';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from './constants';
 import type { RowChange, SqlTab, TableRow } from './types';
 
-export function createSqlTab(index: number): SqlTab {
-  return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', result: null, message: '' };
+export function createSqlTab(index: number): SqlTab {
+  return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', results: [], message: '' };
 }
 
 export function sleep(ms: number) {

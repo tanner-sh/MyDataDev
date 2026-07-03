@@ -8,6 +8,8 @@ import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
+import com.example.dbadmin.dto.ApiDtos.SqlScriptRequest;
+import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
 import com.example.dbadmin.service.ExportService;
 import com.example.dbadmin.service.SqlService;
 import jakarta.validation.Valid;
@@ -30,6 +32,11 @@ public class SqlController {
     @PostMapping("/execute")
     public SqlResult execute(@Valid @RequestBody SqlRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
         return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor);
+    }
+
+    @PostMapping("/execute-script")
+    public SqlScriptResponse executeScript(@Valid @RequestBody SqlScriptRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), actor);
     }
 
     @PostMapping("/explain")

@@ -7,7 +7,7 @@ import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/ico
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
-import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -24,7 +24,7 @@ export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
-  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', result: null, message: '' }]);
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', results: [], message: '' }]);
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -45,7 +45,8 @@ export default function App() {
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
-  const selectedIdRef = useRef<number | null>(null);
+  const selectedIdRef = useRef<number | null>(null);
+  const metadataRef = useRef<Metadata | null>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const executeRef = useRef<() => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
@@ -60,9 +61,13 @@ export default function App() {
     refreshBackups().catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
   }, []);
 
-  useEffect(() => {
-    selectedIdRef.current = selected?.id || null;
-  }, [selected]);
+  useEffect(() => {
+    selectedIdRef.current = selected?.id || null;
+  }, [selected]);
+
+  useEffect(() => {
+    metadataRef.current = metadata;
+  }, [metadata]);
 
   async function refreshConnections(options: RefreshConnectionsOptions = {}) {
     const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
@@ -235,28 +240,54 @@ export default function App() {
     }
   }
 
-  async function execute(path = '/sql/execute') {
-    if (!selected) {
-      setMessage('请先选择一个数据库连接');
-      return;
+  async function execute(path = '/sql/execute') {
+    if (!selected) {
+      setMessage('请先选择一个数据库连接');
+      return;
     }
     const target = sqlExecutionTarget();
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL' });
       return;
     }
-    setMode('sql');
-    setSqlLoading(true);
-    try {
-      const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
-      const nextMessage = data.resultSet
-        ? `${target.selected ? '已执行选中 SQL，' : '已执行全部 SQL，'}返回 ${data.rows.length} 行，用时 ${data.elapsedMs}ms`
-        : `${target.selected ? '已执行选中 SQL，' : '已执行全部 SQL，'}影响 ${data.affectedRows} 行`;
-      updateActiveSqlTab({ result: data, message: nextMessage });
-      await refreshSqlHistory(selected);
-    } catch (e) {
-      updateActiveSqlTab({ message: localizeMessage((e as Error).message) });
-      await refreshSqlHistory(selected);
+    setMode('sql');
+    setSqlLoading(true);
+    try {
+      if (path === '/sql/explain') {
+        const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
+        const result: SqlStatementResult = {
+          index: 1,
+          sql: target.sql,
+          startOffset: 0,
+          endOffset: target.sql.length,
+          status: 'SUCCESS',
+          errorMessage: null,
+          result: data
+        };
+        const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
+        updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage });
+      } else {
+        const data = await api<SqlScriptResult>('/sql/execute-script', { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
+        const failed = data.results.find((item) => item.status === 'FAILED');
+        const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
+        const firstResultSet = data.results.find((item) => item.result?.resultSet);
+        const returnedRows = data.results.reduce((total, item) => total + (item.result?.resultSet ? item.result.rows.length : 0), 0);
+        const nextMessage = failed
+          ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms`
+          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行，用时 ${data.elapsedMs}ms`;
+        updateActiveSqlTab({
+          results: data.results,
+          activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
+          message: nextMessage
+        });
+        if (failed) {
+          selectStatementRange(target.baseOffset + failed.startOffset, target.baseOffset + failed.endOffset);
+        }
+      }
+      await refreshSqlHistory(selected);
+    } catch (e) {
+      updateActiveSqlTab({ message: localizeMessage((e as Error).message) });
+      await refreshSqlHistory(selected);
     } finally {
       setSqlLoading(false);
     }
@@ -330,12 +361,43 @@ export default function App() {
     });
   }
 
-  function sqlExecutionTarget() {
-    const selection = editorRef.current?.getSelection();
-    const model = editorRef.current?.getModel();
-    const selectedText = selection && model ? model.getValueInRange(selection).trim() : '';
-    return { sql: selectedText || activeSqlTab.sql, selected: Boolean(selectedText) };
-  }
+  function sqlExecutionTarget() {
+    const selection = editorRef.current?.getSelection();
+    const model = editorRef.current?.getModel();
+    if (selection && model && !selection.isEmpty()) {
+      const rawSelectedText = model.getValueInRange(selection);
+      const leadingWhitespace = rawSelectedText.length - rawSelectedText.trimStart().length;
+      const selectedText = rawSelectedText.trim();
+      if (selectedText) {
+        return {
+          sql: selectedText,
+          selected: true,
+          baseOffset: model.getOffsetAt(selection.getStartPosition()) + leadingWhitespace
+        };
+      }
+    }
+    return { sql: activeSqlTab.sql, selected: false, baseOffset: 0 };
+  }
+
+  function statementResultKey(result?: SqlStatementResult) {
+    return result ? `statement-${result.index}` : undefined;
+  }
+
+  function selectStatementRange(startOffset: number, endOffset: number) {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const start = model.getPositionAt(startOffset);
+    const end = model.getPositionAt(endOffset);
+    editor.setSelection({
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column
+    });
+    editor.revealPositionInCenter(start);
+    editor.focus();
+  }
 
   useEffect(() => {
     executeRef.current = () => execute();
@@ -348,19 +410,23 @@ export default function App() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
     monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters: ['.', ' '],
-      provideCompletionItems: async (model: Monaco.editor.ITextModel, position: Monaco.Position) => {
-        const word = model.getWordUntilPosition(position);
-        const range = {
-          startLineNumber: position.lineNumber,
+      provideCompletionItems: async (model: Monaco.editor.ITextModel, position: Monaco.Position) => {
+        const word = model.getWordUntilPosition(position);
+        const range = {
+          startLineNumber: position.lineNumber,
           endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn
-        };
-        const connectionId = selectedIdRef.current;
-        const fallbackItems = sqlKeywordCompletionItems(monaco, range);
-        if (!connectionId) {
-          return { suggestions: fallbackItems };
-        }
+          startColumn: word.startColumn,
+          endColumn: word.endColumn
+        };
+        const aliasItems = aliasColumnCompletionItems(model, position, monaco, range);
+        if (aliasItems.length > 0) {
+          return { suggestions: aliasItems };
+        }
+        const connectionId = selectedIdRef.current;
+        const fallbackItems = sqlKeywordCompletionItems(monaco, range);
+        if (!connectionId) {
+          return { suggestions: fallbackItems };
+        }
         try {
           const items = await api<SqlCompletionItem[]>('/sql/completions', {
             method: 'POST',
@@ -379,9 +445,61 @@ export default function App() {
           return { suggestions: fallbackItems };
         }
       }
-    });
-  };
-
+    });
+  };
+
+  function aliasColumnCompletionItems(model: Monaco.editor.ITextModel, position: Monaco.Position, monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
+    const metadataSnapshot = metadataRef.current;
+    if (!metadataSnapshot) return [];
+    const textBeforeCursor = model.getValueInRange({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column
+    });
+    const aliasMatch = textBeforeCursor.match(/([A-Za-z_][\w$]*)\.\w*$/);
+    if (!aliasMatch) return [];
+    const object = resolveAliasObject(model.getValue(), aliasMatch[1], metadataSnapshot.objects);
+    if (!object) return [];
+    return object.columns.map((column) => ({
+      label: column.name,
+      kind: monaco.languages.CompletionItemKind.Field,
+      insertText: column.name,
+      detail: `${object.name} 字段 · ${column.type}`,
+      range
+    }));
+  }
+
+  function resolveAliasObject(sql: string, alias: string, objects: DbObject[]) {
+    const aliasMap = new Map<string, string>();
+    const tablePattern = /\b(?:from|join)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z0-9_.$]+))(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?/gi;
+    const reserved = new Set(['where', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'on', 'group', 'order', 'having', 'limit']);
+    let match: RegExpExecArray | null;
+    while ((match = tablePattern.exec(sql)) !== null) {
+      const tableName = stripSqlIdentifier(match[1]);
+      const tableParts = tableName.split('.');
+      const defaultAlias = tableParts[tableParts.length - 1];
+      const aliasName = match[2] && !reserved.has(match[2].toLowerCase()) ? match[2] : defaultAlias;
+      aliasMap.set(aliasName.toLowerCase(), tableName);
+    }
+    const tableName = aliasMap.get(alias.toLowerCase());
+    if (!tableName) return null;
+    return objects.find((object) => matchesObjectName(object, tableName)) || null;
+  }
+
+  function matchesObjectName(object: DbObject, tableName: string) {
+    const normalizedTable = tableName.toLowerCase();
+    const objectName = object.name.toLowerCase();
+    const qualifiedName = object.schemaName ? `${object.schemaName}.${object.name}`.toLowerCase() : objectName;
+    return normalizedTable === objectName || normalizedTable === qualifiedName || normalizedTable.endsWith(`.${objectName}`);
+  }
+
+  function stripSqlIdentifier(value: string) {
+    return value
+      .replace(/^["`\[]/, '')
+      .replace(/["`\]]$/, '');
+  }
+
   async function openTable(object: DbObject) {
     if (!selected || object.type.toUpperCase().includes('VIEW')) {
       return;
@@ -600,11 +718,12 @@ export default function App() {
               onSqlChange={(sql) => updateActiveSqlTab({ sql })}
               onEditorMount={handleEditorMount}
               onFormat={formatSql}
-              onExplain={() => execute('/sql/explain')}
-              onExecute={() => execute()}
-              onExport={exportSql}
-              onOpenHistory={openSqlHistory}
-            />
+              onExplain={() => execute('/sql/explain')}
+              onExecute={() => execute()}
+              onExport={exportSql}
+              onOpenHistory={openSqlHistory}
+              onResultTabChange={(key) => updateActiveSqlTab({ activeResultKey: key })}
+            />
           ) : mode === 'table' ? (
             <TableWorkspace
               activeTable={activeTable}
