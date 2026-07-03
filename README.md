@@ -36,6 +36,7 @@ Open `http://localhost:5173`.
 - SQL formatting, execution and execution-plan endpoint
 - Result pagination cap and execution audit logs
 - Table edit SQL preview with primary/unique-key guardrails
+- CSV/JSON/SQL import into pending table inserts
 - CSV/JSON/SQL/XML export from SQL query
 - Backup task CRUD, manual execution stub and scheduling fields
 - React UI with connection explorer, SQL workspace, result grid and backup task panel

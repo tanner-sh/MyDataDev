@@ -6,6 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
+import { parseImportFile } from './importers';
 import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
@@ -445,14 +446,37 @@ export default function App() {
     }));
   }
 
-  function addRow() {
-    if (!tableData) return;
-    const empty = Object.fromEntries(tableData.columns.map((column) => [column, '']));
-    setTableRows((rows) => [{ id: `new-${Date.now()}`, values: empty, inserted: true }, ...rows]);
-    setPreviewSql([]);
-  }
-
-  function deleteRow(rowId: string) {
+  function addRow() {
+    if (!tableData) return;
+    const empty = Object.fromEntries(tableData.columns.map((column) => [column, '']));
+    setTableRows((rows) => [{ id: `new-${Date.now()}`, values: empty, inserted: true }, ...rows]);
+    setPreviewSql([]);
+  }
+
+  async function importRows(file: File) {
+    if (!activeTable || !tableData) {
+      setMessage('请先打开一张表再导入数据');
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = parseImportFile(await file.text(), file.name, activeTable.tableName, tableData.columns);
+      const importedRows = result.rows.map((values, index) => ({
+        id: `import-${Date.now()}-${index}`,
+        values,
+        inserted: true
+      }));
+      setTableRows((rows) => [...importedRows, ...rows]);
+      setPreviewSql([]);
+      setMessage(result.message);
+    } catch (e) {
+      setMessage(`导入失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function deleteRow(rowId: string) {
     setTableRows((rows) => rows.flatMap((row) => {
       if (row.id !== rowId) return [row];
       return row.inserted ? [] : [{ ...row, deleted: true }];
@@ -591,9 +615,10 @@ export default function App() {
               statusMessage={`${operationStatusMessage} · 待提交变更：${pendingChanges.length}`}
               loading={loading}
               onBackToSql={() => setMode('sql')}
-              onReload={() => loadTable()}
-              onAddRow={addRow}
-              onPreview={previewChanges}
+              onReload={() => loadTable()}
+              onAddRow={addRow}
+              onImportFile={importRows}
+              onPreview={previewChanges}
               onCommit={commitChanges}
               onEdit={editCell}
               onDelete={deleteRow}
