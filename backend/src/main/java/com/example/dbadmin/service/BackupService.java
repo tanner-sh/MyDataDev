@@ -9,6 +9,7 @@ import com.example.dbadmin.repo.BackupTaskRepository;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -106,6 +107,9 @@ public class BackupService {
             for (TableRef table : tables) {
                 writeTableBackup(connection, writer, table);
             }
+        } catch (Exception e) {
+            Files.deleteIfExists(file);
+            throw e;
         }
         return new BackupFile(file, Files.size(file));
     }
@@ -150,7 +154,7 @@ public class BackupService {
             while (rs.next()) {
                 List<String> values = new ArrayList<>();
                 for (int i = 1; i <= md.getColumnCount(); i++) {
-                    values.add(literal(rs.getObject(i)));
+                    values.add(literal(rs.getObject(i), tableName, columns.get(i - 1)));
                 }
                 writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES (" + String.join(", ", values) + ");\n");
                 rows++;
@@ -205,19 +209,18 @@ public class BackupService {
         return quote == null || quote.isBlank() ? "" : quote.trim();
     }
 
-    private String literal(Object value) throws Exception {
+    private String literal(Object value, String tableName, String columnName) throws Exception {
         if (value == null) {
             return "NULL";
         }
         if (value instanceof Clob clob) {
-            long length = clob.length();
-            return quoteLiteral(clob.getSubString(1, (int) Math.min(length, 10_000)));
+            return quoteLiteral(readClob(clob));
         }
         if (value instanceof Blob blob) {
-            return "NULL /* BLOB " + blob.length() + " bytes */";
+            throw unsupportedBinary(tableName, columnName, "BLOB " + blob.length() + " bytes");
         }
         if (value instanceof byte[] bytes) {
-            return "NULL /* BINARY " + bytes.length + " bytes */";
+            throw unsupportedBinary(tableName, columnName, "BINARY " + bytes.length + " bytes");
         }
         if (value instanceof Number) {
             return value.toString();
@@ -238,6 +241,26 @@ public class BackupService {
             return quoteLiteral(value.toString());
         }
         return quoteLiteral(value.toString());
+    }
+
+    private String readClob(Clob clob) throws Exception {
+        StringBuilder builder = new StringBuilder();
+        try (Reader reader = clob.getCharacterStream()) {
+            char[] buffer = new char[8192];
+            int read;
+            while ((read = reader.read(buffer)) != -1) {
+                builder.append(buffer, 0, read);
+            }
+        }
+        return builder.toString();
+    }
+
+    private IllegalArgumentException unsupportedBinary(String tableName, String columnName, String detail) {
+        return new IllegalArgumentException("SQL 备份暂不支持二进制字段：" + tableName + "." + quoteForMessage(columnName) + " (" + detail + ")");
+    }
+
+    private String quoteForMessage(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 
     private String quoteLiteral(String value) {
