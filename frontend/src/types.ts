@@ -8,15 +8,21 @@ export type Connection = {
   readonly: boolean;
 };
 
-export type DbObject = {
-  schemaName?: string;
-  name: string;
-  type: string;
-  columns: { name: string; type: string; size: number; nullable: boolean }[];
-  indexes: { name: string; columnName: string; unique: boolean }[];
-};
-
-export type Metadata = { schemas: string[]; objects: DbObject[] };
+export type DbObject = {
+  schemaName?: string;
+  name: string;
+  type: string;
+  columns: { name: string; type: string; size: number; nullable: boolean }[];
+  indexes: { name: string; columnName: string; unique: boolean }[];
+};
+
+export type ObjectDetail = DbObject & {
+  primaryKeys: string[];
+  rowCount?: number | null;
+  ddl: string;
+};
+
+export type Metadata = { schemas: string[]; objects: DbObject[] };
 export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean };
 export type BackupTask = { id: number; name: string; connectionId: number; scope: string; cron?: string; lastStatus?: string; lastMessage?: string };
 export type ActiveTable = { schemaName?: string; tableName: string };

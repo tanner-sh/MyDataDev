@@ -4,7 +4,7 @@ import { objectTypeLabel } from '../utils';
 
 const { Text } = Typography;
 
-export function ObjectTree({ objects, onOpenTable }: { objects: DbObject[]; onOpenTable: (object: DbObject) => void }) {
+export function ObjectTree({ objects, onOpenDetail, onOpenTable }: { objects: DbObject[]; onOpenDetail: (object: DbObject) => void; onOpenTable: (object: DbObject) => void }) {
   if (objects.length === 0) {
     return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未加载对象" />;
   }
@@ -14,23 +14,35 @@ export function ObjectTree({ objects, onOpenTable }: { objects: DbObject[]; onOp
       className="object-collapse"
       items={objects.map((object) => ({
         key: `${object.schemaName}.${object.name}`,
-        label: (
-          <Space size={6} className="object-label">
-            <Button
-              type="link"
-              size="small"
-              className="object-open-button"
-              disabled={object.type.toUpperCase().includes('VIEW')}
-              onClick={(event) => {
-                event.stopPropagation();
-                onOpenTable(object);
-              }}
-            >
-              {object.schemaName ? `${object.schemaName}.` : ''}{object.name}
-            </Button>
-            <Tag>{objectTypeLabel(object.type)}</Tag>
-          </Space>
-        ),
+        label: (
+          <Space size={6} className="object-label">
+            <Button
+              type="link"
+              size="small"
+              className="object-open-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenDetail(object);
+              }}
+            >
+              {object.schemaName ? `${object.schemaName}.` : ''}{object.name}
+            </Button>
+            <Tag>{objectTypeLabel(object.type)}</Tag>
+            {!object.type.toUpperCase().includes('VIEW') && (
+              <Button
+                type="link"
+                size="small"
+                className="object-data-button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenTable(object);
+                }}
+              >
+                数据
+              </Button>
+            )}
+          </Space>
+        ),
         children: (
           <List
             size="small"

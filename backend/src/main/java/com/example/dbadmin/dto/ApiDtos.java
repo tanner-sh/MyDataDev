@@ -44,6 +44,9 @@ public final class ApiDtos {
     public record DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
     }
 
+    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, Long rowCount, String ddl) {
+    }
+
     public record ColumnInfo(String name, String type, int size, boolean nullable, String remarks) {
     }
 

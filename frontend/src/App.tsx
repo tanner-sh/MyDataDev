@@ -6,11 +6,12 @@ import zhCN from 'antd/locale/zh_CN';
 import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
-import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
 import { ConnectionList } from './components/ConnectionList';
+import { ObjectDetailWorkspace } from './components/ObjectDetailWorkspace';
 import { ObjectTree } from './components/ObjectTree';
 import { SqlHistoryDrawer } from './components/SqlHistoryDrawer';
 import { SqlWorkspace } from './components/SqlWorkspace';
@@ -34,8 +35,9 @@ export default function App() {
   const [backups, setBackups] = useState<BackupTask[]>([]);
   const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
   const [editingConnectionId, setEditingConnectionId] = useState<number | null>(null);
-  const [mode, setMode] = useState<'sql' | 'table'>('sql');
-  const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
+  const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
+  const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
+  const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
   const [tableData, setTableData] = useState<TableData | null>(null);
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
@@ -159,11 +161,12 @@ export default function App() {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
       setMessage(`已删除连接：${connection.name}`);
       setConnections((rows) => rows.filter((row) => row.id !== connection.id));
-      if (selected?.id === connection.id) {
-        setSelected(null);
-        setMetadata(null);
-        setMode('sql');
-      }
+      if (selected?.id === connection.id) {
+        setSelected(null);
+        setMetadata(null);
+        setActiveObjectDetail(null);
+        setMode('sql');
+      }
       if (editingConnectionId === connection.id) {
         resetConnectionForm();
       }
@@ -176,11 +179,12 @@ export default function App() {
     }
   }
 
-  function selectConnection(connection: Connection) {
-    setSelected(connection);
-    setMetadata(null);
-    setMode('sql');
-  }
+  function selectConnection(connection: Connection) {
+    setSelected(connection);
+    setMetadata(null);
+    setActiveObjectDetail(null);
+    setMode('sql');
+  }
 
   function editConnection(connection: Connection) {
     selectConnection(connection);
@@ -377,15 +381,32 @@ export default function App() {
     });
   };
 
-  async function openTable(object: DbObject) {
-    if (!selected || object.type.toUpperCase().includes('VIEW')) {
-      return;
-    }
-    const next = { schemaName: object.schemaName, tableName: object.name };
+  async function openTable(object: DbObject) {
+    if (!selected || object.type.toUpperCase().includes('VIEW')) {
+      return;
+    }
+    const next = { schemaName: object.schemaName, tableName: object.name };
     setActiveTable(next);
     setMode('table');
-    await loadTable(next);
-  }
+    await loadTable(next);
+  }
+
+  async function openObjectDetail(object: DbObject) {
+    if (!selected) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      const detail = await api<ObjectDetail>(`/metadata/${selected.id}/objects/detail?${params.toString()}`);
+      setActiveObjectDetail(detail);
+      setMode('object');
+      setMessage(`已加载对象详情：${detail.name}`);
+    } catch (e) {
+      setMessage(localizeMessage((e as Error).message));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function loadTable(table = activeTable) {
     if (!selected || !table) return;
@@ -534,7 +555,7 @@ export default function App() {
                 <Button size="small" icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata()}>
                   加载对象
                 </Button>
-                <ObjectTree objects={objects} onOpenTable={openTable} />
+                <ObjectTree objects={objects} onOpenDetail={openObjectDetail} onOpenTable={openTable} />
               </Space>
             </Card>
           </Space>
@@ -560,10 +581,10 @@ export default function App() {
               onExport={exportSql}
               onOpenHistory={openSqlHistory}
             />
-          ) : (
-            <TableWorkspace
-              activeTable={activeTable}
-              tableData={tableData}
+          ) : mode === 'table' ? (
+            <TableWorkspace
+              activeTable={activeTable}
+              tableData={tableData}
               tableRows={tableRows}
               previewSql={previewSql}
               pendingCount={pendingChanges.length}
@@ -574,10 +595,18 @@ export default function App() {
               onAddRow={addRow}
               onPreview={previewChanges}
               onCommit={commitChanges}
-              onEdit={editCell}
-              onDelete={deleteRow}
-            />
-          )}
+              onEdit={editCell}
+              onDelete={deleteRow}
+            />
+          ) : (
+            <ObjectDetailWorkspace
+              detail={activeObjectDetail}
+              statusMessage={operationStatusMessage}
+              loading={loading}
+              onBackToSql={() => setMode('sql')}
+              onOpenTable={openTable}
+            />
+          )}
         </Content>
 
         <Sider

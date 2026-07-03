@@ -32,11 +32,11 @@ Open `http://localhost:5173`.
 
 - Connection CRUD and connection testing
 - Encrypted password storage
-- Metadata browsing for schemas, tables, views, columns and indexes
+- Metadata browsing for schemas, tables, views, columns, indexes and object details
 - SQL formatting, execution and execution-plan endpoint
 - Result pagination cap and execution audit logs
 - Table edit SQL preview with primary/unique-key guardrails
-- CSV/JSON export from SQL query
+- CSV/JSON/SQL/XML export from SQL query
 - Backup task CRUD, manual execution stub and scheduling fields
 - React UI with connection explorer, SQL workspace, result grid and backup task panel
 

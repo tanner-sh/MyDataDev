@@ -192,6 +192,10 @@ body {
   white-space: nowrap;
 }
 
+.object-data-button {
+  padding: 0 2px;
+}
+
 .column-item {
   padding: 3px 0 !important;
 }
@@ -212,6 +216,10 @@ body {
 
 .table-workspace {
   grid-template-rows: 52px 34px minmax(0, 1fr) 150px;
+}
+
+.object-workspace {
+  grid-template-rows: 52px minmax(0, 1fr);
 }
 
 .workspace-toolbar {
@@ -337,6 +345,55 @@ body {
   color: #172033;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+}
+
+.object-detail-tabs {
+  min-height: 0;
+  padding: 10px 12px 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.object-detail-tabs .ant-tabs-content-holder,
+.object-detail-tabs .ant-tabs-content,
+.object-detail-tabs .ant-tabs-tabpane {
+  min-height: 0;
+  overflow: auto;
+}
+
+.object-overview {
+  max-width: 860px;
+}
+
+.object-detail-grid {
+  min-height: 0;
+}
+
+.ddl-viewer {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+}
+
+.ddl-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-bottom: 8px;
+}
+
+.ddl-viewer pre {
+  min-height: 260px;
+  max-height: calc(100vh - 160px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #dde3ee;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .inspector-tabs .ant-tabs-nav {
