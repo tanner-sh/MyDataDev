@@ -648,21 +648,83 @@ export default function App() {
     };
   }
 
-  async function createBackup() {
-    if (!selected) return;
-    const task = await api<BackupTask>('/backups', {
-      method: 'POST',
-      body: JSON.stringify({ name: `${selected.name} 全量备份`, connectionId: selected.id, scope: 'DATABASE', cron: '0 0 2 * * *', enabled: true })
-    });
-    setMessage(`已创建备份任务：${task.name}`);
-    await refreshBackups();
-  }
-
-  async function runBackup(id: number) {
-    const task = await api<BackupTask>(`/backups/${id}/run`, { method: 'POST' });
-    setMessage(localizeMessage(task.lastMessage || '备份任务已执行'));
-    await refreshBackups();
-  }
+  async function createDatabaseBackup() {
+    if (!selected) return;
+    setLoading(true);
+    try {
+      const task = await api<BackupTask>('/backups', {
+        method: 'POST',
+        body: JSON.stringify({ name: `${selected.name} 全量备份`, connectionId: selected.id, scope: 'DATABASE', cron: '0 0 2 * * *', enabled: true })
+      });
+      setMessage(`已创建备份任务：${task.name}`);
+      await refreshBackups();
+    } catch (e) {
+      setMessage(`创建备份任务失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createTableBackup() {
+    if (!selected || !activeTable) return;
+    const tableLabel = `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}`;
+    setLoading(true);
+    try {
+      const task = await api<BackupTask>('/backups', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: `${selected.name} ${tableLabel} 备份`,
+          connectionId: selected.id,
+          scope: 'TABLE',
+          schemaName: activeTable.schemaName,
+          tableName: activeTable.tableName,
+          cron: '',
+          enabled: false
+        })
+      });
+      setMessage(`已创建备份任务：${task.name}`);
+      await refreshBackups();
+    } catch (e) {
+      setMessage(`创建备份任务失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runBackup(id: number) {
+    setLoading(true);
+    try {
+      const task = await api<BackupTask>(`/backups/${id}/run`, { method: 'POST' });
+      setMessage(localizeMessage(task.lastMessage || '备份任务已执行'));
+      await refreshBackups();
+    } catch (e) {
+      setMessage(`备份执行失败：${localizeMessage((e as Error).message)}`);
+      await refreshBackups();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadBackup(id: number) {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API}/backups/${id}/download`);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: response.statusText }));
+        throw new Error(err.message || response.statusText);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-${id}.sql`;
+      downloadBlob(blob, filename);
+      setMessage(`已下载备份文件：${filename}`);
+    } catch (e) {
+      setMessage(`下载备份失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
 
   const baseStatusMessage = activeSqlTab.message || message || '就绪';
   const sqlStatusMessage = sqlLoading ? '处理中...' : baseStatusMessage;
@@ -785,8 +847,8 @@ export default function App() {
               {
                 key: 'backup',
                 label: '备份任务',
-                children: <BackupPanel backups={backups} selected={selected} loading={loading} onCreate={createBackup} onRun={runBackup} />
-              }
+                children: <BackupPanel backups={backups} selected={selected} activeTable={activeTable} loading={loading} onCreateDatabase={createDatabaseBackup} onCreateTable={createTableBackup} onRun={runBackup} onDownload={downloadBackup} />
+              }
             ]}
           />
         </Sider>

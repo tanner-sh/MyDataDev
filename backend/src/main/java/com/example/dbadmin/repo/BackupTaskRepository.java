@@ -29,6 +29,8 @@ public class BackupTaskRepository {
             rs.getBoolean("enabled"),
             rs.getString("last_status"),
             rs.getString("last_message"),
+            rs.getString("last_file_path"),
+            rs.getObject("last_file_size", Long.class),
             toInstant(rs.getTimestamp("last_run_at"))
     );
 
@@ -74,8 +76,16 @@ public class BackupTaskRepository {
     }
 
     public void updateStatus(long id, String status, String message) {
-        jdbc.update("UPDATE backup_task SET last_status = ?, last_message = ?, last_run_at = CURRENT_TIMESTAMP WHERE id = ?",
-                status, message, id);
+        updateStatus(id, status, message, null, null);
+    }
+
+    public void updateStatus(long id, String status, String message, String filePath, Long fileSize) {
+        jdbc.update("""
+                        UPDATE backup_task
+                        SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?, last_run_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                status, message, filePath, fileSize, id);
     }
 
     private Instant toInstant(Timestamp ts) {

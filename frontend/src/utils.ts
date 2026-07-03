@@ -55,12 +55,19 @@ export function backupScopeLabel(scope: string) {
   return scope;
 }
 
-export function backupStatusLabel(status?: string) {
-  if (!status) return '尚未执行';
-  if (status === 'SUCCESS') return '执行成功';
-  if (status === 'FAILED') return '执行失败';
-  return status;
-}
+export function backupStatusLabel(status?: string) {
+  if (!status) return '尚未执行';
+  if (status === 'SUCCESS') return '执行成功';
+  if (status === 'FAILED') return '执行失败';
+  return status;
+}
+
+export function formatFileSize(size?: number) {
+  if (!size || size <= 0) return '';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export function sqlKeywordCompletionItems(monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
   return [

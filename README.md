@@ -38,7 +38,7 @@ Open `http://localhost:5173`.
 - Table edit SQL preview with primary/unique-key guardrails
 - CSV/JSON/SQL import into pending table inserts
 - CSV/JSON/SQL/XML export from SQL query
-- Backup task CRUD, manual execution stub and scheduling fields
+- Backup task CRUD, SQL backup file generation, manual execution, scheduled execution fields and download
 - React UI with connection explorer, SQL workspace, result grid and backup task panel
 
 ## Notes

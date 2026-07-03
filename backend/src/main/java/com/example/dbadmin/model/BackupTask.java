@@ -13,6 +13,8 @@ public record BackupTask(
         boolean enabled,
         String lastStatus,
         String lastMessage,
+        String lastFilePath,
+        Long lastFileSize,
         Instant lastRunAt
 ) {
 }
