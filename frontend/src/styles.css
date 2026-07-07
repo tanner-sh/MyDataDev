@@ -4,6 +4,15 @@
   font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -13,9 +22,10 @@ body {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   width: 100%;
-  overflow-x: hidden;
+  overflow: hidden;
   background: #ffffff;
 }
 
@@ -47,7 +57,9 @@ body {
 
 .app-content {
   flex: 1 1 0;
+  height: 100vh;
   min-width: 0;
+  min-height: 0;
   max-width: 100%;
   overflow: hidden;
   background: #ffffff;
@@ -202,16 +214,18 @@ body {
 
 .workspace {
   width: 100%;
+  height: 100%;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
   display: grid;
-  grid-template-rows: 52px 38px minmax(260px, 42vh) 34px minmax(0, 1fr);
+  grid-template-rows: 52px 38px minmax(180px, 36vh) 34px minmax(0, 1fr);
   overflow: hidden;
   background: #ffffff;
 }
 
 .workspace > * {
   min-width: 0;
+  min-height: 0;
 }
 
 .table-workspace {
@@ -242,7 +256,7 @@ body {
 }
 
 .editor {
-  min-height: 260px;
+  min-height: 180px;
 }
 
 .sql-tabs {
@@ -269,6 +283,7 @@ body {
 }
 
 .result-tabs {
+  height: 100%;
   min-height: 0;
   padding: 0 12px;
   overflow: hidden;
@@ -282,23 +297,29 @@ body {
 .result-tabs .ant-tabs-content-holder,
 .result-tabs .ant-tabs-content,
 .result-tabs .ant-tabs-tabpane {
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
 .statement-result-panel {
+  height: 100%;
   min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .statement-result-meta {
   display: grid;
   gap: 6px;
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
 .statement-sql {
-  max-height: 86px;
+  max-height: 58px;
   margin: 0;
-  padding: 8px;
+  padding: 6px 8px;
   overflow: auto;
   white-space: pre-wrap;
   background: #f8fafc;
@@ -316,6 +337,41 @@ body {
   min-height: 0;
   overflow: hidden;
   background: #ffffff;
+}
+
+.data-grid-fill {
+  height: 100%;
+}
+
+.data-grid-fill.ant-table-wrapper,
+.data-grid-fill .ant-spin-nested-loading,
+.data-grid-fill .ant-spin-container {
+  height: 100%;
+  min-height: 0;
+}
+
+.data-grid-fill .ant-spin-container {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.data-grid-fill .ant-table {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.data-grid-fill .ant-table-container {
+  height: 100%;
+  min-height: 0;
+}
+
+.data-grid-fill .ant-table-body {
+  min-height: 0;
+}
+
+.data-grid-fill .ant-table-body {
+  max-height: 100% !important;
 }
 
 .data-grid.ant-table-wrapper,
@@ -356,6 +412,11 @@ body {
   display: grid;
   place-content: center;
   background: #ffffff;
+}
+
+.empty-state-fill {
+  height: 100%;
+  min-height: 0;
 }
 
 .sql-preview-card {
@@ -486,10 +547,29 @@ body {
   min-width: 0;
 }
 
+.backup-task-title {
+  display: block;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 1180px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+    overflow: auto;
+  }
+
   .app-shell {
     display: block;
+    height: auto;
+    min-height: 100vh;
     overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .app-sider,
@@ -505,6 +585,7 @@ body {
   .workspace {
     width: 100%;
     min-width: 0;
+    height: auto;
     min-height: 720px;
   }
 

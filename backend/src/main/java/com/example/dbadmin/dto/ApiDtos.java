@@ -103,4 +103,7 @@ public final class ApiDtos {
 
     public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
     }
+
+    public record BackupEnabledRequest(boolean enabled) {
+    }
 }

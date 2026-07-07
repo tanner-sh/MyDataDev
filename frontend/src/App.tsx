@@ -7,7 +7,7 @@ import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/ico
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
-import type { ActiveTable, BackupTask, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -56,14 +56,17 @@ export default function App() {
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
   const activeSqlTab = useMemo(() => sqlTabs.find((tab) => tab.id === activeSqlTabId) || sqlTabs[0], [activeSqlTabId, sqlTabs]);
 
-  useEffect(() => {
-    refreshConnections({ retry: true });
-    refreshBackups().catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
-  }, []);
+  useEffect(() => {
+    refreshConnections({ retry: true });
+  }, []);
 
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
   }, [selected]);
+
+  useEffect(() => {
+    refreshBackups(selected).catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
+  }, [selected?.id]);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -97,9 +100,13 @@ export default function App() {
     }
   }
 
-  async function refreshBackups() {
-    setBackups(await api<BackupTask[]>('/backups'));
-  }
+  async function refreshBackups(conn = selected) {
+    if (!conn) {
+      setBackups([]);
+      return;
+    }
+    setBackups(await api<BackupTask[]>(`/backups?connectionId=${conn.id}`));
+  }
 
   async function refreshSqlHistory(conn = selected) {
     if (!conn) {
@@ -648,44 +655,57 @@ export default function App() {
     };
   }
 
-  async function createDatabaseBackup() {
-    if (!selected) return;
+  async function saveBackup(id: number | null, form: BackupTaskForm) {
+    if (!selected) {
+      setMessage('请先选择一个数据库连接');
+      throw new Error('Connection is required');
+    }
     setLoading(true);
     try {
-      const task = await api<BackupTask>('/backups', {
-        method: 'POST',
-        body: JSON.stringify({ name: `${selected.name} 全量备份`, connectionId: selected.id, scope: 'DATABASE', cron: '0 0 2 * * *', enabled: true })
-      });
-      setMessage(`已创建备份任务：${task.name}`);
-      await refreshBackups();
+      const payload = {
+        name: form.name,
+        connectionId: selected.id,
+        scope: form.scope,
+        schemaName: form.scope === 'TABLE' ? form.schemaName : undefined,
+        tableName: form.scope === 'TABLE' ? form.tableName : undefined,
+        cron: form.cron,
+        enabled: form.enabled
+      };
+      const task = id
+        ? await api<BackupTask>(`/backups/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await api<BackupTask>('/backups', { method: 'POST', body: JSON.stringify(payload) });
+      setMessage(id ? `已更新备份任务：${task.name}` : `已创建备份任务：${task.name}`);
+      await refreshBackups(selected);
     } catch (e) {
-      setMessage(`创建备份任务失败：${localizeMessage((e as Error).message)}`);
+      setMessage(`${id ? '更新' : '创建'}备份任务失败：${localizeMessage((e as Error).message)}`);
+      throw e;
     } finally {
       setLoading(false);
     }
   }
 
-  async function createTableBackup() {
-    if (!selected || !activeTable) return;
-    const tableLabel = `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}`;
+  async function toggleBackup(id: number, enabled: boolean) {
     setLoading(true);
     try {
-      const task = await api<BackupTask>('/backups', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: `${selected.name} ${tableLabel} 备份`,
-          connectionId: selected.id,
-          scope: 'TABLE',
-          schemaName: activeTable.schemaName,
-          tableName: activeTable.tableName,
-          cron: '',
-          enabled: false
-        })
-      });
-      setMessage(`已创建备份任务：${task.name}`);
-      await refreshBackups();
+      const task = await api<BackupTask>(`/backups/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
+      setMessage(`${task.name} 已${task.enabled ? '启用' : '停用'}`);
+      await refreshBackups(selected);
     } catch (e) {
-      setMessage(`创建备份任务失败：${localizeMessage((e as Error).message)}`);
+      setMessage(`更新备份任务状态失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteBackup(id: number, deleteFile: boolean) {
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>(`/backups/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' });
+      setMessage(deleteFile ? '已删除备份任务和最近备份文件' : '已删除备份任务');
+      await refreshBackups(selected);
+    } catch (e) {
+      setMessage(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
+      throw e;
     } finally {
       setLoading(false);
     }
@@ -696,10 +716,10 @@ export default function App() {
     try {
       const task = await api<BackupTask>(`/backups/${id}/run`, { method: 'POST' });
       setMessage(localizeMessage(task.lastMessage || '备份任务已执行'));
-      await refreshBackups();
+      await refreshBackups(selected);
     } catch (e) {
       setMessage(`备份执行失败：${localizeMessage((e as Error).message)}`);
-      await refreshBackups();
+      await refreshBackups(selected);
     } finally {
       setLoading(false);
     }
@@ -847,10 +867,22 @@ export default function App() {
               {
                 key: 'backup',
                 label: '备份任务',
-                children: <BackupPanel backups={backups} selected={selected} activeTable={activeTable} loading={loading} onCreateDatabase={createDatabaseBackup} onCreateTable={createTableBackup} onRun={runBackup} onDownload={downloadBackup} />
+                children: (
+                  <BackupPanel
+                    backups={backups}
+                    selected={selected}
+                    activeTable={activeTable}
+                    loading={loading}
+                    onSave={saveBackup}
+                    onToggle={toggleBackup}
+                    onDelete={deleteBackup}
+                    onRun={runBackup}
+                    onDownload={downloadBackup}
+                  />
+                )
               }
-            ]}
-          />
+            ]}
+          />
         </Sider>
       </Layout>
       <SqlHistoryDrawer

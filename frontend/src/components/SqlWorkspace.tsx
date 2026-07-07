@@ -83,7 +83,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, statusMes
       {resultItems.length > 0 ? (
         <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
       ) : (
-        <ResultGrid result={null} />
+        <ResultGrid result={null} fill />
       )}
     </div>
   );
@@ -99,7 +99,7 @@ function StatementResultPanel({ result }: { result: SqlStatementResult }) {
       {result.status === 'FAILED' ? (
         <Alert type="error" showIcon message={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
       ) : (
-        <ResultGrid result={result.result} />
+        <ResultGrid result={result.result} fill />
       )}
     </div>
   );

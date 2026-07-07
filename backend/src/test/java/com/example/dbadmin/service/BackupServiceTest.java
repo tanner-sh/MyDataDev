@@ -21,15 +21,110 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BackupServiceTest {
     @TempDir
     Path tempDir;
+
+    @Test
+    void createsDisabledManualTaskWithoutCron() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupTask saved = new BackupTask(1, "manual", 1, "DATABASE", null, null, null, false, null, null, null, null, null);
+        when(repository.insert(any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(saved));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("manual", 1L, "DATABASE", null, null, "", false), "admin");
+
+        ArgumentCaptor<BackupTask> taskCaptor = ArgumentCaptor.forClass(BackupTask.class);
+        verify(repository).insert(taskCaptor.capture());
+        assertThat(taskCaptor.getValue().scope()).isEqualTo("DATABASE");
+        assertThat(taskCaptor.getValue().cron()).isNull();
+        assertThat(taskCaptor.getValue().enabled()).isFalse();
+    }
+
+    @Test
+    void rejectsEnabledTaskWithoutCron() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("scheduled", 1L, "DATABASE", null, null, "", true), "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("启用定时备份需要填写 cron 表达式。");
+        verify(repository, never()).insert(any());
+    }
+
+    @Test
+    void rejectsInvalidCronOnUpdate() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(task("DATABASE", null, null)));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        assertThatThrownBy(() -> service.update(1L, new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("backup", 1L, "DATABASE", null, null, "invalid cron", true), "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("cron 表达式不合法：invalid cron");
+        verify(repository, never()).update(eq(1L), any());
+    }
+
+    @Test
+    void enablingTaskRequiresCron() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "manual", 1, "DATABASE", null, null, null, false, null, null, null, null, null)));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        assertThatThrownBy(() -> service.setEnabled(1L, true, "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("启用定时备份需要填写 cron 表达式。");
+        verify(repository, never()).updateEnabled(eq(1L), eq(true));
+    }
+
+    @Test
+    void deleteTaskKeepsBackupFileByDefault() throws Exception {
+        Path file = tempDir.resolve("backup.sql");
+        Files.writeString(file, "select 1");
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", file.toString(), 8L, Instant.now())));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        service.delete(1L, false, "admin");
+
+        assertThat(file).exists();
+        verify(repository).delete(1L);
+    }
+
+    @Test
+    void deleteTaskCanDeleteLastBackupFile() throws Exception {
+        Path file = tempDir.resolve("backup.sql");
+        Files.writeString(file, "select 1");
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", file.toString(), 8L, Instant.now())));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        service.delete(1L, true, "admin");
+
+        assertThat(file).doesNotExist();
+        verify(repository).delete(1L);
+    }
+
+    @Test
+    void deleteTaskRejectsFileOutsideBackupDirectory() {
+        Path outside = tempDir.getParent().resolve("outside-" + UUID.randomUUID() + ".sql");
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", outside.toString(), 8L, Instant.now())));
+        BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository);
+
+        assertThatThrownBy(() -> service.delete(1L, true, "admin"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("备份文件路径不在允许目录内。");
+        verify(repository, never()).delete(1L);
+    }
 
     @Test
     void writesDatabaseBackupAsSqlAndSkipsViews() throws Exception {

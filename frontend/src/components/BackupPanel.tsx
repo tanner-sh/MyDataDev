@@ -1,53 +1,191 @@
-import { Button, Empty, List, Space, Tag, Typography } from 'antd';
-import type { ActiveTable, BackupTask, Connection } from '../types';
+import { useState } from 'react';
+import { Button, Checkbox, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import type { ActiveTable, BackupTask, BackupTaskForm, Connection } from '../types';
 import { backupScopeLabel, backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
 
 const { Text } = Typography;
 
-export function BackupPanel({ backups, selected, activeTable, loading, onCreateDatabase, onCreateTable, onRun, onDownload }: {
+type BackupPanelProps = {
   backups: BackupTask[];
   selected: Connection | null;
   activeTable: ActiveTable | null;
   loading: boolean;
-  onCreateDatabase: () => void;
-  onCreateTable: () => void;
+  onSave: (id: number | null, form: BackupTaskForm) => Promise<void>;
+  onToggle: (id: number, enabled: boolean) => Promise<void>;
+  onDelete: (id: number, deleteFile: boolean) => Promise<void>;
   onRun: (id: number) => void;
   onDownload: (id: number) => void;
-}) {
-  return (
-    <section className="inspector-section">
-      <div className="inspector-section-header">
-        <Text strong>备份任务</Text>
-      </div>
+};
+
+export function BackupPanel({ backups, selected, activeTable, loading, onSave, onToggle, onDelete, onRun, onDownload }: BackupPanelProps) {
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState<BackupTaskForm>(emptyDraft());
+  const [deleteFiles, setDeleteFiles] = useState<Record<number, boolean>>({});
+
+  function openDatabaseTask() {
+    if (!selected) return;
+    setEditingId(null);
+    setDraft({
+      name: `${selected.name} 全量备份`,
+      scope: 'DATABASE',
+      schemaName: '',
+      tableName: '',
+      cron: '0 0 2 * * *',
+      enabled: true
+    });
+    setEditorOpen(true);
+  }
+
+  function openTableTask() {
+    if (!selected || !activeTable) return;
+    const tableLabel = `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}`;
+    setEditingId(null);
+    setDraft({
+      name: `${selected.name} ${tableLabel} 备份`,
+      scope: 'TABLE',
+      schemaName: activeTable.schemaName || '',
+      tableName: activeTable.tableName,
+      cron: '',
+      enabled: false
+    });
+    setEditorOpen(true);
+  }
+
+  function openEditTask(task: BackupTask) {
+    setEditingId(task.id);
+    setDraft({
+      name: task.name,
+      scope: task.scope,
+      schemaName: task.schemaName || '',
+      tableName: task.tableName || '',
+      cron: task.cron || '',
+      enabled: task.enabled
+    });
+    setEditorOpen(true);
+  }
+
+  async function saveTask() {
+    await onSave(editingId, draft);
+    setEditorOpen(false);
+  }
+
+  async function deleteTask(id: number) {
+    await onDelete(id, Boolean(deleteFiles[id]));
+    setDeleteFiles((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
+  const scopedTable = draft.scope === 'TABLE';
+
+  return (
+    <section className="inspector-section">
+      <div className="inspector-section-header">
+        <Text strong>备份任务</Text>
+        <Tag>{selected ? selected.name : '未选择连接'}</Tag>
+      </div>
       <Space direction="vertical" size={10} className="full-width">
-        <Button size="small" block disabled={!selected || loading} onClick={onCreateDatabase}>创建全量备份任务</Button>
-        <Button size="small" block disabled={!selected || !activeTable || loading} onClick={onCreateTable}>创建当前表备份任务</Button>
+        <Space.Compact block>
+          <Button size="small" icon={<PlusOutlined />} disabled={!selected || loading} onClick={openDatabaseTask}>全库</Button>
+          <Button size="small" icon={<PlusOutlined />} disabled={!selected || !activeTable || loading} onClick={openTableTask}>当前表</Button>
+        </Space.Compact>
         <List
-          size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无备份任务" /> }}
-          dataSource={backups}
+          size="small"
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务' : '请选择连接'} /> }}
+          dataSource={backups}
           renderItem={(backup) => (
             <List.Item
               actions={[
-                <Button key="run" size="small" onClick={() => onRun(backup.id)}>执行</Button>,
-                <Button key="download" size="small" disabled={!backup.lastFilePath} onClick={() => onDownload(backup.id)}>下载</Button>
+                <Button key="edit" size="small" icon={<EditOutlined />} onClick={() => openEditTask(backup)} />,
+                <Button key="toggle" size="small" icon={backup.enabled ? <PauseCircleOutlined /> : <CheckCircleOutlined />} onClick={() => onToggle(backup.id, !backup.enabled)} />,
+                <Button key="run" size="small" icon={<PlayCircleOutlined />} onClick={() => onRun(backup.id)} />,
+                <Button key="download" size="small" icon={<DownloadOutlined />} disabled={!backup.lastFilePath} onClick={() => onDownload(backup.id)} />,
+                <Popconfirm
+                  key="delete"
+                  title="删除备份任务"
+                  description={(
+                    <Checkbox
+                      checked={Boolean(deleteFiles[backup.id])}
+                      disabled={!backup.lastFilePath}
+                      onChange={(event) => setDeleteFiles((current) => ({ ...current, [backup.id]: event.target.checked }))}
+                    >
+                      同时删除最近备份文件
+                    </Checkbox>
+                  )}
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => deleteTask(backup.id)}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
               ]}
             >
               <List.Item.Meta
-                title={backup.name}
+                title={<span className="backup-task-title">{backup.name}</span>}
                 description={(
                   <Space direction="vertical" size={2}>
                     <Text type="secondary">{backupScopeLabel(backup.scope)} · {backup.cron || '手动执行'}</Text>
+                    {backup.tableName && <Text type="secondary">{backup.schemaName ? `${backup.schemaName}.` : ''}{backup.tableName}</Text>}
                     {backup.lastRunAt && <Text type="secondary">最近执行：{formatHistoryTime(backup.lastRunAt)}</Text>}
                     {backup.lastFileSize ? <Text type="secondary">文件大小：{formatFileSize(backup.lastFileSize)}</Text> : null}
-                    <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
+                    <Space size={4} wrap>
+                      <Tag color={backup.enabled ? 'blue' : 'default'}>{backup.enabled ? '已启用' : '已停用'}</Tag>
+                      <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
+                    </Space>
                   </Space>
-                )}
-              />
-            </List.Item>
-          )}
-        />
-      </Space>
-    </section>
-  );
+                )}
+              />
+            </List.Item>
+          )}
+        />
+      </Space>
+      <Modal
+        title={editingId ? '编辑备份任务' : '新建备份任务'}
+        open={editorOpen}
+        confirmLoading={loading}
+        onCancel={() => setEditorOpen(false)}
+        onOk={saveTask}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form layout="vertical" size="small" className="compact-form">
+          <Form.Item label="任务名称">
+            <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+          </Form.Item>
+          <Form.Item label="备份范围">
+            <Select
+              value={draft.scope}
+              options={[{ value: 'DATABASE', label: '全库' }, { value: 'TABLE', label: '单表' }]}
+              onChange={(scope) => setDraft({ ...draft, scope })}
+            />
+          </Form.Item>
+          {scopedTable && (
+            <>
+              <Form.Item label="Schema">
+                <Input value={draft.schemaName} onChange={(event) => setDraft({ ...draft, schemaName: event.target.value })} />
+              </Form.Item>
+              <Form.Item label="表名">
+                <Input value={draft.tableName} onChange={(event) => setDraft({ ...draft, tableName: event.target.value })} />
+              </Form.Item>
+            </>
+          )}
+          <Form.Item label="Cron">
+            <Input value={draft.cron} onChange={(event) => setDraft({ ...draft, cron: event.target.value })} />
+          </Form.Item>
+          <Form.Item>
+            <Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}>启用定时任务</Checkbox>
+          </Form.Item>
+        </Form>
+      </Modal>
+    </section>
+  );
+}
+
+function emptyDraft(): BackupTaskForm {
+  return { name: '', scope: 'DATABASE', schemaName: '', tableName: '', cron: '', enabled: false };
 }

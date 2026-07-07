@@ -1,6 +1,8 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.dto.ApiDtos.BackupEnabledRequest;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
+import com.example.dbadmin.dto.ApiDtos.MessageResponse;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.service.BackupService;
 import jakarta.validation.Valid;
@@ -24,13 +26,29 @@ public class BackupController {
     }
 
     @GetMapping
-    public List<BackupTask> list() {
-        return service.list();
+    public List<BackupTask> list(@RequestParam(value = "connectionId", required = false) Long connectionId) {
+        return service.list(connectionId);
     }
 
     @PostMapping
     public BackupTask create(@Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) {
         return service.create(request, actor);
+    }
+
+    @PutMapping("/{id}")
+    public BackupTask update(@PathVariable long id, @Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) {
+        return service.update(id, request, actor);
+    }
+
+    @PatchMapping("/{id}/enabled")
+    public BackupTask setEnabled(@PathVariable long id, @Valid @RequestBody BackupEnabledRequest request, @RequestHeader(value = "X-User", required = false) String actor) {
+        return service.setEnabled(id, request.enabled(), actor);
+    }
+
+    @DeleteMapping("/{id}")
+    public MessageResponse delete(@PathVariable long id, @RequestParam(value = "deleteFile", defaultValue = "false") boolean deleteFile, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        service.delete(id, deleteFile, actor);
+        return new MessageResponse(true, "Backup task deleted");
     }
 
     @PostMapping("/{id}/run")

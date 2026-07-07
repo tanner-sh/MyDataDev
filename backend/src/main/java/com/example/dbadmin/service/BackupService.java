@@ -6,6 +6,7 @@ import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
+import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
@@ -49,12 +50,45 @@ public class BackupService {
         return repository.findAll();
     }
 
+    public List<BackupTask> list(Long connectionId) {
+        return connectionId == null ? repository.findAll() : repository.findByConnectionId(connectionId);
+    }
+
     public BackupTask create(BackupTaskRequest request, String actor) {
         connections.require(request.connectionId());
-        validateScope(request.scope(), request.tableName());
-        long id = repository.insert(new BackupTask(0, request.name(), request.connectionId(), request.scope(), request.schemaName(), request.tableName(), request.cron(), request.enabled(), null, null, null, null, null));
+        BackupTask task = taskFromRequest(0, request, null, null, null, null, null);
+        long id = repository.insert(task);
         audit.log(actor, "BACKUP_TASK_CREATE", request.name(), request.scope());
         return repository.findById(id).orElseThrow();
+    }
+
+    public BackupTask update(long id, BackupTaskRequest request, String actor) {
+        repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+        connections.require(request.connectionId());
+        BackupTask task = taskFromRequest(id, request, null, null, null, null, null);
+        repository.update(id, task);
+        audit.log(actor, "BACKUP_TASK_UPDATE", request.name(), request.scope());
+        return repository.findById(id).orElseThrow();
+    }
+
+    public BackupTask setEnabled(long id, boolean enabled, String actor) {
+        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+        if (enabled) {
+            validateCron(task.cron(), true);
+        }
+        repository.updateEnabled(id, enabled);
+        audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
+        return repository.findById(id).orElseThrow();
+    }
+
+    public void delete(long id, boolean deleteFile, String actor) throws Exception {
+        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+        if (deleteFile && task.lastFilePath() != null && !task.lastFilePath().isBlank()) {
+            Path path = checkedBackupPath(task.lastFilePath());
+            Files.deleteIfExists(path);
+        }
+        repository.delete(id);
+        audit.log(actor, "BACKUP_TASK_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
     }
 
     public BackupTask run(long id, String actor) throws Exception {
@@ -79,13 +113,41 @@ public class BackupService {
         if (task.lastFilePath() == null || task.lastFilePath().isBlank()) {
             throw new IllegalStateException("该备份任务还没有生成可下载文件。");
         }
-        Path path = Path.of(task.lastFilePath()).toAbsolutePath().normalize();
+        Path path = checkedBackupPath(task.lastFilePath());
+        if (!Files.exists(path) || !Files.isRegularFile(path)) {
+            throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
+        }
+        return path;
+    }
+
+    private BackupTask taskFromRequest(long id, BackupTaskRequest request, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {
+        String scope = validateScope(request.scope(), request.tableName());
+        String cron = blankToNull(request.cron());
+        validateCron(cron, request.enabled());
+        String schemaName = "TABLE".equals(scope) ? blankToNull(request.schemaName()) : null;
+        String tableName = "TABLE".equals(scope) ? blankToNull(request.tableName()) : null;
+        return new BackupTask(id, request.name().trim(), request.connectionId(), scope, schemaName, tableName, cron, request.enabled(), lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
+    }
+
+    private void validateCron(String cron, boolean enabled) {
+        if (cron == null) {
+            if (enabled) {
+                throw new IllegalArgumentException("启用定时备份需要填写 cron 表达式。");
+            }
+            return;
+        }
+        try {
+            CronExpression.parse(cron);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("cron 表达式不合法：" + cron);
+        }
+    }
+
+    private Path checkedBackupPath(String filePath) {
+        Path path = Path.of(filePath).toAbsolutePath().normalize();
         Path backupRoot = Path.of(properties.getBackup().getDirectory()).toAbsolutePath().normalize();
         if (!path.startsWith(backupRoot)) {
             throw new IllegalStateException("备份文件路径不在允许目录内。");
-        }
-        if (!Files.exists(path) || !Files.isRegularFile(path)) {
-            throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
         }
         return path;
     }
@@ -163,7 +225,7 @@ public class BackupService {
         }
     }
 
-    private void validateScope(String scope, String tableName) {
+    private String validateScope(String scope, String tableName) {
         String normalized = normalizeScope(scope);
         if (!Set.of("DATABASE", "TABLE").contains(normalized)) {
             throw new IllegalArgumentException("不支持的备份范围：" + scope);
@@ -171,10 +233,15 @@ public class BackupService {
         if ("TABLE".equals(normalized) && (tableName == null || tableName.isBlank())) {
             throw new IllegalArgumentException("单表备份需要指定表名。");
         }
+        return normalized;
     }
 
     private String normalizeScope(String scope) {
         return scope == null ? "" : scope.toUpperCase(Locale.ROOT);
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private boolean isSystemSchema(String schema) {

@@ -42,6 +42,10 @@ public class BackupTaskRepository {
         return jdbc.query("SELECT * FROM backup_task ORDER BY id DESC", mapper);
     }
 
+    public List<BackupTask> findByConnectionId(long connectionId) {
+        return jdbc.query("SELECT * FROM backup_task WHERE connection_id = ? ORDER BY id DESC", mapper, connectionId);
+    }
+
     public Optional<BackupTask> findById(long id) {
         List<BackupTask> rows = jdbc.query("SELECT * FROM backup_task WHERE id = ?", mapper, id);
         return rows.stream().findFirst();
@@ -75,6 +79,19 @@ public class BackupTaskRepository {
         return key == null ? 0 : key.longValue();
     }
 
+    public void update(long id, BackupTask task) {
+        jdbc.update("""
+                        UPDATE backup_task
+                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, cron = ?, enabled = ?
+                        WHERE id = ?
+                        """,
+                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.cron(), task.enabled(), id);
+    }
+
+    public void updateEnabled(long id, boolean enabled) {
+        jdbc.update("UPDATE backup_task SET enabled = ? WHERE id = ?", enabled, id);
+    }
+
     public void updateStatus(long id, String status, String message) {
         updateStatus(id, status, message, null, null);
     }
@@ -86,6 +103,10 @@ public class BackupTaskRepository {
                         WHERE id = ?
                         """,
                 status, message, filePath, fileSize, id);
+    }
+
+    public void delete(long id) {
+        jdbc.update("DELETE FROM backup_task WHERE id = ?", id);
     }
 
     private Instant toInstant(Timestamp ts) {

@@ -3,16 +3,17 @@ import { Empty, Table } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ResultRow, SqlResult } from '../types';
 
-export function ResultGrid({ result }: { result: SqlResult | null }) {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+export function ResultGrid({ result, fill = false }: { result: SqlResult | null; fill?: boolean }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
 
   useEffect(() => {
     setCurrentPage(1);
   }, [result]);
 
-  if (!result) return <Empty className="empty-state" description="执行查询后查看结果。" />;
-  if (!result.resultSet) return <Empty className="empty-state" description={`影响 ${result.affectedRows} 行。`} />;
+  if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
+  if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
   const columns: ColumnsType<ResultRow> = [
     {
       title: '序号',
@@ -30,10 +31,10 @@ export function ResultGrid({ result }: { result: SqlResult | null }) {
     }))
   ];
   const rows = result.rows.map((row, index) => ({ key: String(index), ...row }));
-  return (
-    <Table<ResultRow>
-      size="small"
-      className="data-grid"
+  return (
+    <Table<ResultRow>
+      size="small"
+      className={fill ? 'data-grid data-grid-fill' : 'data-grid'}
       columns={columns}
       dataSource={rows}
       pagination={{
@@ -47,7 +48,7 @@ export function ResultGrid({ result }: { result: SqlResult | null }) {
           setPageSize(nextPageSize);
         }
       }}
-      scroll={{ x: true, y: 'calc(100vh - 440px)' }}
-    />
-  );
+      scroll={{ x: true, y: fill ? '100%' : 'calc(100vh - 440px)' }}
+    />
+  );
 }
