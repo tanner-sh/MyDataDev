@@ -74,6 +74,83 @@ class BackupServiceTest {
     }
 
     @Test
+    void rejectsNativeBackupWithoutToolPath() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupService service = service("jdbc:mysql://localhost:3306/demo", "mysql", repository);
+
+        assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "", null, null), "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("原生备份需要填写工具路径。");
+        verify(repository, never()).insert(any());
+    }
+
+    @Test
+    void rejectsDangerousNativeExtraArgs() {
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupService service = service("jdbc:mysql://localhost:3306/demo", "mysql", repository);
+
+        assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "/usr/bin/mysqldump", "--result-file=/tmp/out.sql", null), "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("备份额外参数不能覆盖系统控制参数");
+        verify(repository, never()).insert(any());
+    }
+
+    @Test
+    void runsMysqlDumpWithEnvironmentPasswordAndControlledOutput() throws Exception {
+        Path script = tempDir.resolve("fake-mysqldump.sh");
+        Files.writeString(script, """
+                #!/bin/sh
+                for arg in "$@"; do
+                  case "$arg" in --result-file=*) out="${arg#--result-file=}" ;; esac
+                done
+                printf 'pwd=%s\\nargs=%s\\n' "$MYSQL_PWD" "$*" > "$out"
+                exit 0
+                """);
+        script.toFile().setExecutable(true);
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupTask task = new BackupTask(1, "native", 1, "TABLE", null, "users", "MYSQLDUMP", script.toString(), "--single-transaction", null, null, false, null, null, null, null, null);
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+        BackupService service = service("jdbc:mysql://db.example.com:3307/demo?useSSL=false", "mysql", repository);
+
+        service.run(1L, "admin");
+
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> pathCaptor = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), messageCaptor.capture(), pathCaptor.capture(), anyLong());
+        String dump = Files.readString(Path.of(pathCaptor.getValue()));
+        assertThat(messageCaptor.getValue()).startsWith("mysqldump 备份已生成：");
+        assertThat(dump).contains("pwd=secret");
+        assertThat(dump).contains("--host=db.example.com");
+        assertThat(dump).contains("--port=3307");
+        assertThat(dump).contains("--user=sa");
+        assertThat(dump).contains("--single-transaction");
+        assertThat(dump).contains("demo users");
+    }
+
+    @Test
+    void scrubsNativeBackupPasswordFromFailureMessage() throws Exception {
+        Path script = tempDir.resolve("fake-exp.sh");
+        Files.writeString(script, """
+                #!/bin/sh
+                echo 'failed with secret'
+                exit 2
+                """);
+        script.toFile().setExecutable(true);
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupTask task = new BackupTask(1, "oracle", 1, "DATABASE", null, null, "ORACLE_EXP", script.toString(), null, "//localhost:1521/ORCLPDB1", null, false, null, null, null, null, null);
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+        BackupService service = service("jdbc:oracle:thin:@//localhost:1521/ORCLPDB1", "oracle", repository);
+
+        assertThatThrownBy(() -> service.run(1L, "admin"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("******")
+                .hasMessageNotContaining("secret");
+        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("FAILED"), messageCaptor.capture());
+        assertThat(messageCaptor.getValue()).doesNotContain("secret");
+    }
+
+    @Test
     void enablingTaskRequiresCron() {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "manual", 1, "DATABASE", null, null, null, false, null, null, null, null, null)));
@@ -264,13 +341,18 @@ class BackupServiceTest {
     }
 
     private BackupService service(String url, BackupTaskRepository repository) {
+        return service(url, "h2", repository);
+    }
+
+    private BackupService service(String url, String dbType, BackupTaskRepository repository) {
         ConnectionService connections = mock(ConnectionService.class);
         try {
             when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
-        when(connections.require(anyLong())).thenReturn(new DbConnection(1, "Local H2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        when(connections.require(anyLong())).thenReturn(new DbConnection(1, "Local DB", dbType, url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        when(connections.password(anyLong())).thenReturn("secret");
         AppProperties properties = new AppProperties();
         properties.getBackup().setDirectory(tempDir.toString());
         return new BackupService(repository, connections, mock(AuditRepository.class), properties);

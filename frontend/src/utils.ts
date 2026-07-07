@@ -62,6 +62,13 @@ export function backupStatusLabel(status?: string) {
   return status;
 }
 
+export function backupMethodLabel(method?: string) {
+  if (!method || method === 'SQL') return 'SQL 逻辑备份';
+  if (method === 'MYSQLDUMP') return 'MySQL mysqldump';
+  if (method === 'ORACLE_EXP') return 'Oracle exp';
+  return method;
+}
+
 export function formatFileSize(size?: number) {
   if (!size || size <= 0) return '';
   if (size < 1024) return `${size} B`;

@@ -14,6 +14,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.net.URI;
 import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Connection;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class BackupService {
@@ -55,8 +57,8 @@ public class BackupService {
     }
 
     public BackupTask create(BackupTaskRequest request, String actor) {
-        connections.require(request.connectionId());
-        BackupTask task = taskFromRequest(0, request, null, null, null, null, null);
+        DbConnection connection = connections.require(request.connectionId());
+        BackupTask task = taskFromRequest(0, request, connection, null, null, null, null, null);
         long id = repository.insert(task);
         audit.log(actor, "BACKUP_TASK_CREATE", request.name(), request.scope());
         return repository.findById(id).orElseThrow();
@@ -64,8 +66,8 @@ public class BackupService {
 
     public BackupTask update(long id, BackupTaskRequest request, String actor) {
         repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
-        connections.require(request.connectionId());
-        BackupTask task = taskFromRequest(id, request, null, null, null, null, null);
+        DbConnection connection = connections.require(request.connectionId());
+        BackupTask task = taskFromRequest(id, request, connection, null, null, null, null, null);
         repository.update(id, task);
         audit.log(actor, "BACKUP_TASK_UPDATE", request.name(), request.scope());
         return repository.findById(id).orElseThrow();
@@ -95,8 +97,8 @@ public class BackupService {
         BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
         DbConnection connection = connections.require(task.connectionId());
         try {
-            BackupFile backup = writeSqlBackup(task, connection);
-            String message = "SQL 备份已生成：" + backup.path().getFileName();
+            BackupFile backup = runBackup(task, connection);
+            String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
             repository.updateStatus(id, "SUCCESS", message, backup.path().toAbsolutePath().normalize().toString(), backup.size());
             audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
         } catch (Exception e) {
@@ -120,13 +122,20 @@ public class BackupService {
         return path;
     }
 
-    private BackupTask taskFromRequest(long id, BackupTaskRequest request, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {
+    private BackupTask taskFromRequest(long id, BackupTaskRequest request, DbConnection connection, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {
         String scope = validateScope(request.scope(), request.tableName());
         String cron = blankToNull(request.cron());
         validateCron(cron, request.enabled());
+        String backupMethod = validateBackupMethod(request.backupMethod(), connection);
+        String toolPath = blankToNull(request.toolPath());
+        String extraArgs = validateExtraArgs(request.extraArgs());
+        String nativeConnectName = blankToNull(request.nativeConnectName());
+        if (!"SQL".equals(backupMethod) && toolPath == null) {
+            throw new IllegalArgumentException("原生备份需要填写工具路径。");
+        }
         String schemaName = "TABLE".equals(scope) ? blankToNull(request.schemaName()) : null;
         String tableName = "TABLE".equals(scope) ? blankToNull(request.tableName()) : null;
-        return new BackupTask(id, request.name().trim(), request.connectionId(), scope, schemaName, tableName, cron, request.enabled(), lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
+        return new BackupTask(id, request.name().trim(), request.connectionId(), scope, schemaName, tableName, backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
     }
 
     private void validateCron(String cron, boolean enabled) {
@@ -150,6 +159,200 @@ public class BackupService {
             throw new IllegalStateException("备份文件路径不在允许目录内。");
         }
         return path;
+    }
+
+    private BackupFile runBackup(BackupTask task, DbConnection connection) throws Exception {
+        return switch (normalizeBackupMethod(task.backupMethod())) {
+            case "MYSQLDUMP" -> runMysqlDump(task, connection);
+            case "ORACLE_EXP" -> runOracleExp(task, connection);
+            default -> writeSqlBackup(task, connection);
+        };
+    }
+
+    private BackupFile runMysqlDump(BackupTask task, DbConnection connection) throws Exception {
+        MysqlJdbcTarget target = mysqlTarget(connection.jdbcUrl());
+        String database = "TABLE".equals(normalizeScope(task.scope())) && task.schemaName() != null && !task.schemaName().isBlank()
+                ? task.schemaName()
+                : target.database();
+        if (database == null || database.isBlank()) {
+            throw new IllegalArgumentException("mysqldump 备份需要 JDBC URL 中包含数据库名，或在单表任务中填写 schema。");
+        }
+        Path file = backupPath(task, "mysqldump", ".sql");
+        List<String> command = new ArrayList<>();
+        command.add(task.toolPath());
+        command.add("--host=" + target.host());
+        command.add("--port=" + target.port());
+        if (connection.username() != null && !connection.username().isBlank()) {
+            command.add("--user=" + connection.username());
+        }
+        command.add("--result-file=" + file.toAbsolutePath().normalize());
+        command.addAll(extraArgs(task.extraArgs()));
+        command.add(database);
+        if ("TABLE".equals(normalizeScope(task.scope()))) {
+            command.add(task.tableName());
+        }
+        ProcessBuilder builder = new ProcessBuilder(command);
+        String password = connections.password(connection.id());
+        if (password != null) {
+            builder.environment().put("MYSQL_PWD", password);
+        }
+        runNativeProcess(builder, file, "mysqldump", password);
+        return new BackupFile(file, Files.size(file));
+    }
+
+    private BackupFile runOracleExp(BackupTask task, DbConnection connection) throws Exception {
+        Path file = backupPath(task, "oracle-exp", ".dmp");
+        Path log = file.resolveSibling(file.getFileName() + ".log");
+        String password = connections.password(connection.id());
+        String connectName = task.nativeConnectName() == null || task.nativeConnectName().isBlank()
+                ? oracleConnectName(connection.jdbcUrl())
+                : task.nativeConnectName();
+        String userid = connection.username() + "/" + (password == null ? "" : password) + (connectName == null || connectName.isBlank() ? "" : "@" + connectName);
+        List<String> command = new ArrayList<>();
+        command.add(task.toolPath());
+        command.add("userid=" + userid);
+        command.add("file=" + file.toAbsolutePath().normalize());
+        command.add("log=" + log.toAbsolutePath().normalize());
+        if ("TABLE".equals(normalizeScope(task.scope()))) {
+            String table = task.schemaName() == null || task.schemaName().isBlank()
+                    ? task.tableName()
+                    : task.schemaName() + "." + task.tableName();
+            command.add("tables=(" + table + ")");
+        } else if (task.schemaName() != null && !task.schemaName().isBlank()) {
+            command.add("owner=" + task.schemaName());
+        } else {
+            command.add("full=y");
+        }
+        command.addAll(extraArgs(task.extraArgs()));
+        runNativeProcess(new ProcessBuilder(command), file, "Oracle exp", password);
+        return new BackupFile(file, Files.size(file));
+    }
+
+    private void runNativeProcess(ProcessBuilder builder, Path outputFile, String label, String secret) throws Exception {
+        Files.createDirectories(outputFile.getParent());
+        Path processLog = outputFile.resolveSibling(outputFile.getFileName() + ".out");
+        builder.redirectErrorStream(true);
+        builder.redirectOutput(processLog.toFile());
+        Process process = builder.start();
+        boolean finished = process.waitFor(30, TimeUnit.MINUTES);
+        String output = Files.exists(processLog) ? Files.readString(processLog, StandardCharsets.UTF_8) : "";
+        if (output.length() > 4000) {
+            output = output.substring(0, 4000);
+        }
+        if (!finished) {
+            process.destroyForcibly();
+            Files.deleteIfExists(outputFile);
+            Files.deleteIfExists(processLog);
+            throw new IllegalStateException(label + " 执行超时。");
+        }
+        if (process.exitValue() != 0) {
+            Files.deleteIfExists(outputFile);
+            Files.deleteIfExists(processLog);
+            throw new IllegalStateException(label + " 执行失败，退出码 " + process.exitValue() + (output.isBlank() ? "" : "：" + scrub(output, secret)));
+        }
+        Files.deleteIfExists(processLog);
+        if (!Files.exists(outputFile) || !Files.isRegularFile(outputFile)) {
+            throw new IllegalStateException(label + " 未生成备份文件。");
+        }
+    }
+
+    private Path backupPath(BackupTask task, String prefix, String extension) throws Exception {
+        Path dir = Path.of(properties.getBackup().getDirectory());
+        Files.createDirectories(dir);
+        return dir.resolve(prefix + "-task-" + task.id() + "-" + Instant.now().toEpochMilli() + extension);
+    }
+
+    private String validateBackupMethod(String method, DbConnection connection) {
+        String normalized = normalizeBackupMethod(method);
+        if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_EXP").contains(normalized)) {
+            throw new IllegalArgumentException("不支持的备份方式：" + method);
+        }
+        String dbType = connection.dbType() == null ? "" : connection.dbType().toLowerCase(Locale.ROOT);
+        if ("MYSQLDUMP".equals(normalized) && !Set.of("mysql", "mariadb").contains(dbType)) {
+            throw new IllegalArgumentException("mysqldump 备份仅支持 MySQL/MariaDB 连接。");
+        }
+        if ("ORACLE_EXP".equals(normalized) && !"oracle".equals(dbType)) {
+            throw new IllegalArgumentException("Oracle exp 备份仅支持 Oracle 连接。");
+        }
+        return normalized;
+    }
+
+    private String normalizeBackupMethod(String method) {
+        return method == null || method.isBlank() ? "SQL" : method.toUpperCase(Locale.ROOT);
+    }
+
+    private String methodLabel(String method) {
+        return switch (normalizeBackupMethod(method)) {
+            case "MYSQLDUMP" -> "mysqldump";
+            case "ORACLE_EXP" -> "Oracle exp";
+            default -> "SQL";
+        };
+    }
+
+    private String validateExtraArgs(String extraArgs) {
+        List<String> args = extraArgs(extraArgs);
+        return args.isEmpty() ? null : String.join("\n", args);
+    }
+
+    private List<String> extraArgs(String extraArgs) {
+        if (extraArgs == null || extraArgs.isBlank()) {
+            return List.of();
+        }
+        List<String> args = new ArrayList<>();
+        for (String raw : extraArgs.split("\\R")) {
+            String arg = raw.trim();
+            if (arg.isEmpty()) {
+                continue;
+            }
+            validateExtraArg(arg);
+            args.add(arg);
+        }
+        return args;
+    }
+
+    private void validateExtraArg(String arg) {
+        if (arg.matches(".*[|&;<>`$].*")) {
+            throw new IllegalArgumentException("备份额外参数包含不允许的 shell 控制字符：" + arg);
+        }
+        String lower = arg.toLowerCase(Locale.ROOT);
+        List<String> blockedPrefixes = List.of(
+                "--result-file", "-r", "--host", "-h", "--port", "-p", "--user", "-u", "--password",
+                "--databases", "--all-databases", "--tables", "file=", "log=", "userid=", "owner=", "tables=", "full="
+        );
+        for (String blocked : blockedPrefixes) {
+            if (lower.equals(blocked) || lower.startsWith(blocked + "=")) {
+                throw new IllegalArgumentException("备份额外参数不能覆盖系统控制参数：" + arg);
+            }
+        }
+    }
+
+    private MysqlJdbcTarget mysqlTarget(String jdbcUrl) {
+        try {
+            String raw = jdbcUrl.replaceFirst("^jdbc:", "");
+            URI uri = URI.create(raw);
+            String database = uri.getPath() == null ? null : uri.getPath().replaceFirst("^/", "");
+            if (database != null && database.contains("/")) {
+                database = database.substring(0, database.indexOf('/'));
+            }
+            return new MysqlJdbcTarget(uri.getHost() == null ? "localhost" : uri.getHost(), uri.getPort() == -1 ? 3306 : uri.getPort(), database == null || database.isBlank() ? null : database);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("无法解析 MySQL JDBC URL：" + jdbcUrl);
+        }
+    }
+
+    private String oracleConnectName(String jdbcUrl) {
+        String prefix = "jdbc:oracle:thin:@";
+        if (jdbcUrl == null || !jdbcUrl.startsWith(prefix)) {
+            return null;
+        }
+        return jdbcUrl.substring(prefix.length());
+    }
+
+    private String scrub(String message, String secret) {
+        if (secret == null || secret.isBlank()) {
+            return message;
+        }
+        return message.replace(secret, "******");
     }
 
     private BackupFile writeSqlBackup(BackupTask task, DbConnection dbConnection) throws Exception {
@@ -338,5 +541,8 @@ public class BackupService {
     }
 
     private record BackupFile(Path path, long size) {
+    }
+
+    private record MysqlJdbcTarget(String host, int port, String database) {
     }
 }

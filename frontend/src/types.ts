@@ -33,6 +33,10 @@ export type BackupTask = {
   scope: string;
   schemaName?: string;
   tableName?: string;
+  backupMethod?: string;
+  toolPath?: string;
+  extraArgs?: string;
+  nativeConnectName?: string;
   cron?: string;
   enabled: boolean;
   lastStatus?: string;
@@ -41,7 +45,7 @@ export type BackupTask = {
   lastFileSize?: number;
   lastRunAt?: string;
 };
-export type BackupTaskForm = { name: string; scope: string; schemaName?: string; tableName?: string; cron?: string; enabled: boolean };
+export type BackupTaskForm = { name: string; scope: string; schemaName?: string; tableName?: string; backupMethod?: string; toolPath?: string; extraArgs?: string; nativeConnectName?: string; cron?: string; enabled: boolean };
 export type ActiveTable = { schemaName?: string; tableName: string };
 export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; deleted?: boolean; inserted?: boolean };
 export type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean };

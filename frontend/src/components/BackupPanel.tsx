@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Button, Checkbox, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import type { ActiveTable, BackupTask, BackupTaskForm, Connection } from '../types';
-import { backupScopeLabel, backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
+import { backupMethodLabel, backupScopeLabel, backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
 
 const { Text } = Typography;
 
@@ -32,6 +32,10 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       scope: 'DATABASE',
       schemaName: '',
       tableName: '',
+      backupMethod: defaultBackupMethod(selected),
+      toolPath: defaultToolPath(selected),
+      extraArgs: '',
+      nativeConnectName: '',
       cron: '0 0 2 * * *',
       enabled: true
     });
@@ -47,6 +51,10 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       scope: 'TABLE',
       schemaName: activeTable.schemaName || '',
       tableName: activeTable.tableName,
+      backupMethod: defaultBackupMethod(selected),
+      toolPath: defaultToolPath(selected),
+      extraArgs: '',
+      nativeConnectName: '',
       cron: '',
       enabled: false
     });
@@ -60,6 +68,10 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       scope: task.scope,
       schemaName: task.schemaName || '',
       tableName: task.tableName || '',
+      backupMethod: task.backupMethod || 'SQL',
+      toolPath: task.toolPath || '',
+      extraArgs: task.extraArgs || '',
+      nativeConnectName: task.nativeConnectName || '',
       cron: task.cron || '',
       enabled: task.enabled
     });
@@ -81,6 +93,7 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
   }
 
   const scopedTable = draft.scope === 'TABLE';
+  const nativeBackup = draft.backupMethod && draft.backupMethod !== 'SQL';
 
   return (
     <section className="inspector-section">
@@ -129,7 +142,7 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
                 title={<span className="backup-task-title">{backup.name}</span>}
                 description={(
                   <Space direction="vertical" size={2}>
-                    <Text type="secondary">{backupScopeLabel(backup.scope)} · {backup.cron || '手动执行'}</Text>
+                    <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope)} · {backup.cron || '手动执行'}</Text>
                     {backup.tableName && <Text type="secondary">{backup.schemaName ? `${backup.schemaName}.` : ''}{backup.tableName}</Text>}
                     {backup.lastRunAt && <Text type="secondary">最近执行：{formatHistoryTime(backup.lastRunAt)}</Text>}
                     {backup.lastFileSize ? <Text type="secondary">文件大小：{formatFileSize(backup.lastFileSize)}</Text> : null}
@@ -164,6 +177,17 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
               onChange={(scope) => setDraft({ ...draft, scope })}
             />
           </Form.Item>
+          <Form.Item label="备份方式">
+            <Select
+              value={draft.backupMethod || 'SQL'}
+              options={[
+                { value: 'SQL', label: 'SQL 逻辑备份' },
+                { value: 'MYSQLDUMP', label: 'MySQL mysqldump' },
+                { value: 'ORACLE_EXP', label: 'Oracle exp' }
+              ]}
+              onChange={(backupMethod) => setDraft({ ...draft, backupMethod, toolPath: draft.toolPath || defaultToolPath(selected, backupMethod) })}
+            />
+          </Form.Item>
           {scopedTable && (
             <>
               <Form.Item label="Schema">
@@ -177,6 +201,26 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
           <Form.Item label="Cron">
             <Input value={draft.cron} onChange={(event) => setDraft({ ...draft, cron: event.target.value })} />
           </Form.Item>
+          {nativeBackup && (
+            <>
+              <Form.Item label="工具路径">
+                <Input value={draft.toolPath} placeholder={draft.backupMethod === 'ORACLE_EXP' ? 'exp' : 'mysqldump'} onChange={(event) => setDraft({ ...draft, toolPath: event.target.value })} />
+              </Form.Item>
+              {draft.backupMethod === 'ORACLE_EXP' && (
+                <Form.Item label="连接名覆盖">
+                  <Input value={draft.nativeConnectName} placeholder="//host:1521/service 或 host:1521:SID" onChange={(event) => setDraft({ ...draft, nativeConnectName: event.target.value })} />
+                </Form.Item>
+              )}
+              <Form.Item label="额外参数">
+                <Input.TextArea
+                  rows={3}
+                  value={draft.extraArgs}
+                  placeholder="一行一个参数，例如 --single-transaction 或 compress=y"
+                  onChange={(event) => setDraft({ ...draft, extraArgs: event.target.value })}
+                />
+              </Form.Item>
+            </>
+          )}
           <Form.Item>
             <Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}>启用定时任务</Checkbox>
           </Form.Item>
@@ -187,5 +231,17 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
 }
 
 function emptyDraft(): BackupTaskForm {
-  return { name: '', scope: 'DATABASE', schemaName: '', tableName: '', cron: '', enabled: false };
+  return { name: '', scope: 'DATABASE', schemaName: '', tableName: '', backupMethod: 'SQL', toolPath: '', extraArgs: '', nativeConnectName: '', cron: '', enabled: false };
+}
+
+function defaultBackupMethod(connection: Connection | null) {
+  if (connection?.dbType === 'mysql' || connection?.dbType === 'mariadb') return 'MYSQLDUMP';
+  if (connection?.dbType === 'oracle') return 'ORACLE_EXP';
+  return 'SQL';
+}
+
+function defaultToolPath(connection: Connection | null, method = defaultBackupMethod(connection)) {
+  if (method === 'MYSQLDUMP') return 'mysqldump';
+  if (method === 'ORACLE_EXP') return 'exp';
+  return '';
 }

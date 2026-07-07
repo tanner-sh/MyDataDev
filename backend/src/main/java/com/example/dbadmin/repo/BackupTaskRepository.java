@@ -25,6 +25,10 @@ public class BackupTaskRepository {
             rs.getString("scope"),
             rs.getString("schema_name"),
             rs.getString("table_name"),
+            stringOrDefault(rs.getString("backup_method"), "SQL"),
+            rs.getString("tool_path"),
+            rs.getString("extra_args"),
+            rs.getString("native_connect_name"),
             rs.getString("cron"),
             rs.getBoolean("enabled"),
             rs.getString("last_status"),
@@ -60,16 +64,20 @@ public class BackupTaskRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, cron, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, task.name());
             ps.setLong(2, task.connectionId());
             ps.setString(3, task.scope());
             ps.setString(4, task.schemaName());
             ps.setString(5, task.tableName());
-            ps.setString(6, task.cron());
-            ps.setBoolean(7, task.enabled());
+            ps.setString(6, task.backupMethod());
+            ps.setString(7, task.toolPath());
+            ps.setString(8, task.extraArgs());
+            ps.setString(9, task.nativeConnectName());
+            ps.setString(10, task.cron());
+            ps.setBoolean(11, task.enabled());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -82,10 +90,10 @@ public class BackupTaskRepository {
     public void update(long id, BackupTask task) {
         jdbc.update("""
                         UPDATE backup_task
-                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, cron = ?, enabled = ?
+                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?
                         WHERE id = ?
                         """,
-                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.cron(), task.enabled(), id);
+                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), id);
     }
 
     public void updateEnabled(long id, boolean enabled) {
@@ -111,5 +119,9 @@ public class BackupTaskRepository {
 
     private Instant toInstant(Timestamp ts) {
         return ts == null ? null : ts.toInstant();
+    }
+
+    private String stringOrDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

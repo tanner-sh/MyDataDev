@@ -668,6 +668,10 @@ export default function App() {
         scope: form.scope,
         schemaName: form.scope === 'TABLE' ? form.schemaName : undefined,
         tableName: form.scope === 'TABLE' ? form.tableName : undefined,
+        backupMethod: form.backupMethod || 'SQL',
+        toolPath: form.toolPath,
+        extraArgs: form.extraArgs,
+        nativeConnectName: form.nativeConnectName,
         cron: form.cron,
         enabled: form.enabled
       };

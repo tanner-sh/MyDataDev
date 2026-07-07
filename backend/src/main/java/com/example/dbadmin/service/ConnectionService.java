@@ -94,6 +94,11 @@ public class ConnectionService {
         return repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Connection not found: " + id));
     }
 
+    public String password(long id) {
+        DbConnection c = require(id);
+        return crypto.decrypt(c.encryptedPassword());
+    }
+
     private Properties props(String username, String password) {
         Properties props = new Properties();
         if (username != null) {

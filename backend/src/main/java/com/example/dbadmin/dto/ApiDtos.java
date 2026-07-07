@@ -101,7 +101,10 @@ public final class ApiDtos {
     public record ExportRequest(@NotNull Long connectionId, @NotBlank String sql, @NotBlank String format) {
     }
 
-    public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
+    public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
+        public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
+            this(name, connectionId, scope, schemaName, tableName, cron, enabled, "SQL", null, null, null);
+        }
     }
 
     public record BackupEnabledRequest(boolean enabled) {
