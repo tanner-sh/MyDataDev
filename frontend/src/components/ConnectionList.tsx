@@ -1,18 +1,19 @@
-import { Alert, Button, Card, Empty, List, Popconfirm, Skeleton, Space, Tag, Typography } from 'antd';
-import { CopyOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Empty, List, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { CopyOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
 
 const { Text } = Typography;
 
-export function ConnectionList({ connections, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onEdit, onTest, onDuplicate, onDelete }: {
-  connections: Connection[];
-  selectedId?: number;
+export function ConnectionList({ connections, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSelect, onEdit, onTest, onDuplicate, onDelete }: {
+  connections: Connection[];
+  selectedId?: number;
   connectionsLoading: boolean;
-  connectionsError: string;
-  connectionsReady: boolean;
-  testingConnectionId: number | null;
-  onEdit: (connection: Connection) => void;
+  connectionsError: string;
+  connectionsReady: boolean;
+  testingConnectionId: number | null;
+  onSelect: (connection: Connection) => void;
+  onEdit: (connection: Connection) => void;
   onTest: (connection: Connection) => void;
   onDuplicate: (connection: Connection) => void;
   onDelete: (connection: Connection) => void;
@@ -38,37 +39,45 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
       {connectionsError && <Alert type="warning" showIcon message={connectionsError} />}
       <List
         className="connection-list"
-        dataSource={connections}
-        renderItem={(connection) => (
-          <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
-            <div className="connection-row">
-              <button className="connection-title-button connection-main-info" onClick={() => onEdit(connection)}>
-                <div className="connection-name-row">
-                  <Text strong className="ellipsis-text">{connection.name}</Text>
-                  {connection.readonly && <Tag color="orange">只读</Tag>}
+        dataSource={connections}
+        renderItem={(connection) => (
+          <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
+            <div className="connection-card">
+              <button className="connection-title-button connection-main-info" onClick={() => onSelect(connection)}>
+                <div className="connection-name-row">
+                  <Text strong className="ellipsis-text">{connection.name}</Text>
+                  {connection.readonly && <Tag color="orange">只读</Tag>}
                 </div>
                 <Space size={4} wrap className="connection-tags">
                   <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
                   <Tag>{environmentLabel(connection.environment)}</Tag>
-                </Space>
-                <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
-              </button>
-              <Space size={4} wrap className="connection-actions">
-                <Button size="small" loading={testingConnectionId === connection.id} onClick={() => onTest(connection)}>测试</Button>
-                <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)}>编辑</Button>
-                <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)}>复制</Button>
-                <Popconfirm
-                  title="删除连接"
-                  description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => onDelete(connection)}
-                >
-                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-                </Popconfirm>
-              </Space>
-            </div>
+                </Space>
+                <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
+              </button>
+              <Space size={2} className="connection-actions">
+                <Tooltip title="测试连接">
+                  <Button size="small" icon={<ThunderboltOutlined />} loading={testingConnectionId === connection.id} onClick={() => onTest(connection)} />
+                </Tooltip>
+                <Tooltip title="编辑连接">
+                  <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)} />
+                </Tooltip>
+                <Tooltip title="复制连接">
+                  <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)} />
+                </Tooltip>
+                <Popconfirm
+                  title="删除连接"
+                  description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => onDelete(connection)}
+                >
+                  <Tooltip title="删除连接">
+                    <Button size="small" danger icon={<DeleteOutlined />} />
+                  </Tooltip>
+                </Popconfirm>
+              </Space>
+            </div>
           </List.Item>
         )}
       />

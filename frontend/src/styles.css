@@ -121,16 +121,19 @@ body {
   background: #1f6feb;
 }
 
-.connection-row {
+.connection-card {
   width: 100%;
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
 }
 
 .connection-main-info {
-  flex: 1;
   min-width: 0;
+  grid-row: 1;
+  grid-column: 1;
 }
 
 .connection-name-row {
@@ -155,8 +158,15 @@ body {
 }
 
 .connection-actions {
-  width: 112px;
+  grid-row: 1;
+  grid-column: 2;
+  width: auto;
   justify-content: flex-end;
+}
+
+.connection-actions .ant-btn {
+  width: 24px;
+  padding-inline: 0;
 }
 
 .connection-title-button {
@@ -176,6 +186,34 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.connection-summary {
+  margin-bottom: 10px;
+  padding: 9px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid #edf1f7;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.connection-summary-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-summary-title .ant-tag,
+.connection-summary .ant-tag {
+  margin-inline-end: 0;
+}
+
+.connection-summary-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
 }
 
 .object-collapse {

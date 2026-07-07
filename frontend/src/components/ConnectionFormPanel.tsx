@@ -1,28 +1,59 @@
-import { Button, Checkbox, Form, Input, Select, Space, Typography } from 'antd';
-import { PlusOutlined, SaveOutlined } from '@ant-design/icons';
+import { Button, Checkbox, Form, Input, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from '../constants';
-import type { ConnectionForm } from '../types';
-import { normalizeEnvironment } from '../utils';
+import type { Connection, ConnectionForm } from '../types';
+import { dbTypeLabel, environmentLabel, normalizeEnvironment } from '../utils';
 
 const { Text } = Typography;
 
-export function ConnectionFormPanel({ form, editing, loading, onChange, onDbTypeChange, onReset, onTest, onSave }: {
-  form: ConnectionForm;
-  editing: boolean;
-  loading: boolean;
-  onChange: (form: ConnectionForm) => void;
-  onDbTypeChange: (dbType: string) => void;
-  onReset: () => void;
-  onTest: () => void;
-  onSave: () => void;
-}) {
-  return (
-    <section className="inspector-section">
-      <div className="inspector-section-header">
-        <Text strong>{editing ? '编辑连接' : '新建连接'}</Text>
-        <Button size="small" icon={<PlusOutlined />} onClick={onReset}>新建</Button>
-      </div>
-      <Form layout="vertical" size="small" className="compact-form">
+export function ConnectionFormPanel({ form, selected, editing, loading, onChange, onDbTypeChange, onReset, onEdit, onDuplicate, onDelete, onTest, onSave }: {
+  form: ConnectionForm;
+  selected: Connection | null;
+  editing: boolean;
+  loading: boolean;
+  onChange: (form: ConnectionForm) => void;
+  onDbTypeChange: (dbType: string) => void;
+  onReset: () => void;
+  onEdit: (connection: Connection) => void;
+  onDuplicate: (connection: Connection) => void;
+  onDelete: (connection: Connection) => void;
+  onTest: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <section className="inspector-section">
+      <div className="inspector-section-header">
+        <Text strong>{editing ? '编辑连接' : '新建连接'}</Text>
+        <Button size="small" icon={<PlusOutlined />} onClick={onReset}>新建</Button>
+      </div>
+      {selected && (
+        <div className="connection-summary">
+          <div className="connection-summary-title">
+            <Text strong className="ellipsis-text">{selected.name}</Text>
+            {selected.readonly && <Tag color="orange">只读</Tag>}
+          </div>
+          <Space size={4} wrap>
+            <Tag color="blue">{dbTypeLabel(selected.dbType)}</Tag>
+            <Tag>{environmentLabel(selected.environment)}</Tag>
+          </Space>
+          <Text type="secondary" className="ellipsis-text connection-url">{selected.jdbcUrl}</Text>
+          <div className="connection-summary-actions">
+            <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(selected)}>编辑</Button>
+            <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(selected)}>复制</Button>
+            <Popconfirm
+              title="删除连接"
+              description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => onDelete(selected)}
+            >
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          </div>
+        </div>
+      )}
+      <Form layout="vertical" size="small" className="compact-form">
         <Form.Item label="连接名称">
           <Input value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} />
         </Form.Item>

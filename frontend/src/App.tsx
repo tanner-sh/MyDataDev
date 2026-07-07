@@ -168,28 +168,31 @@ export default function App() {
     }
   }
 
-  async function deleteConnection(connection: Connection) {
-    setLoading(true);
-    try {
-      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
-      setMessage(`已删除连接：${connection.name}`);
-      setConnections((rows) => rows.filter((row) => row.id !== connection.id));
+  async function deleteConnection(connection: Connection) {
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
+      setMessage(`已删除连接：${connection.name}`);
+      const remaining = connections.filter((row) => row.id !== connection.id);
+      setConnections(remaining);
       if (selected?.id === connection.id) {
-        setSelected(null);
+        setSelected(remaining[0] || null);
         setMetadata(null);
         setActiveObjectDetail(null);
         setMode('sql');
       }
       if (editingConnectionId === connection.id) {
         resetConnectionForm();
-      }
-      await refreshConnections();
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-      await refreshSqlHistory(selected);
-    } finally {
-      setLoading(false);
-    }
+      }
+      await refreshConnections();
+    } catch (e) {
+      const rawMessage = (e as Error).message;
+      const blockedByBackups = rawMessage.includes('backup task');
+      setMessage(blockedByBackups ? '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。' : localizeMessage(rawMessage));
+      await refreshSqlHistory(selected);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function selectConnection(connection: Connection) {
@@ -770,12 +773,13 @@ export default function App() {
               connections={connections}
               selectedId={selected?.id}
               connectionsLoading={connectionsLoading}
-              connectionsError={connectionsError}
-              connectionsReady={connectionsReady}
-              testingConnectionId={testingConnectionId}
-              onEdit={editConnection}
-              onTest={testSavedConnection}
-              onDuplicate={duplicateConnection}
+              connectionsError={connectionsError}
+              connectionsReady={connectionsReady}
+              testingConnectionId={testingConnectionId}
+              onSelect={selectConnection}
+              onEdit={editConnection}
+              onTest={testSavedConnection}
+              onDuplicate={duplicateConnection}
               onDelete={deleteConnection}
             />
             <Card size="small" title="数据库对象" className="panel-card">
@@ -856,16 +860,20 @@ export default function App() {
                 key: 'connection',
                 label: '连接配置',
                 children: (
-                  <ConnectionFormPanel
-                    form={form}
-                    editing={Boolean(editingConnectionId)}
-                    loading={loading}
-                    onChange={setForm}
-                    onDbTypeChange={changeDbType}
-                    onReset={resetConnectionForm}
-                    onTest={() => testConnection()}
-                    onSave={saveConnection}
-                  />
+                  <ConnectionFormPanel
+                    form={form}
+                    selected={selected}
+                    editing={Boolean(editingConnectionId)}
+                    loading={loading}
+                    onChange={setForm}
+                    onDbTypeChange={changeDbType}
+                    onReset={resetConnectionForm}
+                    onEdit={editConnection}
+                    onDuplicate={duplicateConnection}
+                    onDelete={deleteConnection}
+                    onTest={() => testConnection()}
+                    onSave={saveConnection}
+                  />
                 )
               },
               {
