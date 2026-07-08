@@ -45,6 +45,17 @@ export type BackupTask = {
   lastFileSize?: number;
   lastRunAt?: string;
 };
+export type BackupHistory = {
+  id: number;
+  taskId: number;
+  connectionId: number;
+  status: string;
+  message?: string;
+  filePath?: string;
+  fileSize?: number;
+  startedAt?: string;
+  finishedAt?: string;
+};
 export type BackupTaskForm = { name: string; scope: string; schemaName?: string; tableName?: string; backupMethod?: string; toolPath?: string; extraArgs?: string; nativeConnectName?: string; cron?: string; enabled: boolean };
 export type ActiveTable = { schemaName?: string; tableName: string };
 export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; deleted?: boolean; inserted?: boolean };

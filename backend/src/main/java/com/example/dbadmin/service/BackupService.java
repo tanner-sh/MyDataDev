@@ -2,9 +2,11 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
+import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
@@ -37,12 +39,14 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class BackupService {
     private final BackupTaskRepository repository;
+    private final BackupHistoryRepository historyRepository;
     private final ConnectionService connections;
     private final AuditRepository audit;
     private final AppProperties properties;
 
-    public BackupService(BackupTaskRepository repository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
         this.repository = repository;
+        this.historyRepository = historyRepository;
         this.connections = connections;
         this.audit = audit;
         this.properties = properties;
@@ -85,10 +89,13 @@ public class BackupService {
 
     public void delete(long id, boolean deleteFile, String actor) throws Exception {
         BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
-        if (deleteFile && task.lastFilePath() != null && !task.lastFilePath().isBlank()) {
-            Path path = checkedBackupPath(task.lastFilePath());
-            Files.deleteIfExists(path);
+        List<BackupHistory> histories = historyRepository.findByTaskId(id);
+        if (deleteFile) {
+            for (BackupHistory history : histories) {
+                deleteHistoryFile(history);
+            }
         }
+        historyRepository.deleteByTaskId(id);
         repository.delete(id);
         audit.log(actor, "BACKUP_TASK_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
     }
@@ -96,13 +103,17 @@ public class BackupService {
     public BackupTask run(long id, String actor) throws Exception {
         BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
         DbConnection connection = connections.require(task.connectionId());
+        Instant startedAt = Instant.now();
         try {
             BackupFile backup = runBackup(task, connection);
             String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
-            repository.updateStatus(id, "SUCCESS", message, backup.path().toAbsolutePath().normalize().toString(), backup.size());
+            String filePath = backup.path().toAbsolutePath().normalize().toString();
+            historyRepository.insert(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now()));
+            repository.updateStatus(id, "SUCCESS", message, filePath, backup.size());
             audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
         } catch (Exception e) {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            historyRepository.insert(new BackupHistory(0, id, connection.id(), "FAILED", message, null, null, startedAt, Instant.now()));
             repository.updateStatus(id, "FAILED", message);
             audit.log(actor, "BACKUP_TASK_RUN_FAILED", task.name(), message);
             throw e;
@@ -120,6 +131,53 @@ public class BackupService {
             throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
         }
         return path;
+    }
+
+    public List<BackupHistory> history(long taskId) {
+        repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+        return historyRepository.findByTaskId(taskId);
+    }
+
+    public Path historyFile(long taskId, long historyId) {
+        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+        if (history.filePath() == null || history.filePath().isBlank()) {
+            throw new IllegalStateException("该备份历史没有生成可下载文件。");
+        }
+        Path path = checkedBackupPath(history.filePath());
+        if (!Files.exists(path) || !Files.isRegularFile(path)) {
+            throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
+        }
+        return path;
+    }
+
+    public void deleteHistory(long taskId, long historyId, boolean deleteFile, String actor) throws Exception {
+        BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+        if (deleteFile) {
+            deleteHistoryFile(history);
+        }
+        historyRepository.delete(historyId);
+        refreshTaskSummary(taskId);
+        audit.log(actor, "BACKUP_HISTORY_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
+    }
+
+    private void deleteHistoryFile(BackupHistory history) throws Exception {
+        if (history.filePath() == null || history.filePath().isBlank()) {
+            return;
+        }
+        Files.deleteIfExists(checkedBackupPath(history.filePath()));
+    }
+
+    private void refreshTaskSummary(long taskId) {
+        List<BackupHistory> histories = historyRepository.findByTaskId(taskId);
+        if (histories.isEmpty()) {
+            repository.updateSummary(taskId, null, null, null, null, null);
+            return;
+        }
+        BackupHistory latest = histories.get(0);
+        repository.updateSummary(taskId, latest.status(), latest.message(), latest.filePath(), latest.fileSize(), latest.finishedAt());
     }
 
     private BackupTask taskFromRequest(long id, BackupTaskRequest request, DbConnection connection, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {

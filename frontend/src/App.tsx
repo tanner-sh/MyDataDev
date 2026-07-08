@@ -7,7 +7,7 @@ import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/ico
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
-import type { ActiveTable, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -708,7 +708,7 @@ export default function App() {
     setLoading(true);
     try {
       await api<{ ok: boolean; message: string }>(`/backups/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' });
-      setMessage(deleteFile ? '已删除备份任务和最近备份文件' : '已删除备份任务');
+      setMessage(deleteFile ? '已删除备份任务和所有历史备份文件' : '已删除备份任务');
       await refreshBackups(selected);
     } catch (e) {
       setMessage(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
@@ -752,8 +752,54 @@ export default function App() {
     }
   }
 
-
-  const baseStatusMessage = activeSqlTab.message || message || '就绪';
+  async function loadBackupHistory(id: number) {
+    setLoading(true);
+    try {
+      return await api<BackupHistory[]>(`/backups/${id}/history`);
+    } catch (e) {
+      setMessage(`加载备份历史失败：${localizeMessage((e as Error).message)}`);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteBackupHistory(taskId: number, historyId: number, deleteFile: boolean) {
+    setLoading(true);
+    try {
+      await api<{ ok: boolean; message: string }>(`/backups/${taskId}/history/${historyId}?deleteFile=${deleteFile}`, { method: 'DELETE' });
+      setMessage(deleteFile ? '已删除备份历史和对应文件' : '已删除备份历史');
+      await refreshBackups(selected);
+    } catch (e) {
+      setMessage(`删除备份历史失败：${localizeMessage((e as Error).message)}`);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function downloadBackupHistory(taskId: number, historyId: number) {
+    setLoading(true);
+    try {
+      const response = await fetch(`${API}/backups/${taskId}/history/${historyId}/download`);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: response.statusText }));
+        throw new Error(err.message || response.statusText);
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get('content-disposition') || '';
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-history-${historyId}.sql`;
+      downloadBlob(blob, filename);
+      setMessage(`已下载备份文件：${filename}`);
+    } catch (e) {
+      setMessage(`下载备份历史失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+  const baseStatusMessage = activeSqlTab.message || message || '就绪';
   const sqlStatusMessage = sqlLoading ? '处理中...' : baseStatusMessage;
   const operationStatusMessage = loading ? '处理中...' : baseStatusMessage;
 
@@ -890,6 +936,9 @@ export default function App() {
                     onDelete={deleteBackup}
                     onRun={runBackup}
                     onDownload={downloadBackup}
+                    onLoadHistory={loadBackupHistory}
+                    onDeleteHistory={deleteBackupHistory}
+                    onDownloadHistory={downloadBackupHistory}
                   />
                 )
               }

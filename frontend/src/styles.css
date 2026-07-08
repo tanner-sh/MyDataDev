@@ -593,6 +593,13 @@ body {
   white-space: nowrap;
 }
 
+.backup-history-message {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1180px) {
   html,
   body,

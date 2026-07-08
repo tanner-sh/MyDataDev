@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Checkbox, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
-import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
-import type { ActiveTable, BackupTask, BackupTaskForm, Connection } from '../types';
+import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, HistoryOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection } from '../types';
 import { backupMethodLabel, backupScopeLabel, backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
 
 const { Text } = Typography;
@@ -16,13 +16,19 @@ type BackupPanelProps = {
   onDelete: (id: number, deleteFile: boolean) => Promise<void>;
   onRun: (id: number) => void;
   onDownload: (id: number) => void;
+  onLoadHistory: (id: number) => Promise<BackupHistory[]>;
+  onDeleteHistory: (taskId: number, historyId: number, deleteFile: boolean) => Promise<void>;
+  onDownloadHistory: (taskId: number, historyId: number) => void;
 };
 
-export function BackupPanel({ backups, selected, activeTable, loading, onSave, onToggle, onDelete, onRun, onDownload }: BackupPanelProps) {
+export function BackupPanel({ backups, selected, activeTable, loading, onSave, onToggle, onDelete, onRun, onDownload, onLoadHistory, onDeleteHistory, onDownloadHistory }: BackupPanelProps) {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState<BackupTaskForm>(emptyDraft());
   const [deleteFiles, setDeleteFiles] = useState<Record<number, boolean>>({});
+  const [historyTask, setHistoryTask] = useState<BackupTask | null>(null);
+  const [histories, setHistories] = useState<BackupHistory[]>([]);
+  const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
 
   function openDatabaseTask() {
     if (!selected) return;
@@ -92,6 +98,22 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
     });
   }
 
+  async function openHistory(task: BackupTask) {
+    setHistoryTask(task);
+    setHistories(await onLoadHistory(task.id));
+  }
+
+  async function deleteHistory(historyId: number) {
+    if (!historyTask) return;
+    await onDeleteHistory(historyTask.id, historyId, Boolean(deleteHistoryFiles[historyId]));
+    setHistories(await onLoadHistory(historyTask.id));
+    setDeleteHistoryFiles((current) => {
+      const next = { ...current };
+      delete next[historyId];
+      return next;
+    });
+  }
+
   const scopedTable = draft.scope === 'TABLE';
   const nativeBackup = draft.backupMethod && draft.backupMethod !== 'SQL';
 
@@ -117,16 +139,16 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
                 <Button key="toggle" size="small" icon={backup.enabled ? <PauseCircleOutlined /> : <CheckCircleOutlined />} onClick={() => onToggle(backup.id, !backup.enabled)} />,
                 <Button key="run" size="small" icon={<PlayCircleOutlined />} onClick={() => onRun(backup.id)} />,
                 <Button key="download" size="small" icon={<DownloadOutlined />} disabled={!backup.lastFilePath} onClick={() => onDownload(backup.id)} />,
+                <Button key="history" size="small" icon={<HistoryOutlined />} onClick={() => openHistory(backup)} />,
                 <Popconfirm
                   key="delete"
                   title="删除备份任务"
                   description={(
                     <Checkbox
                       checked={Boolean(deleteFiles[backup.id])}
-                      disabled={!backup.lastFilePath}
                       onChange={(event) => setDeleteFiles((current) => ({ ...current, [backup.id]: event.target.checked }))}
                     >
-                      同时删除最近备份文件
+                      同时删除所有历史备份文件
                     </Checkbox>
                   )}
                   okText="删除"
@@ -225,6 +247,64 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
             <Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}>启用定时任务</Checkbox>
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal
+        title={historyTask ? `${historyTask.name} 执行历史` : '执行历史'}
+        open={Boolean(historyTask)}
+        footer={null}
+        onCancel={() => {
+          setHistoryTask(null);
+          setHistories([]);
+          setDeleteHistoryFiles({});
+        }}
+      >
+        <List
+          size="small"
+          loading={loading}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
+          dataSource={histories}
+          renderItem={(history) => (
+            <List.Item
+              actions={[
+                <Button key="download" size="small" icon={<DownloadOutlined />} disabled={!history.filePath} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />,
+                <Popconfirm
+                  key="delete"
+                  title="删除备份历史"
+                  description={(
+                    <Checkbox
+                      checked={Boolean(deleteHistoryFiles[history.id])}
+                      disabled={!history.filePath}
+                      onChange={(event) => setDeleteHistoryFiles((current) => ({ ...current, [history.id]: event.target.checked }))}
+                    >
+                      同时删除备份文件
+                    </Checkbox>
+                  )}
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => deleteHistory(history.id)}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              ]}
+            >
+              <List.Item.Meta
+                title={(
+                  <Space size={6} wrap>
+                    <Tag color={history.status === 'SUCCESS' ? 'green' : history.status === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(history.status)}</Tag>
+                    <Text>{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text>
+                  </Space>
+                )}
+                description={(
+                  <Space direction="vertical" size={2} className="full-width">
+                    {history.fileSize ? <Text type="secondary">文件大小：{formatFileSize(history.fileSize)}</Text> : null}
+                    {history.message ? <Text type="secondary" className="backup-history-message">{history.message}</Text> : null}
+                  </Space>
+                )}
+              />
+            </List.Item>
+          )}
+        />
       </Modal>
     </section>
   );

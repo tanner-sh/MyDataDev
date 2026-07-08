@@ -113,6 +113,15 @@ public class BackupTaskRepository {
                 status, message, filePath, fileSize, id);
     }
 
+    public void updateSummary(long id, String status, String message, String filePath, Long fileSize, Instant runAt) {
+        jdbc.update("""
+                        UPDATE backup_task
+                        SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?, last_run_at = ?
+                        WHERE id = ?
+                        """,
+                status, message, filePath, fileSize, runAt == null ? null : Timestamp.from(runAt), id);
+    }
+
     public void delete(long id) {
         jdbc.update("DELETE FROM backup_task WHERE id = ?", id);
     }
