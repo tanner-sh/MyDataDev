@@ -25,24 +25,25 @@ public class MetadataController {
             @RequestParam(required = false) String schema,
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer page,
-            @RequestParam(required = false) Integer pageSize
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
-        return service.inspect(connectionId, schema, keyword, page, pageSize);
+        return service.inspect(connectionId, schema, keyword, page, pageSize, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/detail")
-    public ObjectDetail detail(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName) throws Exception {
-        return service.detail(connectionId, schemaName, objectName);
+    public ObjectDetail detail(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        return service.detail(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/structure")
-    public ObjectStructure structure(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName) throws Exception {
-        return service.structure(connectionId, schemaName, objectName);
+    public ObjectStructure structure(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        return service.structure(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/relations")
-    public ObjectRelations relations(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName) throws Exception {
-        return service.relations(connectionId, schemaName, objectName);
+    public ObjectRelations relations(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        return service.relations(connectionId, schemaName, objectName, refresh);
     }
 
     @PostMapping("/{connectionId}/objects/design/preview")

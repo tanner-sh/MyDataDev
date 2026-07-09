@@ -3,7 +3,7 @@ import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { Button, Card, ConfigProvider, Input, Layout, Select, Space, Tabs } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
@@ -70,6 +70,12 @@ export default function App() {
 
   useEffect(() => {
     refreshBackups(selected).catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (selected) {
+      loadMetadata(selected, { page: 0 }).catch(() => undefined);
+    }
   }, [selected?.id]);
 
   useEffect(() => {
@@ -250,16 +256,21 @@ export default function App() {
     setForm(EMPTY_FORM);
   }
 
-  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean } = {}) {
+  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean } = {}) {
     if (!conn) return;
     setLoading(true);
     try {
+      if (options.refresh) {
+        structureCacheRef.current.clear();
+        setStructureLoadingKey(null);
+      }
       const schema = options.schema ?? metadataQuery.schema;
       const keyword = options.keyword ?? metadataQuery.keyword;
       const params = new URLSearchParams({
         page: String(options.page ?? 0),
         pageSize: String(OBJECT_PAGE_SIZE)
       });
+      if (options.refresh) params.set('refresh', 'true');
       if (schema) params.set('schema', schema);
       if (keyword.trim()) params.set('keyword', keyword.trim());
       const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`);
@@ -270,7 +281,9 @@ export default function App() {
         return { ...data, objects: [...current.objects, ...data.objects] };
       });
       const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
-      setMessage(data.hasMore ? `已加载 ${loadedCount} 个数据库对象，可继续加载更多` : `已加载 ${loadedCount} 个数据库对象`);
+      const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
+      const timeText = data.cachedAt ? `，缓存时间 ${new Date(data.cachedAt).toLocaleString()}` : '';
+      setMessage(data.hasMore ? `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象，可继续加载更多` : `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象`);
     } catch (e) {
       setMessage(localizeMessage((e as Error).message));
     } finally {
@@ -917,9 +930,14 @@ export default function App() {
             />
             <Card size="small" title="数据库对象" className="panel-card">
               <Space direction="vertical" size={8} className="full-width">
-                <Button size="small" icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata(selected, { page: 0 })}>
-                  加载对象
+                <Button size="small" icon={<ReloadOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata(selected, { page: 0, refresh: true })}>
+                  刷新缓存
                 </Button>
+                {metadata?.cachedAt && (
+                  <span className="metadata-cache-status">
+                    {metadata.cacheHit ? '来自缓存' : '已刷新'} · {new Date(metadata.cachedAt).toLocaleString()}
+                  </span>
+                )}
                 <Select
                   size="small"
                   allowClear

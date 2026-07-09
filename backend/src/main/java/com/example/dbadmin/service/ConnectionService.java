@@ -23,12 +23,14 @@ public class ConnectionService {
     private final CryptoService crypto;
     private final AuditRepository audit;
     private final BackupTaskRepository backupTasks;
+    private final MetadataCacheService metadataCache;
 
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks) {
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
         this.backupTasks = backupTasks;
+        this.metadataCache = metadataCache;
     }
 
     public List<ConnectionResponse> list() {
@@ -48,6 +50,7 @@ public class ConnectionService {
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
         repository.update(id, toModel(id, request, secret));
+        metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
     }
@@ -59,6 +62,7 @@ public class ConnectionService {
             throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
         }
         repository.delete(id);
+        metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
     }
 

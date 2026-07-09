@@ -246,6 +246,13 @@ body {
   padding: 0 2px;
 }
 
+.metadata-cache-status {
+  display: block;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .object-structure-loading {
   min-height: 42px;
   display: flex;

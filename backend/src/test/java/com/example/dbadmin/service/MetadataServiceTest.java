@@ -34,15 +34,39 @@ class MetadataServiceTest {
             connection.createStatement().execute("CREATE TABLE beta_events(id BIGINT PRIMARY KEY)");
         }
         MetadataService service = service(url);
-        MetadataResponse response = service.inspect(1L, null, "alpha", 0, 1);
+        MetadataResponse response = service.inspect(1L, null, "alpha", 0, 1, false);
 
         assertThat(response.page()).isZero();
         assertThat(response.pageSize()).isEqualTo(1);
         assertThat(response.hasMore()).isTrue();
+        assertThat(response.cacheHit()).isFalse();
+        assertThat(response.cachedAt()).isNotBlank();
         assertThat(response.objects()).hasSize(1);
         assertThat(response.objects().get(0).name()).contains("ALPHA");
         assertThat(response.objects().get(0).columns()).isEmpty();
         assertThat(response.objects().get(0).indexes()).isEmpty();
+    }
+
+    @Test
+    void reusesMetadataCacheUntilRefresh() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+
+        MetadataResponse first = service.inspect(1L, null, null, 0, 200, false);
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE orders(id BIGINT PRIMARY KEY)");
+        }
+        MetadataResponse cached = service.inspect(1L, null, null, 0, 200, false);
+        MetadataResponse refreshed = service.inspect(1L, null, null, 0, 200, true);
+
+        assertThat(first.objects()).extracting("name").contains("USERS").doesNotContain("ORDERS");
+        assertThat(cached.cacheHit()).isTrue();
+        assertThat(cached.objects()).extracting("name").contains("USERS").doesNotContain("ORDERS");
+        assertThat(refreshed.cacheHit()).isFalse();
+        assertThat(refreshed.objects()).extracting("name").contains("USERS", "ORDERS");
     }
 
     @Test
@@ -141,6 +165,6 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(anyLong())).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        return new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class));
+        return new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService());
     }
 }

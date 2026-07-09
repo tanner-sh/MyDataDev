@@ -34,60 +34,79 @@ public class MetadataService {
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
     private final AuditRepository audit;
+    private final MetadataCacheService cache;
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
 
-    public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit) {
+    public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit, MetadataCacheService cache) {
         this.connections = connections;
         this.dialectRegistry = dialectRegistry;
         this.audit = audit;
+        this.cache = cache;
     }
 
-    public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize) throws Exception {
+    public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
+        if (refresh) {
+            cache.evictConnection(connectionId);
+        }
+        var cached = cache.metadata(connectionId);
+        boolean cacheHit = cached.isPresent();
+        MetadataCacheService.MetadataSnapshot snapshot = cached.orElse(null);
+        if (snapshot == null) {
+            snapshot = loadMetadataSnapshot(connectionId);
+        }
+        List<DbObject> filtered = filterObjects(snapshot.objects(), schemaFilter, keyword);
+        int normalizedPage = Math.max(page == null ? 0 : page, 0);
+        int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
+        int offset = normalizedPage * normalizedPageSize;
+        List<DbObject> objects = filtered.stream().skip(offset).limit(normalizedPageSize).toList();
+        boolean hasMore = filtered.size() > offset + objects.size();
+        return new MetadataResponse(snapshot.schemas(), objects, normalizedPage, normalizedPageSize, hasMore, snapshot.cachedAt().toString(), cacheHit);
+    }
+
+    private MetadataCacheService.MetadataSnapshot loadMetadataSnapshot(long connectionId) throws Exception {
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             List<String> schemas = schemas(meta);
             List<DbObject> objects = new ArrayList<>();
-            String schemaPattern = schemaFilter == null || schemaFilter.isBlank() ? null : schemaFilter;
-            String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.toLowerCase(Locale.ROOT);
-            int normalizedPage = Math.max(page == null ? 0 : page, 0);
-            int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
-            int offset = normalizedPage * normalizedPageSize;
-            int matched = 0;
-            boolean hasMore = false;
-            try (ResultSet rs = meta.getTables(connection.getCatalog(), schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
+            try (ResultSet rs = meta.getTables(connection.getCatalog(), null, "%", new String[]{"TABLE", "VIEW"})) {
                 while (rs.next()) {
                     String schema = rs.getString("TABLE_SCHEM");
                     String name = rs.getString("TABLE_NAME");
                     String type = rs.getString("TABLE_TYPE");
-                    if (isSystemSchema(schema) || !matchesKeyword(schema, name, normalizedKeyword)) {
+                    if (isSystemSchema(schema)) {
                         continue;
-                    }
-                    if (matched++ < offset) {
-                        continue;
-                    }
-                    if (objects.size() >= normalizedPageSize) {
-                        hasMore = true;
-                        break;
                     }
                     objects.add(new DbObject(schema, name, type, List.of(), List.of()));
                 }
             }
-            return new MetadataResponse(schemas, objects, normalizedPage, normalizedPageSize, hasMore);
+            return cache.putMetadata(connectionId, schemas, objects);
         }
     }
 
     public ObjectStructure structure(long connectionId, String schemaName, String objectName) throws Exception {
+        return structure(connectionId, schemaName, objectName, false);
+    }
+
+    public ObjectStructure structure(long connectionId, String schemaName, String objectName, boolean refresh) throws Exception {
+        if (!refresh) {
+            var cached = cache.structure(connectionId, schemaName, objectName);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             String catalog = connection.getCatalog();
             DbObject object = findObject(meta, catalog, schemaName, objectName);
-            return new ObjectStructure(
+            ObjectStructure structure = new ObjectStructure(
                     object.schemaName(),
                     object.name(),
                     object.type(),
                     columns(meta, catalog, object.schemaName(), object.name()),
                     indexes(meta, catalog, object.schemaName(), object.name())
             );
+            cache.putStructure(connectionId, object.schemaName(), object.name(), structure);
+            return structure;
         }
     }
 
@@ -111,6 +130,16 @@ public class MetadataService {
     }
 
     public ObjectDetail detail(long connectionId, String schemaName, String objectName) throws Exception {
+        return detail(connectionId, schemaName, objectName, false);
+    }
+
+    public ObjectDetail detail(long connectionId, String schemaName, String objectName, boolean refresh) throws Exception {
+        if (!refresh) {
+            var cached = cache.detail(connectionId, schemaName, objectName);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             String catalog = connection.getCatalog();
@@ -122,19 +151,33 @@ public class MetadataService {
             DbConnection dbConnection = connections.require(connectionId);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             DdlResult ddl = ddl(connection, dialect, object.schemaName(), object.name(), object.type(), cols, pk.columns());
-            return new ObjectDetail(object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(), rowCount, ddl.sql(), ddl.source());
+            ObjectDetail detail = new ObjectDetail(object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(), rowCount, ddl.sql(), ddl.source());
+            cache.putDetail(connectionId, object.schemaName(), object.name(), detail);
+            return detail;
         }
     }
 
     public ObjectRelations relations(long connectionId, String schemaName, String objectName) throws Exception {
+        return relations(connectionId, schemaName, objectName, false);
+    }
+
+    public ObjectRelations relations(long connectionId, String schemaName, String objectName, boolean refresh) throws Exception {
+        if (!refresh) {
+            var cached = cache.relations(connectionId, schemaName, objectName);
+            if (cached.isPresent()) {
+                return cached.get();
+            }
+        }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             String catalog = connection.getCatalog();
             DbObject object = findObject(meta, catalog, schemaName, objectName);
-            return new ObjectRelations(
+            ObjectRelations relations = new ObjectRelations(
                     relations(meta.getImportedKeys(catalog, object.schemaName(), object.name())),
                     relations(meta.getExportedKeys(catalog, object.schemaName(), object.name()))
             );
+            cache.putRelations(connectionId, object.schemaName(), object.name(), relations);
+            return relations;
         }
     }
 
@@ -161,6 +204,7 @@ public class MetadataService {
                 statement.execute(line);
             }
         }
+        cache.evictObject(connectionId, request.schemaName(), request.tableName());
         audit.log(actor, "TABLE_DESIGN_EXECUTE", "connection:" + connectionId + " table:" + expected, String.join("\n", sql));
         return new TableDesignResponse(sql, "已执行 " + sql.size() + " 条 DDL。");
     }
@@ -209,6 +253,15 @@ public class MetadataService {
                 ? objectName
                 : (schema + "." + name).toLowerCase(Locale.ROOT);
         return objectName.contains(keyword) || qualifiedName.contains(keyword);
+    }
+
+    private List<DbObject> filterObjects(List<DbObject> objects, String schemaFilter, String keyword) {
+        String normalizedSchema = schemaFilter == null || schemaFilter.isBlank() ? null : schemaFilter.toLowerCase(Locale.ROOT);
+        String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.toLowerCase(Locale.ROOT);
+        return objects.stream()
+                .filter(object -> normalizedSchema == null || normalizedSchema.equals((object.schemaName() == null ? "" : object.schemaName()).toLowerCase(Locale.ROOT)))
+                .filter(object -> matchesKeyword(object.schemaName(), object.name(), normalizedKeyword))
+                .toList();
     }
 
     private DbObject findObject(DatabaseMetaData meta, String catalog, String schema, String objectName) throws Exception {
@@ -439,4 +492,5 @@ public class MetadataService {
 
     private record DdlResult(String sql, String source) {
     }
+
 }

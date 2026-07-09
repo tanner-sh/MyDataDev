@@ -154,7 +154,7 @@ public class SqlService {
             items.add(new SqlCompletionItem(keyword, "KEYWORD", keyword, "SQL 关键字"));
         }
         try {
-            MetadataResponse response = metadata.inspect(request.connectionId(), null, null, 0, 200);
+            MetadataResponse response = metadata.inspect(request.connectionId(), null, null, 0, 200, false);
             Set<String> schemas = new LinkedHashSet<>(response.schemas());
             for (String schema : schemas) {
                 items.add(new SqlCompletionItem(schema, "SCHEMA", schema, "数据库 Schema"));
