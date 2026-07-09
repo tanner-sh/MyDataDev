@@ -1,11 +1,19 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
 import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.ObjectRelation;
+import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
+import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
+import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
+import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.repo.AuditRepository;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
@@ -15,14 +23,23 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Service
 public class MetadataService {
     private final ConnectionService connections;
+    private final DialectRegistry dialectRegistry;
+    private final AuditRepository audit;
+    private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
 
-    public MetadataService(ConnectionService connections) {
+    public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit) {
         this.connections = connections;
+        this.dialectRegistry = dialectRegistry;
+        this.audit = audit;
     }
 
     public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize) throws Exception {
@@ -100,11 +117,60 @@ public class MetadataService {
             DbObject object = findObject(meta, catalog, schemaName, objectName);
             List<ColumnInfo> cols = columns(meta, catalog, object.schemaName(), object.name());
             List<IndexInfo> idx = indexes(meta, catalog, object.schemaName(), object.name());
-            List<String> pk = primaryKeys(meta, catalog, object.schemaName(), object.name());
+            PrimaryKeyInfo pk = primaryKeyInfo(meta, catalog, object.schemaName(), object.name());
             Long rowCount = isView(object.type()) ? null : rowCount(connection, object.schemaName(), object.name());
-            String ddl = ddl(object.schemaName(), object.name(), object.type(), cols, pk);
-            return new ObjectDetail(object.schemaName(), object.name(), object.type(), cols, idx, pk, rowCount, ddl);
+            DbConnection dbConnection = connections.require(connectionId);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            DdlResult ddl = ddl(connection, dialect, object.schemaName(), object.name(), object.type(), cols, pk.columns());
+            return new ObjectDetail(object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(), rowCount, ddl.sql(), ddl.source());
         }
+    }
+
+    public ObjectRelations relations(long connectionId, String schemaName, String objectName) throws Exception {
+        try (Connection connection = connections.open(connectionId)) {
+            DatabaseMetaData meta = connection.getMetaData();
+            String catalog = connection.getCatalog();
+            DbObject object = findObject(meta, catalog, schemaName, objectName);
+            return new ObjectRelations(
+                    relations(meta.getImportedKeys(catalog, object.schemaName(), object.name())),
+                    relations(meta.getExportedKeys(catalog, object.schemaName(), object.name()))
+            );
+        }
+    }
+
+    public TableDesignResponse previewDesign(long connectionId, TableDesignRequest request) throws Exception {
+        List<String> sql = designSql(connectionId, request);
+        return new TableDesignResponse(sql, sql.isEmpty() ? "没有检测到结构变更。" : "已生成 " + sql.size() + " 条 DDL。");
+    }
+
+    public TableDesignResponse executeDesign(long connectionId, TableDesignRequest request, String actor) throws Exception {
+        DbConnection dbConnection = connections.require(connectionId);
+        if (dbConnection.readonly()) {
+            throw new IllegalStateException("只读连接不允许执行表结构变更。");
+        }
+        String expected = qualifiedName(request.schemaName(), request.tableName());
+        if (!expected.equals(request.confirmation())) {
+            throw new IllegalArgumentException("确认文本不匹配，请输入完整表名：" + expected);
+        }
+        List<String> sql = designSql(connectionId, request);
+        if (sql.isEmpty()) {
+            return new TableDesignResponse(List.of(), "没有检测到结构变更。");
+        }
+        try (Connection connection = connections.open(connectionId); Statement statement = connection.createStatement()) {
+            for (String line : sql) {
+                statement.execute(line);
+            }
+        }
+        audit.log(actor, "TABLE_DESIGN_EXECUTE", "connection:" + connectionId + " table:" + expected, String.join("\n", sql));
+        return new TableDesignResponse(sql, "已执行 " + sql.size() + " 条 DDL。");
+    }
+
+    private List<String> designSql(long connectionId, TableDesignRequest request) throws Exception {
+        validateDesign(request);
+        ObjectDetail original = detail(connectionId, request.schemaName(), request.tableName());
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        return dialect.alterTableSql(original.schemaName(), original.name(), original, request);
     }
 
     private List<String> schemas(DatabaseMetaData meta) throws Exception {
@@ -171,13 +237,21 @@ public class MetadataService {
     }
 
     private List<String> primaryKeys(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {
+        return primaryKeyInfo(meta, catalog, schema, table).columns();
+    }
+
+    private PrimaryKeyInfo primaryKeyInfo(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {
         TreeMap<Short, String> ordered = new TreeMap<>();
+        String pkName = null;
         try (ResultSet rs = meta.getPrimaryKeys(catalog, schema, table)) {
             while (rs.next()) {
                 ordered.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
+                if (pkName == null) {
+                    pkName = rs.getString("PK_NAME");
+                }
             }
         }
-        return new ArrayList<>(ordered.values());
+        return new PrimaryKeyInfo(new ArrayList<>(ordered.values()), pkName);
     }
 
     private Long rowCount(Connection connection, String schema, String table) {
@@ -188,7 +262,15 @@ public class MetadataService {
         }
     }
 
-    private String ddl(String schema, String table, String type, List<ColumnInfo> columns, List<String> primaryKeys) {
+    private DdlResult ddl(Connection connection, DatabaseDialect dialect, String schema, String table, String type, List<ColumnInfo> columns, List<String> primaryKeys) throws Exception {
+        var nativeDdl = dialect.nativeDdl(connection, schema, table, type);
+        if (nativeDdl.isPresent() && !nativeDdl.get().isBlank()) {
+            return new DdlResult(nativeDdl.get(), "NATIVE");
+        }
+        return new DdlResult(generatedDdl(schema, table, type, columns, primaryKeys), "GENERATED");
+    }
+
+    private String generatedDdl(String schema, String table, String type, List<ColumnInfo> columns, List<String> primaryKeys) {
         if (isView(type)) {
             return "-- 视图定义反查暂未实现。\nCREATE VIEW " + table(schema, table) + " AS\n-- 请使用数据库原生工具查看完整视图定义。";
         }
@@ -234,7 +316,9 @@ public class MetadataService {
                         rs.getString("TYPE_NAME"),
                         rs.getInt("COLUMN_SIZE"),
                         rs.getInt("NULLABLE") == DatabaseMetaData.columnNullable,
-                        rs.getString("REMARKS")
+                        rs.getString("REMARKS"),
+                        rs.getInt("ORDINAL_POSITION"),
+                        rs.getString("COLUMN_DEF")
                 ));
             }
         }
@@ -253,5 +337,106 @@ public class MetadataService {
             }
         }
         return indexes;
+    }
+
+    private List<ObjectRelation> relations(ResultSet rs) throws Exception {
+        try (rs) {
+            List<ObjectRelation> relations = new ArrayList<>();
+            while (rs.next()) {
+                relations.add(new ObjectRelation(
+                        rs.getString("FK_NAME"),
+                        rs.getString("PKTABLE_SCHEM"),
+                        rs.getString("PKTABLE_NAME"),
+                        rs.getString("PKCOLUMN_NAME"),
+                        rs.getString("FKTABLE_SCHEM"),
+                        rs.getString("FKTABLE_NAME"),
+                        rs.getString("FKCOLUMN_NAME")
+                ));
+            }
+            return relations;
+        }
+    }
+
+    private void validateDesign(TableDesignRequest request) {
+        validateIdentifier(request.tableName(), "表名");
+        if (request.schemaName() != null && !request.schemaName().isBlank()) {
+            validateIdentifier(request.schemaName(), "Schema");
+        }
+        if (request.columns() == null || request.columns().stream().noneMatch(column -> !column.deleted())) {
+            throw new IllegalArgumentException("表设计至少需要保留一个字段。");
+        }
+        Set<String> columnNames = request.columns().stream()
+                .filter(column -> !column.deleted())
+                .peek(column -> {
+                    validateIdentifier(column.name(), "字段名");
+                    if (column.originalName() != null && !column.originalName().isBlank()) {
+                        validateIdentifier(column.originalName(), "原字段名");
+                    }
+                    if (column.type() == null || column.type().isBlank()) {
+                        throw new IllegalArgumentException("字段类型不能为空。");
+                    }
+                    validateSqlFragment(column.type(), "字段类型");
+                    if (column.defaultValue() != null && !column.defaultValue().isBlank()) {
+                        validateSqlFragment(column.defaultValue(), "默认值");
+                    }
+                })
+                .map(column -> column.name().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toSet());
+        if (columnNames.size() != request.columns().stream().filter(column -> !column.deleted()).count()) {
+            throw new IllegalArgumentException("字段名不能重复。");
+        }
+        if (request.primaryKeys() != null) {
+            for (String primaryKey : request.primaryKeys()) {
+                validateIdentifier(primaryKey, "主键字段");
+                if (!columnNames.contains(primaryKey.toLowerCase(Locale.ROOT))) {
+                    throw new IllegalArgumentException("主键字段不存在：" + primaryKey);
+                }
+            }
+        }
+        if (request.indexes() != null) {
+            for (var index : request.indexes()) {
+                if (index.deleted()) {
+                    if (index.originalName() != null && !index.originalName().isBlank()) {
+                        validateIdentifier(index.originalName(), "原索引名");
+                    }
+                    continue;
+                }
+                validateIdentifier(index.name(), "索引名");
+                if (index.originalName() != null && !index.originalName().isBlank()) {
+                    validateIdentifier(index.originalName(), "原索引名");
+                }
+                if (index.columns() == null || index.columns().isEmpty()) {
+                    throw new IllegalArgumentException("索引至少需要一个字段。");
+                }
+                for (String column : index.columns()) {
+                    validateIdentifier(column, "索引字段");
+                    if (!columnNames.contains(column.toLowerCase(Locale.ROOT))) {
+                        throw new IllegalArgumentException("索引字段不存在：" + column);
+                    }
+                }
+            }
+        }
+    }
+
+    private void validateIdentifier(String value, String label) {
+        if (value == null || !IDENTIFIER.matcher(value).matches()) {
+            throw new IllegalArgumentException(label + "只能包含字母、数字、下划线、$、#，且不能以数字开头：" + value);
+        }
+    }
+
+    private void validateSqlFragment(String value, String label) {
+        if (value.contains(";") || value.contains("--") || value.contains("/*") || value.contains("*/")) {
+            throw new IllegalArgumentException(label + "包含不允许的 SQL 控制字符。");
+        }
+    }
+
+    private String qualifiedName(String schemaName, String tableName) {
+        return schemaName == null || schemaName.isBlank() ? tableName : schemaName + "." + tableName;
+    }
+
+    private record PrimaryKeyInfo(List<String> columns, String name) {
+    }
+
+    private record DdlResult(String sql, String source) {
     }
 }

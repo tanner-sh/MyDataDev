@@ -47,13 +47,31 @@ public final class ApiDtos {
     public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
     }
 
-    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, Long rowCount, String ddl) {
+    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, Long rowCount, String ddl, String ddlSource) {
     }
 
-    public record ColumnInfo(String name, String type, int size, boolean nullable, String remarks) {
+    public record ObjectRelations(List<ObjectRelation> importedKeys, List<ObjectRelation> exportedKeys) {
+    }
+
+    public record ObjectRelation(String constraintName, String pkSchemaName, String pkTableName, String pkColumnName, String fkSchemaName, String fkTableName, String fkColumnName) {
+    }
+
+    public record ColumnInfo(String name, String type, int size, boolean nullable, String remarks, int ordinalPosition, String defaultValue) {
     }
 
     public record IndexInfo(String name, String columnName, boolean unique) {
+    }
+
+    public record TableDesignRequest(String schemaName, @NotBlank String tableName, List<ColumnDesign> columns, List<IndexDesign> indexes, List<String> primaryKeys, String confirmation) {
+    }
+
+    public record ColumnDesign(@NotBlank String name, @NotBlank String type, Integer size, boolean nullable, String defaultValue, String originalName, boolean deleted) {
+    }
+
+    public record IndexDesign(@NotBlank String name, List<String> columns, boolean unique, String originalName, boolean deleted) {
+    }
+
+    public record TableDesignResponse(List<String> sql, String message) {
     }
 
     public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {

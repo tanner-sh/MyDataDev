@@ -543,6 +543,42 @@ body {
   line-height: 1.6;
 }
 
+.table-designer {
+  display: grid;
+  gap: 10px;
+}
+
+.designer-toolbar {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.designer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.design-confirm-input {
+  margin: 12px 0;
+}
+
+.design-preview {
+  max-height: 260px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #dde3ee;
+  border-radius: 6px;
+  background: #0f172a;
+  color: #e5e7eb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .inspector-tabs .ant-tabs-nav {
   margin-bottom: 10px;
 }

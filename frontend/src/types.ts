@@ -12,16 +12,24 @@ export type DbObject = {
   schemaName?: string;
   name: string;
   type: string;
-  columns: { name: string; type: string; size: number; nullable: boolean }[];
+  columns: { name: string; type: string; size: number; nullable: boolean; remarks?: string; ordinalPosition?: number; defaultValue?: string }[];
   indexes: { name: string; columnName: string; unique: boolean }[];
 };
 
 export type ObjectDetail = DbObject & {
   primaryKeys: string[];
+  primaryKeyName?: string | null;
   rowCount?: number | null;
   ddl: string;
+  ddlSource?: string;
 };
 
+export type ObjectRelation = { constraintName?: string; pkSchemaName?: string; pkTableName: string; pkColumnName: string; fkSchemaName?: string; fkTableName: string; fkColumnName: string };
+export type ObjectRelations = { importedKeys: ObjectRelation[]; exportedKeys: ObjectRelation[] };
+export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean };
+export type IndexDesign = { name: string; columns: string[]; unique: boolean; originalName?: string; deleted: boolean };
+export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; confirmation?: string };
+export type TableDesignResponse = { sql: string[]; message: string };
 export type ObjectStructure = DbObject;
 export type Metadata = { schemas: string[]; objects: DbObject[]; page: number; pageSize: number; hasMore: boolean };
 export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean };

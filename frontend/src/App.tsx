@@ -1010,11 +1010,14 @@ export default function App() {
             />
           ) : (
             <ObjectDetailWorkspace
+              connectionId={selected?.id}
+              readonlyConnection={selected?.readonly}
               detail={activeObjectDetail}
               statusMessage={operationStatusMessage}
               loading={loading}
               onBackToSql={() => setMode('sql')}
               onOpenTable={openTable}
+              onReloadDetail={() => activeObjectDetail && openObjectDetail(activeObjectDetail)}
             />
           )}
         </Content>
