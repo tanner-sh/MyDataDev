@@ -154,7 +154,7 @@ public class SqlService {
             items.add(new SqlCompletionItem(keyword, "KEYWORD", keyword, "SQL 关键字"));
         }
         try {
-            MetadataResponse response = metadata.inspect(request.connectionId(), null);
+            MetadataResponse response = metadata.inspect(request.connectionId(), null, null, 0, 200);
             Set<String> schemas = new LinkedHashSet<>(response.schemas());
             for (String schema : schemas) {
                 items.add(new SqlCompletionItem(schema, "SCHEMA", schema, "数据库 Schema"));
@@ -164,9 +164,6 @@ public class SqlService {
                         ? object.name()
                         : object.schemaName() + "." + object.name();
                 items.add(new SqlCompletionItem(tableLabel, "TABLE", tableLabel, "数据库" + objectTypeLabel(object.type())));
-                for (var column : object.columns()) {
-                    items.add(new SqlCompletionItem(column.name(), "COLUMN", column.name(), object.name() + " 字段 · " + column.type()));
-                }
             }
         } catch (Exception ignored) {
             // Connection metadata may be unavailable while typing; keyword completion should still work.

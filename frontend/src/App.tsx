@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { Button, Card, ConfigProvider, Layout, Space, Tabs } from 'antd';
+import { Button, Card, ConfigProvider, Input, Layout, Select, Space, Tabs } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { DatabaseOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
-import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
+import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow } from './types';
 import { buildChanges, completionKind, createSqlTab, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { BackupPanel } from './components/BackupPanel';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -19,11 +19,14 @@ import { SqlWorkspace } from './components/SqlWorkspace';
 import { TableWorkspace } from './components/TableWorkspace';
 
 const { Sider, Content } = Layout;
+const OBJECT_PAGE_SIZE = 200;
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [selected, setSelected] = useState<Connection | null>(null);
-  const [metadata, setMetadata] = useState<Metadata | null>(null);
+  const [metadata, setMetadata] = useState<Metadata | null>(null);
+  const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
+  const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
   const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', results: [], message: '' }]);
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [message, setMessage] = useState('');
@@ -47,6 +50,7 @@ export default function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const selectedIdRef = useRef<number | null>(null);
   const metadataRef = useRef<Metadata | null>(null);
+  const structureCacheRef = useRef<Map<string, DbObject>>(new Map());
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const executeRef = useRef<() => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
@@ -120,11 +124,15 @@ export default function App() {
   async function saveConnection() {
     setLoading(true);
     try {
-      const saved = editingConnectionId
-        ? await api<Connection>(`/connections/${editingConnectionId}`, { method: 'PUT', body: JSON.stringify(form) })
-        : await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
-      setSelected(saved);
-      setEditingConnectionId(saved.id);
+      const saved = editingConnectionId
+        ? await api<Connection>(`/connections/${editingConnectionId}`, { method: 'PUT', body: JSON.stringify(form) })
+        : await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
+      setSelected(saved);
+      setMetadata(null);
+      setMetadataQuery({ schema: '', keyword: '' });
+      structureCacheRef.current.clear();
+      setStructureLoadingKey(null);
+      setEditingConnectionId(saved.id);
       setMessage(editingConnectionId ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
       await refreshConnections();
     } catch (e) {
@@ -178,6 +186,9 @@ export default function App() {
       if (selected?.id === connection.id) {
         setSelected(remaining[0] || null);
         setMetadata(null);
+        setMetadataQuery({ schema: '', keyword: '' });
+        structureCacheRef.current.clear();
+        setStructureLoadingKey(null);
         setActiveObjectDetail(null);
         setMode('sql');
       }
@@ -198,6 +209,9 @@ export default function App() {
   function selectConnection(connection: Connection) {
     setSelected(connection);
     setMetadata(null);
+    setMetadataQuery({ schema: '', keyword: '' });
+    structureCacheRef.current.clear();
+    setStructureLoadingKey(null);
     setActiveObjectDetail(null);
     setMode('sql');
   }
@@ -236,19 +250,85 @@ export default function App() {
     setForm(EMPTY_FORM);
   }
 
-  async function loadMetadata(conn = selected) {
-    if (!conn) return;
-    setLoading(true);
-    try {
-      const data = await api<Metadata>(`/metadata/${conn.id}`);
-      setMetadata(data);
-      setMessage(`已加载 ${data.objects.length} 个数据库对象`);
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }
+  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean } = {}) {
+    if (!conn) return;
+    setLoading(true);
+    try {
+      const schema = options.schema ?? metadataQuery.schema;
+      const keyword = options.keyword ?? metadataQuery.keyword;
+      const params = new URLSearchParams({
+        page: String(options.page ?? 0),
+        pageSize: String(OBJECT_PAGE_SIZE)
+      });
+      if (schema) params.set('schema', schema);
+      if (keyword.trim()) params.set('keyword', keyword.trim());
+      const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`);
+      setMetadata((current) => {
+        if (!options.append || !current) {
+          return data;
+        }
+        return { ...data, objects: [...current.objects, ...data.objects] };
+      });
+      const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
+      setMessage(data.hasMore ? `已加载 ${loadedCount} 个数据库对象，可继续加载更多` : `已加载 ${loadedCount} 个数据库对象`);
+    } catch (e) {
+      setMessage(localizeMessage((e as Error).message));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
+    return `${connectionId}:${object.schemaName || ''}.${object.name}`.toLowerCase();
+  }
+
+  async function loadObjectStructure(object: DbObject) {
+    const connectionId = selectedIdRef.current;
+    if (!connectionId) return null;
+    const cacheKey = objectCacheKey(connectionId, object);
+    const cached = structureCacheRef.current.get(cacheKey);
+    if (cached) {
+      mergeObjectStructure(cached);
+      return cached;
+    }
+
+    setStructureLoadingKey(`${object.schemaName || ''}.${object.name}`);
+    try {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
+      const nextObject: DbObject = {
+        schemaName: structure.schemaName,
+        name: structure.name,
+        type: structure.type,
+        columns: structure.columns,
+        indexes: structure.indexes
+      };
+      structureCacheRef.current.set(cacheKey, nextObject);
+      mergeObjectStructure(nextObject);
+      return nextObject;
+    } catch (e) {
+      setMessage(localizeMessage((e as Error).message));
+      return null;
+    } finally {
+      setStructureLoadingKey(null);
+    }
+  }
+
+  function mergeObjectStructure(structure: DbObject) {
+    setMetadata((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        objects: current.objects.map((object) => matchesSameObject(object, structure) ? { ...object, ...structure } : object)
+      };
+    });
+  }
+
+  function matchesSameObject(left: Pick<DbObject, 'schemaName' | 'name'>, right: Pick<DbObject, 'schemaName' | 'name'>) {
+    return (left.schemaName || '').toLowerCase() === (right.schemaName || '').toLowerCase()
+      && left.name.toLowerCase() === right.name.toLowerCase();
+  }
 
   async function execute(path = '/sql/execute') {
     if (!selected) {
@@ -428,7 +508,7 @@ export default function App() {
           startColumn: word.startColumn,
           endColumn: word.endColumn
         };
-        const aliasItems = aliasColumnCompletionItems(model, position, monaco, range);
+        const aliasItems = await aliasColumnCompletionItems(model, position, monaco, range);
         if (aliasItems.length > 0) {
           return { suggestions: aliasItems };
         }
@@ -458,9 +538,7 @@ export default function App() {
     });
   };
 
-  function aliasColumnCompletionItems(model: Monaco.editor.ITextModel, position: Monaco.Position, monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
-    const metadataSnapshot = metadataRef.current;
-    if (!metadataSnapshot) return [];
+  async function aliasColumnCompletionItems(model: Monaco.editor.ITextModel, position: Monaco.Position, monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
     const textBeforeCursor = model.getValueInRange({
       startLineNumber: 1,
       startColumn: 1,
@@ -469,13 +547,15 @@ export default function App() {
     });
     const aliasMatch = textBeforeCursor.match(/([A-Za-z_][\w$]*)\.\w*$/);
     if (!aliasMatch) return [];
-    const object = resolveAliasObject(model.getValue(), aliasMatch[1], metadataSnapshot.objects);
+    const object = resolveAliasObject(model.getValue(), aliasMatch[1], metadataRef.current?.objects || []);
     if (!object) return [];
-    return object.columns.map((column) => ({
+    const objectWithColumns = object.columns.length > 0 ? object : await loadObjectStructure(object);
+    if (!objectWithColumns) return [];
+    return objectWithColumns.columns.map((column) => ({
       label: column.name,
       kind: monaco.languages.CompletionItemKind.Field,
       insertText: column.name,
-      detail: `${object.name} 字段 · ${column.type}`,
+      detail: `${objectWithColumns.name} 字段 · ${column.type}`,
       range
     }));
   }
@@ -494,7 +574,14 @@ export default function App() {
     }
     const tableName = aliasMap.get(alias.toLowerCase());
     if (!tableName) return null;
-    return objects.find((object) => matchesObjectName(object, tableName)) || null;
+    return objects.find((object) => matchesObjectName(object, tableName)) || objectFromTableName(tableName);
+  }
+
+  function objectFromTableName(tableName: string): DbObject {
+    const parts = tableName.split('.').filter(Boolean);
+    const name = parts[parts.length - 1] || tableName;
+    const schemaName = parts.length > 1 ? parts[parts.length - 2] : undefined;
+    return { schemaName, name, type: 'TABLE', columns: [], indexes: [] };
   }
 
   function matchesObjectName(object: DbObject, tableName: string) {
@@ -828,14 +915,57 @@ export default function App() {
               onDuplicate={duplicateConnection}
               onDelete={deleteConnection}
             />
-            <Card size="small" title="数据库对象" className="panel-card">
-              <Space direction="vertical" size={8} className="full-width">
-                <Button size="small" icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata()}>
-                  加载对象
-                </Button>
-                <ObjectTree objects={objects} onOpenDetail={openObjectDetail} onOpenTable={openTable} />
-              </Space>
-            </Card>
+            <Card size="small" title="数据库对象" className="panel-card">
+              <Space direction="vertical" size={8} className="full-width">
+                <Button size="small" icon={<TableOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata(selected, { page: 0 })}>
+                  加载对象
+                </Button>
+                <Select
+                  size="small"
+                  allowClear
+                  showSearch
+                  className="full-width"
+                  placeholder="全部 Schema"
+                  value={metadataQuery.schema || undefined}
+                  disabled={!selected || loading}
+                  options={(metadata?.schemas || []).map((schema) => ({ value: schema, label: schema }))}
+                  onChange={(schema) => {
+                    const nextSchema = schema || '';
+                    setMetadataQuery((current) => ({ ...current, schema: nextSchema }));
+                    loadMetadata(selected, { schema: nextSchema, page: 0 });
+                  }}
+                />
+                <Input.Search
+                  size="small"
+                  allowClear
+                  placeholder="搜索对象"
+                  disabled={!selected || loading}
+                  value={metadataQuery.keyword}
+                  onChange={(event) => setMetadataQuery((current) => ({ ...current, keyword: event.target.value }))}
+                  onSearch={(keyword) => {
+                    setMetadataQuery((current) => ({ ...current, keyword }));
+                    loadMetadata(selected, { keyword, page: 0 });
+                  }}
+                />
+                <ObjectTree
+                  objects={objects}
+                  structureLoadingKey={structureLoadingKey}
+                  onLoadStructure={loadObjectStructure}
+                  onOpenDetail={openObjectDetail}
+                  onOpenTable={openTable}
+                />
+                {metadata?.hasMore && (
+                  <Button
+                    size="small"
+                    block
+                    disabled={loading}
+                    onClick={() => loadMetadata(selected, { page: metadata.page + 1, append: true })}
+                  >
+                    加载更多
+                  </Button>
+                )}
+              </Space>
+            </Card>
           </Space>
         </Sider>
 

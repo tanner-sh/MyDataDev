@@ -246,6 +246,13 @@ body {
   padding: 0 2px;
 }
 
+.object-structure-loading {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .column-item {
   padding: 3px 0 !important;
 }

@@ -5,6 +5,7 @@ import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import org.springframework.stereotype.Service;
 
 import java.sql.Connection;
@@ -24,24 +25,52 @@ public class MetadataService {
         this.connections = connections;
     }
 
-    public MetadataResponse inspect(long connectionId, String schemaFilter) throws Exception {
+    public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize) throws Exception {
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             List<String> schemas = schemas(meta);
             List<DbObject> objects = new ArrayList<>();
             String schemaPattern = schemaFilter == null || schemaFilter.isBlank() ? null : schemaFilter;
+            String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.toLowerCase(Locale.ROOT);
+            int normalizedPage = Math.max(page == null ? 0 : page, 0);
+            int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
+            int offset = normalizedPage * normalizedPageSize;
+            int matched = 0;
+            boolean hasMore = false;
             try (ResultSet rs = meta.getTables(connection.getCatalog(), schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
-                while (rs.next() && objects.size() < 100) {
+                while (rs.next()) {
                     String schema = rs.getString("TABLE_SCHEM");
                     String name = rs.getString("TABLE_NAME");
                     String type = rs.getString("TABLE_TYPE");
-                    if (isSystemSchema(schema)) {
+                    if (isSystemSchema(schema) || !matchesKeyword(schema, name, normalizedKeyword)) {
                         continue;
                     }
-                    objects.add(new DbObject(schema, name, type, columns(meta, connection.getCatalog(), schema, name), indexes(meta, connection.getCatalog(), schema, name)));
+                    if (matched++ < offset) {
+                        continue;
+                    }
+                    if (objects.size() >= normalizedPageSize) {
+                        hasMore = true;
+                        break;
+                    }
+                    objects.add(new DbObject(schema, name, type, List.of(), List.of()));
                 }
             }
-            return new MetadataResponse(schemas, objects);
+            return new MetadataResponse(schemas, objects, normalizedPage, normalizedPageSize, hasMore);
+        }
+    }
+
+    public ObjectStructure structure(long connectionId, String schemaName, String objectName) throws Exception {
+        try (Connection connection = connections.open(connectionId)) {
+            DatabaseMetaData meta = connection.getMetaData();
+            String catalog = connection.getCatalog();
+            DbObject object = findObject(meta, catalog, schemaName, objectName);
+            return new ObjectStructure(
+                    object.schemaName(),
+                    object.name(),
+                    object.type(),
+                    columns(meta, catalog, object.schemaName(), object.name()),
+                    indexes(meta, catalog, object.schemaName(), object.name())
+            );
         }
     }
 
@@ -103,6 +132,17 @@ public class MetadataService {
                 || s.equals("SQLJ")
                 || s.startsWith("SYS_")
                 || s.startsWith("MYSQL");
+    }
+
+    private boolean matchesKeyword(String schema, String name, String keyword) {
+        if (keyword == null) {
+            return true;
+        }
+        String objectName = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        String qualifiedName = schema == null || schema.isBlank()
+                ? objectName
+                : (schema + "." + name).toLowerCase(Locale.ROOT);
+        return objectName.contains(keyword) || qualifiedName.contains(keyword);
     }
 
     private DbObject findObject(DatabaseMetaData meta, String catalog, String schema, String objectName) throws Exception {

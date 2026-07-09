@@ -38,10 +38,13 @@ public final class ApiDtos {
     public record MessageResponse(boolean ok, String message) {
     }
 
-    public record MetadataResponse(List<String> schemas, List<DbObject> objects) {
+    public record MetadataResponse(List<String> schemas, List<DbObject> objects, int page, int pageSize, boolean hasMore) {
     }
 
     public record DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
+    }
+
+    public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
     }
 
     public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, Long rowCount, String ddl) {

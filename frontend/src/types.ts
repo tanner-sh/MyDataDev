@@ -22,7 +22,8 @@ export type ObjectDetail = DbObject & {
   ddl: string;
 };
 
-export type Metadata = { schemas: string[]; objects: DbObject[] };
+export type ObjectStructure = DbObject;
+export type Metadata = { schemas: string[]; objects: DbObject[]; page: number; pageSize: number; hasMore: boolean };
 export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[] };
