@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { Button, Card, ConfigProvider, Input, Layout, Select, Space, Tabs } from 'antd';
+import { Button, Card, ConfigProvider, Input, Layout, Select, Space, Tabs, message as antdMessage } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
@@ -28,10 +28,14 @@ export default function App() {
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
   const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', results: [], message: '' }]);
-  const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
-  const [message, setMessage] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [sqlLoading, setSqlLoading] = useState(false);
+  const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
+  const [message, setMessage] = useState('');
+  const [connectionActionLoading, setConnectionActionLoading] = useState(false);
+  const [metadataLoading, setMetadataLoading] = useState(false);
+  const [objectDetailLoading, setObjectDetailLoading] = useState(false);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [sqlLoading, setSqlLoading] = useState(false);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
   const [connectionsReady, setConnectionsReady] = useState(false);
@@ -52,9 +56,10 @@ export default function App() {
   const metadataRef = useRef<Metadata | null>(null);
   const structureCacheRef = useRef<Map<string, DbObject>>(new Map());
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const executeRef = useRef<() => void>(() => undefined);
-  const formatRef = useRef<() => void>(() => undefined);
-  const sqlTabSeqRef = useRef(1);
+  const executeRef = useRef<() => void>(() => undefined);
+  const formatRef = useRef<() => void>(() => undefined);
+  const sqlTabSeqRef = useRef(1);
+  const [toastApi, toastContextHolder] = antdMessage.useMessage();
 
   const objects = useMemo(() => metadata?.objects || [], [metadata]);
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
@@ -69,7 +74,7 @@ export default function App() {
   }, [selected]);
 
   useEffect(() => {
-    refreshBackups(selected).catch(() => setMessage('备份任务加载失败，可稍后刷新。'));
+    refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [selected?.id]);
 
   useEffect(() => {
@@ -81,8 +86,23 @@ export default function App() {
   useEffect(() => {
     metadataRef.current = metadata;
   }, [metadata]);
-
-  async function refreshConnections(options: RefreshConnectionsOptions = {}) {
+
+  function showSuccess(text: string) {
+    setMessage(text);
+    toastApi.success(text);
+  }
+
+  function showError(text: string) {
+    setMessage(text);
+    toastApi.error(text);
+  }
+
+  function showInfo(text: string) {
+    setMessage(text);
+    toastApi.info(text);
+  }
+
+  async function refreshConnections(options: RefreshConnectionsOptions = {}) {
     const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
     setConnectionsLoading(true);
     setConnectionsError('');
@@ -127,9 +147,9 @@ export default function App() {
     setSqlHistory(rows);
   }
 
-  async function saveConnection() {
-    setLoading(true);
-    try {
+  async function saveConnection() {
+    setConnectionActionLoading(true);
+    try {
       const saved = editingConnectionId
         ? await api<Connection>(`/connections/${editingConnectionId}`, { method: 'PUT', body: JSON.stringify(form) })
         : await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
@@ -139,17 +159,17 @@ export default function App() {
       structureCacheRef.current.clear();
       setStructureLoadingKey(null);
       setEditingConnectionId(saved.id);
-      setMessage(editingConnectionId ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
-      await refreshConnections();
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function testConnection(target = form) {
-    setLoading(true);
+      showSuccess(editingConnectionId ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
+      await refreshConnections();
+    } catch (e) {
+      showError(localizeMessage((e as Error).message));
+    } finally {
+      setConnectionActionLoading(false);
+    }
+  }
+
+  async function testConnection(target = form) {
+    setConnectionActionLoading(true);
     try {
       if (editingConnectionId) {
         await api<{ ok: boolean; message: string }>(`/connections/${editingConnectionId}/test`, {
@@ -162,31 +182,31 @@ export default function App() {
           body: JSON.stringify({ jdbcUrl: target.jdbcUrl, username: target.username, password: target.password })
         });
       }
-      setMessage(`连接测试成功：${target.name || target.jdbcUrl}`);
-    } catch (e) {
-      setMessage(`连接测试失败：${localizeMessage((e as Error).message)}`);
-    } finally {
-      setLoading(false);
-    }
-  }
+      showSuccess(`连接测试成功：${target.name || target.jdbcUrl}`);
+    } catch (e) {
+      showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setConnectionActionLoading(false);
+    }
+  }
 
   async function testSavedConnection(connection: Connection) {
     setTestingConnectionId(connection.id);
     try {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
-      setMessage(`连接测试成功：${connection.name}`);
-    } catch (e) {
-      setMessage(`连接测试失败：${localizeMessage((e as Error).message)}`);
+      showSuccess(`连接测试成功：${connection.name}`);
+    } catch (e) {
+      showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
     } finally {
       setTestingConnectionId(null);
     }
   }
 
   async function deleteConnection(connection: Connection) {
-    setLoading(true);
+    setConnectionActionLoading(true);
     try {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
-      setMessage(`已删除连接：${connection.name}`);
+      showSuccess(`已删除连接：${connection.name}`);
       const remaining = connections.filter((row) => row.id !== connection.id);
       setConnections(remaining);
       if (selected?.id === connection.id) {
@@ -205,12 +225,12 @@ export default function App() {
     } catch (e) {
       const rawMessage = (e as Error).message;
       const blockedByBackups = rawMessage.includes('backup task');
-      setMessage(blockedByBackups ? '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。' : localizeMessage(rawMessage));
+      showError(blockedByBackups ? '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。' : localizeMessage(rawMessage));
       await refreshSqlHistory(selected);
     } finally {
-      setLoading(false);
+      setConnectionActionLoading(false);
     }
-  }
+  }
 
   function selectConnection(connection: Connection) {
     setSelected(connection);
@@ -234,7 +254,7 @@ export default function App() {
       environment: normalizeEnvironment(connection.environment),
       readonly: connection.readonly
     });
-    setMessage(`正在编辑连接：${connection.name}。密码显示为 ${PASSWORD_MASK} 表示沿用已保存密码。`);
+    showInfo(`正在编辑连接：${connection.name}。密码显示为 ${PASSWORD_MASK} 表示沿用已保存密码。`);
   }
 
   function duplicateConnection(connection: Connection) {
@@ -248,7 +268,7 @@ export default function App() {
       environment: normalizeEnvironment(connection.environment),
       readonly: connection.readonly
     });
-    setMessage('已复制连接配置，请输入密码后保存为新连接。');
+    showInfo('已复制连接配置，请输入密码后保存为新连接。');
   }
 
   function resetConnectionForm() {
@@ -258,7 +278,7 @@ export default function App() {
 
   async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean } = {}) {
     if (!conn) return;
-    setLoading(true);
+    setMetadataLoading(true);
     try {
       if (options.refresh) {
         structureCacheRef.current.clear();
@@ -283,11 +303,16 @@ export default function App() {
       const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
       const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
       const timeText = data.cachedAt ? `，缓存时间 ${new Date(data.cachedAt).toLocaleString()}` : '';
-      setMessage(data.hasMore ? `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象，可继续加载更多` : `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象`);
+      const nextMessage = data.hasMore ? `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象，可继续加载更多` : `${cacheText}${timeText}，已加载 ${loadedCount} 个数据库对象`;
+      if (options.refresh) {
+        showSuccess(nextMessage);
+      } else {
+        setMessage(nextMessage);
+      }
     } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
+      showError(localizeMessage((e as Error).message));
     } finally {
-      setLoading(false);
+      setMetadataLoading(false);
     }
   }
 
@@ -321,7 +346,7 @@ export default function App() {
       mergeObjectStructure(nextObject);
       return nextObject;
     } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
+      showError(localizeMessage((e as Error).message));
       return null;
     } finally {
       setStructureLoadingKey(null);
@@ -345,9 +370,9 @@ export default function App() {
 
   async function execute(path = '/sql/execute') {
     if (!selected) {
-      setMessage('请先选择一个数据库连接');
+      showInfo('请先选择一个数据库连接');
       return;
-    }
+    }
     const target = sqlExecutionTarget();
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL' });
@@ -389,7 +414,9 @@ export default function App() {
       }
       await refreshSqlHistory(selected);
     } catch (e) {
-      updateActiveSqlTab({ message: localizeMessage((e as Error).message) });
+      const errorMessage = localizeMessage((e as Error).message);
+      updateActiveSqlTab({ message: errorMessage });
+      toastApi.error(errorMessage);
       await refreshSqlHistory(selected);
     } finally {
       setSqlLoading(false);
@@ -407,10 +434,11 @@ export default function App() {
   }
 
   async function exportSql(format: ExportFormat) {
-    if (!selected) {
-      updateActiveSqlTab({ message: '请先选择一个数据库连接' });
-      return;
-    }
+    if (!selected) {
+      updateActiveSqlTab({ message: '请先选择一个数据库连接' });
+      showInfo('请先选择一个数据库连接');
+      return;
+    }
     const target = sqlExecutionTarget();
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要导出的 SQL' });
@@ -428,10 +456,14 @@ export default function App() {
         throw new Error(err.message || response.statusText);
       }
       const blob = await response.blob();
-      downloadBlob(blob, `query-result-${timestamp()}.${format}`);
-      updateActiveSqlTab({ message: `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}` });
-    } catch (e) {
-      updateActiveSqlTab({ message: `导出失败：${localizeMessage((e as Error).message)}` });
+      downloadBlob(blob, `query-result-${timestamp()}.${format}`);
+      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}`;
+      updateActiveSqlTab({ message: nextMessage });
+      toastApi.success(nextMessage);
+    } catch (e) {
+      const errorMessage = `导出失败：${localizeMessage((e as Error).message)}`;
+      updateActiveSqlTab({ message: errorMessage });
+      toastApi.error(errorMessage);
     } finally {
       setSqlLoading(false);
     }
@@ -622,7 +654,7 @@ export default function App() {
 
   async function openObjectDetail(object: DbObject) {
     if (!selected) return;
-    setLoading(true);
+    setObjectDetailLoading(true);
     try {
       const params = new URLSearchParams({ objectName: object.name });
       if (object.schemaName) params.set('schemaName', object.schemaName);
@@ -631,15 +663,15 @@ export default function App() {
       setMode('object');
       setMessage(`已加载对象详情：${detail.name}`);
     } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
+      showError(localizeMessage((e as Error).message));
     } finally {
-      setLoading(false);
+      setObjectDetailLoading(false);
     }
   }
 
-  async function loadTable(table = activeTable) {
-    if (!selected || !table) return;
-    setLoading(true);
+  async function loadTable(table = activeTable) {
+    if (!selected || !table) return;
+    setTableLoading(true);
     try {
       const params = new URLSearchParams({
         connectionId: String(selected.id),
@@ -652,13 +684,13 @@ export default function App() {
       setTableData(data);
       setTableRows(data.rows.map((row, index) => ({ id: `row-${index}`, values: { ...row }, original: { ...row } })));
       setPreviewSql([]);
-      setMessage(`已从 ${table.tableName} 加载 ${data.rows.length} 行数据`);
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }
+      setMessage(`已从 ${table.tableName} 加载 ${data.rows.length} 行数据`);
+    } catch (e) {
+      showError(localizeMessage((e as Error).message));
+    } finally {
+      setTableLoading(false);
+    }
+  }
 
   function editCell(rowId: string, column: string, value: string) {
     setTableRows((rows) => rows.map((row) => row.id === rowId ? { ...row, values: { ...row.values, [column]: value } } : row));
@@ -683,10 +715,10 @@ export default function App() {
 
   async function importRows(file: File) {
     if (!activeTable || !tableData) {
-      setMessage('请先打开一张表再导入数据');
+      showInfo('请先打开一张表再导入数据');
       return;
     }
-    setLoading(true);
+    setTableLoading(true);
     try {
       const result = parseImportFile(await file.text(), file.name, activeTable.tableName, tableData.columns);
       const importedRows = result.rows.map((values, index) => ({
@@ -696,11 +728,11 @@ export default function App() {
       }));
       setTableRows((rows) => [...importedRows, ...rows]);
       setPreviewSql([]);
-      setMessage(result.message);
+      showSuccess(result.message);
     } catch (e) {
-      setMessage(`导入失败：${localizeMessage((e as Error).message)}`);
+      showError(`导入失败：${localizeMessage((e as Error).message)}`);
     } finally {
-      setLoading(false);
+      setTableLoading(false);
     }
   }
 
@@ -714,40 +746,40 @@ export default function App() {
 
   async function previewChanges() {
     if (!selected || !activeTable) return;
-    if (!pendingChanges.length) {
-      setMessage('没有待提交的变更');
-      return;
-    }
-    setLoading(true);
+    if (!pendingChanges.length) {
+      showInfo('没有待提交的变更');
+      return;
+    }
+    setTableLoading(true);
     try {
       const data = await api<{ sql: string[] }>('/data/preview', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
       setPreviewSql(data.sql);
-      setMessage(`已生成 ${data.sql.length} 条变更语句`);
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }
+      showSuccess(`已生成 ${data.sql.length} 条变更语句`);
+    } catch (e) {
+      showError(localizeMessage((e as Error).message));
+    } finally {
+      setTableLoading(false);
+    }
+  }
 
   async function commitChanges() {
     if (!selected || !activeTable) return;
-    if (!pendingChanges.length) {
-      setMessage('没有待提交的变更');
-      return;
-    }
-    setLoading(true);
+    if (!pendingChanges.length) {
+      showInfo('没有待提交的变更');
+      return;
+    }
+    setTableLoading(true);
     try {
       const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
       setPreviewSql(data.sql);
-      setMessage(`已提交，影响 ${data.affectedRows} 行`);
-      await loadTable(activeTable);
-    } catch (e) {
-      setMessage(localizeMessage((e as Error).message));
-    } finally {
-      setLoading(false);
-    }
-  }
+      showSuccess(`已提交，影响 ${data.affectedRows} 行`);
+      await loadTable(activeTable);
+    } catch (e) {
+      showError(localizeMessage((e as Error).message));
+    } finally {
+      setTableLoading(false);
+    }
+  }
 
   function dataChangePayload() {
     return {
@@ -760,10 +792,10 @@ export default function App() {
 
   async function saveBackup(id: number | null, form: BackupTaskForm) {
     if (!selected) {
-      setMessage('请先选择一个数据库连接');
+      showInfo('请先选择一个数据库连接');
       throw new Error('Connection is required');
     }
-    setLoading(true);
+    setBackupLoading(true);
     try {
       const payload = {
         name: form.name,
@@ -781,59 +813,59 @@ export default function App() {
       const task = id
         ? await api<BackupTask>(`/backups/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await api<BackupTask>('/backups', { method: 'POST', body: JSON.stringify(payload) });
-      setMessage(id ? `已更新备份任务：${task.name}` : `已创建备份任务：${task.name}`);
+      showSuccess(id ? `已更新备份任务：${task.name}` : `已创建备份任务：${task.name}`);
       await refreshBackups(selected);
     } catch (e) {
-      setMessage(`${id ? '更新' : '创建'}备份任务失败：${localizeMessage((e as Error).message)}`);
+      showError(`${id ? '更新' : '创建'}备份任务失败：${localizeMessage((e as Error).message)}`);
       throw e;
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function toggleBackup(id: number, enabled: boolean) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       const task = await api<BackupTask>(`/backups/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
-      setMessage(`${task.name} 已${task.enabled ? '启用' : '停用'}`);
+      showSuccess(`${task.name} 已${task.enabled ? '启用' : '停用'}`);
       await refreshBackups(selected);
     } catch (e) {
-      setMessage(`更新备份任务状态失败：${localizeMessage((e as Error).message)}`);
+      showError(`更新备份任务状态失败：${localizeMessage((e as Error).message)}`);
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function deleteBackup(id: number, deleteFile: boolean) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       await api<{ ok: boolean; message: string }>(`/backups/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' });
-      setMessage(deleteFile ? '已删除备份任务和所有历史备份文件' : '已删除备份任务');
+      showSuccess(deleteFile ? '已删除备份任务和所有历史备份文件' : '已删除备份任务');
       await refreshBackups(selected);
     } catch (e) {
-      setMessage(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
+      showError(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
       throw e;
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function runBackup(id: number) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       const task = await api<BackupTask>(`/backups/${id}/run`, { method: 'POST' });
-      setMessage(localizeMessage(task.lastMessage || '备份任务已执行'));
+      showSuccess(localizeMessage(task.lastMessage || '备份任务已执行'));
       await refreshBackups(selected);
     } catch (e) {
-      setMessage(`备份执行失败：${localizeMessage((e as Error).message)}`);
+      showError(`备份执行失败：${localizeMessage((e as Error).message)}`);
       await refreshBackups(selected);
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function downloadBackup(id: number) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       const response = await fetch(`${API}/backups/${id}/download`);
       if (!response.ok) {
@@ -844,42 +876,42 @@ export default function App() {
       const disposition = response.headers.get('content-disposition') || '';
       const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-${id}.sql`;
       downloadBlob(blob, filename);
-      setMessage(`已下载备份文件：${filename}`);
+      showSuccess(`已下载备份文件：${filename}`);
     } catch (e) {
-      setMessage(`下载备份失败：${localizeMessage((e as Error).message)}`);
+      showError(`下载备份失败：${localizeMessage((e as Error).message)}`);
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function loadBackupHistory(id: number) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       return await api<BackupHistory[]>(`/backups/${id}/history`);
     } catch (e) {
-      setMessage(`加载备份历史失败：${localizeMessage((e as Error).message)}`);
+      showError(`加载备份历史失败：${localizeMessage((e as Error).message)}`);
       throw e;
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function deleteBackupHistory(taskId: number, historyId: number, deleteFile: boolean) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       await api<{ ok: boolean; message: string }>(`/backups/${taskId}/history/${historyId}?deleteFile=${deleteFile}`, { method: 'DELETE' });
-      setMessage(deleteFile ? '已删除备份历史和对应文件' : '已删除备份历史');
+      showSuccess(deleteFile ? '已删除备份历史和对应文件' : '已删除备份历史');
       await refreshBackups(selected);
     } catch (e) {
-      setMessage(`删除备份历史失败：${localizeMessage((e as Error).message)}`);
+      showError(`删除备份历史失败：${localizeMessage((e as Error).message)}`);
       throw e;
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
   async function downloadBackupHistory(taskId: number, historyId: number) {
-    setLoading(true);
+    setBackupLoading(true);
     try {
       const response = await fetch(`${API}/backups/${taskId}/history/${historyId}/download`);
       if (!response.ok) {
@@ -890,22 +922,23 @@ export default function App() {
       const disposition = response.headers.get('content-disposition') || '';
       const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-history-${historyId}.sql`;
       downloadBlob(blob, filename);
-      setMessage(`已下载备份文件：${filename}`);
+      showSuccess(`已下载备份文件：${filename}`);
     } catch (e) {
-      setMessage(`下载备份历史失败：${localizeMessage((e as Error).message)}`);
+      showError(`下载备份历史失败：${localizeMessage((e as Error).message)}`);
     } finally {
-      setLoading(false);
+      setBackupLoading(false);
     }
   }
 
 
-  const baseStatusMessage = activeSqlTab.message || message || '就绪';
-  const sqlStatusMessage = sqlLoading ? '处理中...' : baseStatusMessage;
-  const operationStatusMessage = loading ? '处理中...' : baseStatusMessage;
+  const sqlStatusMessage = sqlLoading ? '处理中...' : activeSqlTab.message || '就绪';
+  const tableStatusMessage = tableLoading ? '处理中...' : message || '就绪';
+  const objectStatusMessage = objectDetailLoading ? '处理中...' : message || '就绪';
 
-  return (
-    <ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1f6feb', borderRadius: 6 } }}>
-      <Layout className="app-shell">
+  return (
+    <ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#1f6feb', borderRadius: 6 } }}>
+      {toastContextHolder}
+      <Layout className="app-shell">
         <Sider width={280} className="app-sider" theme="light">
           <Space direction="vertical" size={10} className="full-width">
             <div className="brand">
@@ -930,7 +963,7 @@ export default function App() {
             />
             <Card size="small" title="数据库对象" className="panel-card">
               <Space direction="vertical" size={8} className="full-width">
-                <Button size="small" icon={<ReloadOutlined />} block disabled={!selected || loading} onClick={() => loadMetadata(selected, { page: 0, refresh: true })}>
+                <Button size="small" icon={<ReloadOutlined />} block disabled={!selected || metadataLoading} loading={metadataLoading} onClick={() => loadMetadata(selected, { page: 0, refresh: true })}>
                   刷新缓存
                 </Button>
                 {metadata?.cachedAt && (
@@ -945,7 +978,7 @@ export default function App() {
                   className="full-width"
                   placeholder="全部 Schema"
                   value={metadataQuery.schema || undefined}
-                  disabled={!selected || loading}
+                  disabled={!selected || metadataLoading}
                   options={(metadata?.schemas || []).map((schema) => ({ value: schema, label: schema }))}
                   onChange={(schema) => {
                     const nextSchema = schema || '';
@@ -957,7 +990,7 @@ export default function App() {
                   size="small"
                   allowClear
                   placeholder="搜索对象"
-                  disabled={!selected || loading}
+                  disabled={!selected || metadataLoading}
                   value={metadataQuery.keyword}
                   onChange={(event) => setMetadataQuery((current) => ({ ...current, keyword: event.target.value }))}
                   onSearch={(keyword) => {
@@ -976,7 +1009,7 @@ export default function App() {
                   <Button
                     size="small"
                     block
-                    disabled={loading}
+                    disabled={metadataLoading}
                     onClick={() => loadMetadata(selected, { page: metadata.page + 1, append: true })}
                   >
                     加载更多
@@ -1015,8 +1048,8 @@ export default function App() {
               tableRows={tableRows}
               previewSql={previewSql}
               pendingCount={pendingChanges.length}
-              statusMessage={`${operationStatusMessage} · 待提交变更：${pendingChanges.length}`}
-              loading={loading}
+              statusMessage={`${tableStatusMessage} · 待提交变更：${pendingChanges.length}`}
+              loading={tableLoading}
               onBackToSql={() => setMode('sql')}
               onReload={() => loadTable()}
               onAddRow={addRow}
@@ -1031,8 +1064,8 @@ export default function App() {
               connectionId={selected?.id}
               readonlyConnection={selected?.readonly}
               detail={activeObjectDetail}
-              statusMessage={operationStatusMessage}
-              loading={loading}
+              statusMessage={objectStatusMessage}
+              loading={objectDetailLoading}
               onBackToSql={() => setMode('sql')}
               onOpenTable={openTable}
               onReloadDetail={() => activeObjectDetail && openObjectDetail(activeObjectDetail)}
@@ -1061,7 +1094,7 @@ export default function App() {
                     form={form}
                     selected={selected}
                     editing={Boolean(editingConnectionId)}
-                    loading={loading}
+                    loading={connectionActionLoading}
                     onChange={setForm}
                     onDbTypeChange={changeDbType}
                     onReset={resetConnectionForm}
@@ -1081,7 +1114,7 @@ export default function App() {
                     backups={backups}
                     selected={selected}
                     activeTable={activeTable}
-                    loading={loading}
+                    loading={backupLoading}
                     onSave={saveBackup}
                     onToggle={toggleBackup}
                     onDelete={deleteBackup}
