@@ -38,7 +38,18 @@ public final class ApiDtos {
     public record MessageResponse(boolean ok, String message) {
     }
 
-    public record MetadataResponse(List<String> schemas, List<DbObject> objects, int page, int pageSize, boolean hasMore, String cachedAt, boolean cacheHit) {
+    public record MetadataResponse(
+            List<String> schemas,
+            String currentSchema,
+            String selectedSchema,
+            List<DbObject> objects,
+            int totalObjects,
+            int page,
+            int pageSize,
+            boolean hasMore,
+            String cachedAt,
+            boolean cacheHit
+    ) {
     }
 
     public record DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {

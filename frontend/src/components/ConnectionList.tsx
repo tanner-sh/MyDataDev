@@ -43,7 +43,7 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
         renderItem={(connection) => (
           <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
             <div className="connection-card">
-              <button className="connection-title-button connection-main-info" onClick={() => onSelect(connection)}>
+              <button className="connection-title-button connection-main-info" aria-label={`选择连接 ${connection.name}`} onClick={() => onSelect(connection)}>
                 <div className="connection-name-row">
                   <Text strong className="ellipsis-text">{connection.name}</Text>
                   {connection.readonly && <Tag color="orange">只读</Tag>}
@@ -56,24 +56,24 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
               </button>
               <Space size={2} className="connection-actions">
                 <Tooltip title="测试连接">
-                  <Button size="small" icon={<ThunderboltOutlined />} loading={testingConnectionId === connection.id} onClick={() => onTest(connection)} />
+                  <Button size="small" icon={<ThunderboltOutlined />} aria-label={`测试连接 ${connection.name}`} loading={testingConnectionId === connection.id} onClick={() => onTest(connection)} />
                 </Tooltip>
                 <Tooltip title="编辑连接">
-                  <Button size="small" icon={<EditOutlined />} onClick={() => onEdit(connection)} />
+                  <Button size="small" icon={<EditOutlined />} aria-label={`编辑连接 ${connection.name}`} onClick={() => onEdit(connection)} />
                 </Tooltip>
                 <Tooltip title="复制连接">
-                  <Button size="small" icon={<CopyOutlined />} onClick={() => onDuplicate(connection)} />
+                  <Button size="small" icon={<CopyOutlined />} aria-label={`复制连接 ${connection.name}`} onClick={() => onDuplicate(connection)} />
                 </Tooltip>
                 <Popconfirm
                   title="删除连接"
-                  description="确定删除该连接吗？有关联备份任务的连接会被后端拒绝删除。"
+                  description="确定删除该连接吗？当前未提交的数据变更会丢失；有关联备份任务的连接会被后端拒绝删除。"
                   okText="删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
                   onConfirm={() => onDelete(connection)}
                 >
                   <Tooltip title="删除连接">
-                    <Button size="small" danger icon={<DeleteOutlined />} />
+                    <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除连接 ${connection.name}`} />
                   </Tooltip>
                 </Popconfirm>
               </Space>

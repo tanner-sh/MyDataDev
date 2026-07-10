@@ -15,18 +15,29 @@ import java.util.concurrent.ConcurrentMap;
 
 @Service
 public class MetadataCacheService {
-    private final ConcurrentMap<Long, MetadataSnapshot> metadata = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, SchemaCatalogSnapshot> schemaCatalogs = new ConcurrentHashMap<>();
+    private final ConcurrentMap<MetadataKey, MetadataSnapshot> metadata = new ConcurrentHashMap<>();
     private final ConcurrentMap<ObjectKey, CachedValue<ObjectStructure>> structures = new ConcurrentHashMap<>();
     private final ConcurrentMap<ObjectKey, CachedValue<ObjectDetail>> details = new ConcurrentHashMap<>();
     private final ConcurrentMap<ObjectKey, CachedValue<ObjectRelations>> relations = new ConcurrentHashMap<>();
 
-    public Optional<MetadataSnapshot> metadata(long connectionId) {
-        return Optional.ofNullable(metadata.get(connectionId));
+    public Optional<SchemaCatalogSnapshot> schemaCatalog(long connectionId) {
+        return Optional.ofNullable(schemaCatalogs.get(connectionId));
     }
 
-    public MetadataSnapshot putMetadata(long connectionId, List<String> schemas, List<DbObject> objects) {
-        MetadataSnapshot snapshot = new MetadataSnapshot(List.copyOf(schemas), List.copyOf(objects), Instant.now());
-        metadata.put(connectionId, snapshot);
+    public SchemaCatalogSnapshot putSchemaCatalog(long connectionId, List<String> schemas, String currentSchema, boolean currentIsCatalog) {
+        SchemaCatalogSnapshot snapshot = new SchemaCatalogSnapshot(List.copyOf(schemas), currentSchema, currentIsCatalog, Instant.now());
+        schemaCatalogs.put(connectionId, snapshot);
+        return snapshot;
+    }
+
+    public Optional<MetadataSnapshot> metadata(long connectionId, String schemaName) {
+        return Optional.ofNullable(metadata.get(metadataKey(connectionId, schemaName)));
+    }
+
+    public MetadataSnapshot putMetadata(long connectionId, String schemaName, List<DbObject> objects) {
+        MetadataSnapshot snapshot = new MetadataSnapshot(List.copyOf(objects), Instant.now());
+        metadata.put(metadataKey(connectionId, schemaName), snapshot);
         return snapshot;
     }
 
@@ -55,7 +66,8 @@ public class MetadataCacheService {
     }
 
     public void evictConnection(long connectionId) {
-        metadata.remove(connectionId);
+        schemaCatalogs.remove(connectionId);
+        metadata.keySet().removeIf(key -> key.connectionId() == connectionId);
         structures.keySet().removeIf(key -> key.connectionId() == connectionId);
         details.keySet().removeIf(key -> key.connectionId() == connectionId);
         relations.keySet().removeIf(key -> key.connectionId() == connectionId);
@@ -63,7 +75,9 @@ public class MetadataCacheService {
 
     public void evictObject(long connectionId, String schemaName, String objectName) {
         ObjectKey key = key(connectionId, schemaName, objectName);
-        metadata.remove(connectionId);
+        String normalizedSchema = normalize(schemaName);
+        metadata.keySet().removeIf(metadataKey -> metadataKey.connectionId() == connectionId
+                && (normalizedSchema.isBlank() || metadataKey.schemaName().equals(normalizedSchema)));
         structures.remove(key);
         details.remove(key);
         relations.remove(key);
@@ -77,16 +91,26 @@ public class MetadataCacheService {
         return new ObjectKey(connectionId, normalize(schemaName), normalize(objectName));
     }
 
+    private MetadataKey metadataKey(long connectionId, String schemaName) {
+        return new MetadataKey(connectionId, normalize(schemaName));
+    }
+
     private String normalize(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
-    public record MetadataSnapshot(List<String> schemas, List<DbObject> objects, Instant cachedAt) {
+    public record SchemaCatalogSnapshot(List<String> schemas, String currentSchema, boolean currentIsCatalog, Instant cachedAt) {
+    }
+
+    public record MetadataSnapshot(List<DbObject> objects, Instant cachedAt) {
     }
 
     private record CachedValue<T>(T value, Instant cachedAt) {
     }
 
     private record ObjectKey(long connectionId, String schemaName, String objectName) {
+    }
+
+    private record MetadataKey(long connectionId, String schemaName) {
     }
 }

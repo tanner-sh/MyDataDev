@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { Button, Checkbox, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
-import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, HistoryOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import { useEffect, useRef, useState } from 'react';
+import { Button, Checkbox, Dropdown, Empty, Form, Input, List, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { CheckCircleOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, HistoryOutlined, MoreOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection } from '../types';
 import { backupMethodLabel, backupScopeLabel, backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
 
@@ -22,18 +23,35 @@ type BackupPanelProps = {
 };
 
 export function BackupPanel({ backups, selected, activeTable, loading, onSave, onToggle, onDelete, onRun, onDownload, onLoadHistory, onDeleteHistory, onDownloadHistory }: BackupPanelProps) {
+  const [form] = Form.useForm<BackupTaskForm>();
+  const [modal, modalContextHolder] = Modal.useModal();
+  const initialDraftRef = useRef('');
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [draft, setDraft] = useState<BackupTaskForm>(emptyDraft());
   const [deleteFiles, setDeleteFiles] = useState<Record<number, boolean>>({});
+  const [deleteTarget, setDeleteTarget] = useState<BackupTask | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
+  const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
+  const [taskAction, setTaskAction] = useState<string | null>(null);
   const [historyTask, setHistoryTask] = useState<BackupTask | null>(null);
   const [histories, setHistories] = useState<BackupHistory[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [deletingHistoryId, setDeletingHistoryId] = useState<number | null>(null);
   const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
+
+  const scopedTable = Form.useWatch('scope', form) === 'TABLE';
+  const backupMethod = Form.useWatch('backupMethod', form) || 'SQL';
+  const nativeBackup = backupMethod !== 'SQL';
+
+  useEffect(() => {
+    if (!loading) setRunningTaskId(null);
+  }, [loading]);
 
   function openDatabaseTask() {
     if (!selected) return;
     setEditingId(null);
-    setDraft({
+    form.resetFields();
+    form.setFieldsValue({
       name: `${selected.name} 全量备份`,
       scope: 'DATABASE',
       schemaName: '',
@@ -45,6 +63,7 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       cron: '0 0 2 * * *',
       enabled: true
     });
+    initialDraftRef.current = JSON.stringify(form.getFieldsValue(true));
     setEditorOpen(true);
   }
 
@@ -52,7 +71,8 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
     if (!selected || !activeTable) return;
     const tableLabel = `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}`;
     setEditingId(null);
-    setDraft({
+    form.resetFields();
+    form.setFieldsValue({
       name: `${selected.name} ${tableLabel} 备份`,
       scope: 'TABLE',
       schemaName: activeTable.schemaName || '',
@@ -64,12 +84,14 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       cron: '',
       enabled: false
     });
+    initialDraftRef.current = JSON.stringify(form.getFieldsValue(true));
     setEditorOpen(true);
   }
 
   function openEditTask(task: BackupTask) {
     setEditingId(task.id);
-    setDraft({
+    form.resetFields();
+    form.setFieldsValue({
       name: task.name,
       scope: task.scope,
       schemaName: task.schemaName || '',
@@ -81,44 +103,137 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       cron: task.cron || '',
       enabled: task.enabled
     });
+    initialDraftRef.current = JSON.stringify(form.getFieldsValue(true));
     setEditorOpen(true);
   }
 
-  async function saveTask() {
-    await onSave(editingId, draft);
+  function closeEditor() {
     setEditorOpen(false);
+    setEditingId(null);
+    initialDraftRef.current = '';
+    form.resetFields();
+  }
+
+  function requestCloseEditor() {
+    if (loading) return;
+    if (JSON.stringify(form.getFieldsValue(true)) === initialDraftRef.current) {
+      closeEditor();
+      return;
+    }
+    modal.confirm({
+      title: '放弃未保存的更改？',
+      content: '当前备份任务配置尚未保存，关闭后更改将丢失。',
+      okText: '放弃更改',
+      cancelText: '继续编辑',
+      okButtonProps: { danger: true },
+      onOk: closeEditor
+    });
+  }
+
+  async function saveTask(values: BackupTaskForm) {
+    try {
+      await onSave(editingId, values);
+      closeEditor();
+    } catch {
+      // The parent owns API error feedback; keep the editor open for correction/retry.
+    }
   }
 
   async function deleteTask(id: number) {
-    await onDelete(id, Boolean(deleteFiles[id]));
-    setDeleteFiles((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
+    setDeletingTaskId(id);
+    try {
+      await onDelete(id, Boolean(deleteFiles[id]));
+      setDeleteTarget(null);
+      setDeleteFiles((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    } catch {
+      // The parent owns API error feedback; leave the confirmation open for retry.
+    } finally {
+      setDeletingTaskId(null);
+    }
   }
 
   async function openHistory(task: BackupTask) {
     setHistoryTask(task);
-    setHistories(await onLoadHistory(task.id));
+    setHistories([]);
+    setHistoryLoading(true);
+    try {
+      setHistories(await onLoadHistory(task.id));
+    } catch {
+      // The parent owns API error feedback; the empty state remains visible.
+    } finally {
+      setHistoryLoading(false);
+    }
   }
 
   async function deleteHistory(historyId: number) {
     if (!historyTask) return;
-    await onDeleteHistory(historyTask.id, historyId, Boolean(deleteHistoryFiles[historyId]));
-    setHistories(await onLoadHistory(historyTask.id));
-    setDeleteHistoryFiles((current) => {
-      const next = { ...current };
-      delete next[historyId];
-      return next;
-    });
+    setDeletingHistoryId(historyId);
+    try {
+      await onDeleteHistory(historyTask.id, historyId, Boolean(deleteHistoryFiles[historyId]));
+      setHistories(await onLoadHistory(historyTask.id));
+      setDeleteHistoryFiles((current) => {
+        const next = { ...current };
+        delete next[historyId];
+        return next;
+      });
+    } catch {
+      // The parent owns API error feedback; preserve the history row and selection.
+    } finally {
+      setDeletingHistoryId(null);
+    }
   }
 
-  const scopedTable = draft.scope === 'TABLE';
-  const nativeBackup = draft.backupMethod && draft.backupMethod !== 'SQL';
+  async function handleTaskMenu(task: BackupTask, key: string) {
+    if (key === 'edit') {
+      openEditTask(task);
+      return;
+    }
+    if (key === 'download') {
+      onDownload(task.id);
+      return;
+    }
+    if (key === 'history') {
+      await openHistory(task);
+      return;
+    }
+    if (key === 'delete') {
+      setDeleteTarget(task);
+      return;
+    }
+    if (key === 'toggle') {
+      setTaskAction(`toggle-${task.id}`);
+      try {
+        await onToggle(task.id, !task.enabled);
+      } catch {
+        // The parent owns API error feedback.
+      } finally {
+        setTaskAction(null);
+      }
+    }
+  }
+
+  function taskMenuItems(task: BackupTask): MenuProps['items'] {
+    return [
+      { key: 'edit', icon: <EditOutlined />, label: '编辑任务' },
+      {
+        key: 'toggle',
+        icon: task.enabled ? <PauseCircleOutlined /> : <CheckCircleOutlined />,
+        label: task.enabled ? '停用定时任务' : '启用定时任务'
+      },
+      { key: 'download', icon: <DownloadOutlined />, label: '下载最近备份', disabled: !task.lastFilePath },
+      { key: 'history', icon: <HistoryOutlined />, label: '查看执行历史' },
+      { type: 'divider' },
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除任务', danger: true }
+    ];
+  }
 
   return (
     <section className="inspector-section">
+      {modalContextHolder}
       <div className="inspector-section-header">
         <Text strong>备份任务</Text>
         <Tag>{selected ? selected.name : '未选择连接'}</Tag>
@@ -132,119 +247,215 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
           size="small"
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务' : '请选择连接'} /> }}
           dataSource={backups}
-          renderItem={(backup) => (
-            <List.Item
+          renderItem={(backup) => {
+            const target = backup.tableName ? `${backup.schemaName ? `${backup.schemaName}.` : ''}${backup.tableName}` : '';
+            const recentDetails = [
+              target,
+              backup.lastRunAt ? `最近执行：${formatHistoryTime(backup.lastRunAt)}` : '',
+              backup.lastFileSize ? `文件大小：${formatFileSize(backup.lastFileSize)}` : ''
+            ].filter(Boolean).join(' · ');
+
+            return (
+              <List.Item
               actions={[
-                <Button key="edit" size="small" icon={<EditOutlined />} onClick={() => openEditTask(backup)} />,
-                <Button key="toggle" size="small" icon={backup.enabled ? <PauseCircleOutlined /> : <CheckCircleOutlined />} onClick={() => onToggle(backup.id, !backup.enabled)} />,
-                <Button key="run" size="small" icon={<PlayCircleOutlined />} onClick={() => onRun(backup.id)} />,
-                <Button key="download" size="small" icon={<DownloadOutlined />} disabled={!backup.lastFilePath} onClick={() => onDownload(backup.id)} />,
-                <Button key="history" size="small" icon={<HistoryOutlined />} onClick={() => openHistory(backup)} />,
-                <Popconfirm
-                  key="delete"
-                  title="删除备份任务"
-                  description={(
-                    <Checkbox
-                      checked={Boolean(deleteFiles[backup.id])}
-                      onChange={(event) => setDeleteFiles((current) => ({ ...current, [backup.id]: event.target.checked }))}
-                    >
-                      同时删除所有历史备份文件
-                    </Checkbox>
-                  )}
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => deleteTask(backup.id)}
+                <Button
+                  key="run"
+                  type="primary"
+                  size="small"
+                  icon={<PlayCircleOutlined />}
+                  loading={loading && runningTaskId === backup.id}
+                  disabled={loading || runningTaskId !== null || Boolean(taskAction)}
+                  onClick={() => {
+                    setRunningTaskId(backup.id);
+                    onRun(backup.id);
+                  }}
                 >
-                  <Button size="small" danger icon={<DeleteOutlined />} />
-                </Popconfirm>
+                  立即执行
+                </Button>,
+                <Tooltip key="more" title="更多操作">
+                  <Dropdown
+                    trigger={['click']}
+                    disabled={loading || runningTaskId !== null || Boolean(taskAction)}
+                    menu={{
+                      items: taskMenuItems(backup),
+                      onClick: ({ key }) => void handleTaskMenu(backup, key)
+                    }}
+                  >
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<MoreOutlined />}
+                      aria-label={`${backup.name} 更多操作`}
+                    />
+                  </Dropdown>
+                </Tooltip>
               ]}
-            >
-              <List.Item.Meta
-                title={<span className="backup-task-title">{backup.name}</span>}
-                description={(
-                  <Space direction="vertical" size={2}>
-                    <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope)} · {backup.cron || '手动执行'}</Text>
-                    {backup.tableName && <Text type="secondary">{backup.schemaName ? `${backup.schemaName}.` : ''}{backup.tableName}</Text>}
-                    {backup.lastRunAt && <Text type="secondary">最近执行：{formatHistoryTime(backup.lastRunAt)}</Text>}
-                    {backup.lastFileSize ? <Text type="secondary">文件大小：{formatFileSize(backup.lastFileSize)}</Text> : null}
+              >
+                <List.Item.Meta
+                  title={(
                     <Space size={4} wrap>
+                      <span className="backup-task-title">{backup.name}</span>
                       <Tag color={backup.enabled ? 'blue' : 'default'}>{backup.enabled ? '已启用' : '已停用'}</Tag>
                       <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
                     </Space>
-                  </Space>
-                )}
-              />
-            </List.Item>
-          )}
+                  )}
+                  description={(
+                    <Space direction="vertical" size={1}>
+                      <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope)} · {backup.cron || '手动执行'}</Text>
+                      {recentDetails && <Text type="secondary">{recentDetails}</Text>}
+                    </Space>
+                  )}
+                />
+              </List.Item>
+            );
+          }}
         />
       </Space>
       <Modal
+        title="删除备份任务"
+        open={Boolean(deleteTarget)}
+        okText="删除"
+        cancelText="取消"
+        confirmLoading={deleteTarget ? deletingTaskId === deleteTarget.id : false}
+        okButtonProps={{ danger: true, disabled: loading && deletingTaskId === null }}
+        cancelButtonProps={{ disabled: deletingTaskId !== null }}
+        closable={deletingTaskId === null}
+        maskClosable={deletingTaskId === null}
+        onCancel={() => {
+          if (deleteTarget) {
+            setDeleteFiles((current) => {
+              const next = { ...current };
+              delete next[deleteTarget.id];
+              return next;
+            });
+          }
+          setDeleteTarget(null);
+        }}
+        onOk={() => deleteTarget && deleteTask(deleteTarget.id)}
+      >
+        <Space direction="vertical" size={12} className="full-width">
+          <Text>确定删除任务“{deleteTarget?.name}”吗？此操作无法撤销。</Text>
+          <Checkbox
+            checked={deleteTarget ? Boolean(deleteFiles[deleteTarget.id]) : false}
+            disabled={deletingTaskId !== null}
+            onChange={(event) => {
+              if (!deleteTarget) return;
+              setDeleteFiles((current) => ({ ...current, [deleteTarget.id]: event.target.checked }));
+            }}
+          >
+            同时删除所有历史备份文件
+          </Checkbox>
+        </Space>
+      </Modal>
+      <Modal
         title={editingId ? '编辑备份任务' : '新建备份任务'}
         open={editorOpen}
+        forceRender
         confirmLoading={loading}
-        onCancel={() => setEditorOpen(false)}
-        onOk={saveTask}
+        onCancel={requestCloseEditor}
+        onOk={() => form.submit()}
         okText="保存"
         cancelText="取消"
+        okButtonProps={{ disabled: !selected || loading }}
+        cancelButtonProps={{ disabled: loading }}
+        maskClosable={!loading}
       >
-        <Form layout="vertical" size="small" className="compact-form">
-          <Form.Item label="任务名称">
-            <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        <Form
+          form={form}
+          layout="vertical"
+          size="small"
+          className="compact-form"
+          initialValues={emptyDraft()}
+          disabled={loading}
+          onFinish={saveTask}
+        >
+          <Form.Item
+            label="任务名称"
+            name="name"
+            rules={[{ required: true, whitespace: true, message: '请输入任务名称' }]}
+          >
+            <Input placeholder="例如：生产库每日全量备份" autoFocus />
           </Form.Item>
-          <Form.Item label="备份范围">
+          <Form.Item label="备份范围" name="scope" rules={[{ required: true, message: '请选择备份范围' }]}>
             <Select
-              value={draft.scope}
               options={[{ value: 'DATABASE', label: '全库' }, { value: 'TABLE', label: '单表' }]}
-              onChange={(scope) => setDraft({ ...draft, scope })}
             />
           </Form.Item>
-          <Form.Item label="备份方式">
+          <Form.Item label="备份方式" name="backupMethod" rules={[{ required: true, message: '请选择备份方式' }]}>
             <Select
-              value={draft.backupMethod || 'SQL'}
               options={[
                 { value: 'SQL', label: 'SQL 逻辑备份' },
                 { value: 'MYSQLDUMP', label: 'MySQL mysqldump' },
                 { value: 'ORACLE_EXP', label: 'Oracle exp' }
               ]}
-              onChange={(backupMethod) => setDraft({ ...draft, backupMethod, toolPath: draft.toolPath || defaultToolPath(selected, backupMethod) })}
+              onChange={(nextMethod) => {
+                const currentPath = form.getFieldValue('toolPath');
+                if (!currentPath || currentPath === defaultToolPath(selected, backupMethod)) {
+                  form.setFieldValue('toolPath', defaultToolPath(selected, nextMethod));
+                }
+              }}
             />
           </Form.Item>
           {scopedTable && (
             <>
-              <Form.Item label="Schema">
-                <Input value={draft.schemaName} onChange={(event) => setDraft({ ...draft, schemaName: event.target.value })} />
+              <Form.Item label="Schema" name="schemaName">
+                <Input placeholder="留空时使用连接默认 Schema" />
               </Form.Item>
-              <Form.Item label="表名">
-                <Input value={draft.tableName} onChange={(event) => setDraft({ ...draft, tableName: event.target.value })} />
+              <Form.Item
+                label="表名"
+                name="tableName"
+                rules={[{ required: true, whitespace: true, message: '请输入要备份的表名' }]}
+              >
+                <Input placeholder="请输入表名" />
               </Form.Item>
             </>
           )}
-          <Form.Item label="Cron">
-            <Input value={draft.cron} onChange={(event) => setDraft({ ...draft, cron: event.target.value })} />
+          <Form.Item
+            label="Cron"
+            name="cron"
+            dependencies={['enabled']}
+            extra="使用 Spring 六段式 Cron；手动任务可留空。"
+            rules={[
+              ({ getFieldValue }) => ({
+                validator: (_, value?: string) => {
+                  const cron = value?.trim();
+                  if (getFieldValue('enabled') && !cron) {
+                    return Promise.reject(new Error('启用定时任务时必须填写 Cron 表达式'));
+                  }
+                  if (cron && cron.split(/\s+/).length !== 6) {
+                    return Promise.reject(new Error('Cron 表达式应包含 6 个字段'));
+                  }
+                  return Promise.resolve();
+                }
+              })
+            ]}
+          >
+            <Input placeholder="0 0 2 * * *" />
           </Form.Item>
           {nativeBackup && (
             <>
-              <Form.Item label="工具路径">
-                <Input value={draft.toolPath} placeholder={draft.backupMethod === 'ORACLE_EXP' ? 'exp' : 'mysqldump'} onChange={(event) => setDraft({ ...draft, toolPath: event.target.value })} />
+              <Form.Item
+                label="工具路径"
+                name="toolPath"
+                rules={[{ required: true, whitespace: true, message: '原生备份需要填写工具路径' }]}
+              >
+                <Input placeholder={backupMethod === 'ORACLE_EXP' ? 'exp' : 'mysqldump'} />
               </Form.Item>
-              {draft.backupMethod === 'ORACLE_EXP' && (
-                <Form.Item label="连接名覆盖">
-                  <Input value={draft.nativeConnectName} placeholder="//host:1521/service 或 host:1521:SID" onChange={(event) => setDraft({ ...draft, nativeConnectName: event.target.value })} />
+              {backupMethod === 'ORACLE_EXP' && (
+                <Form.Item label="连接名覆盖" name="nativeConnectName">
+                  <Input placeholder="//host:1521/service 或 host:1521:SID" />
                 </Form.Item>
               )}
-              <Form.Item label="额外参数">
+              <Form.Item label="额外参数" name="extraArgs">
                 <Input.TextArea
                   rows={3}
-                  value={draft.extraArgs}
                   placeholder="一行一个参数，例如 --single-transaction 或 compress=y"
-                  onChange={(event) => setDraft({ ...draft, extraArgs: event.target.value })}
                 />
               </Form.Item>
             </>
           )}
-          <Form.Item>
-            <Checkbox checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}>启用定时任务</Checkbox>
+          <Form.Item name="enabled" valuePropName="checked">
+            <Checkbox>启用定时任务</Checkbox>
           </Form.Item>
         </Form>
       </Modal>
@@ -252,7 +463,10 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
         title={historyTask ? `${historyTask.name} 执行历史` : '执行历史'}
         open={Boolean(historyTask)}
         footer={null}
+        maskClosable={!deletingHistoryId}
+        closable={!deletingHistoryId}
         onCancel={() => {
+          if (deletingHistoryId) return;
           setHistoryTask(null);
           setHistories([]);
           setDeleteHistoryFiles({});
@@ -260,13 +474,22 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
       >
         <List
           size="small"
-          loading={loading}
+          loading={historyLoading}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
           dataSource={histories}
           renderItem={(history) => (
             <List.Item
               actions={[
-                <Button key="download" size="small" icon={<DownloadOutlined />} disabled={!history.filePath} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />,
+                <Tooltip key="download" title={history.filePath ? '下载备份文件' : '没有可下载的备份文件'}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<DownloadOutlined />}
+                    aria-label="下载备份文件"
+                    disabled={!history.filePath || loading || deletingHistoryId !== null}
+                    onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)}
+                  />
+                </Tooltip>,
                 <Popconfirm
                   key="delete"
                   title="删除备份历史"
@@ -284,7 +507,17 @@ export function BackupPanel({ backups, selected, activeTable, loading, onSave, o
                   okButtonProps={{ danger: true }}
                   onConfirm={() => deleteHistory(history.id)}
                 >
-                  <Button size="small" danger icon={<DeleteOutlined />} />
+                  <Tooltip title="删除备份历史">
+                    <Button
+                      size="small"
+                      type="text"
+                      danger
+                      icon={<DeleteOutlined />}
+                      aria-label="删除备份历史"
+                      loading={deletingHistoryId === history.id}
+                      disabled={loading && deletingHistoryId !== history.id}
+                    />
+                  </Tooltip>
                 </Popconfirm>
               ]}
             >

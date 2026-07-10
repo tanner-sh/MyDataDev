@@ -1,11 +1,13 @@
-import { Button, Empty, Input, Table } from 'antd';
+import { Button, Empty, Input, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { DeleteOutlined } from '@ant-design/icons';
+import { DeleteOutlined, UndoOutlined } from '@ant-design/icons';
 import type { EditableRow, TableData, TableRow } from '../types';
 
-export function EditableTable({ data, rows, onEdit, onDelete }: {
-  data: TableData | null;
-  rows: TableRow[];
+export function EditableTable({ data, rows, readonly = false, loading = false, onEdit, onDelete }: {
+  data: TableData | null;
+  rows: TableRow[];
+  readonly?: boolean;
+  loading?: boolean;
   onEdit: (rowId: string, column: string, value: string) => void;
   onDelete: (rowId: string) => void;
 }) {
@@ -15,15 +17,18 @@ export function EditableTable({ data, rows, onEdit, onDelete }: {
       title: '操作',
       key: 'action',
       fixed: 'left',
-      width: 74,
-      render: (_, row) => (
-        <Button
-          size="small"
-          danger
-          icon={<DeleteOutlined />}
-          disabled={row.deleted || (!data.editable && !row.inserted)}
-          onClick={() => onDelete(row.id)}
-        />
+      width: 74,
+      render: (_, row) => (
+        <Tooltip title={row.deleted ? '撤销删除' : row.inserted ? '移除新增行' : '标记为删除'}>
+          <Button
+            size="small"
+            danger={!row.deleted}
+            icon={row.deleted ? <UndoOutlined /> : <DeleteOutlined />}
+            disabled={readonly || loading || (!data.editable && !row.inserted)}
+            aria-label={row.deleted ? '撤销删除' : row.inserted ? '移除新增行' : '标记为删除'}
+            onClick={() => onDelete(row.id)}
+          />
+        </Tooltip>
       )
     },
     ...data.columns.map((column) => ({
@@ -34,9 +39,10 @@ export function EditableTable({ data, rows, onEdit, onDelete }: {
       render: (_: unknown, row: EditableRow) => (
         <Input
           size="small"
-          disabled={row.deleted || (!data.editable && !row.inserted)}
-          value={String(row.values[column] ?? '')}
-          onChange={(event) => onEdit(row.id, column, event.target.value)}
+          disabled={readonly || loading || row.deleted || (!data.editable && !row.inserted)}
+          value={String(row.values[column] ?? '')}
+          aria-label={`${column}，行 ${row.id}`}
+          onChange={(event) => onEdit(row.id, column, event.target.value)}
         />
       )
     }))
@@ -44,13 +50,19 @@ export function EditableTable({ data, rows, onEdit, onDelete }: {
   return (
     <Table<EditableRow>
       size="small"
-      className="data-grid editable-grid"
-      columns={columns}
-      dataSource={rows}
+      className="data-grid data-grid-fill editable-grid"
+      columns={columns}
+      dataSource={rows}
+      loading={loading}
       rowKey="id"
       pagination={false}
-      rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : ''}
-      scroll={{ x: true, y: 'calc(100vh - 330px)' }}
+      rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : isUpdated(row) ? 'updated-row' : ''}
+      scroll={{ x: true, y: '100%' }}
     />
-  );
+  );
+}
+
+function isUpdated(row: TableRow) {
+  if (!row.original) return false;
+  return Object.keys(row.values).some((column) => row.values[column] !== row.original?.[column]);
 }

@@ -39,12 +39,37 @@ class MetadataServiceTest {
         assertThat(response.page()).isZero();
         assertThat(response.pageSize()).isEqualTo(1);
         assertThat(response.hasMore()).isTrue();
+        assertThat(response.totalObjects()).isEqualTo(2);
         assertThat(response.cacheHit()).isFalse();
         assertThat(response.cachedAt()).isNotBlank();
         assertThat(response.objects()).hasSize(1);
         assertThat(response.objects().get(0).name()).contains("ALPHA");
         assertThat(response.objects().get(0).columns()).isEmpty();
         assertThat(response.objects().get(0).indexes()).isEmpty();
+    }
+
+    @Test
+    void defaultsToCurrentSchemaAndLoadsOtherSchemasOnDemand() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE public_users(id BIGINT PRIMARY KEY)");
+            connection.createStatement().execute("CREATE SCHEMA other");
+            connection.createStatement().execute("CREATE TABLE other.audit_events(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+
+        MetadataResponse current = service.inspect(1L, null, null, 0, 200, false);
+        MetadataResponse other = service.inspect(1L, "OTHER", null, 0, 200, false);
+        MetadataResponse cachedCurrent = service.inspect(1L, null, null, 0, 200, false);
+
+        assertThat(current.currentSchema()).isEqualTo("PUBLIC");
+        assertThat(current.selectedSchema()).isEqualTo("PUBLIC");
+        assertThat(current.schemas()).contains("PUBLIC", "OTHER");
+        assertThat(current.objects()).extracting("name").containsExactly("PUBLIC_USERS");
+        assertThat(other.selectedSchema()).isEqualTo("OTHER");
+        assertThat(other.objects()).extracting("name").containsExactly("AUDIT_EVENTS");
+        assertThat(other.cacheHit()).isFalse();
+        assertThat(cachedCurrent.cacheHit()).isTrue();
     }
 
     @Test

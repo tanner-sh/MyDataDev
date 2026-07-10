@@ -1,0 +1,166 @@
+import { useCallback, useEffect, useState } from 'react';
+
+export type ThemeMode = 'light' | 'dark';
+
+export interface LayoutPreferences {
+  themeMode: ThemeMode;
+  explorerWidth: number;
+  explorerCollapsed: boolean;
+  editorSplitRatio: number;
+}
+
+type PreferenceUpdate<T> = T | ((current: T) => T);
+
+export interface LayoutPreferencesController extends LayoutPreferences {
+  setThemeMode: (value: PreferenceUpdate<ThemeMode>) => void;
+  setExplorerWidth: (value: PreferenceUpdate<number>) => void;
+  setExplorerCollapsed: (value: PreferenceUpdate<boolean>) => void;
+  toggleExplorer: () => void;
+  setEditorSplitRatio: (value: PreferenceUpdate<number>) => void;
+}
+
+export const EXPLORER_WIDTH_MIN = 240;
+export const EXPLORER_WIDTH_MAX = 480;
+export const EDITOR_SPLIT_RATIO_MIN = 0.2;
+export const EDITOR_SPLIT_RATIO_MAX = 0.8;
+
+export const DEFAULT_LAYOUT_PREFERENCES: Readonly<LayoutPreferences> = {
+  themeMode: 'light',
+  explorerWidth: 300,
+  explorerCollapsed: false,
+  editorSplitRatio: 0.52
+};
+
+const STORAGE_KEY = 'db-admin:layout-preferences:v1';
+
+export function useLayoutPreferences(): LayoutPreferencesController {
+  const [preferences, setPreferences] = useState<LayoutPreferences>(readStoredPreferences);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+    } catch {
+      // Storage can be unavailable in private browsing or a restricted iframe.
+    }
+  }, [preferences]);
+
+  const setThemeMode = useCallback((value: PreferenceUpdate<ThemeMode>) => {
+    setPreferences((current) => ({
+      ...current,
+      themeMode: resolveUpdate(value, current.themeMode)
+    }));
+  }, []);
+
+  const setExplorerWidth = useCallback((value: PreferenceUpdate<number>) => {
+    setPreferences((current) => ({
+      ...current,
+      explorerWidth: clamp(
+        resolveUpdate(value, current.explorerWidth),
+        EXPLORER_WIDTH_MIN,
+        EXPLORER_WIDTH_MAX
+      )
+    }));
+  }, []);
+
+  const setExplorerCollapsed = useCallback((value: PreferenceUpdate<boolean>) => {
+    setPreferences((current) => ({
+      ...current,
+      explorerCollapsed: resolveUpdate(value, current.explorerCollapsed)
+    }));
+  }, []);
+
+  const toggleExplorer = useCallback(() => {
+    setPreferences((current) => ({
+      ...current,
+      explorerCollapsed: !current.explorerCollapsed
+    }));
+  }, []);
+
+  const setEditorSplitRatio = useCallback((value: PreferenceUpdate<number>) => {
+    setPreferences((current) => ({
+      ...current,
+      editorSplitRatio: clamp(
+        resolveUpdate(value, current.editorSplitRatio),
+        EDITOR_SPLIT_RATIO_MIN,
+        EDITOR_SPLIT_RATIO_MAX
+      )
+    }));
+  }, []);
+
+  return {
+    ...preferences,
+    setThemeMode,
+    setExplorerWidth,
+    setExplorerCollapsed,
+    toggleExplorer,
+    setEditorSplitRatio
+  };
+}
+
+function readStoredPreferences(): LayoutPreferences {
+  if (typeof window === 'undefined') {
+    return { ...DEFAULT_LAYOUT_PREFERENCES };
+  }
+
+  try {
+    const serialized = window.localStorage.getItem(STORAGE_KEY);
+    if (!serialized) {
+      return { ...DEFAULT_LAYOUT_PREFERENCES };
+    }
+
+    return normalizePreferences(JSON.parse(serialized) as unknown);
+  } catch {
+    return { ...DEFAULT_LAYOUT_PREFERENCES };
+  }
+}
+
+function normalizePreferences(value: unknown): LayoutPreferences {
+  if (!isRecord(value)) {
+    return { ...DEFAULT_LAYOUT_PREFERENCES };
+  }
+
+  const explorerWidth = finiteNumber(value.explorerWidth);
+  const editorSplitRatio = finiteNumber(value.editorSplitRatio);
+
+  return {
+    themeMode: value.themeMode === 'dark' ? 'dark' : 'light',
+    explorerWidth: clamp(
+      explorerWidth ?? DEFAULT_LAYOUT_PREFERENCES.explorerWidth,
+      EXPLORER_WIDTH_MIN,
+      EXPLORER_WIDTH_MAX
+    ),
+    explorerCollapsed: typeof value.explorerCollapsed === 'boolean'
+      ? value.explorerCollapsed
+      : DEFAULT_LAYOUT_PREFERENCES.explorerCollapsed,
+    editorSplitRatio: clamp(
+      editorSplitRatio ?? DEFAULT_LAYOUT_PREFERENCES.editorSplitRatio,
+      EDITOR_SPLIT_RATIO_MIN,
+      EDITOR_SPLIT_RATIO_MAX
+    )
+  };
+}
+
+function resolveUpdate<T>(update: PreferenceUpdate<T>, current: T): T {
+  return typeof update === 'function'
+    ? (update as (value: T) => T)(current)
+    : update;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, value));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}

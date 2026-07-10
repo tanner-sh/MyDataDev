@@ -27,6 +27,22 @@ public class OracleDialect extends DefaultDialect {
     }
 
     @Override
+    public String currentSchema(Connection connection) throws Exception {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")) {
+            if (rs.next()) {
+                String schema = rs.getString(1);
+                if (schema != null && !schema.isBlank()) {
+                    return schema;
+                }
+            }
+        } catch (Exception ignored) {
+            // Fall back to the portable JDBC schema/catalog lookup.
+        }
+        return super.currentSchema(connection);
+    }
+
+    @Override
     public SqlResult explain(Connection connection, String sql, int maxRows, int timeoutSeconds) throws Exception {
         long started = System.nanoTime();
         try (Statement explain = connection.createStatement()) {

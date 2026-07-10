@@ -21,6 +21,8 @@ import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -48,39 +50,105 @@ public class MetadataService {
         if (refresh) {
             cache.evictConnection(connectionId);
         }
-        var cached = cache.metadata(connectionId);
-        boolean cacheHit = cached.isPresent();
-        MetadataCacheService.MetadataSnapshot snapshot = cached.orElse(null);
-        if (snapshot == null) {
-            snapshot = loadMetadataSnapshot(connectionId);
+        MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
+        String selectedSchema;
+        boolean cacheHit;
+        MetadataCacheService.MetadataSnapshot snapshot;
+        if (schemaCatalog == null) {
+            try (Connection connection = connections.open(connectionId)) {
+                schemaCatalog = loadSchemaCatalog(connectionId, connection);
+                selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
+                snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, selectedIsCurrentCatalog(schemaCatalog, selectedSchema));
+                cacheHit = false;
+            }
+        } else {
+            selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
+            var cached = cache.metadata(connectionId, selectedSchema);
+            cacheHit = cached.isPresent();
+            snapshot = cached.orElse(null);
+            if (snapshot == null) {
+                try (Connection connection = connections.open(connectionId)) {
+                    snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, selectedIsCurrentCatalog(schemaCatalog, selectedSchema));
+                }
+            }
         }
-        List<DbObject> filtered = filterObjects(snapshot.objects(), schemaFilter, keyword);
+        List<DbObject> filtered = filterObjects(snapshot.objects(), keyword);
         int normalizedPage = Math.max(page == null ? 0 : page, 0);
         int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
         int offset = normalizedPage * normalizedPageSize;
         List<DbObject> objects = filtered.stream().skip(offset).limit(normalizedPageSize).toList();
         boolean hasMore = filtered.size() > offset + objects.size();
-        return new MetadataResponse(snapshot.schemas(), objects, normalizedPage, normalizedPageSize, hasMore, snapshot.cachedAt().toString(), cacheHit);
+        return new MetadataResponse(
+                schemaCatalog.schemas(),
+                schemaCatalog.currentSchema(),
+                selectedSchema,
+                objects,
+                filtered.size(),
+                normalizedPage,
+                normalizedPageSize,
+                hasMore,
+                snapshot.cachedAt().toString(),
+                cacheHit
+        );
     }
 
-    private MetadataCacheService.MetadataSnapshot loadMetadataSnapshot(long connectionId) throws Exception {
-        try (Connection connection = connections.open(connectionId)) {
-            DatabaseMetaData meta = connection.getMetaData();
-            List<String> schemas = schemas(meta);
-            List<DbObject> objects = new ArrayList<>();
-            try (ResultSet rs = meta.getTables(connection.getCatalog(), null, "%", new String[]{"TABLE", "VIEW"})) {
-                while (rs.next()) {
-                    String schema = rs.getString("TABLE_SCHEM");
-                    String name = rs.getString("TABLE_NAME");
-                    String type = rs.getString("TABLE_TYPE");
-                    if (isSystemSchema(schema)) {
-                        continue;
-                    }
-                    objects.add(new DbObject(schema, name, type, List.of(), List.of()));
-                }
-            }
-            return cache.putMetadata(connectionId, schemas, objects);
+    private MetadataCacheService.SchemaCatalogSnapshot loadSchemaCatalog(long connectionId, Connection connection) throws Exception {
+        DatabaseMetaData meta = connection.getMetaData();
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        String currentSchema = trimToNull(dialect.currentSchema(connection));
+        if (currentSchema == null) {
+            currentSchema = trimToNull(dbConnection.username());
         }
+        if (currentSchema == null) {
+            currentSchema = "";
+        }
+        boolean currentIsCatalog = currentSchema != null && currentSchema.equalsIgnoreCase(safeCatalog(connection))
+                && trimToNull(safeSchema(connection)) == null;
+        LinkedHashSet<String> available = new LinkedHashSet<>();
+        if (!currentSchema.isBlank()) {
+            available.add(currentSchema);
+        }
+        available.addAll(schemas(meta));
+        String resolvedCurrentSchema = currentSchema;
+        List<String> schemaNames = available.stream()
+                .sorted((left, right) -> {
+                    if (!resolvedCurrentSchema.isBlank() && left.equalsIgnoreCase(resolvedCurrentSchema)) return -1;
+                    if (!resolvedCurrentSchema.isBlank() && right.equalsIgnoreCase(resolvedCurrentSchema)) return 1;
+                    return left.compareToIgnoreCase(right);
+                })
+                .toList();
+        return cache.putSchemaCatalog(connectionId, schemaNames, currentSchema, currentIsCatalog);
+    }
+
+    private MetadataCacheService.MetadataSnapshot loadMetadataSnapshot(long connectionId, Connection connection, String selectedSchema, boolean currentIsCatalog) throws Exception {
+        DatabaseMetaData meta = connection.getMetaData();
+        String schemaPattern = currentIsCatalog ? null : trimToNull(selectedSchema);
+        List<DbObject> objects = new ArrayList<>();
+        try (ResultSet rs = meta.getTables(connection.getCatalog(), schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
+            while (rs.next()) {
+                String schema = rs.getString("TABLE_SCHEM");
+                String name = rs.getString("TABLE_NAME");
+                String type = rs.getString("TABLE_TYPE");
+                if (schemaPattern != null && schema != null && !schemaPattern.equalsIgnoreCase(schema)) {
+                    continue;
+                }
+                if (isSystemSchema(schema) && (selectedSchema == null || !selectedSchema.equalsIgnoreCase(schema))) {
+                    continue;
+                }
+                objects.add(new DbObject(schema, name, type, List.of(), List.of()));
+            }
+        }
+        objects.sort(Comparator
+                .comparingInt((DbObject object) -> objectTypeOrder(object.type()))
+                .thenComparing(DbObject::name, String.CASE_INSENSITIVE_ORDER));
+        return cache.putMetadata(connectionId, selectedSchema, objects);
+    }
+
+    private boolean selectedIsCurrentCatalog(MetadataCacheService.SchemaCatalogSnapshot schemaCatalog, String selectedSchema) {
+        return schemaCatalog.currentIsCatalog()
+                && schemaCatalog.currentSchema() != null
+                && selectedSchema.equalsIgnoreCase(schemaCatalog.currentSchema());
     }
 
     public ObjectStructure structure(long connectionId, String schemaName, String objectName) throws Exception {
@@ -230,6 +298,54 @@ public class MetadataService {
         return schemas;
     }
 
+    private String selectedSchema(MetadataCacheService.SchemaCatalogSnapshot catalog, String requestedSchema) {
+        String requested = trimToNull(requestedSchema);
+        if (requested == null) {
+            requested = trimToNull(catalog.currentSchema());
+        }
+        if (requested == null && !catalog.schemas().isEmpty()) {
+            requested = catalog.schemas().get(0);
+        }
+        if (requested == null) {
+            return "";
+        }
+        String selected = requested;
+        return catalog.schemas().stream()
+                .filter(schema -> schema.equalsIgnoreCase(selected))
+                .findFirst()
+                .orElse(selected);
+    }
+
+    private String safeSchema(Connection connection) {
+        try {
+            return connection.getSchema();
+        } catch (Exception | AbstractMethodError ignored) {
+            return null;
+        }
+    }
+
+    private String safeCatalog(Connection connection) {
+        try {
+            return connection.getCatalog();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
+    }
+
+    private int objectTypeOrder(String type) {
+        String normalized = type == null ? "" : type.toUpperCase(Locale.ROOT);
+        if (normalized.contains("TABLE")) return 0;
+        if (normalized.contains("VIEW")) return 1;
+        return 2;
+    }
+
     private boolean isSystemSchema(String schema) {
         if (schema == null) {
             return false;
@@ -255,11 +371,9 @@ public class MetadataService {
         return objectName.contains(keyword) || qualifiedName.contains(keyword);
     }
 
-    private List<DbObject> filterObjects(List<DbObject> objects, String schemaFilter, String keyword) {
-        String normalizedSchema = schemaFilter == null || schemaFilter.isBlank() ? null : schemaFilter.toLowerCase(Locale.ROOT);
+    private List<DbObject> filterObjects(List<DbObject> objects, String keyword) {
         String normalizedKeyword = keyword == null || keyword.isBlank() ? null : keyword.toLowerCase(Locale.ROOT);
         return objects.stream()
-                .filter(object -> normalizedSchema == null || normalizedSchema.equals((object.schemaName() == null ? "" : object.schemaName()).toLowerCase(Locale.ROOT)))
                 .filter(object -> matchesKeyword(object.schemaName(), object.name(), normalizedKeyword))
                 .toList();
     }

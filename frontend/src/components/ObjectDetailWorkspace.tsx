@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Checkbox, Descriptions, Empty, Input, InputNumber, Layout, Modal, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { CopyOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, CopyOutlined, PlusOutlined, TableOutlined } from '@ant-design/icons';
 import { api } from '../api';
-import type { ColumnDesign, DbObject, IndexDesign, ObjectDetail, ObjectRelation, ObjectRelations, TableDesignRequest, TableDesignResponse } from '../types';
+import type { ColumnDesign, DbObject, IndexDesign, ObjectDetail, ObjectRelation, ObjectRelations, TableDesignRequest, TableDesignResponse, WorkspaceStatus } from '../types';
 import { localizeMessage, objectTypeLabel } from '../utils';
+import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -19,7 +20,7 @@ export function ObjectDetailWorkspace({
   connectionId,
   readonlyConnection,
   detail,
-  statusMessage,
+  status,
   loading,
   onBackToSql,
   onOpenTable,
@@ -28,7 +29,7 @@ export function ObjectDetailWorkspace({
   connectionId?: number;
   readonlyConnection?: boolean;
   detail: ObjectDetail | null;
-  statusMessage: string;
+  status: WorkspaceStatus;
   loading: boolean;
   onBackToSql: () => void;
   onOpenTable: (object: DbObject) => void;
@@ -43,11 +44,13 @@ export function ObjectDetailWorkspace({
     <div className="workspace object-workspace">
       <Header className="workspace-toolbar">
         <div className="toolbar-title">
-          <Text strong>{objectName}</Text>
-          <Text type="secondary">{detail ? `${objectTypeLabel(detail.type)} · ${statusMessage}` : statusMessage}</Text>
+          <Space size={8}>
+            <Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label="返回查询工作台" onClick={onBackToSql} />
+            <Text strong>{objectName}</Text>
+          </Space>
+          <Text type="secondary">{detail ? objectTypeLabel(detail.type) : '从资源管理器中选择数据库对象'}</Text>
         </div>
         <Space size={8} wrap>
-          <Button size="small" onClick={onBackToSql}>查询工作台</Button>
           <Button
             size="small"
             type="primary"
@@ -87,6 +90,7 @@ export function ObjectDetailWorkspace({
           ]}
         />
       )}
+      <WorkspaceStatusBar status={status} />
     </div>
   );
 }
