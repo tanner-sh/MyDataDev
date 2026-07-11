@@ -10,6 +10,7 @@ import { parseImportFile } from './importers';
 import type { ActiveTable, BackupEditorRequest, BackupHistory, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
+import { withLoadedObjectStructure } from './objectTreeModel';
 import { analyzeSqlCompletion, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { BackupPanel } from './components/BackupPanel';
 import { AppHeader } from './components/AppHeader';
@@ -31,12 +32,14 @@ export default function App() {
   const [selected, setSelected] = useState<Connection | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
+  const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
   const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
   const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', results: [], message: '' }]);
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({ kind: 'idle', text: '就绪' });
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
+  const [metadataBlockingLoading, setMetadataBlockingLoading] = useState(false);
   const [objectDetailLoading, setObjectDetailLoading] = useState(false);
   const [objectDesignDirty, setObjectDesignDirty] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
@@ -79,6 +82,7 @@ export default function App() {
   const formatRef = useRef<() => void>(() => undefined);
   const sqlTabSeqRef = useRef(1);
   const backupEditorRequestSeqRef = useRef(0);
+  const metadataSearchTimerRef = useRef<number | null>(null);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
@@ -167,7 +171,10 @@ export default function App() {
 
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
+    clearMetadataSearchTimer();
   }, [selected]);
+
+  useEffect(() => () => clearMetadataSearchTimer(), []);
 
   useEffect(() => {
     refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
@@ -396,6 +403,7 @@ export default function App() {
           setSelected(null);
           setMetadata(null);
           setMetadataQuery({ schema: '', keyword: '' });
+          setMetadataAppliedKeyword('');
           structureCacheRef.current.clear();
           setStructureLoadingKey(null);
           setActiveObjectDetail(null);
@@ -418,10 +426,12 @@ export default function App() {
   }
 
   function applyConnectionSelection(connection: Connection) {
+    clearMetadataSearchTimer();
     invalidateConnectionRequests();
     setSelected(connection);
     setMetadata(null);
     setMetadataQuery({ schema: '', keyword: '' });
+    setMetadataAppliedKeyword('');
     structureCacheRef.current.clear();
     completionCatalogCacheRef.current.clear();
     completionStructureCacheRef.current.clear();
@@ -591,10 +601,11 @@ export default function App() {
     });
   }
 
-  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean } = {}) {
+  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean; background?: boolean } = {}) {
     if (!conn) return;
     const requestId = ++metadataRequestSeqRef.current;
     setMetadataLoading(true);
+    setMetadataBlockingLoading(!options.background || !metadataRef.current);
     try {
       if (options.refresh) {
         structureCacheRef.current.clear();
@@ -613,12 +624,20 @@ export default function App() {
       if (keyword.trim()) params.set('keyword', keyword.trim());
       const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`);
       if (requestId !== metadataRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
+      const hydratedData = {
+        ...data,
+        objects: data.objects.map((object) => {
+          const cachedStructure = structureCacheRef.current.get(objectCacheKey(conn.id, object));
+          return withLoadedObjectStructure(object, cachedStructure);
+        })
+      };
       setMetadataQuery((current) => ({ ...current, schema: data.selectedSchema || '' }));
+      setMetadataAppliedKeyword(keyword);
       setMetadata((current) => {
         if (!options.append || !current) {
-          return data;
+          return hydratedData;
         }
-        return { ...data, objects: [...current.objects, ...data.objects] };
+        return { ...hydratedData, objects: [...current.objects, ...hydratedData.objects] };
       });
       const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
       const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
@@ -637,8 +656,32 @@ export default function App() {
         showError(localizeMessage((e as Error).message));
       }
     } finally {
-      if (requestId === metadataRequestSeqRef.current) setMetadataLoading(false);
+      if (requestId === metadataRequestSeqRef.current) {
+        setMetadataLoading(false);
+        setMetadataBlockingLoading(false);
+      }
     }
+  }
+
+  function clearMetadataSearchTimer() {
+    if (metadataSearchTimerRef.current != null) window.clearTimeout(metadataSearchTimerRef.current);
+    metadataSearchTimerRef.current = null;
+  }
+
+  function runMetadataSearch(keyword: string) {
+    clearMetadataSearchTimer();
+    setMetadataQuery((current) => ({ ...current, keyword }));
+    if (selected) void loadMetadata(selected, { keyword, page: 0, background: true });
+  }
+
+  function queueMetadataSearch(keyword: string) {
+    setMetadataQuery((current) => ({ ...current, keyword }));
+    clearMetadataSearchTimer();
+    if (!keyword.trim()) {
+      runMetadataSearch('');
+      return;
+    }
+    metadataSearchTimerRef.current = window.setTimeout(() => runMetadataSearch(keyword), 300);
   }
 
   function requestRefreshDatabaseObjects() {
@@ -652,7 +695,8 @@ export default function App() {
 
   async function refreshDatabaseObjects() {
     if (!selected) return;
-    await loadMetadata(selected, { schema: metadataQuery.schema, page: 0, refresh: true });
+    clearMetadataSearchTimer();
+    await loadMetadata(selected, { schema: metadataQuery.schema, page: 0, refresh: true, background: true });
     if (mode === 'object' && activeObjectDetail) {
       await loadObjectDetail(activeObjectDetail, { refresh: true });
     }
@@ -1396,6 +1440,11 @@ export default function App() {
   const objectStatus: WorkspaceStatus = objectDetailLoading
     ? { kind: 'loading', text: '正在加载对象详情…' }
     : workspaceStatus;
+  const explorerActiveObject = mode === 'object' && activeObjectDetail
+    ? { schemaName: activeObjectDetail.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeObjectDetail.name }
+    : mode === 'table' && activeTable
+      ? { schemaName: activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeTable.tableName }
+      : null;
 
   const explorerPanel = (
     <div className="resource-explorer">
@@ -1453,13 +1502,14 @@ export default function App() {
           className="full-width"
           placeholder={`选择${namespaceLabel}`}
           value={metadataQuery.schema || metadata?.selectedSchema || undefined}
-          disabled={!selected || metadataLoading}
+          disabled={!selected || metadataBlockingLoading}
           options={(metadata?.schemas || []).map((schema) => ({
             value: schema,
             label: schema === metadata?.currentSchema ? `${schema}（当前）` : schema
           }))}
           onChange={(schema) => {
             const nextSchema = schema || '';
+            clearMetadataSearchTimer();
             setMetadataQuery((current) => ({ ...current, schema: nextSchema }));
             loadMetadata(selected, { schema: nextSchema, page: 0 });
           }}
@@ -1467,44 +1517,51 @@ export default function App() {
         <Input.Search
           size="small"
           allowClear
+          loading={metadataLoading && !metadataBlockingLoading}
           placeholder="搜索表或视图"
-          disabled={!selected || metadataLoading}
+          disabled={!selected || metadataBlockingLoading}
           value={metadataQuery.keyword}
-          onChange={(event) => setMetadataQuery((current) => ({ ...current, keyword: event.target.value }))}
-          onSearch={(keyword) => {
-            setMetadataQuery((current) => ({ ...current, keyword }));
-            loadMetadata(selected, { keyword, page: 0 });
-          }}
+          onChange={(event) => queueMetadataSearch(event.target.value)}
+          onSearch={runMetadataSearch}
         />
       </div>
 
       {connectionsError && <div className="explorer-error" role="alert">{connectionsError}</div>}
-      <div className="object-tree-scroll">
-        {metadataLoading ? (
+      <div className="object-tree-scroll" aria-busy={metadataLoading}>
+        {metadataBlockingLoading ? (
           <div className="explorer-loading" role="status">
             <Spin size="small" />
-            <Text type="secondary">正在加载 {metadataQuery.schema || '当前 Schema'}…</Text>
+            <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
           </div>
         ) : (
           <ObjectTree
-            key={metadata?.selectedSchema || 'current-schema'}
+            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadata?.cachedAt || 'uncached'}`}
             objects={objects}
-            emptyDescription={metadataQuery.keyword ? '未找到匹配的表或视图' : '当前 Schema 暂无数据库对象'}
+            activeObject={explorerActiveObject}
+            keyword={metadataAppliedKeyword}
+            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表或视图' : `当前${namespaceLabel}暂无数据库对象`}
             structureLoadingKey={structureLoadingKey}
             onLoadStructure={loadObjectStructure}
             onOpenDetail={openObjectDetail}
             onOpenTable={openTable}
+            onBackupTable={(object) => openBackupTaskEditor({ schemaName: object.schemaName, tableName: object.name })}
           />
+        )}
+        {metadataLoading && !metadataBlockingLoading && (
+          <div className="explorer-tree-loading-indicator" role="status">
+            <Spin size="small" />
+            <span>正在更新对象…</span>
+          </div>
         )}
       </div>
       <div className="explorer-footer">
         {metadata?.cachedAt && (
           <span className="metadata-cache-status">
-            已加载 {objects.length}/{metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
+            已展示 {objects.length}/{metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
           </span>
         )}
         {metadata?.hasMore && (
-          <Button size="small" block disabled={metadataLoading} onClick={() => loadMetadata(selected, { page: metadata.page + 1, append: true })}>
+          <Button size="small" block disabled={metadataLoading} onClick={() => loadMetadata(selected, { page: metadata.page + 1, append: true, background: true })}>
             加载更多对象
           </Button>
         )}

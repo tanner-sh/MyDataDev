@@ -1230,7 +1230,7 @@ body {
   grid-row: 3;
   padding: 0 10px 9px;
   display: grid;
-  grid-template-columns: minmax(92px, .8fr) minmax(128px, 1.2fr);
+  grid-template-columns: minmax(82px, .75fr) minmax(0, 1.25fr);
   gap: 6px;
 }
 
@@ -1247,11 +1247,31 @@ body {
 }
 
 .object-tree-scroll {
+  position: relative;
   grid-row: 5;
   min-width: 0;
   min-height: 0;
   padding: 0 4px 8px 6px;
   overflow: hidden;
+}
+
+.explorer-tree-loading-indicator {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  right: 8px;
+  min-height: 26px;
+  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  font-size: 10px;
+  pointer-events: none;
 }
 
 .object-tree-viewport {
@@ -1285,60 +1305,237 @@ body {
   font-size: 10px;
 }
 
-.object-tree,
-.object-tree .ant-tree-list,
-.object-tree .ant-tree-treenode,
-.object-tree .ant-tree-node-content-wrapper {
-  background: transparent;
-}
-
 .object-tree {
+  width: 100%;
   min-width: 100%;
   height: 100%;
+  min-height: 0;
+  padding: 2px 2px 8px;
+  overflow: auto;
   color: var(--text);
   font-size: 12px;
+  scrollbar-gutter: stable;
 }
 
-.object-tree .ant-tree-treenode {
+.object-tree-group + .object-tree-group {
+  margin-top: 4px;
+}
+
+.object-tree-row {
+  --object-tree-level: 0;
+
+  position: relative;
   width: 100%;
-  padding: 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px 0 calc(4px + var(--object-tree-level) * 12px);
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr);
+  column-gap: 4px;
+  align-items: center;
+  border-radius: 6px;
+  color: var(--text);
+  transition: background .12s ease, color .12s ease;
 }
 
-.object-tree .ant-tree-node-content-wrapper {
+.object-tree-row:hover,
+.object-tree-row:focus-within {
+  background: var(--surface-hover);
+}
+
+.object-tree-row.is-selected {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.object-tree-switcher,
+.object-tree-row-main {
+  margin: 0;
+  border: 0;
+  outline: none;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+.object-tree-switcher,
+.object-tree-switcher-placeholder {
+  width: 16px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.object-tree-switcher {
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.object-tree-switcher:hover,
+.object-tree-switcher:focus-visible {
+  color: var(--primary);
+}
+
+.object-tree-switcher:focus-visible,
+.object-tree-row-main:focus-visible {
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent);
+}
+
+.object-tree-row-icon {
+  width: 18px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+.object-tree-row.is-selected .object-tree-row-icon {
+  color: var(--primary);
+}
+
+.object-tree-row-main {
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-align: left;
+  line-height: 32px;
+}
+
+.object-tree-row-main:is(button) {
+  cursor: pointer;
+}
+
+.object-tree-group-row .object-tree-row-main,
+.object-tree-structure-group-row .object-tree-row-main {
+  font-weight: 600;
+}
+
+.object-tree-row-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-tree-count {
+  min-width: 20px;
+  height: 18px;
+  padding-inline: 5px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
+}
+
+.object-tree-row.is-selected .object-tree-count {
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  color: var(--primary);
+}
+
+.object-tree-object-name {
   min-width: 0;
   flex: 1 1 auto;
-  padding-inline: 3px !important;
-  border-radius: 5px;
-}
-
-.object-tree .ant-tree-node-content-wrapper:hover,
-.object-tree .ant-tree-node-selected {
-  background: var(--surface-hover) !important;
-}
-
-.object-tree .ant-tree-title {
-  min-width: 0;
-  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .object-tree-actions {
+  position: absolute;
+  top: 4px;
+  right: 0;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding-left: 12px;
   opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0, var(--surface-hover) 12px, var(--surface-hover) 100%);
   transition: opacity .12s ease;
 }
 
-.object-tree-object-title:hover .object-tree-actions,
-.object-tree-object-title:focus-within .object-tree-actions {
+.object-tree-object-row:hover .object-tree-actions,
+.object-tree-object-row:focus-within .object-tree-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.object-tree-row.is-selected .object-tree-actions {
+  background: linear-gradient(90deg, transparent 0, var(--primary-soft) 12px, var(--primary-soft) 100%);
 }
 
 .object-tree-action {
+  width: 24px;
+  min-width: 24px !important;
+  height: 24px !important;
+  padding: 0;
   color: var(--text-secondary);
 }
 
-.object-tree-column-type,
-.object-tree-index .ant-typography:last-child {
+.object-tree-action:hover,
+.object-tree-action:focus-visible {
+  color: var(--primary) !important;
+  background: var(--surface-raised) !important;
+}
+
+.object-tree-leaf-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-tree-leaf-meta {
+  min-width: 0;
+  flex: 0 1 auto;
   max-width: 105px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
+}
+
+.object-tree-message-row {
+  color: var(--text-secondary);
+}
+
+.object-tree-error-message {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  color: var(--danger);
+}
+
+.object-tree-error-message .ant-btn {
+  height: 24px;
+  margin-left: auto;
+  padding-inline: 4px;
+}
+
+.object-tree-match {
+  padding: 0;
+  color: inherit;
+  background: color-mix(in srgb, var(--warning) 28%, transparent);
+  border-radius: 2px;
 }
 
 .object-tree-empty {
@@ -1720,8 +1917,7 @@ body {
   background: var(--primary-soft);
 }
 
-.connection-actions .ant-btn,
-.object-tree-action {
+.connection-actions .ant-btn {
   min-width: 32px;
   height: 32px;
 }
@@ -1749,6 +1945,11 @@ body {
 @media (hover: none), (pointer: coarse) {
   .object-tree-actions {
     opacity: 1;
+    pointer-events: auto;
+  }
+
+  .object-tree-object-name {
+    padding-right: 52px;
   }
 }
 
