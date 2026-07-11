@@ -12,8 +12,9 @@ export function SqlHistoryDrawer({ open, history, onClose, onPick }: {
 }) {
   return (
     <Drawer title="SQL 执行历史" width={520} open={open} onClose={onClose}>
-      <List
-        dataSource={history}
+      <List
+        dataSource={history}
+        pagination={history.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'small' } : false}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无 SQL 历史" /> }}
         renderItem={(item) => (
           <List.Item

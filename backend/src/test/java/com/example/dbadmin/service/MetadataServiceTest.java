@@ -37,6 +37,7 @@ class MetadataServiceTest {
         MetadataResponse response = service.inspect(1L, null, "alpha", 0, 1, false);
 
         assertThat(response.page()).isZero();
+        assertThat(response.namespaceKind()).isEqualTo("SCHEMA");
         assertThat(response.pageSize()).isEqualTo(1);
         assertThat(response.hasMore()).isTrue();
         assertThat(response.totalObjects()).isEqualTo(2);
@@ -46,6 +47,13 @@ class MetadataServiceTest {
         assertThat(response.objects().get(0).name()).contains("ALPHA");
         assertThat(response.objects().get(0).columns()).isEmpty();
         assertThat(response.objects().get(0).indexes()).isEmpty();
+
+        var completionCatalog = service.completionCatalog(1L, response.selectedSchema(), false);
+        assertThat(completionCatalog.namespaceKind()).isEqualTo("SCHEMA");
+        assertThat(completionCatalog.selectedSchema()).isEqualTo(response.selectedSchema());
+        assertThat(completionCatalog.objects()).extracting("name")
+                .contains("ALPHA_USERS", "ALPHA_ORDERS", "BETA_EVENTS");
+        assertThat(completionCatalog.objects()).allMatch(object -> object.columns().isEmpty() && object.indexes().isEmpty());
     }
 
     @Test

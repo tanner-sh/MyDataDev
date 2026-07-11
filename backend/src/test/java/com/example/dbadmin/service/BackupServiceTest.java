@@ -111,7 +111,7 @@ class BackupServiceTest {
                 """);
         script.toFile().setExecutable(true);
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
-        BackupTask task = new BackupTask(1, "native", 1, "TABLE", null, "users", "MYSQLDUMP", script.toString(), "--single-transaction", null, null, false, null, null, null, null, null);
+        BackupTask task = new BackupTask(1, "native", 1, "DATABASE", null, null, "MYSQLDUMP", script.toString(), "--single-transaction", null, null, false, null, null, null, null, null);
         when(repository.findById(1L)).thenReturn(Optional.of(task));
         BackupService service = service("jdbc:mysql://db.example.com:3307/demo?useSSL=false", "mysql", repository);
 
@@ -127,7 +127,7 @@ class BackupServiceTest {
         assertThat(dump).contains("--port=3307");
         assertThat(dump).contains("--user=sa");
         assertThat(dump).contains("--single-transaction");
-        assertThat(dump).contains("demo users");
+        assertThat(dump).contains("demo");
     }
 
     @Test

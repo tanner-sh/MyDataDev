@@ -43,26 +43,43 @@ public class DataEditService {
         List<String> keyColumns = metadata.primaryOrUniqueColumns(connectionId, schemaName, tableName);
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-        String baseSql = "SELECT * FROM " + table(schemaName, tableName);
-        String sql = dialect.pageQuery(baseSql, safePageSize, safePage * safePageSize);
+        String baseSql = "SELECT * FROM " + dialect.qualifiedName(schemaName, tableName)
+                + (keyColumns.isEmpty()
+                ? ""
+                : " ORDER BY " + keyColumns.stream().map(dialect::quoteIdentifier).collect(Collectors.joining(", ")));
+        int offset;
+        try {
+            offset = Math.multiplyExact(safePage, safePageSize);
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("分页偏移量过大");
+        }
+        String sql = dialect.pageQuery(baseSql, safePageSize + 1, offset);
         try (Connection connection = connections.open(connectionId); Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery(sql)) {
             ResultSetMetaData md = rs.getMetaData();
             List<String> columns = new ArrayList<>();
-            for (int i = 1; i <= md.getColumnCount(); i++) {
-                String column = md.getColumnLabel(i);
-                if (!"DBADMIN_RN".equalsIgnoreCase(column)) {
-                    columns.add(column);
-                }
+            int visibleColumnCount = md.getColumnCount();
+            String helperColumn = dialect.paginationHelperColumn();
+            if (helperColumn != null
+                    && visibleColumnCount > 0
+                    && helperColumn.equalsIgnoreCase(md.getColumnLabel(visibleColumnCount))) {
+                visibleColumnCount--;
+            }
+            for (int i = 1; i <= visibleColumnCount; i++) {
+                columns.add(md.getColumnLabel(i));
             }
             List<Map<String, Object>> rows = new ArrayList<>();
             while (rs.next()) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                for (String column : columns) {
-                    row.put(column, serializableValue(rs.getObject(column)));
+                for (int i = 1; i <= visibleColumnCount; i++) {
+                    row.put(columns.get(i - 1), serializableValue(rs.getObject(i)));
                 }
                 rows.add(row);
             }
-            return new TableDataResponse(columns, rows, keyColumns, !keyColumns.isEmpty());
+            boolean hasMore = rows.size() > safePageSize;
+            if (hasMore) {
+                rows = new ArrayList<>(rows.subList(0, safePageSize));
+            }
+            return new TableDataResponse(columns, rows, keyColumns, !keyColumns.isEmpty(), safePage, safePageSize, hasMore);
         }
     }
 
@@ -98,6 +115,7 @@ public class DataEditService {
             return List.of();
         }
         List<String> guard = metadata.primaryOrUniqueColumns(request.connectionId(), request.schemaName(), request.tableName());
+        DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(request.connectionId()));
         List<String> sql = new ArrayList<>();
         for (RowChange change : request.changes()) {
             String type = change.type().toUpperCase();
@@ -105,61 +123,37 @@ public class DataEditService {
                 throw new IllegalArgumentException("Updates and deletes require a primary key or unique index");
             }
             sql.add(switch (type) {
-                case "INSERT" -> insertSql(request, change.values());
-                case "UPDATE" -> updateSql(request, change.values(), change.key());
-                case "DELETE" -> deleteSql(request, change.key());
+                case "INSERT" -> insertSql(request, change.values(), dialect);
+                case "UPDATE" -> updateSql(request, change.values(), change.key(), dialect);
+                case "DELETE" -> deleteSql(request, change.key(), dialect);
                 default -> throw new IllegalArgumentException("Unsupported change type: " + change.type());
             });
         }
         return sql;
     }
 
-    private String insertSql(DataPreviewRequest request, Map<String, Object> values) {
-        String cols = values.keySet().stream().map(this::quote).collect(Collectors.joining(", "));
-        String vals = values.values().stream().map(this::literal).collect(Collectors.joining(", "));
-        return "INSERT INTO " + table(request) + " (" + cols + ") VALUES (" + vals + ");";
+    private String insertSql(DataPreviewRequest request, Map<String, Object> values, DatabaseDialect dialect) {
+        String cols = values.keySet().stream().map(dialect::quoteIdentifier).collect(Collectors.joining(", "));
+        String vals = values.values().stream().map(dialect::literal).collect(Collectors.joining(", "));
+        return "INSERT INTO " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " (" + cols + ") VALUES (" + vals + ");";
     }
 
-    private String updateSql(DataPreviewRequest request, Map<String, Object> values, Map<String, Object> key) {
-        String set = values.entrySet().stream().map(e -> quote(e.getKey()) + " = " + literal(e.getValue())).collect(Collectors.joining(", "));
-        return "UPDATE " + table(request) + " SET " + set + " WHERE " + where(key) + ";";
+    private String updateSql(DataPreviewRequest request, Map<String, Object> values, Map<String, Object> key, DatabaseDialect dialect) {
+        String set = values.entrySet().stream().map(e -> dialect.quoteIdentifier(e.getKey()) + " = " + dialect.literal(e.getValue())).collect(Collectors.joining(", "));
+        return "UPDATE " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " SET " + set + " WHERE " + where(key, dialect) + ";";
     }
 
-    private String deleteSql(DataPreviewRequest request, Map<String, Object> key) {
-        return "DELETE FROM " + table(request) + " WHERE " + where(key) + ";";
+    private String deleteSql(DataPreviewRequest request, Map<String, Object> key, DatabaseDialect dialect) {
+        return "DELETE FROM " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " WHERE " + where(key, dialect) + ";";
     }
 
-    private String where(Map<String, Object> key) {
+    private String where(Map<String, Object> key, DatabaseDialect dialect) {
         if (key == null || key.isEmpty()) {
             throw new IllegalArgumentException("Row key is required");
         }
-        return key.entrySet().stream().map(e -> quote(e.getKey()) + " = " + literal(e.getValue())).collect(Collectors.joining(" AND "));
-    }
-
-    private String table(DataPreviewRequest request) {
-        return request.schemaName() == null || request.schemaName().isBlank()
-                ? quote(request.tableName())
-                : quote(request.schemaName()) + "." + quote(request.tableName());
-    }
-
-    private String table(String schemaName, String tableName) {
-        return schemaName == null || schemaName.isBlank()
-                ? quote(tableName)
-                : quote(schemaName) + "." + quote(tableName);
-    }
-
-    private String quote(String identifier) {
-        return "\"" + identifier.replace("\"", "\"\"") + "\"";
-    }
-
-    private String literal(Object value) {
-        if (value == null) {
-            return "NULL";
-        }
-        if (value instanceof Number || value instanceof Boolean) {
-            return value.toString();
-        }
-        return "'" + value.toString().replace("'", "''") + "'";
+        return key.entrySet().stream()
+                .map(e -> dialect.quoteIdentifier(e.getKey()) + (e.getValue() == null ? " IS NULL" : " = " + dialect.literal(e.getValue())))
+                .collect(Collectors.joining(" AND "));
     }
 
     private String executableSql(String sql) {

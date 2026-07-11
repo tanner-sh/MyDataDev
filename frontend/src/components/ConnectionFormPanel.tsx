@@ -79,11 +79,21 @@ export function ConnectionFormPanel({ form, selected, editing, loading, onChange
         <Form.Item>
           <Checkbox checked={form.readonly} onChange={(event) => onChange({ ...form, readonly: event.target.checked })}>只读连接</Checkbox>
         </Form.Item>
-        {form.dbType === 'oracle' && (
+        {form.dbType === 'oracle' && (
           <Text type="secondary" className="form-hint-text">
             Oracle 示例：Service Name 使用 jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID 使用 jdbc:oracle:thin:@localhost:1521:ORCL。
           </Text>
-        )}
+        )}
+        {form.dbType === 'dm' && (
+          <Text type="secondary" className="form-hint-text">
+            达梦示例：jdbc:dm://localhost:5236；Schema 通常与登录用户名一致。
+          </Text>
+        )}
+        {(form.dbType === 'oceanbase-mysql' || form.dbType === 'oceanbase-oracle') && (
+          <Text type="secondary" className="form-hint-text">
+            OceanBase 示例：jdbc:oceanbase://localhost:2881/demo；连接类型必须与租户兼容模式一致。
+          </Text>
+        )}
         {editing && <Text type="secondary" className="form-hint-text">编辑已有连接时，密码为 ****** 或留空都表示沿用原密码。</Text>}
         <Space className="form-actions" size={8}>
           <Button block onClick={onTest} loading={loading} disabled={jdbcUrlInvalid}>测试连接</Button>

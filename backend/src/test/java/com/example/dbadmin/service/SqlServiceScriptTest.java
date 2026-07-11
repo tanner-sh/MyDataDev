@@ -75,7 +75,47 @@ class SqlServiceScriptTest {
         }
     }
 
+    @Test
+    void reportsTruncatedResultAtRequestedRowLimit() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        SqlScriptResponse response = service.executeScript(
+                1L,
+                "select x from system_range(1, 3)",
+                2,
+                "admin"
+        );
+
+        var result = response.results().get(0).result();
+        assertThat(result.rows()).hasSize(2);
+        assertThat(result.maxRows()).isEqualTo(2);
+        assertThat(result.truncated()).isTrue();
+    }
+
+    @Test
+    void marksMetadataChangesAndEvictsMetadataCacheAfterSuccessfulDdl() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        MetadataService metadata = mock(MetadataService.class);
+        SqlService service = service(url, mock(SqlHistoryRepository.class), metadata);
+
+        SqlScriptResponse response = service.executeScript(
+                1L,
+                "/* migration */ CREATE TABLE orders(id INT PRIMARY KEY); select * from orders",
+                500,
+                "admin"
+        );
+
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        assertThat(response.metadataChanged()).isTrue();
+        verify(metadata).invalidateConnection(1L);
+    }
+
     private SqlService service(String url, SqlHistoryRepository history) throws Exception {
+        return service(url, history, mock(MetadataService.class));
+    }
+
+    private SqlService service(String url, SqlHistoryRepository history, MetadataService metadata) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         AppProperties properties = new AppProperties();
@@ -87,7 +127,7 @@ class SqlServiceScriptTest {
                 mock(AuditRepository.class),
                 mock(DialectRegistry.class),
                 history,
-                mock(MetadataService.class),
+                metadata,
                 new SqlScriptSplitter()
         );
     }

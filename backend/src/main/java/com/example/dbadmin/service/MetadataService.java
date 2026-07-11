@@ -3,6 +3,9 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
+import com.example.dbadmin.dto.ApiDtos.CompletionCatalogResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupTargetItem;
+import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
@@ -47,6 +50,8 @@ public class MetadataService {
     }
 
     public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
             cache.evictConnection(connectionId);
         }
@@ -56,9 +61,9 @@ public class MetadataService {
         MetadataCacheService.MetadataSnapshot snapshot;
         if (schemaCatalog == null) {
             try (Connection connection = connections.open(connectionId)) {
-                schemaCatalog = loadSchemaCatalog(connectionId, connection);
+                schemaCatalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
                 selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
-                snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, selectedIsCurrentCatalog(schemaCatalog, selectedSchema));
+                snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, dialect);
                 cacheHit = false;
             }
         } else {
@@ -68,7 +73,7 @@ public class MetadataService {
             snapshot = cached.orElse(null);
             if (snapshot == null) {
                 try (Connection connection = connections.open(connectionId)) {
-                    snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, selectedIsCurrentCatalog(schemaCatalog, selectedSchema));
+                    snapshot = loadMetadataSnapshot(connectionId, connection, selectedSchema, dialect);
                 }
             }
         }
@@ -82,6 +87,7 @@ public class MetadataService {
                 schemaCatalog.schemas(),
                 schemaCatalog.currentSchema(),
                 selectedSchema,
+                dialect.namespaceKind().name(),
                 objects,
                 filtered.size(),
                 normalizedPage,
@@ -92,10 +98,104 @@ public class MetadataService {
         );
     }
 
-    private MetadataCacheService.SchemaCatalogSnapshot loadSchemaCatalog(long connectionId, Connection connection) throws Exception {
-        DatabaseMetaData meta = connection.getMetaData();
+    public CompletionCatalogResponse completionCatalog(long connectionId, String requestedNamespace, boolean refresh) throws Exception {
+        MetadataResponse metadata = inspect(connectionId, requestedNamespace, null, 0, 1, refresh);
+        MetadataCacheService.MetadataSnapshot snapshot = cache.metadata(connectionId, metadata.selectedSchema())
+                .orElseThrow(() -> new IllegalStateException("元数据目录加载失败"));
+        return new CompletionCatalogResponse(
+                metadata.namespaceKind(),
+                metadata.selectedSchema(),
+                snapshot.objects(),
+                snapshot.cachedAt().toString(),
+                metadata.cacheHit()
+        );
+    }
+
+    public BackupTargetPage backupTargetNamespaces(long connectionId, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (refresh) {
+            cache.evictConnection(connectionId);
+        }
+        MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
+        if (catalog == null) {
+            try (Connection connection = connections.open(connectionId)) {
+                catalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+            }
+        }
+        String normalizedKeyword = trimToNull(keyword);
+        if (normalizedKeyword != null) {
+            normalizedKeyword = normalizedKeyword.toLowerCase(Locale.ROOT);
+        }
+        String filter = normalizedKeyword;
+        List<String> filtered = catalog.schemas().stream()
+                .filter(name -> filter == null || name.toLowerCase(Locale.ROOT).contains(filter))
+                .toList();
+        PageSlice<String> slice = page(filtered, page, pageSize);
+        String currentNamespace = trimToNull(catalog.currentSchema());
+        List<BackupTargetItem> items = slice.items().stream()
+                .map(name -> new BackupTargetItem(name, currentNamespace != null && name.equalsIgnoreCase(currentNamespace)))
+                .toList();
+        return new BackupTargetPage(
+                dialect.namespaceKind().name(), currentNamespace, currentNamespace, items,
+                filtered.size(), slice.page(), slice.pageSize(), slice.hasMore()
+        );
+    }
+
+    public BackupTargetPage backupTargetTables(long connectionId, String namespaceName, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (refresh) {
+            cache.evictConnection(connectionId);
+        }
+        MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
+        if (catalog == null) {
+            try (Connection connection = connections.open(connectionId)) {
+                catalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+            }
+        }
+        String requested = trimToNull(namespaceName);
+        if (requested == null) {
+            throw new IllegalArgumentException("请选择 Schema/数据库。");
+        }
+        String selected = catalog.schemas().stream()
+                .filter(name -> name.equalsIgnoreCase(requested))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("未找到 Schema/数据库：" + requested));
+        MetadataCacheService.MetadataSnapshot snapshot = cache.metadata(connectionId, selected).orElse(null);
+        if (snapshot == null) {
+            try (Connection connection = connections.open(connectionId)) {
+                snapshot = loadMetadataSnapshot(connectionId, connection, selected, dialect);
+            }
+        }
+        String normalizedKeyword = trimToNull(keyword);
+        if (normalizedKeyword != null) {
+            normalizedKeyword = normalizedKeyword.toLowerCase(Locale.ROOT);
+        }
+        String filter = normalizedKeyword;
+        List<String> filtered = snapshot.objects().stream()
+                .filter(object -> isPhysicalTable(object.type()))
+                .map(DbObject::name)
+                .filter(name -> filter == null || name.toLowerCase(Locale.ROOT).contains(filter))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .toList();
+        PageSlice<String> slice = page(filtered, page, pageSize);
+        List<BackupTargetItem> items = slice.items().stream()
+                .map(name -> new BackupTargetItem(name, false))
+                .toList();
+        String currentNamespace = trimToNull(catalog.currentSchema());
+        return new BackupTargetPage(
+                dialect.namespaceKind().name(), currentNamespace, selected, items,
+                filtered.size(), slice.page(), slice.pageSize(), slice.hasMore()
+        );
+    }
+
+    public void invalidateConnection(long connectionId) {
+        cache.evictConnection(connectionId);
+    }
+
+    private MetadataCacheService.SchemaCatalogSnapshot loadSchemaCatalog(long connectionId, Connection connection, DbConnection dbConnection, DatabaseDialect dialect) throws Exception {
+        DatabaseMetaData meta = connection.getMetaData();
         String currentSchema = trimToNull(dialect.currentSchema(connection));
         if (currentSchema == null) {
             currentSchema = trimToNull(dbConnection.username());
@@ -103,13 +203,12 @@ public class MetadataService {
         if (currentSchema == null) {
             currentSchema = "";
         }
-        boolean currentIsCatalog = currentSchema != null && currentSchema.equalsIgnoreCase(safeCatalog(connection))
-                && trimToNull(safeSchema(connection)) == null;
+        boolean currentIsCatalog = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG;
         LinkedHashSet<String> available = new LinkedHashSet<>();
         if (!currentSchema.isBlank()) {
             available.add(currentSchema);
         }
-        available.addAll(schemas(meta));
+        available.addAll(namespaces(meta, dialect));
         String resolvedCurrentSchema = currentSchema;
         List<String> schemaNames = available.stream()
                 .sorted((left, right) -> {
@@ -121,16 +220,16 @@ public class MetadataService {
         return cache.putSchemaCatalog(connectionId, schemaNames, currentSchema, currentIsCatalog);
     }
 
-    private MetadataCacheService.MetadataSnapshot loadMetadataSnapshot(long connectionId, Connection connection, String selectedSchema, boolean currentIsCatalog) throws Exception {
+    private MetadataCacheService.MetadataSnapshot loadMetadataSnapshot(long connectionId, Connection connection, String selectedSchema, DatabaseDialect dialect) throws Exception {
         DatabaseMetaData meta = connection.getMetaData();
-        String schemaPattern = currentIsCatalog ? null : trimToNull(selectedSchema);
+        DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, selectedSchema);
         List<DbObject> objects = new ArrayList<>();
-        try (ResultSet rs = meta.getTables(connection.getCatalog(), schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
+        try (ResultSet rs = meta.getTables(scope.catalog(), scope.schemaPattern(), "%", new String[]{"TABLE", "VIEW"})) {
             while (rs.next()) {
-                String schema = rs.getString("TABLE_SCHEM");
+                String schema = dialect.resultNamespace(rs);
                 String name = rs.getString("TABLE_NAME");
                 String type = rs.getString("TABLE_TYPE");
-                if (schemaPattern != null && schema != null && !schemaPattern.equalsIgnoreCase(schema)) {
+                if (selectedSchema != null && !selectedSchema.isBlank() && schema != null && !selectedSchema.equalsIgnoreCase(schema)) {
                     continue;
                 }
                 if (isSystemSchema(schema) && (selectedSchema == null || !selectedSchema.equalsIgnoreCase(schema))) {
@@ -143,12 +242,6 @@ public class MetadataService {
                 .comparingInt((DbObject object) -> objectTypeOrder(object.type()))
                 .thenComparing(DbObject::name, String.CASE_INSENSITIVE_ORDER));
         return cache.putMetadata(connectionId, selectedSchema, objects);
-    }
-
-    private boolean selectedIsCurrentCatalog(MetadataCacheService.SchemaCatalogSnapshot schemaCatalog, String selectedSchema) {
-        return schemaCatalog.currentIsCatalog()
-                && schemaCatalog.currentSchema() != null
-                && selectedSchema.equalsIgnoreCase(schemaCatalog.currentSchema());
     }
 
     public ObjectStructure structure(long connectionId, String schemaName, String objectName) throws Exception {
@@ -164,14 +257,16 @@ public class MetadataService {
         }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
-            String catalog = connection.getCatalog();
-            DbObject object = findObject(meta, catalog, schemaName, objectName);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(connectionId));
+            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
+            DbObject object = findObject(meta, scope, dialect, objectName);
+            DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
             ObjectStructure structure = new ObjectStructure(
                     object.schemaName(),
                     object.name(),
                     object.type(),
-                    columns(meta, catalog, object.schemaName(), object.name()),
-                    indexes(meta, catalog, object.schemaName(), object.name())
+                    columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name()),
+                    indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name())
             );
             cache.putStructure(connectionId, object.schemaName(), object.name(), structure);
             return structure;
@@ -181,11 +276,13 @@ public class MetadataService {
     public List<String> primaryOrUniqueColumns(long connectionId, String schema, String table) throws Exception {
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
-            List<String> cols = primaryKeys(meta, connection.getCatalog(), schema, table);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(connectionId));
+            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schema);
+            List<String> cols = primaryKeys(meta, scope.catalog(), scope.schemaPattern(), table);
             if (!cols.isEmpty()) {
                 return cols;
             }
-            try (ResultSet rs = meta.getIndexInfo(connection.getCatalog(), schema, table, true, false)) {
+            try (ResultSet rs = meta.getIndexInfo(scope.catalog(), scope.schemaPattern(), table, true, false)) {
                 while (rs.next()) {
                     String col = rs.getString("COLUMN_NAME");
                     if (col != null && !cols.contains(col)) {
@@ -210,14 +307,15 @@ public class MetadataService {
         }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
-            String catalog = connection.getCatalog();
-            DbObject object = findObject(meta, catalog, schemaName, objectName);
-            List<ColumnInfo> cols = columns(meta, catalog, object.schemaName(), object.name());
-            List<IndexInfo> idx = indexes(meta, catalog, object.schemaName(), object.name());
-            PrimaryKeyInfo pk = primaryKeyInfo(meta, catalog, object.schemaName(), object.name());
-            Long rowCount = isView(object.type()) ? null : rowCount(connection, object.schemaName(), object.name());
             DbConnection dbConnection = connections.require(connectionId);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
+            DbObject object = findObject(meta, scope, dialect, objectName);
+            DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
+            List<ColumnInfo> cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+            List<IndexInfo> idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+            PrimaryKeyInfo pk = primaryKeyInfo(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+            Long rowCount = isView(object.type()) ? null : rowCount(connection, dialect, object.schemaName(), object.name());
             DdlResult ddl = ddl(connection, dialect, object.schemaName(), object.name(), object.type(), cols, pk.columns());
             ObjectDetail detail = new ObjectDetail(object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(), rowCount, ddl.sql(), ddl.source());
             cache.putDetail(connectionId, object.schemaName(), object.name(), detail);
@@ -238,11 +336,13 @@ public class MetadataService {
         }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
-            String catalog = connection.getCatalog();
-            DbObject object = findObject(meta, catalog, schemaName, objectName);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(connectionId));
+            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
+            DbObject object = findObject(meta, scope, dialect, objectName);
+            DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
             ObjectRelations relations = new ObjectRelations(
-                    relations(meta.getImportedKeys(catalog, object.schemaName(), object.name())),
-                    relations(meta.getExportedKeys(catalog, object.schemaName(), object.name()))
+                    relations(meta.getImportedKeys(objectScope.catalog(), objectScope.schemaPattern(), object.name()), dialect),
+                    relations(meta.getExportedKeys(objectScope.catalog(), objectScope.schemaPattern(), object.name()), dialect)
             );
             cache.putRelations(connectionId, object.schemaName(), object.name(), relations);
             return relations;
@@ -285,17 +385,20 @@ public class MetadataService {
         return dialect.alterTableSql(original.schemaName(), original.name(), original, request);
     }
 
-    private List<String> schemas(DatabaseMetaData meta) throws Exception {
-        List<String> schemas = new ArrayList<>();
-        try (ResultSet rs = meta.getSchemas()) {
-            while (rs.next() && schemas.size() < 500) {
-                String schema = rs.getString("TABLE_SCHEM");
-                if (!isSystemSchema(schema)) {
-                    schemas.add(schema);
+    private List<String> namespaces(DatabaseMetaData meta, DatabaseDialect dialect) throws Exception {
+        List<String> namespaces = new ArrayList<>();
+        try (ResultSet rs = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
+                ? meta.getCatalogs()
+                : meta.getSchemas()) {
+            String column = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? "TABLE_CAT" : "TABLE_SCHEM";
+            while (rs.next()) {
+                String namespace = rs.getString(column);
+                if (!isSystemSchema(namespace)) {
+                    namespaces.add(namespace);
                 }
             }
         }
-        return schemas;
+        return namespaces;
     }
 
     private String selectedSchema(MetadataCacheService.SchemaCatalogSnapshot catalog, String requestedSchema) {
@@ -314,22 +417,6 @@ public class MetadataService {
                 .filter(schema -> schema.equalsIgnoreCase(selected))
                 .findFirst()
                 .orElse(selected);
-    }
-
-    private String safeSchema(Connection connection) {
-        try {
-            return connection.getSchema();
-        } catch (Exception | AbstractMethodError ignored) {
-            return null;
-        }
-    }
-
-    private String safeCatalog(Connection connection) {
-        try {
-            return connection.getCatalog();
-        } catch (Exception ignored) {
-            return null;
-        }
     }
 
     private String trimToNull(String value) {
@@ -378,11 +465,26 @@ public class MetadataService {
                 .toList();
     }
 
-    private DbObject findObject(DatabaseMetaData meta, String catalog, String schema, String objectName) throws Exception {
-        String schemaPattern = schema == null || schema.isBlank() ? null : schema;
-        try (ResultSet rs = meta.getTables(catalog, schemaPattern, objectName, new String[]{"TABLE", "VIEW"})) {
+    private boolean isPhysicalTable(String type) {
+        return type != null && ("TABLE".equalsIgnoreCase(type) || "BASE TABLE".equalsIgnoreCase(type));
+    }
+
+    private <T> PageSlice<T> page(List<T> items, Integer page, Integer pageSize) {
+        int normalizedPage = Math.max(page == null ? 0 : page, 0);
+        int normalizedPageSize = Math.min(Math.max(pageSize == null ? 50 : pageSize, 1), 500);
+        long offset = (long) normalizedPage * normalizedPageSize;
+        if (offset >= items.size()) {
+            return new PageSlice<>(List.of(), normalizedPage, normalizedPageSize, false);
+        }
+        int from = (int) offset;
+        int to = Math.min(from + normalizedPageSize, items.size());
+        return new PageSlice<>(items.subList(from, to), normalizedPage, normalizedPageSize, to < items.size());
+    }
+
+    private DbObject findObject(DatabaseMetaData meta, DatabaseDialect.MetadataScope scope, DatabaseDialect dialect, String objectName) throws Exception {
+        try (ResultSet rs = meta.getTables(scope.catalog(), scope.schemaPattern(), objectName, new String[]{"TABLE", "VIEW"})) {
             while (rs.next()) {
-                String foundSchema = rs.getString("TABLE_SCHEM");
+                String foundSchema = dialect.resultNamespace(rs);
                 String foundName = rs.getString("TABLE_NAME");
                 String type = rs.getString("TABLE_TYPE");
                 if (!isSystemSchema(foundSchema)) {
@@ -390,9 +492,9 @@ public class MetadataService {
                 }
             }
         }
-        try (ResultSet rs = meta.getTables(catalog, schemaPattern, "%", new String[]{"TABLE", "VIEW"})) {
+        try (ResultSet rs = meta.getTables(scope.catalog(), scope.schemaPattern(), "%", new String[]{"TABLE", "VIEW"})) {
             while (rs.next()) {
-                String foundSchema = rs.getString("TABLE_SCHEM");
+                String foundSchema = dialect.resultNamespace(rs);
                 String foundName = rs.getString("TABLE_NAME");
                 String type = rs.getString("TABLE_TYPE");
                 if (!isSystemSchema(foundSchema) && foundName != null && foundName.equalsIgnoreCase(objectName)) {
@@ -421,8 +523,8 @@ public class MetadataService {
         return new PrimaryKeyInfo(new ArrayList<>(ordered.values()), pkName);
     }
 
-    private Long rowCount(Connection connection, String schema, String table) {
-        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM " + table(schema, table))) {
+    private Long rowCount(Connection connection, DatabaseDialect dialect, String schema, String table) {
+        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM " + dialect.qualifiedName(schema, table))) {
             return rs.next() ? rs.getLong(1) : null;
         } catch (Exception ignored) {
             return null;
@@ -434,21 +536,21 @@ public class MetadataService {
         if (nativeDdl.isPresent() && !nativeDdl.get().isBlank()) {
             return new DdlResult(nativeDdl.get(), "NATIVE");
         }
-        return new DdlResult(generatedDdl(schema, table, type, columns, primaryKeys), "GENERATED");
+        return new DdlResult(generatedDdl(dialect, schema, table, type, columns, primaryKeys), "GENERATED");
     }
 
-    private String generatedDdl(String schema, String table, String type, List<ColumnInfo> columns, List<String> primaryKeys) {
+    private String generatedDdl(DatabaseDialect dialect, String schema, String table, String type, List<ColumnInfo> columns, List<String> primaryKeys) {
         if (isView(type)) {
-            return "-- 视图定义反查暂未实现。\nCREATE VIEW " + table(schema, table) + " AS\n-- 请使用数据库原生工具查看完整视图定义。";
+            return "-- 视图定义反查暂未实现。\nCREATE VIEW " + dialect.qualifiedName(schema, table) + " AS\n-- 请使用数据库原生工具查看完整视图定义。";
         }
         List<String> lines = new ArrayList<>();
         for (ColumnInfo column : columns) {
-            lines.add("  " + quote(column.name()) + " " + columnType(column) + (column.nullable() ? "" : " NOT NULL"));
+            lines.add("  " + dialect.quoteIdentifier(column.name()) + " " + columnType(column) + (column.nullable() ? "" : " NOT NULL"));
         }
         if (!primaryKeys.isEmpty()) {
-            lines.add("  PRIMARY KEY (" + String.join(", ", primaryKeys.stream().map(this::quote).toList()) + ")");
+            lines.add("  PRIMARY KEY (" + String.join(", ", primaryKeys.stream().map(dialect::quoteIdentifier).toList()) + ")");
         }
-        return "CREATE TABLE " + table(schema, table) + " (\n" + String.join(",\n", lines) + "\n);";
+        return "CREATE TABLE " + dialect.qualifiedName(schema, table) + " (\n" + String.join(",\n", lines) + "\n);";
     }
 
     private String columnType(ColumnInfo column) {
@@ -462,16 +564,6 @@ public class MetadataService {
 
     private boolean isView(String type) {
         return type != null && type.toUpperCase(Locale.ROOT).contains("VIEW");
-    }
-
-    private String table(String schema, String table) {
-        return schema == null || schema.isBlank()
-                ? quote(table)
-                : quote(schema) + "." + quote(table);
-    }
-
-    private String quote(String identifier) {
-        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 
     private List<ColumnInfo> columns(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {
@@ -506,22 +598,27 @@ public class MetadataService {
         return indexes;
     }
 
-    private List<ObjectRelation> relations(ResultSet rs) throws Exception {
+    private List<ObjectRelation> relations(ResultSet rs, DatabaseDialect dialect) throws Exception {
         try (rs) {
             List<ObjectRelation> relations = new ArrayList<>();
             while (rs.next()) {
                 relations.add(new ObjectRelation(
                         rs.getString("FK_NAME"),
-                        rs.getString("PKTABLE_SCHEM"),
+                        relationNamespace(rs, dialect, "PKTABLE"),
                         rs.getString("PKTABLE_NAME"),
                         rs.getString("PKCOLUMN_NAME"),
-                        rs.getString("FKTABLE_SCHEM"),
+                        relationNamespace(rs, dialect, "FKTABLE"),
                         rs.getString("FKTABLE_NAME"),
                         rs.getString("FKCOLUMN_NAME")
                 ));
             }
             return relations;
         }
+    }
+
+    private String relationNamespace(ResultSet rs, DatabaseDialect dialect, String prefix) throws Exception {
+        String column = prefix + (dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? "_CAT" : "_SCHEM");
+        return rs.getString(column);
     }
 
     private void validateDesign(TableDesignRequest request) {
@@ -605,6 +702,9 @@ public class MetadataService {
     }
 
     private record DdlResult(String sql, String source) {
+    }
+
+    private record PageSlice<T>(List<T> items, int page, int pageSize, boolean hasMore) {
     }
 
 }

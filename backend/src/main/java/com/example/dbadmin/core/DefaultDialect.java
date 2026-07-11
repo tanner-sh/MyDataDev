@@ -36,9 +36,9 @@ public class DefaultDialect implements DatabaseDialect {
     public SqlResult explain(Connection connection, String sql, int maxRows, int timeoutSeconds) throws Exception {
         try (Statement statement = connection.createStatement()) {
             statement.setQueryTimeout(timeoutSeconds);
-            statement.setMaxRows(maxRows);
+            statement.setMaxRows(maxRows + 1);
             try (ResultSet rs = statement.executeQuery("EXPLAIN " + sql)) {
-                return readResult(rs, 0);
+                return readResult(rs, 0, maxRows);
             }
         }
     }
@@ -65,7 +65,7 @@ public class DefaultDialect implements DatabaseDialect {
                     continue;
                 }
                 if (originalName == null) {
-                    sql.add("ALTER TABLE " + table + " ADD COLUMN " + columnDefinition(column));
+                    sql.add(addColumnSql(table, column));
                     continue;
                 }
                 ColumnInfo originalColumn = originalColumns.get(key(originalName));
@@ -74,10 +74,12 @@ public class DefaultDialect implements DatabaseDialect {
                 }
                 String currentName = originalName;
                 if (!originalName.equals(column.name())) {
-                    sql.add("ALTER TABLE " + table + " RENAME COLUMN " + quoteIdentifier(originalName) + " TO " + quoteIdentifier(column.name()));
+                    sql.add(renameColumnSql(table, originalName, column));
                     currentName = column.name();
                 }
-                sql.addAll(alterColumnSql(table, currentName, originalColumn, column));
+                if (originalName.equals(column.name()) || !renameIncludesDefinition()) {
+                    sql.addAll(alterColumnSql(table, currentName, originalColumn, column));
+                }
             }
         }
 
@@ -107,6 +109,18 @@ public class DefaultDialect implements DatabaseDialect {
         return sql;
     }
 
+    protected String addColumnSql(String table, ColumnDesign column) {
+        return "ALTER TABLE " + table + " ADD COLUMN " + columnDefinition(column);
+    }
+
+    protected String renameColumnSql(String table, String originalName, ColumnDesign column) {
+        return "ALTER TABLE " + table + " RENAME COLUMN " + quoteIdentifier(originalName) + " TO " + quoteIdentifier(column.name());
+    }
+
+    protected boolean renameIncludesDefinition() {
+        return false;
+    }
+
     protected List<String> primaryKeySql(String table, ObjectDetail original, List<String> requestedPrimaryKeys) {
         List<String> requested = requestedPrimaryKeys == null ? List.of() : requestedPrimaryKeys.stream().filter(name -> name != null && !name.isBlank()).toList();
         if (sameNames(original.primaryKeys(), requested)) {
@@ -130,15 +144,13 @@ public class DefaultDialect implements DatabaseDialect {
                 .filter(name -> name != null && !name.isBlank())
                 .map(this::key)
                 .collect(Collectors.toSet());
-        Set<String> originalNames = originalIndexes.stream()
-                .map(IndexInfo::name)
-                .filter(name -> name != null && !name.isBlank())
-                .map(this::key)
-                .collect(Collectors.toCollection(java.util.LinkedHashSet::new));
-        for (String originalName : originalNames) {
-            boolean explicitlyDeleted = requested.stream().anyMatch(index -> index.deleted() && key(originalName).equals(key(index.originalName())));
-            if (explicitlyDeleted || !requestedOriginals.contains(originalName)) {
-                sql.add("DROP INDEX " + quoteIdentifier(originalName));
+        Map<String, String> originalNames = originalIndexes.stream()
+                .filter(index -> index.name() != null && !index.name().isBlank())
+                .collect(Collectors.toMap(index -> key(index.name()), IndexInfo::name, (left, right) -> left, LinkedHashMap::new));
+        for (Map.Entry<String, String> original : originalNames.entrySet()) {
+            boolean explicitlyDeleted = requested.stream().anyMatch(index -> index.deleted() && original.getKey().equals(key(index.originalName())));
+            if (explicitlyDeleted || !requestedOriginals.contains(original.getKey())) {
+                sql.add(dropIndexSql(table, original.getValue()));
             }
         }
         for (IndexDesign index : requested) {
@@ -146,17 +158,21 @@ public class DefaultDialect implements DatabaseDialect {
                 continue;
             }
             String originalName = blankToNull(index.originalName());
-            boolean isNew = originalName == null || !originalNames.contains(key(originalName));
+            boolean isNew = originalName == null || !originalNames.containsKey(key(originalName));
             boolean renamed = originalName != null && !originalName.equals(index.name());
             if (isNew || renamed) {
                 if (renamed) {
-                    sql.add("DROP INDEX " + quoteIdentifier(originalName));
+                    sql.add(dropIndexSql(table, originalName));
                 }
                 sql.add("CREATE " + (index.unique() ? "UNIQUE " : "") + "INDEX " + quoteIdentifier(index.name()) + " ON " + table
                         + " (" + index.columns().stream().map(this::quoteIdentifier).collect(Collectors.joining(", ")) + ")");
             }
         }
         return sql;
+    }
+
+    protected String dropIndexSql(String table, String indexName) {
+        return "DROP INDEX " + quoteIdentifier(indexName);
     }
 
     protected String columnDefinition(ColumnDesign column) {
@@ -166,9 +182,7 @@ public class DefaultDialect implements DatabaseDialect {
     }
 
     protected String table(String schemaName, String tableName) {
-        return schemaName == null || schemaName.isBlank()
-                ? quoteIdentifier(tableName)
-                : quoteIdentifier(schemaName) + "." + quoteIdentifier(tableName);
+        return qualifiedName(schemaName, tableName);
     }
 
     protected String type(String type, Integer size) {
@@ -211,20 +225,21 @@ public class DefaultDialect implements DatabaseDialect {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
-    protected SqlResult readResult(ResultSet rs, long elapsedMs) throws Exception {
+    protected SqlResult readResult(ResultSet rs, long elapsedMs, int maxRows) throws Exception {
         ResultSetMetaData md = rs.getMetaData();
         List<String> columns = new ArrayList<>();
         for (int i = 1; i <= md.getColumnCount(); i++) {
             columns.add(md.getColumnLabel(i));
         }
         List<Map<String, Object>> rows = new ArrayList<>();
-        while (rs.next()) {
+        while (rows.size() < maxRows && rs.next()) {
             Map<String, Object> row = new LinkedHashMap<>();
             for (int i = 1; i <= md.getColumnCount(); i++) {
                 row.put(columns.get(i - 1), rs.getObject(i));
             }
             rows.add(row);
         }
-        return new SqlResult(columns, rows, -1, elapsedMs, true);
+        boolean truncated = rows.size() == maxRows && rs.next();
+        return new SqlResult(columns, rows, -1, elapsedMs, true, maxRows, truncated);
     }
 }

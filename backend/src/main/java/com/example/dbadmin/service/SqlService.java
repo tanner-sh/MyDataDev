@@ -29,9 +29,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 public class SqlService {
+    private static final int DEFAULT_MAX_ROWS = 500;
+    private static final Pattern METADATA_CHANGING_SQL = Pattern.compile(
+            "(?is)^(?:(?:\\s+)|(?:--[^\\r\\n]*(?:\\r?\\n|$))|(?:/\\*.*?\\*/))*(CREATE|ALTER|DROP|RENAME|TRUNCATE|COMMENT)\\b"
+    );
     private final ConnectionService connections;
     private final AppProperties properties;
     private final AuditRepository audit;
@@ -51,21 +56,24 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
-        int maxRows = Math.min(requestedMaxRows == null ? properties.getSql().getMaxRows() : requestedMaxRows, properties.getSql().getMaxRows());
+        int maxRows = normalizeMaxRows(requestedMaxRows);
         long started = System.nanoTime();
         try (Connection c = connections.open(connectionId); Statement st = c.createStatement()) {
             st.setQueryTimeout(properties.getSql().getTimeoutSeconds());
-            st.setMaxRows(maxRows);
+            st.setMaxRows(maxRows + 1);
             boolean hasResult = st.execute(sql);
             long elapsedMs = (System.nanoTime() - started) / 1_000_000;
             audit.log(actor, "SQL_EXECUTE", "connection:" + connectionId, abbreviate(sql));
+            if (changesMetadata(sql)) {
+                metadata.invalidateConnection(connectionId);
+            }
             if (!hasResult) {
-                SqlResult result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false);
+                SqlResult result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false, maxRows, false);
                 history.insert(connectionId, sql, "EXECUTE", "SUCCESS", elapsedMs, null, actor);
                 return result;
             }
             try (ResultSet rs = st.getResultSet()) {
-                SqlResult result = readResult(rs, elapsedMs);
+                SqlResult result = readResult(rs, elapsedMs, maxRows);
                 history.insert(connectionId, sql, "EXECUTE", "SUCCESS", elapsedMs, null, actor);
                 return result;
             }
@@ -85,15 +93,16 @@ public class SqlService {
             throw new IllegalArgumentException("一次最多执行 50 条 SQL");
         }
 
-        int maxRows = Math.min(requestedMaxRows == null ? properties.getSql().getMaxRows() : requestedMaxRows, properties.getSql().getMaxRows());
+        int maxRows = normalizeMaxRows(requestedMaxRows);
         long scriptStarted = System.nanoTime();
         List<SqlStatementResult> results = new ArrayList<>();
         String status = "SUCCESS";
         String errorMessage = null;
+        boolean metadataChanged = false;
 
         try (Connection c = connections.open(connectionId); Statement st = c.createStatement()) {
             st.setQueryTimeout(properties.getSql().getTimeoutSeconds());
-            st.setMaxRows(maxRows);
+            st.setMaxRows(maxRows + 1);
             for (int i = 0; i < statements.size(); i++) {
                 StatementSegment statement = statements.get(i);
                 long statementStarted = System.nanoTime();
@@ -103,25 +112,29 @@ public class SqlService {
                     SqlResult result;
                     if (hasResult) {
                         try (ResultSet rs = st.getResultSet()) {
-                            result = readResult(rs, elapsedMs);
+                            result = readResult(rs, elapsedMs, maxRows);
                         }
                     } else {
-                        result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false);
+                        result = new SqlResult(List.of(), List.of(), st.getUpdateCount(), elapsedMs, false, maxRows, false);
                     }
                     results.add(new SqlStatementResult(i + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
+                    metadataChanged = metadataChanged || changesMetadata(statement.sql());
                 } catch (Exception e) {
                     long elapsedMs = (System.nanoTime() - statementStarted) / 1_000_000;
                     errorMessage = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                    SqlResult result = new SqlResult(List.of(), List.of(), -1, elapsedMs, false);
+                    SqlResult result = new SqlResult(List.of(), List.of(), -1, elapsedMs, false, maxRows, false);
                     results.add(new SqlStatementResult(i + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), result));
                     status = "FAILED";
                     break;
                 }
             }
             long elapsedMs = (System.nanoTime() - scriptStarted) / 1_000_000;
+            if (metadataChanged) {
+                metadata.invalidateConnection(connectionId);
+            }
             audit.log(actor, "SQL_EXECUTE_SCRIPT", "connection:" + connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", status, elapsedMs, errorMessage == null ? null : abbreviate(errorMessage), actor);
-            return new SqlScriptResponse(status, elapsedMs, results.size(), results);
+            return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged);
         } catch (Exception e) {
             long elapsedMs = (System.nanoTime() - scriptStarted) / 1_000_000;
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsedMs, abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()), actor);
@@ -180,21 +193,32 @@ public class SqlService {
         return formatted.trim();
     }
 
-    private SqlResult readResult(ResultSet rs, long elapsedMs) throws Exception {
+    private SqlResult readResult(ResultSet rs, long elapsedMs, int maxRows) throws Exception {
         ResultSetMetaData md = rs.getMetaData();
         List<String> columns = new ArrayList<>();
         for (int i = 1; i <= md.getColumnCount(); i++) {
             columns.add(md.getColumnLabel(i));
         }
         List<Map<String, Object>> rows = new ArrayList<>();
-        while (rs.next()) {
+        while (rows.size() < maxRows && rs.next()) {
             Map<String, Object> row = new LinkedHashMap<>();
             for (int i = 1; i <= md.getColumnCount(); i++) {
                 row.put(columns.get(i - 1), serializableValue(rs.getObject(i)));
             }
             rows.add(row);
         }
-        return new SqlResult(columns, rows, -1, elapsedMs, true);
+        boolean truncated = rows.size() == maxRows && rs.next();
+        return new SqlResult(columns, rows, -1, elapsedMs, true, maxRows, truncated);
+    }
+
+    private int normalizeMaxRows(Integer requestedMaxRows) {
+        int configuredMaximum = Math.max(properties.getSql().getMaxRows(), 1);
+        int requested = requestedMaxRows == null ? Math.min(DEFAULT_MAX_ROWS, configuredMaximum) : requestedMaxRows;
+        return Math.min(Math.max(requested, 1), configuredMaximum);
+    }
+
+    private boolean changesMetadata(String sql) {
+        return sql != null && METADATA_CHANGING_SQL.matcher(sql).find();
     }
 
     private Object serializableValue(Object value) throws Exception {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
@@ -7,8 +7,10 @@ import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
 import { parseImportFile } from './importers';
-import type { ActiveTable, BackupHistory, BackupTask, BackupTaskForm, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCompletionItem, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, completionKind, createSqlTab, dbTypeLabel, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import type { ActiveTable, BackupEditorRequest, BackupHistory, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import { AsyncResourceCache } from './asyncResourceCache';
+import { analyzeSqlCompletion, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { BackupPanel } from './components/BackupPanel';
 import { AppHeader } from './components/AppHeader';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
@@ -36,6 +38,7 @@ export default function App() {
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [objectDetailLoading, setObjectDetailLoading] = useState(false);
+  const [objectDesignDirty, setObjectDesignDirty] = useState(false);
   const [tableLoading, setTableLoading] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const [sqlLoading, setSqlLoading] = useState(false);
@@ -49,31 +52,52 @@ export default function App() {
   const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
-  const [tableData, setTableData] = useState<TableData | null>(null);
-  const [tableRows, setTableRows] = useState<TableRow[]>([]);
+  const [tableData, setTableData] = useState<TableData | null>(null);
+  const [tableRows, setTableRows] = useState<TableRow[]>([]);
+  const [tablePage, setTablePage] = useState(0);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | null>(null);
+  const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
   const selectedIdRef = useRef<number | null>(null);
   const metadataRef = useRef<Metadata | null>(null);
+  const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>());
+  const completionStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>());
   const structureCacheRef = useRef<Map<string, DbObject>>(new Map());
   const metadataRequestSeqRef = useRef(0);
   const structureRequestSeqRef = useRef(0);
   const objectDetailRequestSeqRef = useRef(0);
   const tableRequestSeqRef = useRef(0);
   const backupRequestSeqRef = useRef(0);
-  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const objectDesignDirtyRef = useRef(false);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
   const executeRef = useRef<() => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
   const sqlTabSeqRef = useRef(1);
+  const backupEditorRequestSeqRef = useRef(0);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
+  const updateObjectDesignDirty = useCallback((dirty: boolean) => {
+    objectDesignDirtyRef.current = dirty;
+    setObjectDesignDirty(dirty);
+  }, []);
 
   const objects = useMemo(() => metadata?.objects || [], [metadata]);
+  const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
+  const currentBackupTable = useMemo<ActiveTable | null>(() => {
+    const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
+    if (mode === 'table' && activeTable) {
+      return { ...activeTable, schemaName: activeTable.schemaName || fallbackNamespace };
+    }
+    const objectType = activeObjectDetail?.type.toUpperCase() || '';
+    if (mode !== 'object' || !activeObjectDetail || !objectType.includes('TABLE') || objectType.includes('VIEW')) return null;
+    return { schemaName: activeObjectDetail.schemaName || fallbackNamespace, tableName: activeObjectDetail.name };
+  }, [activeObjectDetail, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
   const activeSqlTab = useMemo(() => sqlTabs.find((tab) => tab.id === activeSqlTabId) || sqlTabs[0], [activeSqlTabId, sqlTabs]);
   const connectionFormBaseline = useMemo<ConnectionForm>(() => {
@@ -92,10 +116,16 @@ export default function App() {
     () => JSON.stringify(form) !== JSON.stringify(connectionFormBaseline),
     [form, connectionFormBaseline]
   );
+  const antThemeConfig = useMemo(() => ({
+    algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+    token: { colorPrimary: '#2f74e8', borderRadius: 7, controlHeight: 34, fontSize: 13 }
+  }), [layoutPreferences.themeMode]);
 
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
+
+  useEffect(() => () => completionProviderRef.current?.dispose(), []);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1199px)');
@@ -126,14 +156,14 @@ export default function App() {
   }, [compactLayout, layoutPreferences.toggleExplorer]);
 
   useEffect(() => {
-    if (pendingChanges.length === 0) return;
+    if (pendingChanges.length === 0 && !objectDesignDirty) return;
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [pendingChanges.length]);
+  }, [objectDesignDirty, pendingChanges.length]);
 
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
@@ -151,7 +181,10 @@ export default function App() {
 
   useEffect(() => {
     metadataRef.current = metadata;
-  }, [metadata]);
+    if (selected && metadata?.selectedSchema) {
+      void loadCompletionCatalog(selected.id, metadata.selectedSchema).catch(() => undefined);
+    }
+  }, [metadata, selected?.id]);
 
   function showSuccess(text: string) {
     setWorkspaceStatus({ kind: 'success', text });
@@ -211,7 +244,37 @@ export default function App() {
       if (requestId === backupRequestSeqRef.current && selectedIdRef.current === conn.id) throw error;
     }
   }
-
+
+  async function loadBackupNamespaces(query: BackupTargetQuery): Promise<BackupTargetPage> {
+    if (!selected) throw new Error('请先选择数据库连接');
+    const params = new URLSearchParams({
+      page: String(query.page),
+      pageSize: String(query.pageSize)
+    });
+    if (query.keyword?.trim()) params.set('keyword', query.keyword.trim());
+    if (query.refresh) params.set('refresh', 'true');
+    return api<BackupTargetPage>(`/metadata/${selected.id}/backup-targets/namespaces?${params.toString()}`);
+  }
+
+  async function loadBackupTables(query: BackupTableTargetQuery): Promise<BackupTargetPage> {
+    if (!selected) throw new Error('请先选择数据库连接');
+    const params = new URLSearchParams({
+      namespaceName: query.namespaceName,
+      page: String(query.page),
+      pageSize: String(query.pageSize)
+    });
+    if (query.keyword?.trim()) params.set('keyword', query.keyword.trim());
+    if (query.refresh) params.set('refresh', 'true');
+    return api<BackupTargetPage>(`/metadata/${selected.id}/backup-targets/tables?${params.toString()}`);
+  }
+
+  async function previewBackupSchedule(cron: string): Promise<BackupSchedulePreview> {
+    return api<BackupSchedulePreview>('/backups/schedule/preview', {
+      method: 'POST',
+      body: JSON.stringify({ cron })
+    });
+  }
+
   async function refreshSqlHistory(conn = selected) {
     if (!conn) {
       setSqlHistory([]);
@@ -256,18 +319,20 @@ export default function App() {
   }
 
   function requestSaveConnection() {
-    if (pendingChanges.length === 0) {
-      void saveConnection();
-      return;
-    }
-    modalApi.confirm({
-      title: '保存连接将关闭当前数据表',
-      content: `当前表有 ${pendingChanges.length} 项待提交变更。连接保存成功后，这些变更将被放弃。`,
-      okText: '保存并放弃变更',
-      cancelText: '返回处理变更',
-      okButtonProps: { danger: true },
-      onOk: saveConnection
-    });
+    confirmDiscardObjectDesign(() => {
+      if (pendingChanges.length === 0) {
+        void saveConnection();
+        return;
+      }
+      modalApi.confirm({
+        title: '保存连接将关闭当前数据表',
+        content: `当前表有 ${pendingChanges.length} 项待提交变更。连接保存成功后，这些变更将被放弃。`,
+        okText: '保存并放弃变更',
+        cancelText: '返回处理变更',
+        okButtonProps: { danger: true },
+        onOk: saveConnection
+      });
+    }, '保存连接配置');
   }
 
   async function testConnection(target = form) {
@@ -304,7 +369,18 @@ export default function App() {
     }
   }
 
-  async function deleteConnection(connection: Connection) {
+  function deleteConnection(connection: Connection) {
+    const performDelete = () => void performDeleteConnection(connection);
+    if (selected?.id !== connection.id) {
+      performDelete();
+      return;
+    }
+    confirmDiscardObjectDesign(() => {
+      confirmDiscardTableChanges(performDelete, `删除连接“${connection.name}”`);
+    }, `删除连接“${connection.name}”`);
+  }
+
+  async function performDeleteConnection(connection: Connection) {
     setConnectionActionLoading(true);
     try {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
@@ -347,8 +423,11 @@ export default function App() {
     setMetadata(null);
     setMetadataQuery({ schema: '', keyword: '' });
     structureCacheRef.current.clear();
+    completionCatalogCacheRef.current.clear();
+    completionStructureCacheRef.current.clear();
     setStructureLoadingKey(null);
     setActiveObjectDetail(null);
+    updateObjectDesignDirty(false);
     clearTableWorkspace();
     setMode('sql');
     setMobileExplorerOpen(false);
@@ -369,30 +448,38 @@ export default function App() {
       return;
     }
     confirmDiscardConnectionDraft(() => {
-      confirmDiscardTableChanges(() => {
-        resetConnectionForm();
-        applyConnectionSelection(connection);
+      confirmDiscardObjectDesign(() => {
+        confirmDiscardTableChanges(() => {
+          resetConnectionForm();
+          applyConnectionSelection(connection);
+        }, `切换到连接“${connection.name}”`);
       }, `切换到连接“${connection.name}”`);
     });
   }
 
   function editConnection(connection: Connection) {
+    const openEditor = () => {
+      if (selected?.id !== connection.id) applyConnectionSelection(connection);
+      setEditingConnectionId(connection.id);
+      setForm({
+        name: connection.name,
+        dbType: connection.dbType,
+        jdbcUrl: connection.jdbcUrl,
+        username: connection.username || '',
+        password: PASSWORD_MASK,
+        environment: normalizeEnvironment(connection.environment),
+        readonly: connection.readonly
+      });
+      setActiveDrawer('connections');
+      showInfo(`正在编辑连接：${connection.name}。密码显示为 ${PASSWORD_MASK} 表示沿用已保存密码。`);
+    };
+    const continueEditing = () => confirmDiscardTableChanges(openEditor, `编辑连接“${connection.name}”`);
     confirmDiscardConnectionDraft(() => {
-      confirmDiscardTableChanges(() => {
-        if (selected?.id !== connection.id) applyConnectionSelection(connection);
-        setEditingConnectionId(connection.id);
-        setForm({
-          name: connection.name,
-          dbType: connection.dbType,
-          jdbcUrl: connection.jdbcUrl,
-          username: connection.username || '',
-          password: PASSWORD_MASK,
-          environment: normalizeEnvironment(connection.environment),
-          readonly: connection.readonly
-        });
-        setActiveDrawer('connections');
-        showInfo(`正在编辑连接：${connection.name}。密码显示为 ${PASSWORD_MASK} 表示沿用已保存密码。`);
-      }, `编辑连接“${connection.name}”`);
+      if (selected?.id === connection.id) {
+        continueEditing();
+        return;
+      }
+      confirmDiscardObjectDesign(continueEditing, `编辑连接“${connection.name}”`);
     });
   }
 
@@ -457,7 +544,7 @@ export default function App() {
 
   function discardTableChanges() {
     if (!tableData) return;
-    setTableRows(tableData.rows.map((row, index) => ({ id: `row-${index}`, values: { ...row }, original: { ...row } })));
+    setTableRows(tableData.rows.map((row, index) => ({ id: `row-${tablePage}-${index}`, values: { ...row }, original: { ...row } })));
     setPreviewSql([]);
   }
 
@@ -465,6 +552,7 @@ export default function App() {
     setActiveTable(null);
     setTableData(null);
     setTableRows([]);
+    setTablePage(0);
     setPreviewSql([]);
   }
 
@@ -485,7 +573,24 @@ export default function App() {
       }
     });
   }
-
+
+  function confirmDiscardObjectDesign(action: () => void, nextAction = '离开当前对象') {
+    if (!objectDesignDirtyRef.current) {
+      action();
+      return;
+    }
+    modalApi.confirm({
+      title: '存在未保存的表结构设计',
+      content: `${nextAction}将放弃尚未执行的字段或索引修改。`,
+      okText: '放弃并继续',
+      cancelText: '继续设计',
+      okButtonProps: { danger: true },
+      // The destination action (successful reload, mode change or connection
+      // switch) resets dirty state. Keep it dirty if that action later fails.
+      onOk: action
+    });
+  }
+
   async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean } = {}) {
     if (!conn) return;
     const requestId = ++metadataRequestSeqRef.current;
@@ -493,6 +598,8 @@ export default function App() {
     try {
       if (options.refresh) {
         structureCacheRef.current.clear();
+        completionCatalogCacheRef.current.clear();
+        completionStructureCacheRef.current.clear();
         setStructureLoadingKey(null);
       }
       const schema = options.schema ?? metadataQuery.schema;
@@ -516,7 +623,7 @@ export default function App() {
       const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
       const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
       const timeText = data.cachedAt ? `，缓存时间 ${new Date(data.cachedAt).toLocaleString()}` : '';
-      const scopeText = data.selectedSchema ? `Schema ${data.selectedSchema}` : '当前数据库';
+      const scopeText = data.selectedSchema ? `${data.namespaceKind === 'CATALOG' ? '数据库' : 'Schema'} ${data.selectedSchema}` : '当前数据库';
       const nextMessage = data.hasMore
         ? `${cacheText}${timeText}，${scopeText} 已加载 ${loadedCount}/${data.totalObjects} 个对象`
         : `${cacheText}${timeText}，${scopeText} 共 ${data.totalObjects} 个对象`;
@@ -531,6 +638,26 @@ export default function App() {
       }
     } finally {
       if (requestId === metadataRequestSeqRef.current) setMetadataLoading(false);
+    }
+  }
+
+  function requestRefreshDatabaseObjects() {
+    if (!selected) return;
+    confirmDiscardObjectDesign(() => {
+      confirmDiscardTableChanges(() => {
+        void refreshDatabaseObjects();
+      }, '刷新数据库对象');
+    }, '刷新数据库对象');
+  }
+
+  async function refreshDatabaseObjects() {
+    if (!selected) return;
+    await loadMetadata(selected, { schema: metadataQuery.schema, page: 0, refresh: true });
+    if (mode === 'object' && activeObjectDetail) {
+      await loadObjectDetail(activeObjectDetail, { refresh: true });
+    }
+    if (mode === 'table' && activeTable) {
+      await loadTable(activeTable, { page: tablePage });
     }
   }
 
@@ -603,7 +730,7 @@ export default function App() {
     setSqlLoading(true);
     try {
       if (path === '/sql/explain') {
-        const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
+        const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows }) });
         const result: SqlStatementResult = {
           index: 1,
           sql: target.sql,
@@ -616,14 +743,15 @@ export default function App() {
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success' });
       } else {
-        const data = await api<SqlScriptResult>('/sql/execute-script', { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: 500 }) });
+        const data = await api<SqlScriptResult>('/sql/execute-script', { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows }) });
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
         const firstResultSet = data.results.find((item) => item.result?.resultSet);
         const returnedRows = data.results.reduce((total, item) => total + (item.result?.resultSet ? item.result.rows.length : 0), 0);
+        const truncated = data.results.some((item) => item.result?.truncated);
         const nextMessage = failed
           ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms`
-          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行，用时 ${data.elapsedMs}ms`;
+          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? `（已达到 ${layoutPreferences.sqlMaxRows} 行上限，结果可能不完整）` : ''}，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
@@ -632,6 +760,9 @@ export default function App() {
         });
         if (failed) {
           selectStatementRange(target.baseOffset + failed.startOffset, target.baseOffset + failed.endOffset);
+        }
+        if (data.metadataChanged) {
+          await loadMetadata(selected, { page: 0, refresh: true });
         }
       }
       await refreshSqlHistoryQuietly(selected);
@@ -646,13 +777,14 @@ export default function App() {
   }
 
   async function formatSql() {
-    if (!activeSqlTab.sql.trim()) {
+    const currentSql = editorRef.current?.getValue() ?? activeSqlTab.sql;
+    if (!currentSql.trim()) {
       updateActiveSqlTab({ message: '请输入要格式化的 SQL', statusKind: 'info' });
       return;
     }
     setSqlLoading(true);
     try {
-      const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: activeSqlTab.sql }) });
+      const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: currentSql }) });
       updateActiveSqlTab({ sql: data.sql, message: 'SQL 格式化完成', statusKind: 'success' });
     } catch (e) {
       const errorMessage = `格式化失败：${localizeMessage((e as Error).message)}`;
@@ -738,8 +870,9 @@ export default function App() {
   }
 
   function sqlExecutionTarget() {
-    const selection = editorRef.current?.getSelection();
-    const model = editorRef.current?.getModel();
+    const editor = editorRef.current;
+    const selection = editor?.getSelection();
+    const model = editor?.getModel();
     if (selection && model && !selection.isEmpty()) {
       const rawSelectedText = model.getValueInRange(selection);
       const leadingWhitespace = rawSelectedText.length - rawSelectedText.trimStart().length;
@@ -752,7 +885,11 @@ export default function App() {
         };
       }
     }
-    return { sql: activeSqlTab.sql, selected: false, baseOffset: 0 };
+    // SqlWorkspace keeps the current editor text in a local draft to avoid
+    // re-rendering Monaco on every keystroke. Always read the live model here:
+    // React state may still contain the last committed draft when a toolbar
+    // action or Ctrl/Cmd+Enter is triggered.
+    return { sql: model?.getValue() ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
   }
 
   function statementResultKey(result?: SqlStatementResult) {
@@ -775,100 +912,140 @@ export default function App() {
     editor.focus();
   }
 
-  useEffect(() => {
-    executeRef.current = () => execute();
-    formatRef.current = () => formatSql();
-  });
-
-  const handleEditorMount: OnMount = (editor, monaco) => {
-    editorRef.current = editor;
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
-    monaco.languages.registerCompletionItemProvider('sql', {
-      triggerCharacters: ['.', ' '],
-      provideCompletionItems: async (model: Monaco.editor.ITextModel, position: Monaco.Position) => {
-        const word = model.getWordUntilPosition(position);
-        const range = {
-          startLineNumber: position.lineNumber,
-          endLineNumber: position.lineNumber,
-          startColumn: word.startColumn,
-          endColumn: word.endColumn
+  useEffect(() => {
+    executeRef.current = () => execute();
+    formatRef.current = () => formatSql();
+  });
+
+  function completionCatalogKey(connectionId: number, schemaName?: string) {
+    return `${connectionId}:${(schemaName || '').toLowerCase()}`;
+  }
+
+  function completionObjectKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
+    return `${connectionId}:${(object.schemaName || '').toLowerCase()}.${object.name.toLowerCase()}`;
+  }
+
+  function loadCompletionCatalog(connectionId: number, schemaName?: string) {
+    const key = completionCatalogKey(connectionId, schemaName);
+    return completionCatalogCacheRef.current.load(key, async () => {
+      const params = new URLSearchParams();
+      if (schemaName) params.set('schema', schemaName);
+      const suffix = params.size > 0 ? `?${params.toString()}` : '';
+      return api<CompletionCatalog>(`/metadata/${connectionId}/completion-catalog${suffix}`);
+    });
+  }
+
+  function loadCompletionStructure(connectionId: number, object: DbObject) {
+    const key = completionObjectKey(connectionId, object);
+    return completionStructureCacheRef.current.load(key, async () => {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
+      return { ...object, ...structure };
+    });
+  }
+
+  async function sqlCompletionItems(
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+    monaco: Parameters<OnMount>[1],
+    token: Monaco.CancellationToken
+  ) {
+    const context = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
+    if (context.insideCommentOrString || context.mode === 'none') return [];
+    const start = model.getPositionAt(context.replacement.start);
+    const end = model.getPositionAt(context.replacement.end);
+    const range = {
+      startLineNumber: start.lineNumber,
+      startColumn: start.column,
+      endLineNumber: end.lineNumber,
+      endColumn: end.column
+    };
+    const keywords = sqlKeywordCompletionItems(monaco, range);
+    const connectionId = selectedIdRef.current;
+    if (!connectionId) return keywords;
+    const schemaName = metadataRef.current?.selectedSchema || '';
+    let catalog: CompletionCatalog;
+    try {
+      catalog = await loadCompletionCatalog(connectionId, schemaName);
+    } catch {
+      catalog = { selectedSchema: schemaName, objects: metadataRef.current?.objects || [] };
+    }
+    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
+    const prefix = context.replacement.prefix.toLowerCase();
+    const matchingObjects = catalog.objects.filter((object) => !prefix || object.name.toLowerCase().startsWith(prefix));
+    const tableItems = matchingObjects.map((object) => ({
+      label: object.name,
+      kind: monaco.languages.CompletionItemKind.Class,
+      insertText: quoteSqlIdentifier(object.name, context.replacement.quoteStyle),
+      detail: `${object.schemaName || catalog.selectedSchema || schemaName} · ${object.type.toUpperCase().includes('VIEW') ? '视图' : '表'}`,
+      range,
+      sortText: `1-${object.name.toLowerCase()}`
+    }));
+    if (context.mode === 'table') return tableItems;
+
+    const referenced = context.mode === 'qualified-column'
+      ? [resolveSqlTableReference(context, context.qualifierParts)].filter((table): table is NonNullable<typeof table> => Boolean(table))
+      : context.tables;
+    if (referenced.length === 0) return [...tableItems, ...keywords];
+
+    const structures = await Promise.all(referenced.map(async (table) => {
+      const object = catalog.objects.find((candidate) => matchesObjectName(candidate, table.qualifiedName)) || {
+        schemaName: table.schemaName || schemaName,
+        name: table.name,
+        type: 'TABLE',
+        columns: [],
+        indexes: []
+      };
+      try {
+        return { table, object: await loadCompletionStructure(connectionId, object) };
+      } catch {
+        return { table, object };
+      }
+    }));
+    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
+
+    const qualify = context.mode === 'column' && context.qualifyColumns;
+    const columnItems = structures.flatMap(({ table, object }) => object.columns
+      .filter((column) => !prefix || column.name.toLowerCase().startsWith(prefix))
+      .map((column) => {
+        const columnName = quoteSqlIdentifier(column.name, context.replacement.quoteStyle);
+        const insertText = qualify ? `${sqlTableQualifier(table)}.${columnName}` : columnName;
+        return {
+          label: qualify ? `${sqlTableQualifier(table)}.${column.name}` : column.name,
+          kind: monaco.languages.CompletionItemKind.Field,
+          insertText,
+          detail: `${object.name} 字段 · ${column.type}`,
+          range,
+          sortText: `0-${column.name.toLowerCase()}`
         };
-        const aliasItems = await aliasColumnCompletionItems(model, position, monaco, range);
-        if (aliasItems.length > 0) {
-          return { suggestions: aliasItems };
-        }
-        const connectionId = selectedIdRef.current;
-        const fallbackItems = sqlKeywordCompletionItems(monaco, range);
-        if (!connectionId) {
-          return { suggestions: fallbackItems };
-        }
-        try {
-          const items = await api<SqlCompletionItem[]>('/sql/completions', {
-            method: 'POST',
-            body: JSON.stringify({ connectionId, sql: model.getValue(), cursorPosition: model.getOffsetAt(position) })
-          });
-          return {
-            suggestions: items.map((item) => ({
-              label: item.label,
-              kind: completionKind(monaco, item.kind),
-              insertText: item.insertText,
-              detail: item.detail,
-              range
-            }))
-          };
-        } catch {
-          return { suggestions: fallbackItems };
-        }
-      }
+      }));
+    return columnItems.length > 0 ? [...columnItems, ...keywords] : [...tableItems, ...keywords];
+  }
+
+  const handleEditorMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
+    completionProviderRef.current?.dispose();
+    const provider = monaco.languages.registerCompletionItemProvider('sql', {
+      triggerCharacters: ['.'],
+      provideCompletionItems: async (
+        model: Monaco.editor.ITextModel,
+        position: Monaco.Position,
+        _context: Monaco.languages.CompletionContext,
+        token: Monaco.CancellationToken
+      ) => {
+        return { suggestions: await sqlCompletionItems(model, position, monaco, token) };
+      }
+    });
+    completionProviderRef.current = provider;
+    editor.onDidDispose(() => {
+      provider.dispose();
+      if (completionProviderRef.current === provider) completionProviderRef.current = null;
+      if (editorRef.current === editor) editorRef.current = null;
     });
   };
-
-  async function aliasColumnCompletionItems(model: Monaco.editor.ITextModel, position: Monaco.Position, monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
-    const textBeforeCursor = model.getValueInRange({
-      startLineNumber: 1,
-      startColumn: 1,
-      endLineNumber: position.lineNumber,
-      endColumn: position.column
-    });
-    const aliasMatch = textBeforeCursor.match(/([A-Za-z_][\w$]*)\.\w*$/);
-    if (!aliasMatch) return [];
-    const object = resolveAliasObject(model.getValue(), aliasMatch[1], metadataRef.current?.objects || []);
-    if (!object) return [];
-    const objectWithColumns = object.columns.length > 0 ? object : await loadObjectStructure(object);
-    if (!objectWithColumns) return [];
-    return objectWithColumns.columns.map((column) => ({
-      label: column.name,
-      kind: monaco.languages.CompletionItemKind.Field,
-      insertText: column.name,
-      detail: `${objectWithColumns.name} 字段 · ${column.type}`,
-      range
-    }));
-  }
-
-  function resolveAliasObject(sql: string, alias: string, objects: DbObject[]) {
-    const aliasMap = new Map<string, string>();
-    const tablePattern = /\b(?:from|join)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z0-9_.$]+))(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?/gi;
-    const reserved = new Set(['where', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'on', 'group', 'order', 'having', 'limit']);
-    let match: RegExpExecArray | null;
-    while ((match = tablePattern.exec(sql)) !== null) {
-      const tableName = stripSqlIdentifier(match[1]);
-      const tableParts = tableName.split('.');
-      const defaultAlias = tableParts[tableParts.length - 1];
-      const aliasName = match[2] && !reserved.has(match[2].toLowerCase()) ? match[2] : defaultAlias;
-      aliasMap.set(aliasName.toLowerCase(), tableName);
-    }
-    const tableName = aliasMap.get(alias.toLowerCase());
-    if (!tableName) return null;
-    return objects.find((object) => matchesObjectName(object, tableName)) || objectFromTableName(tableName);
-  }
-
-  function objectFromTableName(tableName: string): DbObject {
-    const parts = tableName.split('.').filter(Boolean);
-    const name = parts[parts.length - 1] || tableName;
-    const schemaName = parts.length > 1 ? parts[parts.length - 2] : undefined;
-    return { schemaName, name, type: 'TABLE', columns: [], indexes: [] };
-  }
 
   function matchesObjectName(object: DbObject, tableName: string) {
     const normalizedTable = tableName.toLowerCase();
@@ -877,36 +1054,35 @@ export default function App() {
     return normalizedTable === objectName || normalizedTable === qualifiedName || normalizedTable.endsWith(`.${objectName}`);
   }
 
-  function stripSqlIdentifier(value: string) {
-    return value
-      .replace(/^["`\[]/, '')
-      .replace(/["`\]]$/, '');
-  }
-
   function openTable(object: DbObject) {
     if (!selected || object.type.toUpperCase().includes('VIEW')) {
       return;
     }
     const targetName = `${object.schemaName ? `${object.schemaName}.` : ''}${object.name}`;
-    confirmDiscardTableChanges(() => {
-      void applyOpenTable(object);
+    confirmDiscardObjectDesign(() => {
+      confirmDiscardTableChanges(() => {
+        void applyOpenTable(object);
+      }, `打开数据表“${targetName}”`);
     }, `打开数据表“${targetName}”`);
   }
 
   async function applyOpenTable(object: DbObject) {
     const next = { schemaName: object.schemaName, tableName: object.name };
     setActiveTable(next);
+    setTablePage(0);
     setMode('table');
-    await loadTable(next);
+    await loadTable(next, { page: 0 });
   }
 
   function openObjectDetail(object: DbObject) {
-    confirmDiscardTableChanges(() => {
-      void loadObjectDetail(object);
+    confirmDiscardObjectDesign(() => {
+      confirmDiscardTableChanges(() => {
+        void loadObjectDetail(object);
+      }, `查看对象“${object.name}”`);
     }, `查看对象“${object.name}”`);
   }
 
-  async function loadObjectDetail(object: DbObject) {
+  async function loadObjectDetail(object: DbObject, options: { refresh?: boolean } = {}) {
     if (!selected) return;
     const connectionId = selected.id;
     const requestId = ++objectDetailRequestSeqRef.current;
@@ -914,9 +1090,11 @@ export default function App() {
     try {
       const params = new URLSearchParams({ objectName: object.name });
       if (object.schemaName) params.set('schemaName', object.schemaName);
+      if (options.refresh) params.set('refresh', 'true');
       const detail = await api<ObjectDetail>(`/metadata/${connectionId}/objects/detail?${params.toString()}`);
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setActiveObjectDetail(detail);
+      updateObjectDesignDirty(false);
       setMode('object');
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {
@@ -926,25 +1104,29 @@ export default function App() {
     }
   }
 
-  async function loadTable(table = activeTable) {
+  async function loadTable(table = activeTable, options: { page?: number; pageSize?: number } = {}) {
     if (!selected || !table) return;
     const connectionId = selected.id;
     const requestId = ++tableRequestSeqRef.current;
+    const requestedPage = Math.max(options.page ?? tablePage, 0);
+    const requestedPageSize = options.pageSize ?? layoutPreferences.tablePageSize;
     setTableLoading(true);
     try {
       const params = new URLSearchParams({
         connectionId: String(connectionId),
         tableName: table.tableName,
-        page: '0',
-        pageSize: '100'
+        page: String(requestedPage),
+        pageSize: String(requestedPageSize)
       });
       if (table.schemaName) params.set('schemaName', table.schemaName);
       const data = await api<TableData>(`/data/table?${params.toString()}`);
       if (requestId !== tableRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setTableData(data);
-      setTableRows(data.rows.map((row, index) => ({ id: `row-${index}`, values: { ...row }, original: { ...row } })));
+      const resolvedPage = data.page ?? requestedPage;
+      setTablePage(resolvedPage);
+      setTableRows(data.rows.map((row, index) => ({ id: `row-${resolvedPage}-${index}`, values: { ...row }, original: { ...row } })));
       setPreviewSql([]);
-      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载 ${data.rows.length} 行数据` });
+      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${resolvedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}` });
     } catch (e) {
       if (requestId === tableRequestSeqRef.current) showError(localizeMessage((e as Error).message));
     } finally {
@@ -1033,7 +1215,7 @@ export default function App() {
       const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
       setPreviewSql(data.sql);
       showSuccess(`已提交，影响 ${data.affectedRows} 行`);
-      await loadTable(activeTable);
+      await loadTable(activeTable, { page: tablePage });
     } catch (e) {
       showError(localizeMessage((e as Error).message));
     } finally {
@@ -1041,15 +1223,29 @@ export default function App() {
     }
   }
 
-  function dataChangePayload() {
+  function dataChangePayload() {
     return {
       connectionId: selected?.id,
       schemaName: activeTable?.schemaName,
       tableName: activeTable?.tableName,
       changes: pendingChanges
     };
-  }
-
+  }
+
+  function openBackupTaskEditor(target = currentBackupTable) {
+    if (!selected) {
+      showInfo('请先选择一个数据库连接');
+      return;
+    }
+    if (!target) {
+      showInfo('当前工作区没有可备份的数据表');
+      return;
+    }
+    const requestId = ++backupEditorRequestSeqRef.current;
+    setBackupEditorRequest({ requestId, target });
+    setActiveDrawer('backups');
+  }
+
   async function saveBackup(id: number | null, form: BackupTaskForm) {
     if (!selected) {
       showInfo('请先选择一个数据库连接');
@@ -1061,8 +1257,9 @@ export default function App() {
         name: form.name,
         connectionId: selected.id,
         scope: form.scope,
-        schemaName: form.scope === 'TABLE' ? form.schemaName : undefined,
-        tableName: form.scope === 'TABLE' ? form.tableName : undefined,
+        schemaName: form.scope === 'SCHEMA' || form.scope === 'TABLES' ? form.schemaName : undefined,
+        tableNames: form.scope === 'TABLES' ? form.tableNames || [] : [],
+        tableName: form.scope === 'TABLES' ? form.tableNames?.[0] : undefined,
         backupMethod: form.backupMethod || 'SQL',
         toolPath: form.toolPath,
         extraArgs: form.extraArgs,
@@ -1216,8 +1413,10 @@ export default function App() {
               loading={metadataLoading}
               disabled={!selected}
               aria-label="刷新对象缓存"
-              onClick={() => loadMetadata(selected, { page: 0, refresh: true })}
-            />
+              onClick={requestRefreshDatabaseObjects}
+            >
+              刷新
+            </Button>
           </Tooltip>
           {compactLayout && (
             <Tooltip title="关闭资源管理器">
@@ -1236,7 +1435,7 @@ export default function App() {
           <Space size={4} wrap>
             <Tag bordered={false} color="blue">{dbTypeLabel(selected.dbType)}</Tag>
             {selected.readonly && <Tag bordered={false} color="orange">只读</Tag>}
-            {metadata?.selectedSchema && <Tag bordered={false}>Schema · {metadata.selectedSchema}</Tag>}
+            {metadata?.selectedSchema && <Tag bordered={false}>{namespaceLabel} · {metadata.selectedSchema}</Tag>}
           </Space>
           <Text type="secondary" ellipsis title={selected.jdbcUrl}>{selected.jdbcUrl}</Text>
         </div>
@@ -1252,7 +1451,7 @@ export default function App() {
           allowClear
           showSearch
           className="full-width"
-          placeholder="选择 Schema"
+          placeholder={`选择${namespaceLabel}`}
           value={metadataQuery.schema || metadata?.selectedSchema || undefined}
           disabled={!selected || metadataLoading}
           options={(metadata?.schemas || []).map((schema) => ({
@@ -1316,10 +1515,7 @@ export default function App() {
   return (
     <ConfigProvider
       locale={zhCN}
-      theme={{
-        algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-        token: { colorPrimary: '#2f74e8', borderRadius: 7, controlHeight: 34, fontSize: 13 }
-      }}
+      theme={antThemeConfig}
     >
       {toastContextHolder}
       {modalContextHolder}
@@ -1367,6 +1563,8 @@ export default function App() {
                 loading={sqlLoading}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
+                maxRows={layoutPreferences.sqlMaxRows}
+                onMaxRowsChange={layoutPreferences.setSqlMaxRows}
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
                 onTabChange={setActiveSqlTabId}
                 onTabAdd={addSqlTab}
@@ -1387,11 +1585,20 @@ export default function App() {
                 tableRows={tableRows}
                 previewSql={previewSql}
                 pendingCount={pendingChanges.length}
+                page={tablePage}
+                pageSize={tableData?.pageSize ?? layoutPreferences.tablePageSize}
+                hasMore={tableData?.hasMore ?? false}
                 status={tableStatus}
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
                 onBackToSql={() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台')}
+                onBackupTable={() => openBackupTaskEditor()}
                 onReload={() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表')}
+                onPageChange={(page) => confirmDiscardTableChanges(() => void loadTable(activeTable, { page }), `切换到第 ${page + 1} 页`)}
+                onPageSizeChange={(pageSize) => confirmDiscardTableChanges(() => {
+                  layoutPreferences.setTablePageSize(pageSize);
+                  void loadTable(activeTable, { page: 0, pageSize });
+                }, `将每页行数调整为 ${pageSize}`)}
                 onAddRow={addRow}
                 onImportFile={importRows}
                 onPreview={previewChanges}
@@ -1406,9 +1613,11 @@ export default function App() {
                 detail={activeObjectDetail}
                 status={objectStatus}
                 loading={objectDetailLoading}
-                onBackToSql={() => setMode('sql')}
+                onBackToSql={() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台')}
                 onOpenTable={openTable}
-                onReloadDetail={() => activeObjectDetail && void loadObjectDetail(activeObjectDetail)}
+                onReloadDetail={requestRefreshDatabaseObjects}
+                onBackupTable={() => openBackupTaskEditor()}
+                onDesignDirtyChange={updateObjectDesignDirty}
               />
             )}
           </main>
@@ -1475,8 +1684,13 @@ export default function App() {
         <BackupPanel
           backups={backups}
           selected={selected}
-          activeTable={activeTable}
+          activeTable={currentBackupTable}
           loading={backupLoading}
+          namespaceKind={metadata?.namespaceKind}
+          editorRequest={backupEditorRequest}
+          onLoadNamespaces={loadBackupNamespaces}
+          onLoadTables={loadBackupTables}
+          onPreviewSchedule={previewBackupSchedule}
           onSave={saveBackup}
           onToggle={toggleBackup}
           onDelete={deleteBackup}

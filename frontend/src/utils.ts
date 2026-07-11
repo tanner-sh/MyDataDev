@@ -1,7 +1,7 @@
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from './constants';
-import type { RowChange, SqlTab, TableRow } from './types';
+import type { BackupTask, LegacyBackupScope, RowChange, SqlTab, TableRow } from './types';
 
 export function createSqlTab(index: number): SqlTab {
   return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', results: [], message: '' };
@@ -49,11 +49,31 @@ export function removeEmptyValues(values: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ''));
 }
 
-export function backupScopeLabel(scope: string) {
-  if (scope === 'DATABASE') return '全库';
-  if (scope === 'TABLE') return '单表';
-  return scope;
-}
+export function normalizeBackupScope(scope: LegacyBackupScope | string) {
+  return scope === 'TABLE' ? 'TABLES' : scope;
+}
+
+export function backupScopeLabel(scope: LegacyBackupScope | string, namespaceKind?: 'SCHEMA' | 'CATALOG') {
+  if (scope === 'DATABASE') return '当前数据库';
+  if (scope === 'SCHEMA') return namespaceKind === 'CATALOG' ? '指定数据库' : '指定 Schema';
+  if (scope === 'TABLE' || scope === 'TABLES') return '指定表';
+  return scope;
+}
+
+export function backupTargetLabel(task: Pick<BackupTask, 'scope' | 'schemaName' | 'tableName' | 'tableNames'>, namespaceKind?: 'SCHEMA' | 'CATALOG') {
+  const scope = normalizeBackupScope(task.scope);
+  if (scope === 'DATABASE') return '当前连接数据库范围';
+  const namespace = task.schemaName?.trim();
+  if (scope === 'SCHEMA') {
+    const label = namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
+    return namespace ? `${label} ${namespace}` : `连接默认${label}`;
+  }
+  const tables = task.tableNames?.length ? task.tableNames : task.tableName ? [task.tableName] : [];
+  if (!tables.length) return namespace ? `${namespace} 下的指定表` : '指定表';
+  if (tables.length === 1) return `${namespace ? `${namespace}.` : ''}${tables[0]}`;
+  const visible = tables.slice(0, 3).join('、');
+  return `${namespace ? `${namespace} · ` : ''}${tables.length} 张表（${visible}${tables.length > 3 ? '…' : ''}）`;
+}
 
 export function backupStatusLabel(status?: string) {
   if (!status) return '尚未执行';
@@ -96,10 +116,13 @@ export function completionKind(monaco: Parameters<OnMount>[1], kind: string) {
   return monaco.languages.CompletionItemKind.Keyword;
 }
 
-export function formatHistoryTime(value: string) {
-  if (!value) return '';
-  return new Date(value).toLocaleString('zh-CN', { hour12: false });
-}
+export function formatHistoryTime(value: string) {
+  if (!value) return '';
+  // Java ZonedDateTime may append a region suffix such as "[Asia/Shanghai]",
+  // which browsers do not accept even though the preceding offset is valid ISO-8601.
+  const parsed = new Date(value.replace(/\[[^\]]+\]$/, ''));
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { hour12: false });
+}
 
 export function dbTypeLabel(dbType: string) {
   return DB_TYPE_OPTIONS.find((option) => option.value === dbType)?.label || dbType;

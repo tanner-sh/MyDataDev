@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MyDataDev">
+  <defs>
+    <linearGradient id="brand" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#397fea"/>
+      <stop offset="1" stop-color="#1d5fc9"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="3" width="58" height="58" rx="15" fill="url(#brand)"/>
+  <ellipse cx="32" cy="20" rx="17" ry="7" fill="none" stroke="#fff" stroke-width="4"/>
+  <path d="M15 20v12c0 3.9 7.6 7 17 7s17-3.1 17-7V20M15 32v12c0 3.9 7.6 7 17 7s17-3.1 17-7V32" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+</svg>

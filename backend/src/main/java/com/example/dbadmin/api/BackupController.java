@@ -2,6 +2,8 @@ package com.example.dbadmin.api;
 
 import com.example.dbadmin.dto.ApiDtos.BackupEnabledRequest;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
+import com.example.dbadmin.dto.ApiDtos.CronPreviewRequest;
+import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.MessageResponse;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
@@ -32,13 +34,18 @@ public class BackupController {
     }
 
     @PostMapping
-    public BackupTask create(@Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) {
+    public BackupTask create(@Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
         return service.create(request, actor);
     }
 
     @PutMapping("/{id}")
-    public BackupTask update(@PathVariable long id, @Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) {
+    public BackupTask update(@PathVariable long id, @Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
         return service.update(id, request, actor);
+    }
+
+    @PostMapping("/schedule/preview")
+    public CronPreviewResponse previewSchedule(@Valid @RequestBody CronPreviewRequest request) {
+        return service.previewSchedule(request.cron());
     }
 
     @PatchMapping("/{id}/enabled")

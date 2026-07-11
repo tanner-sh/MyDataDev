@@ -13,6 +13,8 @@ import java.util.List;
 import java.util.Optional;
 
 public class OracleDialect extends DefaultDialect {
+    private static final String PAGE_ROW_COLUMN = "__DBADMIN_PAGE_RN__";
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         return "oracle".equalsIgnoreCase(dbType)
@@ -22,8 +24,13 @@ public class OracleDialect extends DefaultDialect {
     @Override
     public String pageQuery(String baseSql, int limit, int offset) {
         int upperBound = offset + limit;
-        return "SELECT * FROM (SELECT inner_query.*, ROWNUM dbadmin_rn FROM (" + baseSql
-                + ") inner_query WHERE ROWNUM <= " + upperBound + ") WHERE dbadmin_rn > " + offset;
+        return "SELECT * FROM (SELECT dbadmin_page_source.*, ROWNUM " + PAGE_ROW_COLUMN + " FROM (" + baseSql
+                + ") dbadmin_page_source WHERE ROWNUM <= " + upperBound + ") WHERE " + PAGE_ROW_COLUMN + " > " + offset;
+    }
+
+    @Override
+    public String paginationHelperColumn() {
+        return PAGE_ROW_COLUMN;
     }
 
     @Override
@@ -51,9 +58,9 @@ public class OracleDialect extends DefaultDialect {
         }
         try (Statement display = connection.createStatement()) {
             display.setQueryTimeout(timeoutSeconds);
-            display.setMaxRows(maxRows);
+            display.setMaxRows(maxRows + 1);
             try (ResultSet rs = display.executeQuery("SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY())")) {
-                return readResult(rs, (System.nanoTime() - started) / 1_000_000);
+                return readResult(rs, (System.nanoTime() - started) / 1_000_000, maxRows);
             }
         }
     }
@@ -64,10 +71,10 @@ public class OracleDialect extends DefaultDialect {
         StringBuilder sql = new StringBuilder("SELECT DBMS_METADATA.GET_DDL('")
                 .append(ddlType)
                 .append("', '")
-                .append(objectName.replace("'", "''").toUpperCase())
+                .append(objectName.replace("'", "''"))
                 .append("'");
         if (schemaName != null && !schemaName.isBlank()) {
-            sql.append(", '").append(schemaName.replace("'", "''").toUpperCase()).append("'");
+            sql.append(", '").append(schemaName.replace("'", "''")).append("'");
         }
         sql.append(") FROM DUAL");
         try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery(sql.toString())) {
@@ -100,6 +107,11 @@ public class OracleDialect extends DefaultDialect {
     }
 
     @Override
+    protected String addColumnSql(String table, ColumnDesign column) {
+        return "ALTER TABLE " + table + " ADD (" + columnDefinition(column) + ")";
+    }
+
+    @Override
     protected List<String> primaryKeySql(String table, ObjectDetail original, List<String> requestedPrimaryKeys) {
         List<String> requested = requestedPrimaryKeys == null ? List.of() : requestedPrimaryKeys.stream().filter(name -> name != null && !name.isBlank()).toList();
         if (sameNames(original.primaryKeys(), requested)) {
@@ -116,5 +128,13 @@ public class OracleDialect extends DefaultDialect {
             sql.add("ALTER TABLE " + table + " ADD PRIMARY KEY (" + String.join(", ", requested.stream().map(this::quoteIdentifier).toList()) + ")");
         }
         return sql;
+    }
+
+    @Override
+    public String literal(Object value) {
+        if (value instanceof Boolean bool) {
+            return bool ? "1" : "0";
+        }
+        return super.literal(value);
     }
 }

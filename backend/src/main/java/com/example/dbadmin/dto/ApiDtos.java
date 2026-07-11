@@ -42,11 +42,21 @@ public final class ApiDtos {
             List<String> schemas,
             String currentSchema,
             String selectedSchema,
+            String namespaceKind,
             List<DbObject> objects,
             int totalObjects,
             int page,
             int pageSize,
             boolean hasMore,
+            String cachedAt,
+            boolean cacheHit
+    ) {
+    }
+
+    public record CompletionCatalogResponse(
+            String namespaceKind,
+            String selectedSchema,
+            List<DbObject> objects,
             String cachedAt,
             boolean cacheHit
     ) {
@@ -88,13 +98,19 @@ public final class ApiDtos {
     public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {
     }
 
-    public record SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
+    public record SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
+        public SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
+            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false);
+        }
     }
 
     public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {
     }
 
-    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results) {
+    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
+        public SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results) {
+            this(status, elapsedMs, executedCount, results, false);
+        }
     }
 
     public record SqlStatementResult(int index, String sql, int startOffset, int endOffset, String status, String errorMessage, SqlResult result) {
@@ -124,7 +140,10 @@ public final class ApiDtos {
     public record DataPreviewResponse(List<String> sql) {
     }
 
-    public record TableDataResponse(List<String> columns, List<Map<String, Object>> rows, List<String> keyColumns, boolean editable) {
+    public record TableDataResponse(List<String> columns, List<Map<String, Object>> rows, List<String> keyColumns, boolean editable, int page, int pageSize, boolean hasMore) {
+        public TableDataResponse(List<String> columns, List<Map<String, Object>> rows, List<String> keyColumns, boolean editable) {
+            this(columns, rows, keyColumns, editable, 0, rows == null ? 0 : rows.size(), false);
+        }
     }
 
     public record DataCommitResponse(List<String> sql, int affectedRows) {
@@ -133,10 +152,35 @@ public final class ApiDtos {
     public record ExportRequest(@NotNull Long connectionId, @NotBlank String sql, @NotBlank String format) {
     }
 
-    public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
-        public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
-            this(name, connectionId, scope, schemaName, tableName, cron, enabled, "SQL", null, null, null);
+    public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, List<String> tableNames, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
+        public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
+            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName);
         }
+
+        public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
+            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, "SQL", null, null, null);
+        }
+    }
+
+    public record BackupTargetItem(String name, boolean current) {
+    }
+
+    public record BackupTargetPage(
+            String namespaceKind,
+            String currentNamespace,
+            String namespaceName,
+            List<BackupTargetItem> items,
+            int total,
+            int page,
+            int pageSize,
+            boolean hasMore
+    ) {
+    }
+
+    public record CronPreviewRequest(@NotBlank String cron) {
+    }
+
+    public record CronPreviewResponse(String cron, String zoneId, List<String> nextRuns) {
     }
 
     public record BackupEnabledRequest(boolean enabled) {

@@ -7,7 +7,14 @@ import java.util.List;
 
 @Component
 public class DialectRegistry {
-    private final List<DatabaseDialect> dialects = List.of(new OracleDialect(), new DefaultDialect());
+    private final List<DatabaseDialect> dialects = List.of(
+            new OceanBaseMySqlDialect(),
+            new OceanBaseOracleDialect(),
+            new OracleDialect(),
+            new MySqlDialect(),
+            new DamengDialect(),
+            new DefaultDialect()
+    );
 
     public DatabaseDialect dialectFor(DbConnection connection) {
         return dialects.stream()

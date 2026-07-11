@@ -1,6 +1,16 @@
 import { useEffect, useState } from 'react';
-import { Badge, Button, Drawer, Layout, Space, Typography, Upload } from 'antd';
-import { ArrowLeftOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from '@ant-design/icons';
+import { Badge, Button, Drawer, Layout, Select, Space, Typography, Upload } from 'antd';
+import {
+  ArrowLeftOutlined,
+  CloudServerOutlined,
+  EyeOutlined,
+  LeftOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  RightOutlined,
+  SaveOutlined,
+  UploadOutlined
+} from '@ant-design/icons';
 import type { ActiveTable, TableData, TableRow, WorkspaceStatus } from '../types';
 import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
@@ -8,28 +18,57 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 
 const { Header } = Layout;
 const { Text } = Typography;
+const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200, 500];
 
-export function TableWorkspace({ activeTable, tableData, tableRows, previewSql, pendingCount, status, loading, readonlyConnection = false, onBackToSql, onReload, onAddRow, onImportFile, onPreview, onCommit, onEdit, onDelete }: {
-  activeTable: ActiveTable | null;
-  tableData: TableData | null;
-  tableRows: TableRow[];
-  previewSql: string[];
-  pendingCount: number;
+export function TableWorkspace({
+  activeTable,
+  tableData,
+  tableRows,
+  previewSql,
+  pendingCount,
+  status,
+  loading,
+  readonlyConnection = false,
+  page = 0,
+  pageSize = 100,
+  hasMore = false,
+  onBackToSql,
+  onBackupTable,
+  onReload,
+  onAddRow,
+  onImportFile,
+  onPreview,
+  onCommit,
+  onEdit,
+  onDelete,
+  onPageChange,
+  onPageSizeChange
+}: {
+  activeTable: ActiveTable | null;
+  tableData: TableData | null;
+  tableRows: TableRow[];
+  previewSql: string[];
+  pendingCount: number;
   status: WorkspaceStatus;
   loading: boolean;
   readonlyConnection?: boolean;
-  onBackToSql: () => void;
+  page?: number;
+  pageSize?: number;
+  hasMore?: boolean;
+  onBackToSql: () => void;
+  onBackupTable?: () => void;
   onReload: () => void;
   onAddRow: () => void;
   onImportFile: (file: File) => void;
   onPreview: () => void;
-  onCommit: () => void;
-  onEdit: (rowId: string, column: string, value: string) => void;
-  onDelete: (rowId: string) => void;
+  onCommit: () => void;
+  onEdit: (rowId: string, column: string, value: string) => void;
+  onDelete: (rowId: string) => void;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
-
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
 
   useEffect(() => {
@@ -57,7 +96,15 @@ export function TableWorkspace({ activeTable, tableData, tableRows, previewSql, 
           </Text>
         </div>
         <Space size={8} wrap>
-          <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>重新加载</Button>
+          <Button
+            size="small"
+            icon={<CloudServerOutlined />}
+            disabled={!activeTable || loading || !onBackupTable}
+            onClick={onBackupTable}
+          >
+            备份此表
+          </Button>
+          <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
           <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || readonlyConnection} onClick={onAddRow}>新增行</Button>
           <Upload
             accept=".csv,.json,.sql"
@@ -86,6 +133,37 @@ export function TableWorkspace({ activeTable, tableData, tableRows, previewSql, 
       </Header>
       <div className="table-grid-pane">
         <EditableTable data={tableData} rows={tableRows} readonly={readonlyConnection} loading={loading} onEdit={onEdit} onDelete={onDelete} />
+      </div>
+      <div className="grid-pagination table-pagination">
+        <Text type="secondary">第 {page + 1} 页 · 本页 {tableRows.length} 行</Text>
+        <Space size={8} wrap={false}>
+          <Text type="secondary">每页</Text>
+          <Select
+            size="small"
+            className="table-page-size-select"
+            value={pageSize}
+            options={TABLE_PAGE_SIZE_OPTIONS.map((value) => ({ value, label: `${value} 行` }))}
+            disabled={!tableData || loading || !onPageSizeChange}
+            onChange={onPageSizeChange}
+          />
+          <Button
+            size="small"
+            icon={<LeftOutlined />}
+            disabled={!tableData || loading || page <= 0 || !onPageChange}
+            onClick={() => onPageChange?.(page - 1)}
+          >
+            上一页
+          </Button>
+          <Button
+            size="small"
+            icon={<RightOutlined />}
+            iconPosition="end"
+            disabled={!tableData || loading || !hasMore || !onPageChange}
+            onClick={() => onPageChange?.(page + 1)}
+          >
+            下一页
+          </Button>
+        </Space>
       </div>
       <WorkspaceStatusBar
         status={status}

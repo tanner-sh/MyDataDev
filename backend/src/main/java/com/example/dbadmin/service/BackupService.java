@@ -1,7 +1,10 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
+import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
@@ -9,6 +12,7 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import org.springframework.scheduling.support.CronExpression;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.BufferedWriter;
@@ -30,9 +34,14 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -43,13 +52,20 @@ public class BackupService {
     private final ConnectionService connections;
     private final AuditRepository audit;
     private final AppProperties properties;
+    private final DialectRegistry dialectRegistry;
 
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
+    @Autowired
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.connections = connections;
         this.audit = audit;
         this.properties = properties;
+        this.dialectRegistry = dialectRegistry;
+    }
+
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
+        this(repository, historyRepository, connections, audit, properties, new DialectRegistry());
     }
 
     public List<BackupTask> list() {
@@ -85,6 +101,30 @@ public class BackupService {
         repository.updateEnabled(id, enabled);
         audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
         return repository.findById(id).orElseThrow();
+    }
+
+    public CronPreviewResponse previewSchedule(String cronValue) {
+        String cron = blankToNull(cronValue);
+        if (cron == null) {
+            throw new IllegalArgumentException("cron 表达式不能为空。");
+        }
+        CronExpression expression;
+        try {
+            expression = CronExpression.parse(cron);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("cron 表达式不合法：" + cron);
+        }
+        ZoneId zone = ZoneId.systemDefault();
+        ZonedDateTime cursor = ZonedDateTime.now(zone);
+        List<String> nextRuns = new ArrayList<>(3);
+        for (int index = 0; index < 3; index++) {
+            cursor = expression.next(cursor);
+            if (cursor == null) {
+                break;
+            }
+            nextRuns.add(cursor.toString());
+        }
+        return new CronPreviewResponse(cron, zone.getId(), nextRuns);
     }
 
     public void delete(long id, boolean deleteFile, String actor) throws Exception {
@@ -181,7 +221,10 @@ public class BackupService {
     }
 
     private BackupTask taskFromRequest(long id, BackupTaskRequest request, DbConnection connection, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {
-        String scope = validateScope(request.scope(), request.tableName());
+        List<String> requestedTables = requestedTableNames(request.tableNames(), request.tableName());
+        String rawScope = request.scope() == null ? "" : request.scope().toUpperCase(Locale.ROOT);
+        String scope = validateScope(request.scope(), requestedTables);
+        validateRequestTargetShape(rawScope, request.schemaName(), requestedTables);
         String cron = blankToNull(request.cron());
         validateCron(cron, request.enabled());
         String backupMethod = validateBackupMethod(request.backupMethod(), connection);
@@ -191,9 +234,25 @@ public class BackupService {
         if (!"SQL".equals(backupMethod) && toolPath == null) {
             throw new IllegalArgumentException("原生备份需要填写工具路径。");
         }
-        String schemaName = "TABLE".equals(scope) ? blankToNull(request.schemaName()) : null;
-        String tableName = "TABLE".equals(scope) ? blankToNull(request.tableName()) : null;
-        return new BackupTask(id, request.name().trim(), request.connectionId(), scope, schemaName, tableName, backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
+        String requestedSchema = Set.of("SCHEMA", "TABLES").contains(scope) ? blankToNull(request.schemaName()) : null;
+        ResolvedTarget resolved;
+        try {
+            resolved = resolveRequestedTarget(connection, scope, requestedSchema, requestedTables);
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            throw new IllegalStateException("无法验证备份目标：" + message, e);
+        }
+        List<String> tableNames = "TABLES".equals(scope)
+                ? resolved.tables().stream().map(TableRef::name).toList()
+                : List.of();
+        String tableName = tableNames.isEmpty() ? null : tableNames.get(0);
+        return new BackupTask(
+                id, request.name().trim(), request.connectionId(), scope, resolved.namespace(), tableName, tableNames,
+                backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage,
+                lastFilePath, lastFileSize, lastRunAt
+        );
     }
 
     private void validateCron(String cron, boolean enabled) {
@@ -221,19 +280,17 @@ public class BackupService {
 
     private BackupFile runBackup(BackupTask task, DbConnection connection) throws Exception {
         return switch (normalizeBackupMethod(task.backupMethod())) {
-            case "MYSQLDUMP" -> runMysqlDump(task, connection);
-            case "ORACLE_EXP" -> runOracleExp(task, connection);
+            case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection));
+            case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection));
             default -> writeSqlBackup(task, connection);
         };
     }
 
-    private BackupFile runMysqlDump(BackupTask task, DbConnection connection) throws Exception {
+    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, ResolvedTarget resolved) throws Exception {
         MysqlJdbcTarget target = mysqlTarget(connection.jdbcUrl());
-        String database = "TABLE".equals(normalizeScope(task.scope())) && task.schemaName() != null && !task.schemaName().isBlank()
-                ? task.schemaName()
-                : target.database();
+        String database = "DATABASE".equals(resolved.scope()) ? target.database() : resolved.namespace();
         if (database == null || database.isBlank()) {
-            throw new IllegalArgumentException("mysqldump 备份需要 JDBC URL 中包含数据库名，或在单表任务中填写 schema。");
+            throw new IllegalArgumentException("mysqldump 备份需要 JDBC URL 中包含数据库名，或选择一个数据库。");
         }
         Path file = backupPath(task, "mysqldump", ".sql");
         List<String> command = new ArrayList<>();
@@ -246,8 +303,8 @@ public class BackupService {
         command.add("--result-file=" + file.toAbsolutePath().normalize());
         command.addAll(extraArgs(task.extraArgs()));
         command.add(database);
-        if ("TABLE".equals(normalizeScope(task.scope()))) {
-            command.add(task.tableName());
+        if ("TABLES".equals(resolved.scope())) {
+            command.addAll(resolved.tables().stream().map(TableRef::name).toList());
         }
         ProcessBuilder builder = new ProcessBuilder(command);
         String password = connections.password(connection.id());
@@ -258,7 +315,8 @@ public class BackupService {
         return new BackupFile(file, Files.size(file));
     }
 
-    private BackupFile runOracleExp(BackupTask task, DbConnection connection) throws Exception {
+    private BackupFile runOracleExp(BackupTask task, DbConnection connection, ResolvedTarget resolved) throws Exception {
+        validateOracleNativeTarget(resolved);
         Path file = backupPath(task, "oracle-exp", ".dmp");
         Path log = file.resolveSibling(file.getFileName() + ".log");
         String password = connections.password(connection.id());
@@ -271,13 +329,15 @@ public class BackupService {
         command.add("userid=" + userid);
         command.add("file=" + file.toAbsolutePath().normalize());
         command.add("log=" + log.toAbsolutePath().normalize());
-        if ("TABLE".equals(normalizeScope(task.scope()))) {
-            String table = task.schemaName() == null || task.schemaName().isBlank()
-                    ? task.tableName()
-                    : task.schemaName() + "." + task.tableName();
-            command.add("tables=(" + table + ")");
-        } else if (task.schemaName() != null && !task.schemaName().isBlank()) {
-            command.add("owner=" + task.schemaName());
+        if ("TABLES".equals(resolved.scope())) {
+            List<String> tables = resolved.tables().stream()
+                    .map(table -> resolved.namespace() == null || resolved.namespace().isBlank()
+                            ? table.name()
+                            : resolved.namespace() + "." + table.name())
+                    .toList();
+            command.add("tables=(" + String.join(",", tables) + ")");
+        } else if ("SCHEMA".equals(resolved.scope())) {
+            command.add("owner=" + resolved.namespace());
         } else {
             command.add("full=y");
         }
@@ -417,18 +477,19 @@ public class BackupService {
         Path dir = Path.of(properties.getBackup().getDirectory());
         Files.createDirectories(dir);
         Path file = dir.resolve("backup-task-" + task.id() + "-" + Instant.now().toEpochMilli() + ".sql");
-        try (Connection connection = connections.open(task.connectionId());
-             BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
-            List<TableRef> tables = backupTables(task, connection);
-            if (tables.isEmpty()) {
+        try (Connection connection = connections.open(task.connectionId())) {
+            ResolvedTarget resolved = resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), task.scope(), task.schemaName(), task.tableNames());
+            if (resolved.tables().isEmpty()) {
                 throw new IllegalArgumentException("没有找到可备份的表。");
             }
-            writer.write("-- MyDataDev SQL Backup\n");
-            writer.write("-- Task: " + task.name() + "\n");
-            writer.write("-- Connection: " + dbConnection.name() + "\n");
-            writer.write("-- Generated At: " + Instant.now() + "\n\n");
-            for (TableRef table : tables) {
-                writeTableBackup(connection, writer, table);
+            try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
+                writer.write("-- MyDataDev SQL Backup\n");
+                writer.write("-- Task: " + task.name() + "\n");
+                writer.write("-- Connection: " + dbConnection.name() + "\n");
+                writer.write("-- Generated At: " + Instant.now() + "\n\n");
+                for (TableRef table : resolved.tables()) {
+                    writeTableBackup(connection, writer, table);
+                }
             }
         } catch (Exception e) {
             Files.deleteIfExists(file);
@@ -437,29 +498,219 @@ public class BackupService {
         return new BackupFile(file, Files.size(file));
     }
 
-    private List<TableRef> backupTables(BackupTask task, Connection connection) throws Exception {
-        String scope = normalizeScope(task.scope());
-        if ("TABLE".equals(scope)) {
-            if (task.tableName() == null || task.tableName().isBlank()) {
-                throw new IllegalArgumentException("单表备份需要指定表名。");
+    private List<String> requestedTableNames(List<String> tableNames, String legacyTableName) {
+        List<String> requested = tableNames == null ? new ArrayList<>() : new ArrayList<>(tableNames);
+        String legacy = blankToNull(legacyTableName);
+        if (requested.isEmpty() && legacy != null) {
+            requested.add(legacy);
+        } else if (!requested.isEmpty() && legacy != null) {
+            String first = blankToNull(requested.get(0));
+            if (!legacy.equals(first)) {
+                throw new IllegalArgumentException("tableName 必须与 tableNames 的第一项一致。");
             }
-            return List.of(new TableRef(task.schemaName(), task.tableName()));
         }
-        if (!"DATABASE".equals(scope)) {
-            throw new IllegalArgumentException("不支持的备份范围：" + task.scope());
+        if (requested.size() > 100) {
+            throw new IllegalArgumentException("一次最多选择 100 张表。");
+        }
+        Set<String> unique = new HashSet<>();
+        List<String> normalized = new ArrayList<>(requested.size());
+        for (String value : requested) {
+            String name = blankToNull(value);
+            if (name == null) {
+                throw new IllegalArgumentException("表名不能为空。");
+            }
+            if (!unique.add(name)) {
+                throw new IllegalArgumentException("不能重复选择表：" + name);
+            }
+            normalized.add(name);
+        }
+        return List.copyOf(normalized);
+    }
+
+    private void validateRequestTargetShape(String rawScope, String schemaName, List<String> tableNames) {
+        String schema = blankToNull(schemaName);
+        switch (rawScope) {
+            case "DATABASE" -> {
+                if (schema != null) {
+                    throw new IllegalArgumentException("全库备份不能指定 Schema/数据库。");
+                }
+                if (!tableNames.isEmpty()) {
+                    throw new IllegalArgumentException("全库备份不能指定表。");
+                }
+            }
+            case "SCHEMA" -> {
+                if (schema == null) {
+                    throw new IllegalArgumentException("请选择 Schema/数据库。");
+                }
+                if (!tableNames.isEmpty()) {
+                    throw new IllegalArgumentException("Schema/数据库备份不能指定表。");
+                }
+            }
+            case "TABLES" -> {
+                if (schema == null) {
+                    throw new IllegalArgumentException("请选择 Schema/数据库。");
+                }
+            }
+            case "TABLE" -> {
+                // Legacy single-table tasks may omit the namespace; resolve it from the connection.
+            }
+            default -> {
+                // validateScope reports unsupported values.
+            }
+        }
+    }
+
+    private ResolvedTarget resolveRequestedTarget(DbConnection dbConnection, String scope, String schemaName, List<String> tableNames) throws Exception {
+        if ("DATABASE".equals(scope)) {
+            return new ResolvedTarget(scope, null, List.of());
+        }
+        try (Connection connection = connections.open(dbConnection.id())) {
+            return resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), scope, schemaName, tableNames);
+        }
+    }
+
+    private ResolvedTarget resolveTaskTarget(BackupTask task, DbConnection dbConnection) throws Exception {
+        String scope = normalizeScope(task.scope());
+        if ("DATABASE".equals(scope)) {
+            return new ResolvedTarget(scope, null, List.of());
+        }
+        try (Connection connection = connections.open(dbConnection.id())) {
+            return resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), task.scope(), task.schemaName(), task.tableNames());
+        }
+    }
+
+    private ResolvedTarget resolveTarget(Connection connection, DatabaseDialect dialect, String rawScope, String schemaName, List<String> rawTableNames) throws Exception {
+        List<String> tableNames = requestedTableNames(rawTableNames, null);
+        String scope = validateScope(rawScope, tableNames);
+        if ("DATABASE".equals(scope)) {
+            return new ResolvedTarget(scope, null, physicalTables(connection, dialect, null));
+        }
+        String requestedNamespace = blankToNull(schemaName);
+        if (requestedNamespace == null) {
+            requestedNamespace = blankToNull(dialect.currentSchema(connection));
+        }
+        if (requestedNamespace == null) {
+            throw new IllegalArgumentException("无法确定当前 Schema/数据库，请重新选择备份目标。");
+        }
+        String namespace = resolveNamespace(connection, dialect, requestedNamespace);
+        List<TableRef> availableTables = physicalTables(connection, dialect, namespace);
+        if ("SCHEMA".equals(scope)) {
+            return new ResolvedTarget(scope, namespace, availableTables);
+        }
+        Map<String, TableRef> exactTables = new LinkedHashMap<>();
+        Map<String, List<TableRef>> foldedTables = new LinkedHashMap<>();
+        for (TableRef table : availableTables) {
+            exactTables.putIfAbsent(table.name(), table);
+            foldedTables.computeIfAbsent(table.name().toLowerCase(Locale.ROOT), ignored -> new ArrayList<>()).add(table);
+        }
+        List<TableRef> selected = new ArrayList<>(tableNames.size());
+        List<String> missing = new ArrayList<>();
+        List<String> ambiguous = new ArrayList<>();
+        Set<String> selectedActualNames = new HashSet<>();
+        for (String tableName : tableNames) {
+            TableRef table = exactTables.get(tableName);
+            if (table == null) {
+                List<TableRef> folded = foldedTables.getOrDefault(tableName.toLowerCase(Locale.ROOT), List.of());
+                if (folded.size() == 1) {
+                    table = folded.get(0);
+                } else if (folded.size() > 1) {
+                    ambiguous.add(tableName);
+                    continue;
+                }
+            }
+            if (table == null) {
+                missing.add(tableName);
+            } else if (!selectedActualNames.add(table.name())) {
+                throw new IllegalArgumentException("多个目标解析到了同一张表：" + table.name());
+            } else {
+                selected.add(table);
+            }
+        }
+        if (!ambiguous.isEmpty()) {
+            throw new IllegalArgumentException("以下表名大小写不明确，请使用数据库返回的精确名称：" + String.join(", ", ambiguous));
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException("以下表不存在或不是物理表：" + String.join(", ", missing));
+        }
+        return new ResolvedTarget(scope, namespace, List.copyOf(selected));
+    }
+
+    private String resolveNamespace(Connection connection, DatabaseDialect dialect, String requestedNamespace) throws Exception {
+        List<String> available = availableNamespaces(connection, dialect);
+        if (available.contains(requestedNamespace)) {
+            return requestedNamespace;
+        }
+        List<String> folded = available.stream().filter(namespace -> namespace.equalsIgnoreCase(requestedNamespace)).toList();
+        if (folded.size() == 1) {
+            return folded.get(0);
+        }
+        if (folded.size() > 1) {
+            throw new IllegalArgumentException("Schema/数据库名称大小写不明确，请使用精确名称：" + requestedNamespace);
+        }
+        throw new IllegalArgumentException("未找到 Schema/数据库：" + requestedNamespace);
+    }
+
+    private List<String> availableNamespaces(Connection connection, DatabaseDialect dialect) throws Exception {
+        Map<String, String> namespaces = new LinkedHashMap<>();
+        String current = blankToNull(dialect.currentSchema(connection));
+        if (current != null && !isSystemSchema(current)) {
+            namespaces.put(current.toLowerCase(Locale.ROOT), current);
         }
         DatabaseMetaData meta = connection.getMetaData();
-        List<TableRef> tables = new ArrayList<>();
-        try (ResultSet rs = meta.getTables(connection.getCatalog(), null, "%", new String[]{"TABLE"})) {
+        try (ResultSet rs = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
+                ? meta.getCatalogs()
+                : meta.getSchemas()) {
+            String column = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? "TABLE_CAT" : "TABLE_SCHEM";
             while (rs.next()) {
-                String schema = rs.getString("TABLE_SCHEM");
-                String name = rs.getString("TABLE_NAME");
-                if (name != null && !isSystemSchema(schema)) {
-                    tables.add(new TableRef(schema, name));
+                String namespace = blankToNull(rs.getString(column));
+                if (namespace != null && !isSystemSchema(namespace)) {
+                    namespaces.putIfAbsent(namespace.toLowerCase(Locale.ROOT), namespace);
                 }
             }
         }
-        return tables;
+        return namespaces.values().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+    }
+
+    private List<TableRef> physicalTables(Connection connection, DatabaseDialect dialect, String namespace) throws Exception {
+        DatabaseMetaData meta = connection.getMetaData();
+        DatabaseDialect.MetadataScope metadataScope = dialect.metadataScope(connection, namespace);
+        List<TableRef> tables = new ArrayList<>();
+        try (ResultSet rs = meta.getTables(metadataScope.catalog(), metadataScope.schemaPattern(), "%", new String[]{"TABLE", "BASE TABLE"})) {
+            while (rs.next()) {
+                String foundNamespace = blankToNull(dialect.resultNamespace(rs));
+                if (namespace != null && foundNamespace != null && !namespace.equalsIgnoreCase(foundNamespace)) {
+                    continue;
+                }
+                String effectiveNamespace = foundNamespace == null ? namespace : foundNamespace;
+                String name = blankToNull(rs.getString("TABLE_NAME"));
+                String type = blankToNull(rs.getString("TABLE_TYPE"));
+                if (name != null && ("TABLE".equalsIgnoreCase(type) || "BASE TABLE".equalsIgnoreCase(type)) && !isSystemSchema(effectiveNamespace)) {
+                    tables.add(new TableRef(effectiveNamespace, name));
+                }
+            }
+        }
+        tables.sort(Comparator
+                .comparing((TableRef table) -> table.schema() == null ? "" : table.schema(), String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(TableRef::name, String.CASE_INSENSITIVE_ORDER));
+        return List.copyOf(tables);
+    }
+
+    private void validateOracleNativeTarget(ResolvedTarget target) {
+        if ("DATABASE".equals(target.scope())) {
+            return;
+        }
+        validateOracleNativeIdentifier(target.namespace(), "Schema");
+        if ("TABLES".equals(target.scope())) {
+            for (TableRef table : target.tables()) {
+                validateOracleNativeIdentifier(table.name(), "表");
+            }
+        }
+    }
+
+    private void validateOracleNativeIdentifier(String value, String label) {
+        if (value == null || !value.matches("[A-Za-z][A-Za-z0-9_$#]*") || !value.equals(value.toUpperCase(Locale.ROOT))) {
+            throw new IllegalArgumentException("Oracle exp 暂不支持需要引号或区分大小写的" + label + "标识符：" + value);
+        }
     }
 
     private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table) throws Exception {
@@ -486,19 +737,20 @@ public class BackupService {
         }
     }
 
-    private String validateScope(String scope, String tableName) {
+    private String validateScope(String scope, List<String> tableNames) {
         String normalized = normalizeScope(scope);
-        if (!Set.of("DATABASE", "TABLE").contains(normalized)) {
+        if (!Set.of("DATABASE", "SCHEMA", "TABLES").contains(normalized)) {
             throw new IllegalArgumentException("不支持的备份范围：" + scope);
         }
-        if ("TABLE".equals(normalized) && (tableName == null || tableName.isBlank())) {
-            throw new IllegalArgumentException("单表备份需要指定表名。");
+        if ("TABLES".equals(normalized) && tableNames.isEmpty()) {
+            throw new IllegalArgumentException("表备份至少需要选择一张表。");
         }
         return normalized;
     }
 
     private String normalizeScope(String scope) {
-        return scope == null ? "" : scope.toUpperCase(Locale.ROOT);
+        String normalized = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
+        return "TABLE".equals(normalized) ? "TABLES" : normalized;
     }
 
     private String blankToNull(String value) {
@@ -596,6 +848,9 @@ public class BackupService {
     }
 
     private record TableRef(String schema, String name) {
+    }
+
+    private record ResolvedTarget(String scope, String namespace, List<TableRef> tables) {
     }
 
     private record BackupFile(Path path, long size) {

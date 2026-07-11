@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.dto.ApiDtos.CompletionCatalogResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
@@ -29,6 +31,40 @@ public class MetadataController {
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
         return service.inspect(connectionId, schema, keyword, page, pageSize, refresh);
+    }
+
+    @GetMapping("/{connectionId}/completion-catalog")
+    public CompletionCatalogResponse completionCatalog(
+            @PathVariable long connectionId,
+            @RequestParam(required = false) String schema,
+            @RequestParam(required = false) String namespace,
+            @RequestParam(defaultValue = "false") boolean refresh
+    ) throws Exception {
+        String requestedNamespace = namespace == null || namespace.isBlank() ? schema : namespace;
+        return service.completionCatalog(connectionId, requestedNamespace, refresh);
+    }
+
+    @GetMapping("/{connectionId}/backup-targets/namespaces")
+    public BackupTargetPage backupTargetNamespaces(
+            @PathVariable long connectionId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(defaultValue = "false") boolean refresh
+    ) throws Exception {
+        return service.backupTargetNamespaces(connectionId, keyword, page, pageSize, refresh);
+    }
+
+    @GetMapping("/{connectionId}/backup-targets/tables")
+    public BackupTargetPage backupTargetTables(
+            @PathVariable long connectionId,
+            @RequestParam String namespaceName,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(defaultValue = "false") boolean refresh
+    ) throws Exception {
+        return service.backupTargetTables(connectionId, namespaceName, keyword, page, pageSize, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/detail")

@@ -35,6 +35,7 @@ export type Metadata = {
   schemas: string[];
   currentSchema: string;
   selectedSchema: string;
+  namespaceKind?: 'SCHEMA' | 'CATALOG';
   objects: DbObject[];
   totalObjects: number;
   page: number;
@@ -43,17 +44,41 @@ export type Metadata = {
   cachedAt?: string;
   cacheHit?: boolean;
 };
-export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean };
+export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
-export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[] };
+export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
+export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
+export type LegacyBackupScope = BackupScope | 'TABLE';
+export type BackupMethod = 'SQL' | 'MYSQLDUMP' | 'ORACLE_EXP';
+export type BackupTargetItem = { name: string; current?: boolean };
+export type BackupTargetPage = {
+  namespaceKind?: 'SCHEMA' | 'CATALOG';
+  currentNamespace?: string;
+  namespaceName?: string;
+  items: BackupTargetItem[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
+};
+export type BackupTargetQuery = { keyword?: string; page: number; pageSize: number; refresh?: boolean };
+export type BackupTableTargetQuery = BackupTargetQuery & { namespaceName: string };
+export type BackupSchedulePreview = { cron?: string; zoneId: string; nextRuns: string[] };
+export type BackupEditorRequest = {
+  requestId: string | number;
+  target: ActiveTable;
+  name?: string;
+};
 export type BackupTask = {
   id: number;
   name: string;
   connectionId: number;
-  scope: string;
+  scope: LegacyBackupScope;
   schemaName?: string;
+  tableNames?: string[];
+  /** @deprecated Compatibility field returned by older servers. */
   tableName?: string;
-  backupMethod?: string;
+  backupMethod?: BackupMethod | string;
   toolPath?: string;
   extraArgs?: string;
   nativeConnectName?: string;
@@ -64,6 +89,8 @@ export type BackupTask = {
   lastFilePath?: string;
   lastFileSize?: number;
   lastRunAt?: string;
+  zoneId?: string;
+  nextRunAt?: string;
 };
 export type BackupHistory = {
   id: number;
@@ -76,10 +103,24 @@ export type BackupHistory = {
   startedAt?: string;
   finishedAt?: string;
 };
-export type BackupTaskForm = { name: string; scope: string; schemaName?: string; tableName?: string; backupMethod?: string; toolPath?: string; extraArgs?: string; nativeConnectName?: string; cron?: string; enabled: boolean };
+export type BackupTaskForm = {
+  name: string;
+  scope: BackupScope;
+  schemaName?: string;
+  tableNames?: string[];
+  /** @deprecated Sent for one release so an older backend can still read a single-table task. */
+  tableName?: string;
+  backupMethod?: BackupMethod | string;
+  toolPath?: string;
+  extraArgs?: string;
+  nativeConnectName?: string;
+  cron?: string;
+  enabled: boolean;
+};
 export type ActiveTable = { schemaName?: string; tableName: string };
 export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; deleted?: boolean; inserted?: boolean };
-export type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean };
+export type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean; page?: number; pageSize?: number; hasMore?: boolean };
+export type CompletionCatalog = { namespaceKind?: 'SCHEMA' | 'CATALOG'; selectedSchema?: string; objects: DbObject[] };
 export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; key?: Record<string, unknown>; values?: Record<string, unknown> };
 export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
