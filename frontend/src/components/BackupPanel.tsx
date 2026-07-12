@@ -38,6 +38,7 @@ import type {
   ActiveTable,
   BackupEditorRequest,
   BackupHistory,
+  BackupHistoryPage,
   BackupMethod,
   BackupSchedulePreview,
   BackupScope,
@@ -68,6 +69,7 @@ import {
 
 const { Text } = Typography;
 const TARGET_PAGE_SIZE = 30;
+const HISTORY_PAGE_SIZE = 20;
 
 export type BackupPanelProps = {
   backups: BackupTask[];
@@ -84,7 +86,7 @@ export type BackupPanelProps = {
   onDelete: (id: number, deleteFile: boolean) => Promise<void>;
   onRun: (id: number) => void;
   onDownload: (id: number) => void;
-  onLoadHistory: (id: number) => Promise<BackupHistory[]>;
+  onLoadHistory: (id: number, page: number, pageSize: number) => Promise<BackupHistoryPage>;
   onDeleteHistory: (taskId: number, historyId: number, deleteFile: boolean) => Promise<void>;
   onDownloadHistory: (taskId: number, historyId: number) => void;
 };
@@ -134,7 +136,10 @@ export function BackupPanel({
   const [taskAction, setTaskAction] = useState<string | null>(null);
   const [historyTask, setHistoryTask] = useState<BackupTask | null>(null);
   const [histories, setHistories] = useState<BackupHistory[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const historyRequestIdRef = useRef(0);
   const [deletingHistoryId, setDeletingHistoryId] = useState<number | null>(null);
   const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
   const [schedulePreview, setSchedulePreview] = useState<BackupSchedulePreview | null>(null);
@@ -384,13 +389,24 @@ export function BackupPanel({
   async function openHistory(task: BackupTask) {
     setHistoryTask(task);
     setHistories([]);
+    setHistoryPage(0);
+    setHistoryHasMore(false);
+    await loadHistoryPage(task, 0);
+  }
+
+  async function loadHistoryPage(task: BackupTask, page: number) {
+    const requestId = ++historyRequestIdRef.current;
     setHistoryLoading(true);
     try {
-      setHistories(await onLoadHistory(task.id));
+      const result = await onLoadHistory(task.id, page, HISTORY_PAGE_SIZE);
+      if (requestId !== historyRequestIdRef.current) return;
+      setHistories(result.items);
+      setHistoryPage(result.page);
+      setHistoryHasMore(result.hasMore);
     } catch {
-      // The parent owns API error feedback; the empty state remains visible.
+      // The parent owns API error feedback; preserve the current page for retry.
     } finally {
-      setHistoryLoading(false);
+      if (requestId === historyRequestIdRef.current) setHistoryLoading(false);
     }
   }
 
@@ -399,7 +415,8 @@ export function BackupPanel({
     setDeletingHistoryId(historyId);
     try {
       await onDeleteHistory(historyTask.id, historyId, Boolean(deleteHistoryFiles[historyId]));
-      setHistories(await onLoadHistory(historyTask.id));
+      const targetPage = histories.length === 1 && historyPage > 0 ? historyPage - 1 : historyPage;
+      await loadHistoryPage(historyTask, targetPage);
       setDeleteHistoryFiles((current) => {
         const next = { ...current };
         delete next[historyId];
@@ -430,17 +447,19 @@ export function BackupPanel({
   }
 
   function taskMenuItems(task: BackupTask): MenuProps['items'] {
+    const running = task.lastStatus === 'RUNNING';
     return [
-      { key: 'edit', icon: <EditOutlined />, label: '编辑任务' },
+      { key: 'edit', icon: <EditOutlined />, label: '编辑任务', disabled: running },
       ...(task.cron?.trim() ? [{
         key: 'toggle',
         icon: task.enabled ? <PauseCircleOutlined /> : <CheckCircleOutlined />,
-        label: task.enabled ? '暂停执行计划' : '启用执行计划'
+        label: task.enabled ? '暂停执行计划' : '启用执行计划',
+        disabled: running
       }] : []),
       { key: 'download', icon: <DownloadOutlined />, label: '下载最近备份', disabled: !task.lastFilePath },
       { key: 'history', icon: <HistoryOutlined />, label: '查看执行历史' },
       { type: 'divider' },
-      { key: 'delete', icon: <DeleteOutlined />, label: '删除任务', danger: true }
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除任务', danger: true, disabled: running }
     ] as MenuProps['items'];
   }
 
@@ -464,6 +483,7 @@ export function BackupPanel({
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务' : '请选择连接'} /> }}
           dataSource={backups}
           renderItem={(backup) => {
+            const taskRunning = backup.lastStatus === 'RUNNING';
             const scheduled = Boolean(backup.cron?.trim());
             const taskSchedulePreview = backup.cron ? listSchedulePreviews[backup.cron.trim()] : undefined;
             const taskZoneId = backup.zoneId || taskSchedulePreview?.zoneId;
@@ -481,8 +501,8 @@ export function BackupPanel({
                     type="primary"
                     size="small"
                     icon={<PlayCircleOutlined />}
-                    loading={loading && runningTaskId === backup.id}
-                    disabled={loading || runningTaskId !== null || Boolean(taskAction)}
+                    loading={taskRunning || (loading && runningTaskId === backup.id)}
+                    disabled={taskRunning || loading || runningTaskId !== null || Boolean(taskAction)}
                     onClick={() => {
                       setRunningTaskId(backup.id);
                       onRun(backup.id);
@@ -508,7 +528,7 @@ export function BackupPanel({
                       <Tag color={!scheduled ? 'default' : backup.enabled ? 'blue' : 'orange'}>
                         {!scheduled ? '手动任务' : backup.enabled ? '计划运行中' : '计划已暂停'}
                       </Tag>
-                      <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
+                      <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : backup.lastStatus === 'RUNNING' ? 'blue' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
                     </Space>
                   )}
                   description={(
@@ -665,6 +685,7 @@ export function BackupPanel({
               }}
             />
           </Form.Item>
+          {!nativeBackup && <Alert type="warning" showIcon message="SQL 数据备份仅逐行导出数据、不包含表结构；遇到二进制字段会停止并报错，超大库优先使用数据库原生备份工具。" />}
 
           <Divider titlePlacement="start" plain>执行计划</Divider>
           <Form.Item label="执行频率" name="scheduleKind" rules={[{ required: true, message: '请选择执行频率' }]}>
@@ -749,7 +770,7 @@ export function BackupPanel({
                     <Input.TextArea rows={3} placeholder="例如：--single-transaction" />
                   </Form.Item>
                 </>
-              ) : <Text type="secondary">SQL 逻辑备份无需配置外部工具。</Text>
+              ) : <Text type="secondary">SQL 数据备份无需配置外部工具。</Text>
             }]}
           />
         </Form>
@@ -763,15 +784,19 @@ export function BackupPanel({
         closable={!deletingHistoryId}
         onCancel={() => {
           if (deletingHistoryId) return;
+          historyRequestIdRef.current += 1;
+          setHistoryLoading(false);
           setHistoryTask(null);
           setHistories([]);
+          setHistoryPage(0);
+          setHistoryHasMore(false);
           setDeleteHistoryFiles({});
         }}
       >
         <List
           size="small"
           loading={historyLoading}
-          pagination={histories.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'small' } : false}
+          pagination={false}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
           dataSource={histories}
           renderItem={(history) => (
@@ -812,7 +837,7 @@ export function BackupPanel({
                       icon={<DeleteOutlined />}
                       aria-label="删除备份历史"
                       loading={deletingHistoryId === history.id}
-                      disabled={loading && deletingHistoryId !== history.id}
+                      disabled={historyTask?.lastStatus === 'RUNNING' || (loading && deletingHistoryId !== history.id)}
                     />
                   </Tooltip>
                 </Popconfirm>
@@ -835,6 +860,13 @@ export function BackupPanel({
             </List.Item>
           )}
         />
+        <div className="backup-history-pagination">
+          <Text type="secondary">第 {historyPage + 1} 页 · 本页 {histories.length} 条</Text>
+          <Space.Compact>
+            <Button size="small" icon={<LeftOutlined />} disabled={historyLoading || historyPage === 0} onClick={() => historyTask && void loadHistoryPage(historyTask, historyPage - 1)}>上一页</Button>
+            <Button size="small" icon={<RightOutlined />} iconPosition="end" disabled={historyLoading || !historyHasMore} onClick={() => historyTask && void loadHistoryPage(historyTask, historyPage + 1)}>下一页</Button>
+          </Space.Compact>
+        </div>
       </Modal>
     </section>
   );
@@ -902,7 +934,9 @@ function RemoteNameSelect({ value, onChange, active, disabled, multiple, maxCoun
     value: item.name,
     label: item.current ? <Space size={4}><span>{item.name}</span><Tag color="blue">当前</Tag></Space> : item.name
   }));
-  const pageCount = Math.max(1, Math.ceil(result.total / Math.max(result.pageSize, 1)));
+  const pageCount = result.totalExact === false
+    ? result.page + (result.hasMore ? 2 : 1)
+    : Math.max(1, Math.ceil(result.total / Math.max(result.pageSize, 1)));
 
   return (
     <Select
@@ -926,7 +960,7 @@ function RemoteNameSelect({ value, onChange, active, disabled, multiple, maxCoun
           {menu}
           <Divider style={{ margin: '6px 0' }} />
           <Space style={{ display: 'flex', justifyContent: 'space-between', padding: '0 8px 6px' }}>
-            <Text type={error ? 'danger' : 'secondary'}>{error || `第 ${result.page + 1} / ${pageCount} 页，共 ${result.total} 项`}</Text>
+            <Text type={error ? 'danger' : 'secondary'}>{error || `第 ${result.page + 1} / ${pageCount} 页，${result.totalExact === false ? `至少 ${result.total}` : `共 ${result.total}`} 项`}</Text>
             <Space.Compact>
               <Button size="small" type="text" icon={<ReloadOutlined />} loading={fetching} onMouseDown={(event) => event.preventDefault()} onClick={() => void fetchPage(true)} />
               <Button size="small" type="text" icon={<LeftOutlined />} disabled={fetching || pageNumber <= 0} onMouseDown={(event) => event.preventDefault()} onClick={() => setPageNumber((page) => Math.max(0, page - 1))} />
@@ -988,10 +1022,10 @@ function monthlyDayOptions() {
 }
 
 function backupMethodOptions(connection: Connection | null, currentMethod?: string) {
-  const options: { value: string; label: string }[] = [{ value: 'SQL', label: 'SQL 逻辑备份' }];
-  const dbType = connection?.dbType?.toLowerCase();
-  if (dbType === 'mysql' || dbType === 'mariadb') options.push({ value: 'MYSQLDUMP', label: 'MySQL mysqldump' });
-  if (dbType === 'oracle') options.push({ value: 'ORACLE_EXP', label: 'Oracle exp' });
+  const options: { value: string; label: string }[] = [{ value: 'SQL', label: 'SQL 数据备份' }];
+  const nativeMethods = connection?.capabilities?.nativeBackupMethods || [];
+  if (nativeMethods.includes('MYSQLDUMP')) options.push({ value: 'MYSQLDUMP', label: 'MySQL mysqldump' });
+  if (nativeMethods.includes('ORACLE_EXP')) options.push({ value: 'ORACLE_EXP', label: 'Oracle exp' });
   if (currentMethod && !options.some((option) => option.value === currentMethod)) {
     options.push({ value: currentMethod, label: `${backupMethodLabel(currentMethod)}（现有配置）` });
   }
@@ -999,9 +1033,9 @@ function backupMethodOptions(connection: Connection | null, currentMethod?: stri
 }
 
 function defaultBackupMethod(connection: Connection | null): BackupMethod {
-  const dbType = connection?.dbType?.toLowerCase();
-  if (dbType === 'mysql' || dbType === 'mariadb') return 'MYSQLDUMP';
-  if (dbType === 'oracle') return 'ORACLE_EXP';
+  const nativeMethods = connection?.capabilities?.nativeBackupMethods || [];
+  if (nativeMethods.includes('MYSQLDUMP')) return 'MYSQLDUMP';
+  if (nativeMethods.includes('ORACLE_EXP')) return 'ORACLE_EXP';
   return 'SQL';
 }
 

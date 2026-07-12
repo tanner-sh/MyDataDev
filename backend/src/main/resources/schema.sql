@@ -48,6 +48,8 @@ ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS tool_path VARCHAR(1000);
 ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS extra_args CLOB;
 ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS native_connect_name VARCHAR(1000);
 
+CREATE INDEX IF NOT EXISTS idx_backup_task_connection_id ON backup_task(connection_id);
+
 CREATE TABLE IF NOT EXISTS backup_task_table (
     task_id BIGINT NOT NULL,
     target_order INT NOT NULL,
@@ -91,3 +93,5 @@ CREATE TABLE IF NOT EXISTS sql_history (
     actor VARCHAR(120),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_sql_history_connection_id ON sql_history(connection_id, id);

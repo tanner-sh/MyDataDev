@@ -14,7 +14,7 @@ import {
 import { Button, Dropdown, Empty, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, Key, ReactNode } from 'react';
+import type { CSSProperties, Key, ReactNode, UIEvent } from 'react';
 import {
   collapseObjectBranch,
   createObjectOpenIntent,
@@ -33,6 +33,9 @@ export type ObjectTreeProps = {
   keyword?: string;
   emptyDescription?: string;
   structureLoadingKey?: string | null;
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
   onLoadStructure: (object: DbObject) => Promise<DbObject | null>;
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
@@ -40,6 +43,16 @@ export type ObjectTreeProps = {
 };
 
 type AggregatedIndex = { name: string; columns: string[]; unique: boolean };
+type FlatRow =
+  | { id: string; kind: 'group'; level: 0; key: Key; label: string; count: number; expanded: boolean }
+  | { id: string; kind: 'object'; level: 1; key: Key; object: DbObject; expanded: boolean; selected: boolean }
+  | { id: string; kind: 'structure-group'; level: 2; key: Key; object: DbObject; structureKind: 'columns' | 'indexes'; label: string; count: number; expanded: boolean }
+  | { id: string; kind: 'column'; level: 3; object: DbObject; name: string; meta: string }
+  | { id: string; kind: 'index'; level: 3; object: DbObject; name: string; meta: string }
+  | { id: string; kind: 'message'; level: 2; object: DbObject; message: 'loading' | 'error' | 'empty' };
+
+const ROW_HEIGHT = 30;
+const OVERSCAN = 10;
 
 function objectIcon(object: DbObject) {
   return object.type.toUpperCase().includes('VIEW') ? <EyeOutlined /> : <TableOutlined />;
@@ -55,15 +68,18 @@ function rowStyle(level: number) {
 
 function aggregateIndexes(object: DbObject): AggregatedIndex[] {
   const indexes = new Map<string, AggregatedIndex>();
-  object.indexes.forEach((index) => {
-    const identity = index.name || `${index.columnName}-index`;
-    const existing = indexes.get(identity);
-    if (existing) {
-      if (!existing.columns.includes(index.columnName)) existing.columns.push(index.columnName);
-      return;
-    }
-    indexes.set(identity, { name: index.name || '未命名索引', columns: [index.columnName], unique: index.unique });
-  });
+  object.indexes
+    .slice()
+    .sort((left, right) => (left.ordinalPosition || 0) - (right.ordinalPosition || 0))
+    .forEach((index) => {
+      const identity = index.name || `${index.columnName}-index`;
+      const existing = indexes.get(identity);
+      if (existing) {
+        if (!existing.columns.includes(index.columnName)) existing.columns.push(index.columnName);
+      } else {
+        indexes.set(identity, { name: index.name || '未命名索引', columns: [index.columnName], unique: index.unique });
+      }
+    });
   return [...indexes.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true, sensitivity: 'base' }));
 }
 
@@ -72,21 +88,11 @@ function HighlightedName({ name, keyword }: { name: string; keyword?: string }) 
   if (!normalizedKeyword) return <>{name}</>;
   const start = name.toLocaleLowerCase().indexOf(normalizedKeyword);
   if (start < 0) return <>{name}</>;
-  return (
-    <>
-      {name.slice(0, start)}
-      <mark className="object-tree-match">{name.slice(start, start + normalizedKeyword.length)}</mark>
-      {name.slice(start + normalizedKeyword.length)}
-    </>
-  );
+  return <>{name.slice(0, start)}<mark className="object-tree-match">{name.slice(start, start + normalizedKeyword.length)}</mark>{name.slice(start + normalizedKeyword.length)}</>;
 }
 
 function TreeSwitcher({ expanded, label, onClick }: { expanded: boolean; label: string; onClick: () => void }) {
-  return (
-    <button className="object-tree-switcher" type="button" aria-label={label} onClick={onClick}>
-      {expanded ? <CaretDownOutlined /> : <CaretRightOutlined />}
-    </button>
-  );
+  return <button className="object-tree-switcher" type="button" aria-label={label} onClick={onClick}>{expanded ? <CaretDownOutlined /> : <CaretRightOutlined />}</button>;
 }
 
 function TreeIcon({ children }: { children?: ReactNode }) {
@@ -99,29 +105,43 @@ export function ObjectTree({
   keyword,
   emptyDescription = '当前 Schema 暂无数据库对象',
   structureLoadingKey,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   onLoadStructure,
   onOpenDetail,
   onOpenTable,
   onBackupTable
 }: ObjectTreeProps) {
-  const openIntentRef = useRef<ReturnType<typeof createObjectOpenIntent> | null>(null);
-  if (!openIntentRef.current) openIntentRef.current = createObjectOpenIntent();
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const openIntentRef = useRef(createObjectOpenIntent());
   const groups = useMemo(() => groupDatabaseObjects(objects), [objects]);
   const groupKeys = useMemo(() => groups.map((group) => treeNodeKey('object-type', group.objects[0]?.schemaName || '', group.key)), [groups]);
-  const groupKeySignature = groupKeys.join('|');
-  const objectListSignature = groups.flatMap((group) => group.objects.map((object) => databaseObjectNodeKey(object))).join('|');
   const [expandedKeys, setExpandedKeys] = useState<Key[]>(groupKeys);
   const [structureErrors, setStructureErrors] = useState<Set<string>>(() => new Set());
+  const [structureLoadingKeys, setStructureLoadingKeys] = useState<Set<string>>(() => new Set());
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(400);
 
   useEffect(() => {
     setExpandedKeys((current) => [...new Set([...groupKeys, ...current])]);
-  }, [groupKeySignature]);
-
-  useEffect(() => () => openIntentRef.current?.cancel(), []);
+  }, [groupKeys.join('|')]);
 
   useEffect(() => {
-    openIntentRef.current?.cancel();
-  }, [objectListSignature]);
+    openIntentRef.current.cancel();
+  }, [objects]);
+
+  useEffect(() => () => openIntentRef.current.cancel(), []);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const update = () => setViewportHeight(Math.max(ROW_HEIGHT, viewport.clientHeight));
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    observer?.observe(viewport);
+    return () => observer?.disconnect();
+  }, []);
 
   const selectedObjectKey = useMemo(() => {
     if (!activeObject) return null;
@@ -129,16 +149,39 @@ export function ObjectTree({
     return matched ? databaseObjectNodeKey(matched) : null;
   }, [activeObject, objects]);
 
+  const rows = useMemo(() => flattenRows(groups, groupKeys, expandedKeys, selectedObjectKey, structureLoadingKey, structureLoadingKeys, structureErrors), [
+    expandedKeys,
+    groupKeys,
+    groups,
+    selectedObjectKey,
+    structureErrors,
+    structureLoadingKey,
+    structureLoadingKeys
+  ]);
+
+  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
+  const visibleRows = rows.slice(start, end);
+
   async function requestStructure(object: DbObject) {
     const identity = objectStructureKey(object);
-    if (structureLoadingKey === identity) return;
+    if (structureLoadingKeys.has(identity)) return;
+    setStructureLoadingKeys((current) => new Set(current).add(identity));
     setStructureErrors((current) => {
       const next = new Set(current);
       next.delete(identity);
       return next;
     });
-    const loaded = await onLoadStructure(object);
-    if (!loaded) setStructureErrors((current) => new Set(current).add(identity));
+    try {
+      const loaded = await onLoadStructure(object);
+      if (!loaded) setStructureErrors((current) => new Set(current).add(identity));
+    } finally {
+      setStructureLoadingKeys((current) => {
+        const next = new Set(current);
+        next.delete(identity);
+        return next;
+      });
+    }
   }
 
   function toggleKey(key: Key) {
@@ -146,10 +189,14 @@ export function ObjectTree({
   }
 
   function setObjectExpanded(object: DbObject, objectKey: Key, expanded: boolean) {
-    setExpandedKeys((current) => expanded
-      ? [...new Set([...keepOnlyObjectBranch(current, objectKey), objectKey])]
-      : collapseObjectBranch(current, objectKey));
+    setExpandedKeys((current) => expanded ? [...new Set([...keepOnlyObjectBranch(current, objectKey), objectKey])] : collapseObjectBranch(current, objectKey));
     if (expanded && object.columns.length === 0 && object.indexes.length === 0) void requestStructure(object);
+  }
+
+  function handleScroll(event: UIEvent<HTMLDivElement>) {
+    const viewport = event.currentTarget;
+    setScrollTop(viewport.scrollTop);
+    if (hasMore && !loadingMore && onLoadMore && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < ROW_HEIGHT * 8) onLoadMore();
   }
 
   function objectMenuItems(object: DbObject, expanded: boolean): MenuProps['items'] {
@@ -161,188 +208,126 @@ export function ObjectTree({
     ];
   }
 
-  function renderMessageRow(key: string, content: ReactNode, icon?: ReactNode) {
+  if (objects.length === 0) return <Empty className="object-tree-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />;
+
+  return (
+    <div ref={viewportRef} className="object-tree-viewport object-tree object-tree-virtual" role="tree" aria-label="数据库对象" onScroll={handleScroll}>
+      <div className="object-tree-virtual-spacer" style={{ height: rows.length * ROW_HEIGHT + (loadingMore ? ROW_HEIGHT : 0) }}>
+        {visibleRows.map((row, visibleIndex) => {
+          const index = start + visibleIndex;
+          return (
+            <div className="object-tree-virtual-row" key={row.id} style={{ transform: `translateY(${index * ROW_HEIGHT}px)` }}>
+              {renderRow(row)}
+            </div>
+          );
+        })}
+        {loadingMore && <div className="object-tree-virtual-row object-tree-load-more" style={{ transform: `translateY(${rows.length * ROW_HEIGHT}px)` }}><Spin size="small" /> 正在加载更多对象…</div>}
+      </div>
+    </div>
+  );
+
+  function renderRow(row: FlatRow) {
+    if (row.kind === 'group') {
+      return (
+        <div className="object-tree-row object-tree-group-row" style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded}>
+          <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'}${row.label}`} onClick={() => toggleKey(row.key)} />
+          <TreeIcon>{row.expanded ? <FolderOpenOutlined /> : <FolderOutlined />}</TreeIcon>
+          <button className="object-tree-row-main" type="button" onClick={() => toggleKey(row.key)}><span className="object-tree-row-label">{row.label}</span><span className="object-tree-count">{row.count}</span></button>
+        </div>
+      );
+    }
+    if (row.kind === 'object') {
+      const displayName = fullObjectName(row.object);
+      const isView = row.object.type.toUpperCase().includes('VIEW');
+      return (
+        <div className={`object-tree-row object-tree-object-row${row.selected ? ' is-selected' : ''}`} style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded} aria-selected={row.selected}>
+          <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'} ${displayName} 的结构`} onClick={() => setObjectExpanded(row.object, row.key, !row.expanded)} />
+          <TreeIcon>{objectIcon(row.object)}</TreeIcon>
+          <button className="object-tree-row-main object-tree-object-trigger" type="button" title={displayName} onClick={() => openIntentRef.current.single(() => onOpenDetail(row.object))} onDoubleClick={() => openIntentRef.current.double(() => isView ? onOpenDetail(row.object) : onOpenTable(row.object))}>
+            <span className="object-tree-object-name"><HighlightedName name={row.object.name} keyword={keyword} /></span>
+          </button>
+          <span className="object-tree-actions">
+            {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => { openIntentRef.current.cancel(); onOpenTable(row.object); }} /></Tooltip>}
+            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { openIntentRef.current.cancel(); if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); } }}>
+              <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
+            </Dropdown>
+          </span>
+        </div>
+      );
+    }
+    if (row.kind === 'structure-group') {
+      return (
+        <div className="object-tree-row object-tree-structure-group-row" style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded}>
+          <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'}${row.label}`} onClick={() => toggleKey(row.key)} />
+          <TreeIcon>{row.structureKind === 'indexes' ? <KeyOutlined /> : <UnorderedListOutlined />}</TreeIcon>
+          <button className="object-tree-row-main" type="button" onClick={() => toggleKey(row.key)}><span className="object-tree-row-label">{row.label}</span><span className="object-tree-count">{row.count}</span></button>
+        </div>
+      );
+    }
+    if (row.kind === 'message') {
+      return (
+        <div className="object-tree-row object-tree-message-row" style={rowStyle(row.level)} role="treeitem">
+          <span className="object-tree-switcher-placeholder" /><TreeIcon>{row.message === 'loading' ? <Spin size="small" /> : undefined}</TreeIcon>
+          <span className="object-tree-row-main">{row.message === 'loading' ? '正在加载结构…' : row.message === 'empty' ? '暂无字段或索引' : <span className="object-tree-error-message"><span>结构加载失败</span><Button type="link" size="small" onClick={() => void requestStructure(row.object)}>重试</Button></span>}</span>
+        </div>
+      );
+    }
     return (
-      <div key={key} className="object-tree-row object-tree-message-row" style={rowStyle(2)} role="treeitem">
-        <span className="object-tree-switcher-placeholder" />
-        <TreeIcon>{icon}</TreeIcon>
-        <span className="object-tree-row-main">{content}</span>
+      <div className="object-tree-row object-tree-leaf-row" style={rowStyle(row.level)} role="treeitem">
+        <span className="object-tree-switcher-placeholder" /><TreeIcon>{row.kind === 'index' ? <KeyOutlined /> : undefined}</TreeIcon>
+        <span className="object-tree-row-main"><span className="object-tree-leaf-name" title={row.name}>{row.name}</span><span className="object-tree-leaf-meta" title={row.meta}>{row.meta}</span></span>
       </div>
     );
   }
+}
 
-  function renderStructure(object: DbObject, objectKey: string) {
-    const identity = objectStructureKey(object);
-    if (structureLoadingKey === identity) {
-      return renderMessageRow(`${objectKey}:loading`, <span>正在加载结构…</span>, <Spin size="small" />);
-    }
-    if (structureErrors.has(identity)) {
-      return renderMessageRow(`${objectKey}:error`, (
-        <span className="object-tree-error-message">
-          <span>结构加载失败</span>
-          <Button type="link" size="small" onClick={() => void requestStructure(object)}>重试</Button>
-        </span>
-      ));
-    }
-
-    const rows: ReactNode[] = [];
-    if (object.columns.length > 0) {
-      const fieldsKey = `${objectKey}:columns`;
-      const fieldsExpanded = expandedKeys.includes(fieldsKey);
-      rows.push(
-        <div key={fieldsKey} role="treeitem" aria-expanded={fieldsExpanded}>
-          <div className="object-tree-row object-tree-structure-group-row" style={rowStyle(2)}>
-            <TreeSwitcher expanded={fieldsExpanded} label={`${fieldsExpanded ? '收起' : '展开'}字段`} onClick={() => toggleKey(fieldsKey)} />
-            <TreeIcon><UnorderedListOutlined /></TreeIcon>
-            <button className="object-tree-row-main" type="button" onClick={() => toggleKey(fieldsKey)}>
-              <span className="object-tree-row-label">字段</span>
-              <span className="object-tree-count">{object.columns.length}</span>
-            </button>
-          </div>
-          {fieldsExpanded && (
-            <div role="group">
-              {object.columns
-                .slice()
-                .sort((left, right) => (left.ordinalPosition ?? Number.MAX_SAFE_INTEGER) - (right.ordinalPosition ?? Number.MAX_SAFE_INTEGER))
-                .map((column) => (
-                  <div key={`${objectKey}:column:${encodeURIComponent(column.name)}`} className="object-tree-row object-tree-leaf-row" style={rowStyle(3)} role="treeitem">
-                    <span className="object-tree-switcher-placeholder" />
-                    <TreeIcon />
-                    <span className="object-tree-row-main">
-                      <span className="object-tree-leaf-name" title={column.name}>{column.name}</span>
-                      <span className="object-tree-leaf-meta" title={column.type}>{column.type}</span>
-                    </span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    const indexes = aggregateIndexes(object);
-    if (indexes.length > 0) {
-      const indexesKey = `${objectKey}:indexes`;
-      const indexesExpanded = expandedKeys.includes(indexesKey);
-      rows.push(
-        <div key={indexesKey} role="treeitem" aria-expanded={indexesExpanded}>
-          <div className="object-tree-row object-tree-structure-group-row" style={rowStyle(2)}>
-            <TreeSwitcher expanded={indexesExpanded} label={`${indexesExpanded ? '收起' : '展开'}索引`} onClick={() => toggleKey(indexesKey)} />
-            <TreeIcon><KeyOutlined /></TreeIcon>
-            <button className="object-tree-row-main" type="button" onClick={() => toggleKey(indexesKey)}>
-              <span className="object-tree-row-label">索引</span>
-              <span className="object-tree-count">{indexes.length}</span>
-            </button>
-          </div>
-          {indexesExpanded && (
-            <div role="group">
-              {indexes.map((index) => (
-                <div key={`${objectKey}:index:${encodeURIComponent(index.name)}`} className="object-tree-row object-tree-leaf-row" style={rowStyle(3)} role="treeitem">
-                  <span className="object-tree-switcher-placeholder" />
-                  <TreeIcon><KeyOutlined /></TreeIcon>
-                  <span className="object-tree-row-main">
-                    <span className="object-tree-leaf-name" title={index.name}>{index.name}</span>
-                    <span className="object-tree-leaf-meta" title={index.columns.join(', ')}>{index.unique ? '唯一 · ' : ''}{index.columns.join(', ')}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return rows.length > 0 ? rows : renderMessageRow(`${objectKey}:empty`, <span>暂无字段或索引</span>);
-  }
-
-  if (objects.length === 0) {
-    return <Empty className="object-tree-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />;
-  }
-
-  return (
-    <div className="object-tree-viewport object-tree" role="tree" aria-label="数据库对象">
-      {groups.map((group, groupIndex) => {
-        const groupKey = groupKeys[groupIndex];
-        const groupExpanded = expandedKeys.includes(groupKey);
-        return (
-          <div className="object-tree-group" key={String(groupKey)} role="treeitem" aria-expanded={groupExpanded}>
-            <div className="object-tree-row object-tree-group-row" style={rowStyle(0)}>
-              <TreeSwitcher expanded={groupExpanded} label={`${groupExpanded ? '收起' : '展开'}${group.label}`} onClick={() => toggleKey(groupKey)} />
-              <TreeIcon>{groupExpanded ? <FolderOpenOutlined /> : <FolderOutlined />}</TreeIcon>
-              <button className="object-tree-row-main" type="button" onClick={() => toggleKey(groupKey)}>
-                <span className="object-tree-row-label">{group.label}</span>
-                <span className="object-tree-count">{group.objects.length}</span>
-              </button>
-            </div>
-            {groupExpanded && (
-              <div role="group">
-                {group.objects.map((object) => {
-                  const objectKey = databaseObjectNodeKey(object);
-                  const objectExpanded = expandedKeys.includes(objectKey);
-                  const selected = selectedObjectKey === objectKey;
-                  const displayName = fullObjectName(object);
-                  const isView = object.type.toUpperCase().includes('VIEW');
-                  return (
-                    <div className="object-tree-object" key={objectKey} role="treeitem" aria-expanded={objectExpanded} aria-selected={selected}>
-                      <div className={`object-tree-row object-tree-object-row${selected ? ' is-selected' : ''}`} style={rowStyle(1)}>
-                        <TreeSwitcher
-                          expanded={objectExpanded}
-                          label={`${objectExpanded ? '收起' : '展开'} ${displayName} 的结构`}
-                          onClick={() => setObjectExpanded(object, objectKey, !objectExpanded)}
-                        />
-                        <TreeIcon>{objectIcon(object)}</TreeIcon>
-                        <button
-                          className="object-tree-row-main object-tree-object-trigger"
-                          type="button"
-                          title={displayName}
-                          onClick={() => openIntentRef.current?.single(() => onOpenDetail(object))}
-                          onDoubleClick={() => openIntentRef.current?.double(() => isView ? onOpenDetail(object) : onOpenTable(object))}
-                        >
-                          <span className="object-tree-object-name"><HighlightedName name={object.name} keyword={keyword} /></span>
-                        </button>
-                        <span className="object-tree-actions">
-                          {!isView && (
-                            <Tooltip title="打开表数据">
-                              <Button
-                                className="object-tree-action"
-                                type="text"
-                                size="small"
-                                icon={<TableOutlined />}
-                                aria-label={`打开 ${displayName} 的表数据`}
-                                onClick={() => {
-                                  openIntentRef.current?.cancel();
-                                  onOpenTable(object);
-                                }}
-                              />
-                            </Tooltip>
-                          )}
-                          <Dropdown
-                            trigger={['click']}
-                            menu={{
-                              items: objectMenuItems(object, objectExpanded),
-                              onClick: ({ key }) => {
-                                openIntentRef.current?.cancel();
-                                if (key === 'detail') onOpenDetail(object);
-                                if (key === 'structure') setObjectExpanded(object, objectKey, !objectExpanded);
-                                if (key === 'backup') onBackupTable?.(object);
-                              }
-                            }}
-                          >
-                            <Tooltip title="更多操作">
-                              <Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} />
-                            </Tooltip>
-                          </Dropdown>
-                        </span>
-                      </div>
-                      {objectExpanded && <div role="group">{renderStructure(object, objectKey)}</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
+function flattenRows(
+  groups: ReturnType<typeof groupDatabaseObjects>,
+  groupKeys: Key[],
+  expandedKeys: Key[],
+  selectedObjectKey: string | null,
+  structureLoadingKey: string | null | undefined,
+  structureLoadingKeys: Set<string>,
+  structureErrors: Set<string>
+) {
+  const rows: FlatRow[] = [];
+  groups.forEach((group, groupIndex) => {
+    const groupKey = groupKeys[groupIndex];
+    const groupExpanded = expandedKeys.includes(groupKey);
+    rows.push({ id: String(groupKey), kind: 'group', level: 0, key: groupKey, label: group.label, count: group.objects.length, expanded: groupExpanded });
+    if (!groupExpanded) return;
+    group.objects.forEach((object) => {
+      const objectKey = databaseObjectNodeKey(object);
+      const objectExpanded = expandedKeys.includes(objectKey);
+      rows.push({ id: objectKey, kind: 'object', level: 1, key: objectKey, object, expanded: objectExpanded, selected: selectedObjectKey === objectKey });
+      if (!objectExpanded) return;
+      const identity = objectStructureKey(object);
+      if (structureLoadingKey === identity || structureLoadingKeys.has(identity)) {
+        rows.push({ id: `${objectKey}:loading`, kind: 'message', level: 2, object, message: 'loading' });
+        return;
+      }
+      if (structureErrors.has(identity)) {
+        rows.push({ id: `${objectKey}:error`, kind: 'message', level: 2, object, message: 'error' });
+        return;
+      }
+      let hasStructure = false;
+      if (object.columns.length > 0) {
+        hasStructure = true;
+        const key = `${objectKey}:columns`;
+        const expanded = expandedKeys.includes(key);
+        rows.push({ id: key, kind: 'structure-group', level: 2, key, object, structureKind: 'columns', label: '字段', count: object.columns.length, expanded });
+        if (expanded) object.columns.slice().sort((left, right) => (left.ordinalPosition ?? Number.MAX_SAFE_INTEGER) - (right.ordinalPosition ?? Number.MAX_SAFE_INTEGER)).forEach((column) => rows.push({ id: `${objectKey}:column:${encodeURIComponent(column.name)}`, kind: 'column', level: 3, object, name: column.name, meta: column.type }));
+      }
+      const indexes = aggregateIndexes(object);
+      if (indexes.length > 0) {
+        hasStructure = true;
+        const key = `${objectKey}:indexes`;
+        const expanded = expandedKeys.includes(key);
+        rows.push({ id: key, kind: 'structure-group', level: 2, key, object, structureKind: 'indexes', label: '索引', count: indexes.length, expanded });
+        if (expanded) indexes.forEach((index) => rows.push({ id: `${objectKey}:index:${encodeURIComponent(index.name)}`, kind: 'index', level: 3, object, name: index.name, meta: `${index.unique ? '唯一 · ' : ''}${index.columns.join(', ')}` }));
+      }
+      if (!hasStructure) rows.push({ id: `${objectKey}:empty`, kind: 'message', level: 2, object, message: 'empty' });
+    });
+  });
+  return rows;
 }

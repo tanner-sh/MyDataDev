@@ -1,34 +1,44 @@
-export type Connection = {
+export type Connection = {
   id: number;
   name: string;
   dbType: string;
   jdbcUrl: string;
   username?: string;
   environment: string;
-  readonly: boolean;
-};
+  readonly: boolean;
+  capabilities: DatabaseCapabilities;
+};
+
+export type DatabaseCapabilities = {
+  tableBrowse: boolean;
+  tableEdit: boolean;
+  tableDesign: boolean;
+  explain: boolean;
+  nativeBackupMethods: string[];
+};
 
 export type DbObject = {
   schemaName?: string;
   name: string;
   type: string;
   columns: { name: string; type: string; size: number; nullable: boolean; remarks?: string; ordinalPosition?: number; defaultValue?: string }[];
-  indexes: { name: string; columnName: string; unique: boolean }[];
+  indexes: { name: string; columnName: string; unique: boolean; ordinalPosition?: number }[];
 };
 
 export type ObjectDetail = DbObject & {
   primaryKeys: string[];
   primaryKeyName?: string | null;
-  rowCount?: number | null;
-  ddl: string;
-  ddlSource?: string;
+  structureVersion: string;
 };
+
+export type ObjectDdl = { ddl: string; source?: string };
+export type ObjectRowCount = { value?: number | null; exact: boolean; elapsedMs: number };
 
 export type ObjectRelation = { constraintName?: string; pkSchemaName?: string; pkTableName: string; pkColumnName: string; fkSchemaName?: string; fkTableName: string; fkColumnName: string };
 export type ObjectRelations = { importedKeys: ObjectRelation[]; exportedKeys: ObjectRelation[] };
 export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean };
 export type IndexDesign = { name: string; columns: string[]; unique: boolean; originalName?: string; deleted: boolean };
-export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; confirmation?: string };
+export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; structureVersion: string; confirmation?: string };
 export type TableDesignResponse = { sql: string[]; message: string };
 export type ObjectStructure = DbObject;
 export type Metadata = {
@@ -38,13 +48,15 @@ export type Metadata = {
   namespaceKind?: 'SCHEMA' | 'CATALOG';
   objects: DbObject[];
   totalObjects: number;
+  totalObjectsExact?: boolean;
   page: number;
   pageSize: number;
   hasMore: boolean;
   cachedAt?: string;
   cacheHit?: boolean;
 };
-export type SqlResult = { columns: string[]; rows: Record<string, unknown>[]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean };
+export type ResultColumn = { key: string; label: string; typeName: string };
+export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
@@ -60,6 +72,7 @@ export type BackupTargetPage = {
   pageSize: number;
   total: number;
   hasMore: boolean;
+  totalExact?: boolean;
 };
 export type BackupTargetQuery = { keyword?: string; page: number; pageSize: number; refresh?: boolean };
 export type BackupTableTargetQuery = BackupTargetQuery & { namespaceName: string };
@@ -103,6 +116,7 @@ export type BackupHistory = {
   startedAt?: string;
   finishedAt?: string;
 };
+export type BackupHistoryPage = { items: BackupHistory[]; page: number; pageSize: number; hasMore: boolean };
 export type BackupTaskForm = {
   name: string;
   scope: BackupScope;
@@ -118,10 +132,11 @@ export type BackupTaskForm = {
   enabled: boolean;
 };
 export type ActiveTable = { schemaName?: string; tableName: string };
-export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; deleted?: boolean; inserted?: boolean };
-export type TableData = { columns: string[]; rows: Record<string, unknown>[]; keyColumns: string[]; editable: boolean; page?: number; pageSize?: number; hasMore?: boolean };
-export type CompletionCatalog = { namespaceKind?: 'SCHEMA' | 'CATALOG'; selectedSchema?: string; objects: DbObject[] };
-export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; key?: Record<string, unknown>; values?: Record<string, unknown> };
+export type TableColumn = { name: string; typeName: string; jdbcType: number; nullable: boolean; editable?: boolean; truncated?: boolean };
+export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; keyToken?: string; touchedColumns?: string[]; deleted?: boolean; inserted?: boolean };
+export type TableData = { columns: TableColumn[]; rows: Record<string, unknown>[]; rowKeyTokens?: string[]; keyColumns: string[]; editable: boolean; navigationMode: 'KEYSET' | 'OFFSET'; nextCursor?: string | null; hasMore: boolean };
+export type CompletionCatalog = { namespaceKind?: 'SCHEMA' | 'CATALOG'; selectedSchema?: string; objects: DbObject[]; hasMore?: boolean };
+export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; keyToken?: string; values?: Record<string, unknown>; originalValues?: Record<string, unknown> };
 export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
@@ -131,6 +146,6 @@ export type SqlCompletionItem = { label: string; kind: string; insertText: strin
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };
-export type ResultRow = { key: string } & Record<string, unknown>;
+export type ResultRow = { key: string; values: unknown[] };
 export type EditableRow = TableRow;
 export type RefreshConnectionsOptions = { retry?: boolean };

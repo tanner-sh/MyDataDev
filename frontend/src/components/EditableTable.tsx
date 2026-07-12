@@ -3,14 +3,15 @@ import { Button, Empty, Input, Table, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
-import type { EditableRow, TableData, TableRow } from '../types';
+import type { EditableRow, TableColumn, TableData, TableRow } from '../types';
+import { sameCellValue } from '../utils';
 
 export function EditableTable({ data, rows, readonly = false, loading = false, onEdit, onDelete }: {
   data: TableData | null;
   rows: TableRow[];
   readonly?: boolean;
   loading?: boolean;
-  onEdit: (rowId: string, column: string, value: string) => void;
+  onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
 }) {
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(data) });
@@ -36,16 +37,17 @@ export function EditableTable({ data, rows, readonly = false, loading = false, o
         )
       },
       ...data.columns.map((column) => ({
-        title: column,
-        dataIndex: ['values', column],
-        key: column,
+        title: <span title={column.truncated ? `${column.typeName} · 本页存在超长值，已截断并禁用该列编辑` : column.typeName}>{column.name}{column.truncated ? ' ⚠' : ''}</span>,
+        key: column.name,
         width: 180,
         render: (_: unknown, row: EditableRow) => (
           <EditableCell
             rowId={row.id}
             column={column}
-            value={row.values[column]}
-            disabled={readonly || loading || row.deleted || (!data.editable && !row.inserted)}
+            value={row.values[column.name]}
+            inserted={Boolean(row.inserted)}
+            touched={!row.inserted || Boolean(row.touchedColumns?.includes(column.name))}
+            disabled={readonly || loading || row.deleted || column.editable === false || (!data.editable && !row.inserted)}
             onCommit={onEdit}
           />
         )
@@ -65,50 +67,68 @@ export function EditableTable({ data, rows, readonly = false, loading = false, o
         loading={loading}
         rowKey="id"
         pagination={false}
+        virtual={Boolean(scrollY)}
         rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : isUpdated(row) ? 'updated-row' : ''}
-        scroll={{ x: 'max-content', ...(scrollY ? { y: scrollY } : {}) }}
+        scroll={{ x: Math.max(800, data.columns.length * 180 + 74), ...(scrollY ? { y: scrollY } : {}) }}
       />
     </div>
   );
 }
 
-function EditableCell({ rowId, column, value, disabled, onCommit }: {
+function EditableCell({ rowId, column, value, inserted, touched, disabled, onCommit }: {
   rowId: string;
-  column: string;
+  column: TableColumn;
   value: unknown;
+  inserted: boolean;
+  touched: boolean;
   disabled: boolean;
-  onCommit: (rowId: string, column: string, value: string) => void;
+  onCommit: (rowId: string, column: string, value: unknown) => void;
 }) {
   const normalizedValue = String(value ?? '');
   const [draft, setDraft] = useState(normalizedValue);
+  const mode = inserted && !touched ? 'default' : value == null ? 'null' : 'value';
 
   useEffect(() => {
     setDraft(normalizedValue);
-  }, [column, normalizedValue, rowId]);
+  }, [column.name, normalizedValue, rowId, touched]);
 
   const commit = () => {
-    if (draft !== normalizedValue) onCommit(rowId, column, draft);
+    if (mode === 'value' && draft !== normalizedValue) onCommit(rowId, column.name, draft);
   };
 
   return (
-    <Input
-      size="small"
-      disabled={disabled}
-      value={draft}
-      aria-label={`${column}，行 ${rowId}`}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
-      onPressEnter={(event) => event.currentTarget.blur()}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          setDraft(normalizedValue);
-        }
-      }}
-    />
+    <div className="editable-cell-control">
+      <Input
+        size="small"
+        disabled={disabled}
+        value={mode === 'value' ? draft : ''}
+        placeholder={mode === 'default' ? 'DEFAULT' : mode === 'null' ? 'NULL' : undefined}
+        aria-label={`${column.name}，行 ${rowId}`}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          if (mode !== 'value') onCommit(rowId, column.name, event.target.value);
+        }}
+        onBlur={commit}
+        onPressEnter={(event) => event.currentTarget.blur()}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setDraft(normalizedValue);
+        }}
+      />
+      {!disabled && inserted && touched && (
+        <Tooltip title="使用数据库默认值">
+          <Button size="small" type="text" onMouseDown={(event) => event.preventDefault()} onClick={() => onCommit(rowId, column.name, undefined)}>默认</Button>
+        </Tooltip>
+      )}
+      {!disabled && column.nullable && (
+        <Tooltip title={mode === 'null' ? '改为空字符串' : '设为 NULL'}>
+          <Button size="small" type="text" onMouseDown={(event) => event.preventDefault()} onClick={() => onCommit(rowId, column.name, mode === 'null' ? '' : null)}>{mode === 'null' ? '空串' : 'NULL'}</Button>
+        </Tooltip>
+      )}
+    </div>
   );
 }
 
 function isUpdated(row: TableRow) {
   if (!row.original) return false;
-  return Object.keys(row.values).some((column) => row.values[column] !== row.original?.[column]);
+  return Object.keys(row.values).some((column) => !sameCellValue(row.values[column], row.original?.[column]));
 }

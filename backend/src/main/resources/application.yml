@@ -26,3 +26,4 @@ app:
     timeout-seconds: 60
   backup:
     directory: ./backups
+    timeout-seconds: 7200

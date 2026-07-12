@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -41,12 +43,18 @@ class MetadataServiceTest {
         assertThat(response.pageSize()).isEqualTo(1);
         assertThat(response.hasMore()).isTrue();
         assertThat(response.totalObjects()).isEqualTo(2);
+        assertThat(response.totalObjectsExact()).isFalse();
         assertThat(response.cacheHit()).isFalse();
         assertThat(response.cachedAt()).isNotBlank();
         assertThat(response.objects()).hasSize(1);
         assertThat(response.objects().get(0).name()).contains("ALPHA");
         assertThat(response.objects().get(0).columns()).isEmpty();
         assertThat(response.objects().get(0).indexes()).isEmpty();
+
+        MetadataResponse lastPage = service.inspect(1L, response.selectedSchema(), "alpha", 1, 1, false);
+        assertThat(lastPage.hasMore()).isFalse();
+        assertThat(lastPage.totalObjectsExact()).isTrue();
+        assertThat(lastPage.totalObjects()).isEqualTo(2);
 
         var completionCatalog = service.completionCatalog(1L, response.selectedSchema(), false);
         assertThat(completionCatalog.namespaceKind()).isEqualTo("SCHEMA");
@@ -118,7 +126,58 @@ class MetadataServiceTest {
     }
 
     @Test
-    void loadsObjectDetailWithPrimaryKeysIndexesRowCountAndDdl() throws Exception {
+    void treatsJdbcMetadataWildcardsAsLiteralObjectNames() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE orders_2024(id BIGINT PRIMARY KEY, only_expected VARCHAR(20))");
+            connection.createStatement().execute("CREATE TABLE ordersX2024(id BIGINT PRIMARY KEY, from_other_table VARCHAR(20))");
+        }
+
+        ObjectDetail detail = service(url).detail(1L, "PUBLIC", "ORDERS_2024");
+
+        assertThat(detail.columns()).extracting("name")
+                .containsExactly("ID", "ONLY_EXPECTED")
+                .doesNotContain("FROM_OTHER_TABLE");
+    }
+
+    @Test
+    void keepsCaseSensitiveObjectsInSeparateMetadataCacheEntries() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE \"Foo\"(\"UpperColumn\" INT)");
+            connection.createStatement().execute("CREATE TABLE \"foo\"(\"lowerColumn\" INT)");
+        }
+        MetadataService service = service(url);
+
+        ObjectDetail upper = service.detail(1L, "PUBLIC", "Foo");
+        ObjectDetail lower = service.detail(1L, "PUBLIC", "foo");
+
+        assertThat(upper.columns()).extracting("name").containsExactly("UpperColumn");
+        assertThat(lower.columns()).extracting("name").containsExactly("lowerColumn");
+    }
+
+    @Test
+    void requiresExactNamespaceWhenCaseFoldedNameIsAmbiguous() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE SCHEMA \"Foo\"");
+            connection.createStatement().execute("CREATE SCHEMA \"foo\"");
+            connection.createStatement().execute("CREATE TABLE \"Foo\".upper_table(id INT)");
+            connection.createStatement().execute("CREATE TABLE \"foo\".lower_table(id INT)");
+        }
+        MetadataService service = service(url);
+
+        assertThat(service.inspect(1L, "Foo", null, 0, 20, false).objects())
+                .extracting("name").containsExactly("UPPER_TABLE");
+        assertThat(service.inspect(1L, "foo", null, 0, 20, false).objects())
+                .extracting("name").containsExactly("LOWER_TABLE");
+        assertThatThrownBy(() -> service.inspect(1L, "FOO", null, 0, 20, false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("大小写不明确");
+    }
+
+    @Test
+    void loadsStructuralDetailAndDefersExpensiveRowCountAndDdl() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY, name VARCHAR(40) NOT NULL)");
@@ -127,18 +186,21 @@ class MetadataServiceTest {
         }
         MetadataService service = service(url);
         ObjectDetail detail = service.detail(1L, null, "USERS");
+        var rowCount = service.rowCount(1L, null, "USERS");
+        var ddl = service.ddl(1L, null, "USERS", false);
 
         assertThat(detail.name()).isEqualTo("USERS");
         assertThat(detail.primaryKeys()).containsExactly("ID");
-        assertThat(detail.rowCount()).isEqualTo(2L);
         assertThat(detail.indexes()).anyMatch(index -> "IDX_USERS_NAME".equals(index.name()) && "NAME".equals(index.columnName()));
-        assertThat(detail.ddl()).contains("CREATE TABLE");
-        assertThat(detail.ddl()).contains("\"ID\" BIGINT NOT NULL");
-        assertThat(detail.ddl()).contains("PRIMARY KEY (\"ID\")");
+        assertThat(rowCount.exact()).isTrue();
+        assertThat(rowCount.value()).isEqualTo(2L);
+        assertThat(ddl.ddl()).contains("CREATE TABLE");
+        assertThat(ddl.ddl()).contains("\"ID\" BIGINT NOT NULL");
+        assertThat(ddl.ddl()).contains("PRIMARY KEY (\"ID\")");
     }
 
     @Test
-    void skipsRowCountForViews() throws Exception {
+    void returnsViewDetailWithoutRunningCountAndLoadsDdlOnDemand() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
@@ -146,10 +208,10 @@ class MetadataServiceTest {
         }
         MetadataService service = service(url);
         ObjectDetail detail = service.detail(1L, null, "ACTIVE_USERS");
+        var ddl = service.ddl(1L, null, "ACTIVE_USERS", false);
 
         assertThat(detail.type()).contains("VIEW");
-        assertThat(detail.rowCount()).isNull();
-        assertThat(detail.ddl()).contains("视图定义反查暂未实现");
+        assertThat(ddl.ddl()).contains("视图定义反查暂未实现");
     }
 
     @Test
@@ -176,6 +238,7 @@ class MetadataServiceTest {
         }
 
         MetadataService service = service(url);
+        String structureVersion = service.detail(1L, null, "USERS", true).structureVersion();
         var response = service.previewDesign(1L, new TableDesignRequest(
                 null,
                 "USERS",
@@ -186,12 +249,76 @@ class MetadataServiceTest {
                 ),
                 List.of(new IndexDesign("IDX_USERS_EMAIL", List.of("EMAIL"), false, null, false)),
                 List.of("ID"),
+                structureVersion,
                 null
         ));
 
         assertThat(response.sql()).anyMatch(sql -> sql.contains("RENAME COLUMN"));
         assertThat(response.sql()).anyMatch(sql -> sql.contains("ADD COLUMN"));
         assertThat(response.sql()).anyMatch(sql -> sql.contains("CREATE INDEX"));
+    }
+
+    @Test
+    void rejectsStaleTableDesignWhenLiveStructureChanged() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+        ObjectDetail original = service.detail(1L, null, "USERS", true);
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("ALTER TABLE users ADD COLUMN external_value VARCHAR(40)");
+        }
+
+        TableDesignRequest request = new TableDesignRequest(
+                null,
+                "USERS",
+                List.of(new ColumnDesign("ID", "BIGINT", null, false, null, "ID", false)),
+                List.of(),
+                List.of("ID"),
+                original.structureVersion(),
+                null
+        );
+
+        assertThatThrownBy(() -> service.previewDesign(1L, request))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        problem -> assertThat(problem.code()).isEqualTo("STALE_TABLE_DESIGN"));
+        assertThat(service.detail(1L, null, "USERS", true).columns())
+                .extracting("name")
+                .contains("EXTERNAL_VALUE");
+    }
+
+    @Test
+    void evictsDetailCacheWhenLaterDdlStatementFailsAfterPartialSuccess() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(name VARCHAR(40))");
+        }
+        MetadataService service = service(url);
+        ObjectDetail original = service.detail(1L, null, "USERS");
+        assertThat(original.columns()).extracting("name").contains("NAME");
+
+        TableDesignRequest request = new TableDesignRequest(
+                null,
+                "USERS",
+                List.of(
+                        new ColumnDesign("RENAMED", "VARCHAR", 40, true, null, "NAME", false),
+                        new ColumnDesign("BROKEN", "THIS_TYPE_DOES_NOT_EXIST", null, true, null, null, false)
+                ),
+                List.of(),
+                List.of(),
+                original.structureVersion(),
+                "USERS"
+        );
+
+        assertThatThrownBy(() -> service.executeDesign(1L, request, "admin"))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("DDL_PARTIALLY_APPLIED");
+                    assertThat(problem.details().get("executedStatements")).asList().isNotEmpty();
+                });
+        assertThat(service.detail(1L, null, "USERS").columns()).extracting("name")
+                .contains("RENAMED")
+                .doesNotContain("NAME");
     }
 
     private MetadataService service(String url) throws Exception {

@@ -4,6 +4,8 @@ import com.example.dbadmin.dto.ApiDtos.CompletionCatalogResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.ObjectDdlResponse;
+import com.example.dbadmin.dto.ApiDtos.ObjectRowCountResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
@@ -38,10 +40,12 @@ public class MetadataController {
             @PathVariable long connectionId,
             @RequestParam(required = false) String schema,
             @RequestParam(required = false) String namespace,
+            @RequestParam(required = false) String prefix,
+            @RequestParam(required = false) Integer limit,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
         String requestedNamespace = namespace == null || namespace.isBlank() ? schema : namespace;
-        return service.completionCatalog(connectionId, requestedNamespace, refresh);
+        return service.completionCatalog(connectionId, requestedNamespace, prefix, limit, refresh);
     }
 
     @GetMapping("/{connectionId}/backup-targets/namespaces")
@@ -72,6 +76,16 @@ public class MetadataController {
         return service.detail(connectionId, schemaName, objectName, refresh);
     }
 
+    @GetMapping("/{connectionId}/objects/ddl")
+    public ObjectDdlResponse ddl(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        return service.ddl(connectionId, schemaName, objectName, refresh);
+    }
+
+    @GetMapping("/{connectionId}/objects/row-count")
+    public ObjectRowCountResponse rowCount(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName) throws Exception {
+        return service.rowCount(connectionId, schemaName, objectName);
+    }
+
     @GetMapping("/{connectionId}/objects/structure")
     public ObjectStructure structure(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
         return service.structure(connectionId, schemaName, objectName, refresh);
@@ -88,7 +102,12 @@ public class MetadataController {
     }
 
     @PostMapping("/{connectionId}/objects/design/execute")
-    public TableDesignResponse executeDesign(@PathVariable long connectionId, @Valid @RequestBody TableDesignRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return service.executeDesign(connectionId, request, actor);
+    public TableDesignResponse executeDesign(
+            @PathVariable long connectionId,
+            @Valid @RequestBody TableDesignRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return service.executeDesign(connectionId, request, actor, productionConfirmation);
     }
 }

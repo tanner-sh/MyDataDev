@@ -16,6 +16,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -30,23 +31,41 @@ public class SqlController {
     }
 
     @PostMapping("/execute")
-    public SqlResult execute(@Valid @RequestBody SqlRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor);
+    public SqlResult execute(
+            @Valid @RequestBody SqlRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation);
     }
 
     @PostMapping("/execute-script")
-    public SqlScriptResponse executeScript(@Valid @RequestBody SqlScriptRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), actor);
+    public SqlScriptResponse executeScript(
+            @Valid @RequestBody SqlScriptRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation);
     }
 
     @PostMapping("/explain")
-    public SqlResult explain(@Valid @RequestBody SqlRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return sqlService.explain(request.connectionId(), request.sql(), actor);
+    public SqlResult explain(
+            @Valid @RequestBody SqlRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return sqlService.explain(request.connectionId(), request.sql(), actor, productionConfirmation);
     }
 
     @PostMapping("/format")
     public FormatResponse format(@Valid @RequestBody FormatRequest request) {
         return new FormatResponse(sqlService.format(request.sql()));
+    }
+
+    @PostMapping("/executions/{executionId}/cancel")
+    public com.example.dbadmin.dto.ApiDtos.MessageResponse cancel(@PathVariable String executionId) throws Exception {
+        boolean cancelled = sqlService.cancel(executionId);
+        return new com.example.dbadmin.dto.ApiDtos.MessageResponse(cancelled, cancelled ? "已发送取消请求" : "SQL 已结束或不存在");
     }
 
     @GetMapping("/history")
@@ -60,17 +79,35 @@ public class SqlController {
     }
 
     @PostMapping("/export")
-    public ResponseEntity<String> export(@Valid @RequestBody ExportRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        String body = exportService.export(request.connectionId(), request.sql(), request.format(), actor);
+    public ResponseEntity<StreamingResponseBody> export(
+            @Valid @RequestBody ExportRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
         String format = normalizedExportFormat(request.format());
+        ExportService.PreparedExport prepared = exportService.prepare(
+                request.connectionId(), request.sql(), format, actor, productionConfirmation
+        );
+        StreamingResponseBody body = output -> {
+            try {
+                prepared.writeTo(output);
+            } catch (java.io.IOException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new java.io.IOException(e.getMessage(), e);
+            }
+        };
         return ResponseEntity.ok()
                 .contentType(exportContentType(format))
+                .contentLength(prepared.size())
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"query-result." + format + "\"")
+                .header("X-Export-Row-Limit", String.valueOf(ExportService.EXPORT_MAX_ROWS))
+                .header("X-Export-Truncated", String.valueOf(prepared.truncated()))
                 .body(body);
     }
 
     private String normalizedExportFormat(String format) {
-        String normalized = format == null ? "" : format.toLowerCase();
+        String normalized = format == null ? "" : format.toLowerCase(java.util.Locale.ROOT);
         if (java.util.Set.of("csv", "json", "sql", "xml").contains(normalized)) {
             return normalized;
         }

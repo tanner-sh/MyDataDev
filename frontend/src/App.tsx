@@ -1,31 +1,33 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
-import { api, downloadBlob } from './api';
+import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
-import { parseImportFile } from './importers';
-import type { ActiveTable, BackupEditorRequest, BackupHistory, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import { analyzeSqlCompletion, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
-import { BackupPanel } from './components/BackupPanel';
 import { AppHeader } from './components/AppHeader';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
 import { ConnectionList } from './components/ConnectionList';
-import { ObjectDetailWorkspace } from './components/ObjectDetailWorkspace';
 import { ObjectTree } from './components/ObjectTree';
 import { PaneResizer } from './components/PaneResizer';
 import { SqlHistoryDrawer } from './components/SqlHistoryDrawer';
-import { SqlWorkspace } from './components/SqlWorkspace';
 import { TableWorkspace } from './components/TableWorkspace';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 
 const { Text } = Typography;
 const OBJECT_PAGE_SIZE = 200;
+const MAX_TABLE_CHANGES = 1_000;
+const MAX_STRUCTURE_CACHE_ENTRIES = 500;
+const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
+const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
+const ObjectDetailWorkspace = lazy(() => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace })));
+const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -45,6 +47,8 @@ export default function App() {
   const [tableLoading, setTableLoading] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const [sqlLoading, setSqlLoading] = useState(false);
+  const [sqlCancellable, setSqlCancellable] = useState(false);
+  const [sqlCancelling, setSqlCancelling] = useState(false);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
   const [connectionsReady, setConnectionsReady] = useState(false);
@@ -58,6 +62,7 @@ export default function App() {
   const [tableData, setTableData] = useState<TableData | null>(null);
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
   const [tablePage, setTablePage] = useState(0);
+  const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -67,9 +72,10 @@ export default function App() {
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
   const selectedIdRef = useRef<number | null>(null);
   const metadataRef = useRef<Metadata | null>(null);
-  const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>());
-  const completionStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>());
+  const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: 300 }));
+  const completionStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
   const structureCacheRef = useRef<Map<string, DbObject>>(new Map());
+  const structureRequestsRef = useRef<Map<string, Promise<DbObject | null>>>(new Map());
   const metadataRequestSeqRef = useRef(0);
   const structureRequestSeqRef = useRef(0);
   const objectDetailRequestSeqRef = useRef(0);
@@ -83,6 +89,11 @@ export default function App() {
   const sqlTabSeqRef = useRef(1);
   const backupEditorRequestSeqRef = useRef(0);
   const metadataSearchTimerRef = useRef<number | null>(null);
+  const metadataAbortRef = useRef<AbortController | null>(null);
+  const tableAbortRef = useRef<AbortController | null>(null);
+  const objectDetailAbortRef = useRef<AbortController | null>(null);
+  const sqlExecutionIdRef = useRef<string | null>(null);
+  const sqlBusyRef = useRef(false);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
@@ -176,9 +187,23 @@ export default function App() {
 
   useEffect(() => () => clearMetadataSearchTimer(), []);
 
+  useEffect(() => () => {
+    metadataAbortRef.current?.abort();
+    tableAbortRef.current?.abort();
+    objectDetailAbortRef.current?.abort();
+  }, []);
+
   useEffect(() => {
     refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [selected?.id]);
+
+  useEffect(() => {
+    if (!selected || !backups.some((task) => task.lastStatus === 'RUNNING')) return;
+    const timer = window.setInterval(() => {
+      void refreshBackups(selected).catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [backups, selected?.id]);
 
   useEffect(() => {
     if (selected) {
@@ -188,10 +213,7 @@ export default function App() {
 
   useEffect(() => {
     metadataRef.current = metadata;
-    if (selected && metadata?.selectedSchema) {
-      void loadCompletionCatalog(selected.id, metadata.selectedSchema).catch(() => undefined);
-    }
-  }, [metadata, selected?.id]);
+  }, [metadata]);
 
   function showSuccess(text: string) {
     setWorkspaceStatus({ kind: 'success', text });
@@ -208,6 +230,33 @@ export default function App() {
     toastApi.info(text);
   }
 
+  function requestProductionConfirmation(action: string): Promise<string | undefined> {
+    if (!selected || selected.environment !== 'prod') return Promise.resolve(undefined);
+    let input = '';
+    return new Promise((resolve) => {
+      modalApi.confirm({
+        title: `确认在生产连接上${action}`,
+        content: (
+          <Space direction="vertical" className="full-width">
+            <Text>请输入连接名 <Text code>{selected.name}</Text> 以确认本次生产库操作。</Text>
+            <Input autoFocus placeholder={selected.name} onChange={(event) => { input = event.target.value; }} />
+          </Space>
+        ),
+        okText: '确认执行',
+        cancelText: '取消',
+        okButtonProps: { danger: true },
+        onOk: () => {
+          if (input !== selected.name) {
+            toastApi.error('连接名不匹配');
+            return Promise.reject(new Error('连接名不匹配'));
+          }
+          resolve(input);
+        },
+        onCancel: () => resolve(undefined)
+      });
+    });
+  }
+
   async function refreshConnections(options: RefreshConnectionsOptions = {}) {
     const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
     setConnectionsLoading(true);
@@ -220,7 +269,7 @@ export default function App() {
       try {
         const rows = await api<Connection[]>('/connections');
         setConnections(rows);
-        setSelected((current: Connection | null) => current || rows[0] || null);
+        setSelected((current: Connection | null) => current ? rows.find((row) => row.id === current.id) || rows[0] || null : rows[0] || null);
         setConnectionsError('');
         setConnectionsReady(true);
         setConnectionsLoading(false);
@@ -433,6 +482,7 @@ export default function App() {
     setMetadataQuery({ schema: '', keyword: '' });
     setMetadataAppliedKeyword('');
     structureCacheRef.current.clear();
+    structureRequestsRef.current.clear();
     completionCatalogCacheRef.current.clear();
     completionStructureCacheRef.current.clear();
     setStructureLoadingKey(null);
@@ -444,11 +494,21 @@ export default function App() {
   }
 
   function invalidateConnectionRequests() {
+    metadataAbortRef.current?.abort();
+    tableAbortRef.current?.abort();
+    objectDetailAbortRef.current?.abort();
     metadataRequestSeqRef.current += 1;
     structureRequestSeqRef.current += 1;
     objectDetailRequestSeqRef.current += 1;
     tableRequestSeqRef.current += 1;
     backupRequestSeqRef.current += 1;
+    metadataAbortRef.current = null;
+    tableAbortRef.current = null;
+    objectDetailAbortRef.current = null;
+    setMetadataLoading(false);
+    setMetadataBlockingLoading(false);
+    setTableLoading(false);
+    setObjectDetailLoading(false);
   }
 
   function selectConnection(connection: Connection) {
@@ -554,7 +614,7 @@ export default function App() {
 
   function discardTableChanges() {
     if (!tableData) return;
-    setTableRows(tableData.rows.map((row, index) => ({ id: `row-${tablePage}-${index}`, values: { ...row }, original: { ...row } })));
+    setTableRows(tableData.rows.map((row, index) => ({ id: `row-${tablePage}-${index}`, values: { ...row }, original: { ...row }, keyToken: tableData.rowKeyTokens?.[index] })));
     setPreviewSql([]);
   }
 
@@ -563,6 +623,7 @@ export default function App() {
     setTableData(null);
     setTableRows([]);
     setTablePage(0);
+    setTableCursorStack([null]);
     setPreviewSql([]);
   }
 
@@ -603,12 +664,17 @@ export default function App() {
 
   async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean; background?: boolean } = {}) {
     if (!conn) return;
+    metadataAbortRef.current?.abort();
+    const controller = new AbortController();
+    metadataAbortRef.current = controller;
     const requestId = ++metadataRequestSeqRef.current;
     setMetadataLoading(true);
     setMetadataBlockingLoading(!options.background || !metadataRef.current);
     try {
       if (options.refresh) {
+        structureRequestSeqRef.current += 1;
         structureCacheRef.current.clear();
+        structureRequestsRef.current.clear();
         completionCatalogCacheRef.current.clear();
         completionStructureCacheRef.current.clear();
         setStructureLoadingKey(null);
@@ -622,12 +688,12 @@ export default function App() {
       if (options.refresh) params.set('refresh', 'true');
       if (schema) params.set('schema', schema);
       if (keyword.trim()) params.set('keyword', keyword.trim());
-      const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`);
+      const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`, { signal: controller.signal });
       if (requestId !== metadataRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
       const hydratedData = {
         ...data,
         objects: data.objects.map((object) => {
-          const cachedStructure = structureCacheRef.current.get(objectCacheKey(conn.id, object));
+          const cachedStructure = cachedStructureValue(objectCacheKey(conn.id, object));
           return withLoadedObjectStructure(object, cachedStructure);
         })
       };
@@ -643,8 +709,9 @@ export default function App() {
       const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
       const timeText = data.cachedAt ? `，缓存时间 ${new Date(data.cachedAt).toLocaleString()}` : '';
       const scopeText = data.selectedSchema ? `${data.namespaceKind === 'CATALOG' ? '数据库' : 'Schema'} ${data.selectedSchema}` : '当前数据库';
+      const totalText = data.totalObjectsExact === false ? `至少 ${data.totalObjects}` : String(data.totalObjects);
       const nextMessage = data.hasMore
-        ? `${cacheText}${timeText}，${scopeText} 已加载 ${loadedCount}/${data.totalObjects} 个对象`
+        ? `${cacheText}${timeText}，${scopeText} 已加载 ${loadedCount} 个对象（${totalText}）`
         : `${cacheText}${timeText}，${scopeText} 共 ${data.totalObjects} 个对象`;
       if (options.refresh) {
         showSuccess(nextMessage);
@@ -652,6 +719,7 @@ export default function App() {
         setWorkspaceStatus({ kind: 'success', text: nextMessage });
       }
     } catch (e) {
+      if ((e as Error).name === 'AbortError') return;
       if (requestId === metadataRequestSeqRef.current && selectedIdRef.current === conn.id) {
         showError(localizeMessage((e as Error).message));
       }
@@ -659,6 +727,7 @@ export default function App() {
       if (requestId === metadataRequestSeqRef.current) {
         setMetadataLoading(false);
         setMetadataBlockingLoading(false);
+        if (metadataAbortRef.current === controller) metadataAbortRef.current = null;
       }
     }
   }
@@ -706,42 +775,72 @@ export default function App() {
   }
 
   function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
-    return `${connectionId}:${object.schemaName || ''}.${object.name}`.toLowerCase();
+    return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
+  }
+
+  function cachedStructureValue(cacheKey: string) {
+    const value = structureCacheRef.current.get(cacheKey);
+    if (value) {
+      structureCacheRef.current.delete(cacheKey);
+      structureCacheRef.current.set(cacheKey, value);
+    }
+    return value;
+  }
+
+  function cacheStructureValue(cacheKey: string, value: DbObject) {
+    structureCacheRef.current.delete(cacheKey);
+    structureCacheRef.current.set(cacheKey, value);
+    while (structureCacheRef.current.size > MAX_STRUCTURE_CACHE_ENTRIES) {
+      const oldest = structureCacheRef.current.keys().next().value;
+      if (oldest === undefined) break;
+      structureCacheRef.current.delete(oldest);
+    }
   }
 
   async function loadObjectStructure(object: DbObject) {
     const connectionId = selectedIdRef.current;
     if (!connectionId) return null;
     const cacheKey = objectCacheKey(connectionId, object);
-    const cached = structureCacheRef.current.get(cacheKey);
+    const cached = cachedStructureValue(cacheKey);
     if (cached) {
       mergeObjectStructure(cached);
       return cached;
     }
+    const inFlight = structureRequestsRef.current.get(cacheKey);
+    if (inFlight) return inFlight;
 
-    const requestId = ++structureRequestSeqRef.current;
-    setStructureLoadingKey(`${object.schemaName || ''}.${object.name}`);
-    try {
-      const params = new URLSearchParams({ objectName: object.name });
-      if (object.schemaName) params.set('schemaName', object.schemaName);
-      const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
-      if (requestId !== structureRequestSeqRef.current || selectedIdRef.current !== connectionId) return null;
-      const nextObject: DbObject = {
-        schemaName: structure.schemaName,
-        name: structure.name,
-        type: structure.type,
-        columns: structure.columns,
-        indexes: structure.indexes
-      };
-      structureCacheRef.current.set(cacheKey, nextObject);
-      mergeObjectStructure(nextObject);
-      return nextObject;
-    } catch (e) {
-      if (requestId === structureRequestSeqRef.current) showError(localizeMessage((e as Error).message));
-      return null;
-    } finally {
-      if (requestId === structureRequestSeqRef.current) setStructureLoadingKey(null);
-    }
+    const loadingKey = `${object.schemaName || ''}.${object.name}`;
+    const generation = structureRequestSeqRef.current;
+    let request!: Promise<DbObject | null>;
+    request = (async () => {
+      setStructureLoadingKey(loadingKey);
+      try {
+        const params = new URLSearchParams({ objectName: object.name });
+        if (object.schemaName) params.set('schemaName', object.schemaName);
+        const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
+        if (selectedIdRef.current !== connectionId || structureRequestSeqRef.current !== generation) return null;
+        const nextObject: DbObject = {
+          schemaName: structure.schemaName,
+          name: structure.name,
+          type: structure.type,
+          columns: structure.columns,
+          indexes: structure.indexes
+        };
+        cacheStructureValue(cacheKey, nextObject);
+        mergeObjectStructure(nextObject);
+        return nextObject;
+      } catch (e) {
+        if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) showError(localizeMessage((e as Error).message));
+        return null;
+      } finally {
+        if (structureRequestsRef.current.get(cacheKey) === request) {
+          structureRequestsRef.current.delete(cacheKey);
+          setStructureLoadingKey((current) => current === loadingKey ? null : current);
+        }
+      }
+    })();
+    structureRequestsRef.current.set(cacheKey, request);
+    return request;
   }
 
   function mergeObjectStructure(structure: DbObject) {
@@ -755,26 +854,50 @@ export default function App() {
   }
 
   function matchesSameObject(left: Pick<DbObject, 'schemaName' | 'name'>, right: Pick<DbObject, 'schemaName' | 'name'>) {
-    return (left.schemaName || '').toLowerCase() === (right.schemaName || '').toLowerCase()
-      && left.name.toLowerCase() === right.name.toLowerCase();
+    return (left.schemaName || '') === (right.schemaName || '') && left.name === right.name;
   }
 
-  async function execute(path = '/sql/execute') {
+  async function execute(path = '/sql/execute', productionConfirmation?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
       showInfo('请先选择一个数据库连接');
       return;
     }
     const target = sqlExecutionTarget();
-    if (!target.sql.trim()) {
+    if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
       return;
-    }
-    setMode('sql');
-    setSqlLoading(true);
+    }
+    if (path === '/sql/explain' && !selected.capabilities?.explain) {
+      showInfo('当前数据库类型暂不支持执行计划');
+      return;
+    }
+    if (sqlBusyRef.current) {
+      showInfo('已有 SQL 操作正在处理，请等待完成后重试');
+      return;
+    }
+    sqlBusyRef.current = true;
     try {
-      if (path === '/sql/explain') {
-        const data = await api<SqlResult>(path, { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows }) });
+      if (selected.environment === 'prod' && !productionConfirmation) {
+        const confirmation = await requestProductionConfirmation(path === '/sql/explain' ? '生成执行计划' : '执行 SQL');
+        if (!confirmation) {
+          updateActiveSqlTab({ message: '已取消生产 SQL 操作', statusKind: 'info' });
+          return;
+        }
+        productionConfirmation = confirmation;
+      }
+      const executionId = crypto.randomUUID();
+      sqlExecutionIdRef.current = executionId;
+      setMode('sql');
+      setSqlCancellable(path !== '/sql/explain');
+      setSqlLoading(true);
+      try {
+        if (path === '/sql/explain') {
+        const data = await api<SqlResult>(path, {
+          method: 'POST',
+          headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows, executionId })
+        });
         const result: SqlStatementResult = {
           index: 1,
           sql: target.sql,
@@ -786,8 +909,12 @@ export default function App() {
         };
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success' });
-      } else {
-        const data = await api<SqlScriptResult>('/sql/execute-script', { method: 'POST', body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows }) });
+        } else {
+        const data = await api<SqlScriptResult>('/sql/execute-script', {
+          method: 'POST',
+          headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows, executionId })
+        });
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
         const firstResultSet = data.results.find((item) => item.result?.resultSet);
@@ -795,7 +922,7 @@ export default function App() {
         const truncated = data.results.some((item) => item.result?.truncated);
         const nextMessage = failed
           ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms`
-          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? `（已达到 ${layoutPreferences.sqlMaxRows} 行上限，结果可能不完整）` : ''}，用时 ${data.elapsedMs}ms`;
+          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
@@ -808,17 +935,22 @@ export default function App() {
         if (data.metadataChanged) {
           await loadMetadata(selected, { page: 0, refresh: true });
         }
+        }
+        await refreshSqlHistoryQuietly(selected);
+      } catch (e) {
+        const errorMessage = localizeMessage((e as Error).message);
+        updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
+        toastApi.error(errorMessage);
+        await refreshSqlHistoryQuietly(selected);
+      } finally {
+        if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
+        setSqlCancellable(false);
+        setSqlLoading(false);
       }
-      await refreshSqlHistoryQuietly(selected);
-    } catch (e) {
-      const errorMessage = localizeMessage((e as Error).message);
-      updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
-      toastApi.error(errorMessage);
-      await refreshSqlHistoryQuietly(selected);
-    } finally {
-      setSqlLoading(false);
-    }
-  }
+    } finally {
+      sqlBusyRef.current = false;
+    }
+  }
 
   async function formatSql() {
     const currentSql = editorRef.current?.getValue() ?? activeSqlTab.sql;
@@ -826,7 +958,13 @@ export default function App() {
       updateActiveSqlTab({ message: '请输入要格式化的 SQL', statusKind: 'info' });
       return;
     }
+    if (sqlBusyRef.current) {
+      showInfo('已有 SQL 操作正在处理，请等待完成后重试');
+      return;
+    }
+    sqlBusyRef.current = true;
     setSqlLoading(true);
+    setSqlCancellable(false);
     try {
       const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: currentSql }) });
       updateActiveSqlTab({ sql: data.sql, message: 'SQL 格式化完成', statusKind: 'success' });
@@ -836,6 +974,21 @@ export default function App() {
       toastApi.error(errorMessage);
     } finally {
       setSqlLoading(false);
+      sqlBusyRef.current = false;
+    }
+  }
+
+  async function cancelSqlExecution() {
+    const executionId = sqlExecutionIdRef.current;
+    if (!executionId || sqlCancelling) return;
+    setSqlCancelling(true);
+    try {
+      const result = await api<{ ok: boolean; message: string }>(`/sql/executions/${executionId}/cancel`, { method: 'POST' });
+      showInfo(result.message);
+    } catch (e) {
+      showError(`取消 SQL 失败：${localizeMessage((e as Error).message)}`);
+    } finally {
+      setSqlCancelling(false);
     }
   }
 
@@ -857,15 +1010,28 @@ export default function App() {
       return;
     }
     const target = sqlExecutionTarget();
-    if (!target.sql.trim()) {
+    if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要导出的 SQL', statusKind: 'info' });
-      return;
-    }
-    setSqlLoading(true);
-    try {
+      return;
+    }
+    if (sqlBusyRef.current) {
+      showInfo('已有 SQL 操作正在处理，请等待完成后重试');
+      return;
+    }
+    sqlBusyRef.current = true;
+    try {
+      const productionConfirmation = await requestProductionConfirmation('导出查询结果');
+      if (selected.environment === 'prod' && !productionConfirmation) return;
+      setSqlLoading(true);
+      setSqlCancellable(false);
+      try {
       const response = await fetch(`${API}/sql/export`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-User': 'admin' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User': 'admin',
+          ...(productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : {})
+        },
         body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format })
       });
       if (!response.ok) {
@@ -874,15 +1040,20 @@ export default function App() {
       }
       const blob = await response.blob();
       downloadBlob(blob, `query-result-${timestamp()}.${format}`);
-      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}`;
+      const rowLimit = response.headers.get('x-export-row-limit') || '10000';
+      const truncated = response.headers.get('x-export-truncated') === 'true';
+      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}（最多 ${rowLimit} 行${truncated ? '，本次已截断' : ''}）`;
       updateActiveSqlTab({ message: nextMessage, statusKind: 'success' });
       toastApi.success(nextMessage);
-    } catch (e) {
-      const errorMessage = `导出失败：${localizeMessage((e as Error).message)}`;
-      updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
-      toastApi.error(errorMessage);
-    } finally {
-      setSqlLoading(false);
+      } catch (e) {
+        const errorMessage = `导出失败：${localizeMessage((e as Error).message)}`;
+        updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
+        toastApi.error(errorMessage);
+      } finally {
+        setSqlLoading(false);
+      }
+    } finally {
+      sqlBusyRef.current = false;
     }
   }
 
@@ -962,18 +1133,21 @@ export default function App() {
   });
 
   function completionCatalogKey(connectionId: number, schemaName?: string) {
-    return `${connectionId}:${(schemaName || '').toLowerCase()}`;
+    return `${connectionId}:${encodeURIComponent(schemaName || '')}`;
   }
 
   function completionObjectKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
-    return `${connectionId}:${(object.schemaName || '').toLowerCase()}.${object.name.toLowerCase()}`;
+    return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
   }
 
-  function loadCompletionCatalog(connectionId: number, schemaName?: string) {
-    const key = completionCatalogKey(connectionId, schemaName);
+  function loadCompletionCatalog(connectionId: number, schemaName?: string, prefix = '') {
+    const normalizedPrefix = prefix.trim().toLowerCase();
+    const key = `${completionCatalogKey(connectionId, schemaName)}:${normalizedPrefix}`;
     return completionCatalogCacheRef.current.load(key, async () => {
       const params = new URLSearchParams();
       if (schemaName) params.set('schema', schemaName);
+      if (normalizedPrefix) params.set('prefix', normalizedPrefix);
+      params.set('limit', '100');
       const suffix = params.size > 0 ? `?${params.toString()}` : '';
       return api<CompletionCatalog>(`/metadata/${connectionId}/completion-catalog${suffix}`);
     });
@@ -1009,14 +1183,14 @@ export default function App() {
     const connectionId = selectedIdRef.current;
     if (!connectionId) return keywords;
     const schemaName = metadataRef.current?.selectedSchema || '';
+    const prefix = context.replacement.prefix.toLowerCase();
     let catalog: CompletionCatalog;
     try {
-      catalog = await loadCompletionCatalog(connectionId, schemaName);
+      catalog = await loadCompletionCatalog(connectionId, schemaName, context.mode === 'table' ? prefix : '');
     } catch {
       catalog = { selectedSchema: schemaName, objects: metadataRef.current?.objects || [] };
     }
     if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
-    const prefix = context.replacement.prefix.toLowerCase();
     const matchingObjects = catalog.objects.filter((object) => !prefix || object.name.toLowerCase().startsWith(prefix));
     const tableItems = matchingObjects.map((object) => ({
       label: object.name,
@@ -1034,7 +1208,7 @@ export default function App() {
     if (referenced.length === 0) return [...tableItems, ...keywords];
 
     const structures = await Promise.all(referenced.map(async (table) => {
-      const object = catalog.objects.find((candidate) => matchesObjectName(candidate, table.qualifiedName)) || {
+      const object = findCompletionObject(catalog.objects, table.schemaName, table.name) || {
         schemaName: table.schemaName || schemaName,
         name: table.name,
         type: 'TABLE',
@@ -1091,15 +1265,23 @@ export default function App() {
     });
   };
 
-  function matchesObjectName(object: DbObject, tableName: string) {
-    const normalizedTable = tableName.toLowerCase();
-    const objectName = object.name.toLowerCase();
-    const qualifiedName = object.schemaName ? `${object.schemaName}.${object.name}`.toLowerCase() : objectName;
-    return normalizedTable === objectName || normalizedTable === qualifiedName || normalizedTable.endsWith(`.${objectName}`);
+  function findCompletionObject(objects: DbObject[], requestedSchema: string | undefined, requestedName: string) {
+    const schemaMatches = (object: DbObject, folded: boolean) => !requestedSchema
+      || (folded
+        ? (object.schemaName || '').toLowerCase() === requestedSchema.toLowerCase()
+        : (object.schemaName || '') === requestedSchema);
+    const exact = objects.filter((object) => object.name === requestedName && schemaMatches(object, false));
+    if (exact.length === 1) return exact[0];
+    const folded = objects.filter((object) => object.name.toLowerCase() === requestedName.toLowerCase() && schemaMatches(object, true));
+    return folded.length === 1 ? folded[0] : undefined;
   }
 
   function openTable(object: DbObject) {
     if (!selected || object.type.toUpperCase().includes('VIEW')) {
+      return;
+    }
+    if (!selected.capabilities?.tableBrowse) {
+      showInfo('当前数据库类型暂不支持表数据浏览');
       return;
     }
     const targetName = `${object.schemaName ? `${object.schemaName}.` : ''}${object.name}`;
@@ -1112,10 +1294,16 @@ export default function App() {
 
   async function applyOpenTable(object: DbObject) {
     const next = { schemaName: object.schemaName, tableName: object.name };
+    // Never leave rows from the previous table visible under a new table name
+    // if the new request fails.
+    setTableData(null);
+    setTableRows([]);
+    setPreviewSql([]);
     setActiveTable(next);
     setTablePage(0);
+    setTableCursorStack([null]);
     setMode('table');
-    await loadTable(next, { page: 0 });
+    await loadTable(next, { page: 0, reset: true });
   }
 
   function openObjectDetail(object: DbObject) {
@@ -1128,6 +1316,9 @@ export default function App() {
 
   async function loadObjectDetail(object: DbObject, options: { refresh?: boolean } = {}) {
     if (!selected) return;
+    objectDetailAbortRef.current?.abort();
+    const controller = new AbortController();
+    objectDetailAbortRef.current = controller;
     const connectionId = selected.id;
     const requestId = ++objectDetailRequestSeqRef.current;
     setObjectDetailLoading(true);
@@ -1135,51 +1326,85 @@ export default function App() {
       const params = new URLSearchParams({ objectName: object.name });
       if (object.schemaName) params.set('schemaName', object.schemaName);
       if (options.refresh) params.set('refresh', 'true');
-      const detail = await api<ObjectDetail>(`/metadata/${connectionId}/objects/detail?${params.toString()}`);
+      const detail = await api<ObjectDetail>(`/metadata/${connectionId}/objects/detail?${params.toString()}`, { signal: controller.signal });
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setActiveObjectDetail(detail);
       updateObjectDesignDirty(false);
       setMode('object');
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {
+      if ((e as Error).name === 'AbortError') return;
       if (requestId === objectDetailRequestSeqRef.current) showError(localizeMessage((e as Error).message));
     } finally {
       if (requestId === objectDetailRequestSeqRef.current) setObjectDetailLoading(false);
+      if (objectDetailAbortRef.current === controller) objectDetailAbortRef.current = null;
     }
   }
 
-  async function loadTable(table = activeTable, options: { page?: number; pageSize?: number } = {}) {
+  async function loadTable(table = activeTable, options: { page?: number; pageSize?: number; reset?: boolean } = {}) {
     if (!selected || !table) return;
+    tableAbortRef.current?.abort();
+    const controller = new AbortController();
+    tableAbortRef.current = controller;
     const connectionId = selected.id;
     const requestId = ++tableRequestSeqRef.current;
     const requestedPage = Math.max(options.page ?? tablePage, 0);
     const requestedPageSize = options.pageSize ?? layoutPreferences.tablePageSize;
+    let cursor: string | null | undefined = options.reset || requestedPage === 0 ? null : tableCursorStack[requestedPage];
+    if (cursor === undefined && requestedPage === tablePage + 1) cursor = tableData?.nextCursor || undefined;
+    if (cursor === undefined) {
+      showInfo('当前页游标已失效，请从第一页重新加载');
+      setTableLoading(false);
+      if (tableAbortRef.current === controller) tableAbortRef.current = null;
+      return;
+    }
     setTableLoading(true);
     try {
       const params = new URLSearchParams({
         connectionId: String(connectionId),
         tableName: table.tableName,
-        page: String(requestedPage),
         pageSize: String(requestedPageSize)
-      });
+      });
       if (table.schemaName) params.set('schemaName', table.schemaName);
-      const data = await api<TableData>(`/data/table?${params.toString()}`);
+      if (cursor) params.set('cursor', cursor);
+      const data = await api<TableData>(`/data/table?${params.toString()}`, { signal: controller.signal });
       if (requestId !== tableRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setTableData(data);
-      const resolvedPage = data.page ?? requestedPage;
-      setTablePage(resolvedPage);
-      setTableRows(data.rows.map((row, index) => ({ id: `row-${resolvedPage}-${index}`, values: { ...row }, original: { ...row } })));
+      setTablePage(requestedPage);
+      setTableCursorStack((current) => {
+        const next = options.reset || requestedPage === 0 ? [null] : current.slice(0, requestedPage + 1);
+        if (data.nextCursor) next[requestedPage + 1] = data.nextCursor;
+        return next;
+      });
+      setTableRows(data.rows.map((row, index) => ({ id: `row-${requestedPage}-${index}`, values: { ...row }, original: { ...row }, keyToken: data.rowKeyTokens?.[index] })));
       setPreviewSql([]);
-      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${resolvedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}` });
+      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${requestedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}${data.navigationMode === 'OFFSET' ? '；当前表无稳定行键，深页浏览受限' : ''}` });
     } catch (e) {
+      if ((e as Error).name === 'AbortError') return;
       if (requestId === tableRequestSeqRef.current) showError(localizeMessage((e as Error).message));
     } finally {
       if (requestId === tableRequestSeqRef.current) setTableLoading(false);
+      if (tableAbortRef.current === controller) tableAbortRef.current = null;
     }
   }
 
-  function editCell(rowId: string, column: string, value: string) {
-    setTableRows((rows) => rows.map((row) => row.id === rowId ? { ...row, values: { ...row.values, [column]: value } } : row));
+  function editCell(rowId: string, column: string, value: unknown) {
+    setTableRows((rows) => rows.map((row) => {
+      if (row.id !== rowId) return row;
+      if (row.inserted) {
+        const values = { ...row.values };
+        const touched = new Set(row.touchedColumns || []);
+        if (value === undefined) {
+          delete values[column];
+          touched.delete(column);
+        } else {
+          values[column] = value;
+          touched.add(column);
+        }
+        return { ...row, values, touchedColumns: [...touched] };
+      }
+      return { ...row, values: { ...row.values, [column]: value } };
+    }));
     setPreviewSql([]);
   }
 
@@ -1194,8 +1419,11 @@ export default function App() {
 
   function addRow() {
     if (!tableData) return;
-    const empty = Object.fromEntries(tableData.columns.map((column) => [column, '']));
-    setTableRows((rows) => [{ id: `new-${Date.now()}`, values: empty, inserted: true }, ...rows]);
+    if (pendingChanges.length >= MAX_TABLE_CHANGES) {
+      showInfo(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更，请先提交当前修改。`);
+      return;
+    }
+    setTableRows((rows) => [{ id: `new-${crypto.randomUUID()}`, values: {}, touchedColumns: [], inserted: true }, ...rows]);
     setPreviewSql([]);
   }
 
@@ -1206,10 +1434,16 @@ export default function App() {
     }
     setTableLoading(true);
     try {
-      const result = parseImportFile(await file.text(), file.name, activeTable.tableName, tableData.columns);
+      if (file.size > 10 * 1024 * 1024) throw new Error('导入文件不能超过 10 MB，请拆分后重试。');
+      const { parseImportFile } = await import('./importers');
+      const result = parseImportFile(await file.text(), file.name, activeTable.tableName, tableData.columns.map((column) => column.name));
+      if (result.rows.length + pendingChanges.length > MAX_TABLE_CHANGES) {
+        throw new Error(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更；请先提交现有修改，或拆分导入文件。`);
+      }
       const importedRows = result.rows.map((values, index) => ({
         id: `import-${Date.now()}-${index}`,
         values,
+        touchedColumns: Object.keys(values),
         inserted: true
       }));
       setTableRows((rows) => [...importedRows, ...rows]);
@@ -1248,15 +1482,21 @@ export default function App() {
     }
   }
 
-  async function commitChanges() {
+  async function commitChanges() {
     if (!selected || !activeTable) return;
     if (!pendingChanges.length) {
       showInfo('没有待提交的变更');
       return;
     }
+    const productionConfirmation = await requestProductionConfirmation('提交表数据变更');
+    if (selected.environment === 'prod' && !productionConfirmation) return;
     setTableLoading(true);
-    try {
-      const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
+    try {
+      const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', {
+        method: 'POST',
+        headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+        body: JSON.stringify(dataChangePayload())
+      });
       setPreviewSql(data.sql);
       showSuccess(`已提交，影响 ${data.affectedRows} 行`);
       await loadTable(activeTable, { page: tablePage });
@@ -1365,35 +1605,17 @@ export default function App() {
     }
   }
 
-  async function downloadBackup(id: number) {
-    setBackupLoading(true);
-    try {
-      const response = await fetch(`${API}/backups/${id}/download`);
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || response.statusText);
-      }
-      const blob = await response.blob();
-      const disposition = response.headers.get('content-disposition') || '';
-      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-${id}.sql`;
-      downloadBlob(blob, filename);
-      showSuccess(`已下载备份文件：${filename}`);
-    } catch (e) {
-      showError(`下载备份失败：${localizeMessage((e as Error).message)}`);
-    } finally {
-      setBackupLoading(false);
-    }
+  function downloadBackup(id: number) {
+    downloadFromUrl(`${API}/backups/${id}/download`);
+    showInfo('已交由浏览器流式下载最近备份文件');
   }
 
-  async function loadBackupHistory(id: number) {
-    setBackupLoading(true);
+  async function loadBackupHistory(id: number, pageNumber: number, pageSize: number) {
     try {
-      return await api<BackupHistory[]>(`/backups/${id}/history`);
+      return await api<BackupHistoryPage>(`/backups/${id}/history?page=${pageNumber}&pageSize=${pageSize}`);
     } catch (e) {
       showError(`加载备份历史失败：${localizeMessage((e as Error).message)}`);
       throw e;
-    } finally {
-      setBackupLoading(false);
     }
   }
 
@@ -1411,24 +1633,9 @@ export default function App() {
     }
   }
 
-  async function downloadBackupHistory(taskId: number, historyId: number) {
-    setBackupLoading(true);
-    try {
-      const response = await fetch(`${API}/backups/${taskId}/history/${historyId}/download`);
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || response.statusText);
-      }
-      const blob = await response.blob();
-      const disposition = response.headers.get('content-disposition') || '';
-      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `backup-history-${historyId}.sql`;
-      downloadBlob(blob, filename);
-      showSuccess(`已下载备份文件：${filename}`);
-    } catch (e) {
-      showError(`下载备份历史失败：${localizeMessage((e as Error).message)}`);
-    } finally {
-      setBackupLoading(false);
-    }
+  function downloadBackupHistory(taskId: number, historyId: number) {
+    downloadFromUrl(`${API}/backups/${taskId}/history/${historyId}/download`);
+    showInfo('已交由浏览器流式下载历史备份文件');
   }
 
   const sqlStatus: WorkspaceStatus = sqlLoading
@@ -1535,12 +1742,17 @@ export default function App() {
           </div>
         ) : (
           <ObjectTree
-            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadata?.cachedAt || 'uncached'}`}
+            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
             objects={objects}
             activeObject={explorerActiveObject}
             keyword={metadataAppliedKeyword}
             emptyDescription={metadataAppliedKeyword ? '未找到匹配的表或视图' : `当前${namespaceLabel}暂无数据库对象`}
             structureLoadingKey={structureLoadingKey}
+            hasMore={metadata?.hasMore}
+            loadingMore={metadataLoading && !metadataBlockingLoading}
+            onLoadMore={() => {
+              if (metadata?.hasMore && !metadataLoading) void loadMetadata(selected, { page: metadata.page + 1, append: true, background: true });
+            }}
             onLoadStructure={loadObjectStructure}
             onOpenDetail={openObjectDetail}
             onOpenTable={openTable}
@@ -1557,7 +1769,7 @@ export default function App() {
       <div className="explorer-footer">
         {metadata?.cachedAt && (
           <span className="metadata-cache-status">
-            已展示 {objects.length}/{metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
+            已展示 {objects.length}/{metadata.totalObjectsExact === false ? `至少 ${metadata.totalObjects}` : metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
           </span>
         )}
         {metadata?.hasMore && (
@@ -1610,6 +1822,7 @@ export default function App() {
           )}
 
           <main className="app-content">
+            <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载工作区…</div>}>
             {mode === 'sql' ? (
               <SqlWorkspace
                 selected={selected}
@@ -1618,6 +1831,8 @@ export default function App() {
                 activeTab={activeSqlTab}
                 status={sqlStatus}
                 loading={sqlLoading}
+                cancelling={sqlCancelling}
+                cancellable={sqlCancellable}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
                 maxRows={layoutPreferences.sqlMaxRows}
@@ -1631,6 +1846,7 @@ export default function App() {
                 onFormat={formatSql}
                 onExplain={() => execute('/sql/explain')}
                 onExecute={() => execute()}
+                onCancel={cancelSqlExecution}
                 onExport={exportSql}
                 onOpenHistory={openSqlHistory}
                 onResultTabChange={(key) => updateActiveSqlTab({ activeResultKey: key })}
@@ -1643,18 +1859,19 @@ export default function App() {
                 previewSql={previewSql}
                 pendingCount={pendingChanges.length}
                 page={tablePage}
-                pageSize={tableData?.pageSize ?? layoutPreferences.tablePageSize}
+                pageSize={layoutPreferences.tablePageSize}
                 hasMore={tableData?.hasMore ?? false}
                 status={tableStatus}
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
+                editingSupported={selected?.capabilities?.tableEdit ?? false}
                 onBackToSql={() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台')}
                 onBackupTable={() => openBackupTaskEditor()}
                 onReload={() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表')}
                 onPageChange={(page) => confirmDiscardTableChanges(() => void loadTable(activeTable, { page }), `切换到第 ${page + 1} 页`)}
                 onPageSizeChange={(pageSize) => confirmDiscardTableChanges(() => {
                   layoutPreferences.setTablePageSize(pageSize);
-                  void loadTable(activeTable, { page: 0, pageSize });
+                  void loadTable(activeTable, { page: 0, pageSize, reset: true });
                 }, `将每页行数调整为 ${pageSize}`)}
                 onAddRow={addRow}
                 onImportFile={importRows}
@@ -1667,6 +1884,8 @@ export default function App() {
               <ObjectDetailWorkspace
                 connectionId={selected?.id}
                 readonlyConnection={selected?.readonly}
+                capabilities={selected?.capabilities}
+                productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
                 detail={activeObjectDetail}
                 status={objectStatus}
                 loading={objectDetailLoading}
@@ -1677,6 +1896,7 @@ export default function App() {
                 onDesignDirtyChange={updateObjectDesignDirty}
               />
             )}
+            </Suspense>
           </main>
         </div>
       </div>
@@ -1738,7 +1958,8 @@ export default function App() {
         rootClassName="management-drawer backup-management-drawer"
         onClose={() => setActiveDrawer(null)}
       >
-        <BackupPanel
+        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载备份管理…</div>}>
+          <BackupPanel
           backups={backups}
           selected={selected}
           activeTable={currentBackupTable}
@@ -1756,7 +1977,8 @@ export default function App() {
           onLoadHistory={loadBackupHistory}
           onDeleteHistory={deleteBackupHistory}
           onDownloadHistory={downloadBackupHistory}
-        />
+          />
+        </Suspense>
       </Drawer>
       <SqlHistoryDrawer
         open={historyOpen}

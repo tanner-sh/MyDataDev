@@ -41,7 +41,7 @@ class BackupSchedulerTest {
 
         scheduler.runDueBackups();
 
-        org.mockito.Mockito.verify(service).run(due.id(), "scheduler");
+        org.mockito.Mockito.verify(service).enqueue(due.id(), "scheduler");
     }
 
     private BackupTask task(String cron, Instant lastRunAt) {

@@ -49,7 +49,7 @@ class OracleDialectTest {
     @Test
     void usesOracleAddAndModifyTableSyntax() {
         ColumnInfo id = new ColumnInfo("ID", "NUMBER", 0, false, null, 1, null);
-        ObjectDetail original = new ObjectDetail("APP", "USERS", "TABLE", List.of(id), List.of(), List.of("ID"), "PK_USERS", 0L, "", "GENERATED");
+        ObjectDetail original = new ObjectDetail("APP", "USERS", "TABLE", List.of(id), List.of(), List.of("ID"), "PK_USERS");
         TableDesignRequest design = new TableDesignRequest(
                 "APP",
                 "USERS",

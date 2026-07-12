@@ -43,4 +43,20 @@ class SqlScriptSplitterTest {
         assertThat(statements.get(1).startOffset()).isEqualTo(15);
         assertThat(statements.get(1).endOffset()).isEqualTo(23);
     }
+
+    @Test
+    void keepsSemicolonsInsidePostgresAndOracleAlternativeQuotes() {
+        var statements = splitter.split("select $$a;b$$; select $tag$c;d$tag$; select q'[e;f]' from dual");
+
+        assertThat(statements).extracting(SqlScriptSplitter.StatementSegment::sql)
+                .containsExactly("select $$a;b$$", "select $tag$c;d$tag$", "select q'[e;f]' from dual");
+    }
+
+    @Test
+    void ignoresTrailingCommentOnlySegments() {
+        var statements = splitter.split("select 1; -- trailing comment only");
+
+        assertThat(statements).extracting(SqlScriptSplitter.StatementSegment::sql)
+                .containsExactly("select 1");
+    }
 }

@@ -1,8 +1,9 @@
 import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import '../monacoSetup';
 import { Alert, Button, Dropdown, InputNumber, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
-import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import type { Connection, ExportFormat, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
@@ -23,13 +24,15 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, loading, themeMode, editorSplitRatio, maxRows, onMaxRowsChange, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onExport, onOpenHistory, onResultTabChange }: {
+export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, themeMode, editorSplitRatio, maxRows, onMaxRowsChange, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onResultTabChange }: {
   selected: Connection | null;
   tabs: SqlTab[];
   activeTabId: string;
   activeTab: SqlTab;
   status: WorkspaceStatus;
   loading: boolean;
+  cancelling: boolean;
+  cancellable: boolean;
   themeMode: 'light' | 'dark';
   editorSplitRatio: number;
   maxRows: number;
@@ -43,6 +46,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   onFormat: () => void;
   onExplain: () => void;
   onExecute: () => void;
+  onCancel: () => void;
   onExport: (format: ExportFormat) => void;
   onOpenHistory: () => void;
   onResultTabChange: (key: string) => void;
@@ -83,14 +87,14 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
 
   return (
-    <div className="workspace sql-workspace">
+    <div className={`workspace sql-workspace${selected?.readonly ? ' is-readonly' : ''}`}>
       <Header className="workspace-toolbar">
         <div className="toolbar-title">
           <Text strong>SQL 查询工作台</Text>
           <Text type="secondary" className="ellipsis-text">{selected?.jdbcUrl || '请先选择数据库连接'}</Text>
         </div>
         <Space size={8} wrap>
-          <Tooltip title="单条查询最多返回的行数，结果达到上限时会提示截断">
+          <Tooltip title="单条查询最多返回的行数；服务端也会限制总单元格和文本体积">
             <Space.Compact size="small">
               <Button size="small" disabled>最大行数</Button>
               <InputNumber
@@ -125,12 +129,19 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
           >
             <Button size="small" icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
           </Dropdown>
-          <Button size="small" disabled={!selected || loading} onClick={() => { commitDraft(); onExplain(); }}>执行计划</Button>
-          <Tooltip title="执行当前或选中 SQL（Ctrl/Cmd+Enter）">
-            <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={!selected || loading} loading={loading} onClick={() => { commitDraft(); onExecute(); }}>执行</Button>
+          <Button size="small" disabled={!selected || loading || !selected.capabilities?.explain} onClick={() => { commitDraft(); onExplain(); }}>执行计划</Button>
+          <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
+            {loading && cancellable ? (
+              <Button size="small" danger icon={<StopOutlined />} loading={cancelling} onClick={onCancel}>取消执行</Button>
+            ) : loading ? (
+              <Button size="small" type="primary" loading disabled>处理中</Button>
+            ) : (
+              <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={!selected} onClick={() => { commitDraft(); onExecute(); }}>执行</Button>
+            )}
           </Tooltip>
         </Space>
       </Header>
+      {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon message="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}
       <Tabs
         className="sql-tabs"
         type="editable-card"
@@ -195,7 +206,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result }: { re
         <Text type="secondary">
           第 {result.index} 条 · 用时 {result.result.elapsedMs}ms
           {result.result.resultSet ? ` · 返回 ${rowCount} 行` : ''}
-          {result.result.truncated ? ` · 已达到 ${result.result.maxRows || rowCount} 行上限，结果可能不完整` : ''}
+          {result.result.truncated ? ' · 已达到服务端结果大小上限，结果可能不完整' : ''}
         </Text>
         <details className="statement-sql-details">
           <summary>查看执行语句</summary>

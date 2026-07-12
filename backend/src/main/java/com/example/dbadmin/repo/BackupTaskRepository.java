@@ -66,6 +66,15 @@ public class BackupTaskRepository {
         return count == null ? 0 : count;
     }
 
+    public int countRunningByConnectionId(long connectionId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM backup_task WHERE connection_id = ? AND last_status = 'RUNNING'",
+                Integer.class,
+                connectionId
+        );
+        return count == null ? 0 : count;
+    }
+
     @Transactional
     public long insert(BackupTask task) {
         KeyHolder keys = new GeneratedKeyHolder();
@@ -110,6 +119,14 @@ public class BackupTaskRepository {
 
     public void updateEnabled(long id, boolean enabled) {
         jdbc.update("UPDATE backup_task SET enabled = ? WHERE id = ?", enabled, id);
+    }
+
+    public void failStaleRunningTasks() {
+        jdbc.update("""
+                UPDATE backup_task
+                SET last_status = 'FAILED', last_message = '服务重启，上一轮备份执行状态未知。'
+                WHERE last_status = 'RUNNING'
+                """);
     }
 
     public void updateStatus(long id, String status, String message) {

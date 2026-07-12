@@ -5,6 +5,8 @@ import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupHistoryPage;
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
@@ -14,12 +16,22 @@ import com.example.dbadmin.repo.BackupTaskRepository;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.LinkOption;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.net.URI;
 import java.sql.Blob;
 import java.sql.Clob;
@@ -44,28 +56,42 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 
 @Service
 public class BackupService {
+    private static final Logger log = LoggerFactory.getLogger(BackupService.class);
     private final BackupTaskRepository repository;
     private final BackupHistoryRepository historyRepository;
     private final ConnectionService connections;
     private final AuditRepository audit;
     private final AppProperties properties;
     private final DialectRegistry dialectRegistry;
+    private final BackupExecutionCoordinator coordinator;
+    private final Object[] taskLocks = taskLocks();
 
     @Autowired
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.connections = connections;
         this.audit = audit;
         this.properties = properties;
         this.dialectRegistry = dialectRegistry;
+        this.coordinator = coordinator;
+    }
+
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
+        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator());
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
         this(repository, historyRepository, connections, audit, properties, new DialectRegistry());
+    }
+
+    @PostConstruct
+    public void recoverInterruptedTasks() {
+        repository.failStaleRunningTasks();
     }
 
     public List<BackupTask> list() {
@@ -85,22 +111,27 @@ public class BackupService {
     }
 
     public BackupTask update(long id, BackupTaskRequest request, String actor) {
-        repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
-        DbConnection connection = connections.require(request.connectionId());
-        BackupTask task = taskFromRequest(id, request, connection, null, null, null, null, null);
-        repository.update(id, task);
-        audit.log(actor, "BACKUP_TASK_UPDATE", request.name(), request.scope());
-        return repository.findById(id).orElseThrow();
+        synchronized (taskLock(id)) {
+            requireNotRunning(id);
+            repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+            DbConnection connection = connections.require(request.connectionId());
+            BackupTask task = taskFromRequest(id, request, connection, null, null, null, null, null);
+            repository.update(id, task);
+            audit.log(actor, "BACKUP_TASK_UPDATE", request.name(), request.scope());
+            return repository.findById(id).orElseThrow();
+        }
     }
 
     public BackupTask setEnabled(long id, boolean enabled, String actor) {
-        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
-        if (enabled) {
-            validateCron(task.cron(), true);
+        synchronized (taskLock(id)) {
+            BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+            if (enabled) {
+                validateCron(task.cron(), true);
+            }
+            repository.updateEnabled(id, enabled);
+            audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
+            return repository.findById(id).orElseThrow();
         }
-        repository.updateEnabled(id, enabled);
-        audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
-        return repository.findById(id).orElseThrow();
     }
 
     public CronPreviewResponse previewSchedule(String cronValue) {
@@ -128,37 +159,87 @@ public class BackupService {
     }
 
     public void delete(long id, boolean deleteFile, String actor) throws Exception {
-        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
-        List<BackupHistory> histories = historyRepository.findByTaskId(id);
-        if (deleteFile) {
-            for (BackupHistory history : histories) {
-                deleteHistoryFile(history);
+        synchronized (taskLock(id)) {
+            requireNotRunning(id);
+            BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+            if (deleteFile) {
+                long offset = 0;
+                while (true) {
+                    List<BackupHistory> histories = historyRepository.findPageByTaskId(id, 100, offset);
+                    for (BackupHistory history : histories) deleteHistoryFile(history);
+                    if (histories.size() < 100) break;
+                    offset += histories.size();
+                }
             }
+            historyRepository.deleteByTaskId(id);
+            repository.delete(id);
+            audit.log(actor, "BACKUP_TASK_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
         }
-        historyRepository.deleteByTaskId(id);
-        repository.delete(id);
-        audit.log(actor, "BACKUP_TASK_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
     }
 
     public BackupTask run(long id, String actor) throws Exception {
         BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
         DbConnection connection = connections.require(task.connectionId());
         Instant startedAt = Instant.now();
+        BackupFile backup;
         try {
-            BackupFile backup = runBackup(task, connection);
-            String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
-            String filePath = backup.path().toAbsolutePath().normalize().toString();
-            historyRepository.insert(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now()));
-            repository.updateStatus(id, "SUCCESS", message, filePath, backup.size());
-            audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
+            backup = runBackup(task, connection);
         } catch (Exception e) {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            historyRepository.insert(new BackupHistory(0, id, connection.id(), "FAILED", message, null, null, startedAt, Instant.now()));
-            repository.updateStatus(id, "FAILED", message);
+            recordHistory(new BackupHistory(0, id, connection.id(), "FAILED", message, null, null, startedAt, Instant.now()));
+            updateStatus(id, "FAILED", message, null, null);
             audit.log(actor, "BACKUP_TASK_RUN_FAILED", task.name(), message);
             throw e;
         }
+        String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
+        String filePath = backup.path().toAbsolutePath().normalize().toString();
+        recordHistory(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now()));
+        updateStatus(id, "SUCCESS", message, filePath, backup.size());
+        audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
         return repository.findById(id).orElseThrow();
+    }
+
+    private void recordHistory(BackupHistory history) {
+        try {
+            historyRepository.insert(history);
+        } catch (RuntimeException error) {
+            log.error("Unable to persist backup history task={} status={}", history.taskId(), history.status(), error);
+        }
+    }
+
+    private void updateStatus(long taskId, String status, String message, String filePath, Long fileSize) {
+        try {
+            if (filePath == null && fileSize == null) repository.updateStatus(taskId, status, message);
+            else repository.updateStatus(taskId, status, message, filePath, fileSize);
+        } catch (RuntimeException error) {
+            log.error("Unable to persist backup task status task={} status={}", taskId, status, error);
+        }
+    }
+
+    public BackupTask enqueue(long id, String actor) {
+        synchronized (taskLock(id)) {
+            BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+            try {
+                boolean accepted = coordinator.submit(
+                        id,
+                        () -> repository.updateStatus(id, "RUNNING", "备份任务已进入后台执行队列。"),
+                        () -> {
+                            try {
+                                run(id, actor);
+                            } catch (Exception ignored) {
+                                // run records the failed history and task status.
+                            }
+                        }
+                );
+                if (!accepted) {
+                    throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请勿重复启动。");
+                }
+            } catch (RejectedExecutionException e) {
+                repository.updateStatus(id, "FAILED", "备份执行队列已满，任务未启动。");
+                throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
+            }
+            return repository.findById(task.id()).orElseThrow();
+        }
     }
 
     public Path backupFile(long id) {
@@ -167,7 +248,7 @@ public class BackupService {
             throw new IllegalStateException("该备份任务还没有生成可下载文件。");
         }
         Path path = checkedBackupPath(task.lastFilePath());
-        if (!Files.exists(path) || !Files.isRegularFile(path)) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
         }
         return path;
@@ -178,6 +259,20 @@ public class BackupService {
         return historyRepository.findByTaskId(taskId);
     }
 
+    public BackupHistoryPage history(long taskId, Integer page, Integer pageSize) {
+        repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+        int safePage = Math.max(page == null ? 0 : page, 0);
+        int safePageSize = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
+        long offset = (long) safePage * safePageSize;
+        if (offset > 1_000_000) {
+            throw new IllegalArgumentException("备份历史分页偏移过大，请从较早页面重新浏览。");
+        }
+        List<BackupHistory> rows = historyRepository.findPageByTaskId(taskId, safePageSize + 1, offset);
+        boolean hasMore = rows.size() > safePageSize;
+        if (hasMore) rows = rows.subList(0, safePageSize);
+        return new BackupHistoryPage(List.copyOf(rows), safePage, safePageSize, hasMore);
+    }
+
     public Path historyFile(long taskId, long historyId) {
         BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
                 .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
@@ -185,33 +280,39 @@ public class BackupService {
             throw new IllegalStateException("该备份历史没有生成可下载文件。");
         }
         Path path = checkedBackupPath(history.filePath());
-        if (!Files.exists(path) || !Files.isRegularFile(path)) {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
             throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
         }
         return path;
     }
 
     public void deleteHistory(long taskId, long historyId, boolean deleteFile, String actor) throws Exception {
-        BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
-        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
-                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
-        if (deleteFile) {
-            deleteHistoryFile(history);
+        synchronized (taskLock(taskId)) {
+            requireNotRunning(taskId);
+            BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+            BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                    .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+            if (deleteFile) {
+                deleteHistoryFile(history);
+            }
+            historyRepository.delete(historyId);
+            refreshTaskSummary(taskId);
+            audit.log(actor, "BACKUP_HISTORY_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
         }
-        historyRepository.delete(historyId);
-        refreshTaskSummary(taskId);
-        audit.log(actor, "BACKUP_HISTORY_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
     }
 
     private void deleteHistoryFile(BackupHistory history) throws Exception {
         if (history.filePath() == null || history.filePath().isBlank()) {
             return;
         }
-        Files.deleteIfExists(checkedBackupPath(history.filePath()));
+        Path path = checkedBackupPath(history.filePath());
+        Files.deleteIfExists(path);
+        Files.deleteIfExists(checkedBackupPath(path + ".log"));
+        Files.deleteIfExists(checkedBackupPath(path + ".out"));
     }
 
     private void refreshTaskSummary(long taskId) {
-        List<BackupHistory> histories = historyRepository.findByTaskId(taskId);
+        List<BackupHistory> histories = historyRepository.findPageByTaskId(taskId, 1, 0);
         if (histories.isEmpty()) {
             repository.updateSummary(taskId, null, null, null, null, null);
             return;
@@ -233,6 +334,9 @@ public class BackupService {
         String nativeConnectName = blankToNull(request.nativeConnectName());
         if (!"SQL".equals(backupMethod) && toolPath == null) {
             throw new IllegalArgumentException("原生备份需要填写工具路径。");
+        }
+        if (!"SQL".equals(backupMethod)) {
+            validateNativeToolPath(backupMethod, toolPath);
         }
         String requestedSchema = Set.of("SCHEMA", "TABLES").contains(scope) ? blankToNull(request.schemaName()) : null;
         ResolvedTarget resolved;
@@ -275,11 +379,26 @@ public class BackupService {
         if (!path.startsWith(backupRoot)) {
             throw new IllegalStateException("备份文件路径不在允许目录内。");
         }
+        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                Path realRoot = backupRoot.toRealPath();
+                Path realPath = path.toRealPath();
+                if (!realPath.startsWith(realRoot)) {
+                    throw new IllegalStateException("备份文件的真实路径不在允许目录内。");
+                }
+            } catch (IOException error) {
+                throw new IllegalStateException("无法验证备份文件真实路径。", error);
+            }
+        }
         return path;
     }
 
     private BackupFile runBackup(BackupTask task, DbConnection connection) throws Exception {
-        return switch (normalizeBackupMethod(task.backupMethod())) {
+        // Connections are editable after a task is created. Revalidate the
+        // saved method against the current dialect before invoking a tool.
+        String method = validateBackupMethod(task.backupMethod(), connection);
+        if (!"SQL".equals(method)) validateNativeToolPath(method, task.toolPath());
+        return switch (method) {
             case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection));
             case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection));
             default -> writeSqlBackup(task, connection);
@@ -317,60 +436,125 @@ public class BackupService {
 
     private BackupFile runOracleExp(BackupTask task, DbConnection connection, ResolvedTarget resolved) throws Exception {
         validateOracleNativeTarget(resolved);
+        String username = blankToNull(connection.username());
+        if (username == null) {
+            throw new IllegalArgumentException("Oracle exp 备份需要配置数据库用户名。");
+        }
         Path file = backupPath(task, "oracle-exp", ".dmp");
         Path log = file.resolveSibling(file.getFileName() + ".log");
         String password = connections.password(connection.id());
         String connectName = task.nativeConnectName() == null || task.nativeConnectName().isBlank()
                 ? oracleConnectName(connection.jdbcUrl())
                 : task.nativeConnectName();
-        String userid = connection.username() + "/" + (password == null ? "" : password) + (connectName == null || connectName.isBlank() ? "" : "@" + connectName);
-        List<String> command = new ArrayList<>();
-        command.add(task.toolPath());
-        command.add("userid=" + userid);
-        command.add("file=" + file.toAbsolutePath().normalize());
-        command.add("log=" + log.toAbsolutePath().normalize());
+        String userid = username + "/" + (password == null ? "" : password) + (connectName == null || connectName.isBlank() ? "" : "@" + connectName);
+        validateOracleParameterValue(userid, "Oracle 用户名、密码或连接名");
+        validateOracleParameterValue(file.toAbsolutePath().normalize().toString(), "Oracle 备份文件路径");
+        validateOracleParameterValue(log.toAbsolutePath().normalize().toString(), "Oracle 日志路径");
+        List<String> parameters = new ArrayList<>();
+        parameters.add("userid=" + userid);
+        parameters.add("file=" + file.toAbsolutePath().normalize());
+        parameters.add("log=" + log.toAbsolutePath().normalize());
         if ("TABLES".equals(resolved.scope())) {
             List<String> tables = resolved.tables().stream()
                     .map(table -> resolved.namespace() == null || resolved.namespace().isBlank()
                             ? table.name()
                             : resolved.namespace() + "." + table.name())
                     .toList();
-            command.add("tables=(" + String.join(",", tables) + ")");
+            parameters.add("tables=(" + String.join(",", tables) + ")");
         } else if ("SCHEMA".equals(resolved.scope())) {
-            command.add("owner=" + resolved.namespace());
+            parameters.add("owner=" + resolved.namespace());
         } else {
-            command.add("full=y");
+            parameters.add("full=y");
         }
+        Path parameterFile = writeOracleParameterFile(file, parameters);
+        List<String> command = new ArrayList<>();
+        command.add(task.toolPath());
+        command.add("parfile=" + parameterFile.toAbsolutePath().normalize());
         command.addAll(extraArgs(task.extraArgs()));
-        runNativeProcess(new ProcessBuilder(command), file, "Oracle exp", password);
-        return new BackupFile(file, Files.size(file));
+        try {
+            runNativeProcess(new ProcessBuilder(command), file, "Oracle exp", password);
+            return new BackupFile(file, Files.size(file));
+        } finally {
+            deleteTemporaryFile(parameterFile);
+            deleteTemporaryFile(log);
+        }
+    }
+
+    private Path writeOracleParameterFile(Path outputFile, List<String> parameters) throws Exception {
+        Files.createDirectories(outputFile.getParent());
+        Set<PosixFilePermission> ownerOnly = Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+        Path parameterFile = Files.getFileStore(outputFile.getParent()).supportsFileAttributeView("posix")
+                ? Files.createTempFile(outputFile.getParent(), ".oracle-exp-", ".par", PosixFilePermissions.asFileAttribute(ownerOnly))
+                : Files.createTempFile(outputFile.getParent(), ".oracle-exp-", ".par");
+        try {
+            Files.write(parameterFile, parameters, StandardCharsets.UTF_8);
+            return parameterFile;
+        } catch (Exception error) {
+            deleteTemporaryFile(parameterFile);
+            throw error;
+        }
+    }
+
+    private void validateOracleParameterValue(String value, String label) {
+        if (value != null && (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0 || value.indexOf('\0') >= 0)) {
+            throw new IllegalArgumentException(label + "不能包含换行符或 NUL 字符。");
+        }
     }
 
     private void runNativeProcess(ProcessBuilder builder, Path outputFile, String label, String secret) throws Exception {
         Files.createDirectories(outputFile.getParent());
-        Path processLog = outputFile.resolveSibling(outputFile.getFileName() + ".out");
         builder.redirectErrorStream(true);
-        builder.redirectOutput(processLog.toFile());
-        Process process = builder.start();
-        boolean finished = process.waitFor(30, TimeUnit.MINUTES);
-        String output = Files.exists(processLog) ? Files.readString(processLog, StandardCharsets.UTF_8) : "";
-        if (output.length() > 4000) {
-            output = output.substring(0, 4000);
+        Process process = null;
+        ProcessOutputCollector outputCollector = null;
+        boolean success = false;
+        try {
+            process = builder.start();
+            outputCollector = new ProcessOutputCollector(process.getInputStream());
+            outputCollector.start(label);
+            boolean finished = process.waitFor(Math.max(1, properties.getBackup().getTimeoutSeconds()), TimeUnit.SECONDS);
+            if (!finished) {
+                throw new IllegalStateException(label + " 执行超时。");
+            }
+            outputCollector.await(5_000);
+            String output = outputCollector.output();
+            if (process.exitValue() != 0) {
+                throw new IllegalStateException(label + " 执行失败，退出码 " + process.exitValue() + (output.isBlank() ? "" : "：" + scrub(output, secret)));
+            }
+            if (!Files.exists(outputFile) || !Files.isRegularFile(outputFile)) {
+                throw new IllegalStateException(label + " 未生成备份文件。");
+            }
+            success = true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw interrupted;
+        } finally {
+            terminateProcess(process);
+            if (outputCollector != null) outputCollector.await(5_000);
+            if (!success) deleteTemporaryFile(outputFile);
         }
-        if (!finished) {
-            process.destroyForcibly();
-            Files.deleteIfExists(outputFile);
-            Files.deleteIfExists(processLog);
-            throw new IllegalStateException(label + " 执行超时。");
+    }
+
+    private void terminateProcess(Process process) {
+        if (process == null) return;
+        process.descendants().forEach(handle -> {
+            if (handle.isAlive()) handle.destroyForcibly();
+        });
+        if (!process.isAlive()) return;
+        process.destroyForcibly();
+        try {
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                log.warn("Native backup process did not exit after forcible termination pid={}", process.pid());
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
         }
-        if (process.exitValue() != 0) {
-            Files.deleteIfExists(outputFile);
-            Files.deleteIfExists(processLog);
-            throw new IllegalStateException(label + " 执行失败，退出码 " + process.exitValue() + (output.isBlank() ? "" : "：" + scrub(output, secret)));
-        }
-        Files.deleteIfExists(processLog);
-        if (!Files.exists(outputFile) || !Files.isRegularFile(outputFile)) {
-            throw new IllegalStateException(label + " 未生成备份文件。");
+    }
+
+    private void deleteTemporaryFile(Path path) {
+        try {
+            Files.deleteIfExists(path);
+        } catch (Exception error) {
+            log.warn("Unable to delete temporary backup file {}", path, error);
         }
     }
 
@@ -385,11 +569,11 @@ public class BackupService {
         if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_EXP").contains(normalized)) {
             throw new IllegalArgumentException("不支持的备份方式：" + method);
         }
-        String dbType = connection.dbType() == null ? "" : connection.dbType().toLowerCase(Locale.ROOT);
-        if ("MYSQLDUMP".equals(normalized) && !Set.of("mysql", "mariadb").contains(dbType)) {
+        List<String> supportedNativeMethods = dialectRegistry.dialectFor(connection).capabilities().nativeBackupMethods();
+        if ("MYSQLDUMP".equals(normalized) && !supportedNativeMethods.contains("MYSQLDUMP")) {
             throw new IllegalArgumentException("mysqldump 备份仅支持 MySQL/MariaDB 连接。");
         }
-        if ("ORACLE_EXP".equals(normalized) && !"oracle".equals(dbType)) {
+        if ("ORACLE_EXP".equals(normalized) && !supportedNativeMethods.contains("ORACLE_EXP")) {
             throw new IllegalArgumentException("Oracle exp 备份仅支持 Oracle 连接。");
         }
         return normalized;
@@ -397,6 +581,22 @@ public class BackupService {
 
     private String normalizeBackupMethod(String method) {
         return method == null || method.isBlank() ? "SQL" : method.toUpperCase(Locale.ROOT);
+    }
+
+    private void requireNotRunning(long taskId) {
+        if (coordinator.isRunning(taskId)) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "备份任务正在执行，暂不能修改或删除。");
+        }
+    }
+
+    private Object taskLock(long taskId) {
+        return taskLocks[Math.floorMod(Long.hashCode(taskId), taskLocks.length)];
+    }
+
+    private static Object[] taskLocks() {
+        Object[] locks = new Object[64];
+        java.util.Arrays.setAll(locks, ignored -> new Object());
+        return locks;
     }
 
     private String methodLabel(String method) {
@@ -412,6 +612,17 @@ public class BackupService {
         return args.isEmpty() ? null : String.join("\n", args);
     }
 
+    private void validateNativeToolPath(String backupMethod, String toolPath) {
+        String normalizedPath = toolPath == null ? "" : toolPath.replace('\\', '/');
+        String executable = normalizedPath.substring(normalizedPath.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+        Set<String> allowed = "MYSQLDUMP".equals(backupMethod)
+                ? Set.of("mysqldump", "mysqldump.exe")
+                : Set.of("exp", "exp.exe");
+        if (!allowed.contains(executable)) {
+            throw new IllegalArgumentException("工具路径必须指向 " + ("MYSQLDUMP".equals(backupMethod) ? "mysqldump" : "Oracle exp") + " 可执行文件。");
+        }
+    }
+
     private List<String> extraArgs(String extraArgs) {
         if (extraArgs == null || extraArgs.isBlank()) {
             return List.of();
@@ -421,6 +632,12 @@ public class BackupService {
             String arg = raw.trim();
             if (arg.isEmpty()) {
                 continue;
+            }
+            if (arg.length() > 2_000) {
+                throw new IllegalArgumentException("单个备份额外参数不能超过 2000 个字符。");
+            }
+            if (args.size() >= 100) {
+                throw new IllegalArgumentException("备份额外参数最多填写 100 行。");
             }
             validateExtraArg(arg);
             args.add(arg);
@@ -433,14 +650,16 @@ public class BackupService {
             throw new IllegalArgumentException("备份额外参数包含不允许的 shell 控制字符：" + arg);
         }
         String lower = arg.toLowerCase(Locale.ROOT);
-        List<String> blockedPrefixes = List.of(
-                "--result-file", "-r", "--host", "-h", "--port", "-p", "--user", "-u", "--password",
-                "--databases", "--all-databases", "--tables", "file=", "log=", "userid=", "owner=", "tables=", "full="
+        String optionName = lower.contains("=") ? lower.substring(0, lower.indexOf('=')) : lower;
+        Set<String> blockedNames = Set.of(
+                "--result-file", "--host", "--port", "--user", "--password",
+                "--databases", "--all-databases", "--tables",
+                "file", "log", "userid", "owner", "tables", "full", "parfile"
         );
-        for (String blocked : blockedPrefixes) {
-            if (lower.equals(blocked) || lower.startsWith(blocked + "=")) {
-                throw new IllegalArgumentException("备份额外参数不能覆盖系统控制参数：" + arg);
-            }
+        boolean blockedShortOption = arg.startsWith("-r") || arg.startsWith("-h") || arg.startsWith("-P")
+                || arg.startsWith("-p") || arg.startsWith("-u");
+        if (blockedNames.contains(optionName) || blockedShortOption) {
+            throw new IllegalArgumentException("备份额外参数不能覆盖系统控制参数：" + arg);
         }
     }
 
@@ -477,18 +696,20 @@ public class BackupService {
         Path dir = Path.of(properties.getBackup().getDirectory());
         Files.createDirectories(dir);
         Path file = dir.resolve("backup-task-" + task.id() + "-" + Instant.now().toEpochMilli() + ".sql");
-        try (Connection connection = connections.open(task.connectionId())) {
-            ResolvedTarget resolved = resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), task.scope(), task.schemaName(), task.tableNames());
+        try (Connection connection = connections.open(task.connectionId());
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true)) {
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            ResolvedTarget resolved = resolveTarget(connection, dialect, task.scope(), task.schemaName(), task.tableNames());
             if (resolved.tables().isEmpty()) {
                 throw new IllegalArgumentException("没有找到可备份的表。");
             }
             try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
                 writer.write("-- MyDataDev SQL Backup\n");
-                writer.write("-- Task: " + task.name() + "\n");
-                writer.write("-- Connection: " + dbConnection.name() + "\n");
+                writer.write("-- Task: " + sqlCommentValue(task.name()) + "\n");
+                writer.write("-- Connection: " + sqlCommentValue(dbConnection.name()) + "\n");
                 writer.write("-- Generated At: " + Instant.now() + "\n\n");
                 for (TableRef table : resolved.tables()) {
-                    writeTableBackup(connection, writer, table);
+                    writeTableBackup(connection, writer, table, dialect);
                 }
             }
         } catch (Exception e) {
@@ -565,7 +786,16 @@ public class BackupService {
             return new ResolvedTarget(scope, null, List.of());
         }
         try (Connection connection = connections.open(dbConnection.id())) {
-            return resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), scope, schemaName, tableNames);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            if ("SCHEMA".equals(scope)) {
+                String requestedNamespace = blankToNull(schemaName);
+                if (requestedNamespace == null) requestedNamespace = blankToNull(dialect.currentSchema(connection));
+                if (requestedNamespace == null) {
+                    throw new IllegalArgumentException("无法确定当前 Schema/数据库，请重新选择备份目标。");
+                }
+                return new ResolvedTarget(scope, resolveNamespace(connection, dialect, requestedNamespace), List.of());
+            }
+            return resolveTarget(connection, dialect, scope, schemaName, tableNames);
         }
     }
 
@@ -583,7 +813,16 @@ public class BackupService {
         List<String> tableNames = requestedTableNames(rawTableNames, null);
         String scope = validateScope(rawScope, tableNames);
         if ("DATABASE".equals(scope)) {
-            return new ResolvedTarget(scope, null, physicalTables(connection, dialect, null));
+            if (dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG) {
+                String currentNamespace = blankToNull(dialect.currentSchema(connection));
+                if (currentNamespace != null) currentNamespace = resolveNamespace(connection, dialect, currentNamespace);
+                return new ResolvedTarget(scope, currentNamespace, physicalTables(connection, dialect, currentNamespace));
+            }
+            List<TableRef> allTables = new ArrayList<>();
+            for (String namespace : availableNamespaces(connection, dialect)) {
+                allTables.addAll(physicalTables(connection, dialect, namespace));
+            }
+            return new ResolvedTarget(scope, null, List.copyOf(allTables));
         }
         String requestedNamespace = blankToNull(schemaName);
         if (requestedNamespace == null) {
@@ -651,10 +890,10 @@ public class BackupService {
     }
 
     private List<String> availableNamespaces(Connection connection, DatabaseDialect dialect) throws Exception {
-        Map<String, String> namespaces = new LinkedHashMap<>();
+        Set<String> namespaces = new java.util.LinkedHashSet<>();
         String current = blankToNull(dialect.currentSchema(connection));
         if (current != null && !isSystemSchema(current)) {
-            namespaces.put(current.toLowerCase(Locale.ROOT), current);
+            namespaces.add(current);
         }
         DatabaseMetaData meta = connection.getMetaData();
         try (ResultSet rs = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
@@ -664,21 +903,24 @@ public class BackupService {
             while (rs.next()) {
                 String namespace = blankToNull(rs.getString(column));
                 if (namespace != null && !isSystemSchema(namespace)) {
-                    namespaces.putIfAbsent(namespace.toLowerCase(Locale.ROOT), namespace);
+                    namespaces.add(namespace);
                 }
             }
         }
-        return namespaces.values().stream().sorted(String.CASE_INSENSITIVE_ORDER).toList();
+        return namespaces.stream()
+                .sorted(String.CASE_INSENSITIVE_ORDER.thenComparing(Comparator.naturalOrder()))
+                .toList();
     }
 
     private List<TableRef> physicalTables(Connection connection, DatabaseDialect dialect, String namespace) throws Exception {
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope metadataScope = dialect.metadataScope(connection, namespace);
+        String schemaPattern = metadataScope.schemaPattern() == null ? null : metadataExactPattern(meta, metadataScope.schemaPattern());
         List<TableRef> tables = new ArrayList<>();
-        try (ResultSet rs = meta.getTables(metadataScope.catalog(), metadataScope.schemaPattern(), "%", new String[]{"TABLE", "BASE TABLE"})) {
+        try (ResultSet rs = meta.getTables(metadataScope.catalog(), schemaPattern, "%", new String[]{"TABLE", "BASE TABLE"})) {
             while (rs.next()) {
                 String foundNamespace = blankToNull(dialect.resultNamespace(rs));
-                if (namespace != null && foundNamespace != null && !namespace.equalsIgnoreCase(foundNamespace)) {
+                if (namespace != null && foundNamespace != null && !namespace.equals(foundNamespace)) {
                     continue;
                 }
                 String effectiveNamespace = foundNamespace == null ? namespace : foundNamespace;
@@ -691,8 +933,18 @@ public class BackupService {
         }
         tables.sort(Comparator
                 .comparing((TableRef table) -> table.schema() == null ? "" : table.schema(), String.CASE_INSENSITIVE_ORDER)
-                .thenComparing(TableRef::name, String.CASE_INSENSITIVE_ORDER));
+                .thenComparing(table -> table.schema() == null ? "" : table.schema())
+                .thenComparing(TableRef::name, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(TableRef::name));
         return List.copyOf(tables);
+    }
+
+    private String metadataExactPattern(DatabaseMetaData meta, String value) throws Exception {
+        String escape = meta.getSearchStringEscape();
+        if (escape == null || escape.isEmpty()) return value;
+        return value.replace(escape, escape + escape)
+                .replace("%", escape + "%")
+                .replace("_", escape + "_");
     }
 
     private void validateOracleNativeTarget(ResolvedTarget target) {
@@ -713,11 +965,13 @@ public class BackupService {
         }
     }
 
-    private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table) throws Exception {
+    private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect) throws Exception {
         String quoteString = identifierQuote(connection);
         String tableName = table(table.schema(), table.name(), quoteString);
-        writer.write("-- Table: " + tableName + "\n");
-        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery("SELECT * FROM " + tableName)) {
+        writer.write("-- Table: " + sqlCommentValue(tableName) + "\n");
+        try (Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            dialect.configureStreamingStatement(connection, statement, 500, properties.getBackup().getTimeoutSeconds());
+            try (ResultSet rs = statement.executeQuery("SELECT * FROM " + tableName)) {
             ResultSetMetaData md = rs.getMetaData();
             List<String> columns = new ArrayList<>();
             for (int i = 1; i <= md.getColumnCount(); i++) {
@@ -726,15 +980,37 @@ public class BackupService {
             String columnSql = columns.stream().map(column -> quote(column, quoteString)).reduce((a, b) -> a + ", " + b).orElse("");
             long rows = 0;
             while (rs.next()) {
-                List<String> values = new ArrayList<>();
+                writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES (");
                 for (int i = 1; i <= md.getColumnCount(); i++) {
-                    values.add(literal(rs.getObject(i), tableName, columns.get(i - 1)));
+                    if (i > 1) writer.write(", ");
+                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1));
                 }
-                writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES (" + String.join(", ", values) + ");\n");
+                writer.write(");\n");
                 rows++;
             }
             writer.write("-- Rows: " + rows + "\n\n");
+            }
         }
+    }
+
+    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName) throws Exception {
+        if (value instanceof Clob clob) {
+            writer.write('\'');
+            try (Reader reader = clob.getCharacterStream()) {
+                char[] buffer = new char[8_192];
+                int read;
+                while ((read = reader.read(buffer)) != -1) {
+                    for (int index = 0; index < read; index++) {
+                        char ch = buffer[index];
+                        if (ch == '\'') writer.write("''");
+                        else writer.write(ch);
+                    }
+                }
+            }
+            writer.write('\'');
+            return;
+        }
+        writer.write(literal(value, tableName, columnName));
     }
 
     private String validateScope(String scope, List<String> tableNames) {
@@ -768,7 +1044,9 @@ public class BackupService {
                 || s.equals("PG_CATALOG")
                 || s.equals("SQLJ")
                 || s.startsWith("SYS_")
-                || s.startsWith("MYSQL");
+                || s.equals("MYSQL")
+                || s.startsWith("PG_TOAST")
+                || s.startsWith("PG_TEMP_");
     }
 
     private String table(String schema, String table, String quoteString) {
@@ -845,6 +1123,59 @@ public class BackupService {
 
     private String quoteLiteral(String value) {
         return "'" + value.replace("'", "''") + "'";
+    }
+
+    private String sqlCommentValue(String value) {
+        return value == null ? "" : value.replace('\r', ' ').replace('\n', ' ').replace('\0', ' ');
+    }
+
+    private static final class ProcessOutputCollector {
+        private static final int MAX_CAPTURE_BYTES = 4_000;
+        private final InputStream input;
+        private final ByteArrayOutputStream captured = new ByteArrayOutputStream(MAX_CAPTURE_BYTES);
+        private Thread thread;
+
+        private ProcessOutputCollector(InputStream input) {
+            this.input = input;
+        }
+
+        private void start(String label) {
+            thread = new Thread(this::drain, "dbadmin-native-output-" + label.replaceAll("[^A-Za-z0-9_-]", "-"));
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        private void drain() {
+            try (input) {
+                byte[] buffer = new byte[8_192];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    synchronized (captured) {
+                        int retained = Math.min(read, MAX_CAPTURE_BYTES - captured.size());
+                        if (retained > 0) captured.write(buffer, 0, retained);
+                    }
+                }
+            } catch (IOException ignored) {
+                // Process termination can close the pipe while the collector
+                // is blocked. The retained prefix remains useful for errors.
+            }
+        }
+
+        private void await(long timeoutMillis) {
+            Thread running = thread;
+            if (running == null) return;
+            try {
+                running.join(timeoutMillis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private String output() {
+            synchronized (captured) {
+                return captured.toString(StandardCharsets.UTF_8);
+            }
+        }
     }
 
     private record TableRef(String schema, String name) {

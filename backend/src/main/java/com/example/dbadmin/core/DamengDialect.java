@@ -2,11 +2,17 @@ package com.example.dbadmin.core;
 
 import com.example.dbadmin.dto.ApiDtos.ColumnDesign;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
+import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.util.List;
 import java.util.Locale;
 
 public class DamengDialect extends DefaultDialect {
+    @Override
+    public DatabaseCapabilities capabilities() {
+        return new DatabaseCapabilities(true, true, true, false, List.of());
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);

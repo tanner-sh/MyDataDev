@@ -18,7 +18,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 
 const { Header } = Layout;
 const { Text } = Typography;
-const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200, 500];
+const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
 
 export function TableWorkspace({
   activeTable,
@@ -29,6 +29,7 @@ export function TableWorkspace({
   status,
   loading,
   readonlyConnection = false,
+  editingSupported = true,
   page = 0,
   pageSize = 100,
   hasMore = false,
@@ -52,6 +53,7 @@ export function TableWorkspace({
   status: WorkspaceStatus;
   loading: boolean;
   readonlyConnection?: boolean;
+  editingSupported?: boolean;
   page?: number;
   pageSize?: number;
   hasMore?: boolean;
@@ -62,7 +64,7 @@ export function TableWorkspace({
   onImportFile: (file: File) => void;
   onPreview: () => void;
   onCommit: () => void;
-  onEdit: (rowId: string, column: string, value: string) => void;
+  onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
@@ -70,6 +72,7 @@ export function TableWorkspace({
   const [previewOpen, setPreviewOpen] = useState(false);
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
+  const editingDisabled = readonlyConnection || !editingSupported;
 
   useEffect(() => {
     setPreviewOpen(false);
@@ -90,9 +93,12 @@ export function TableWorkspace({
           <Text type="secondary">
             {readonlyConnection
               ? '当前连接为只读连接'
+              : !editingSupported
+                ? '当前数据库方言未开放表数据编辑'
               : tableData?.editable
                 ? `可编辑，行定位字段：${tableData.keyColumns.join(', ')}`
-                : '当前表没有主键或唯一索引，只允许新增数据'}
+                : '当前表没有主键或全非空唯一索引，只允许新增数据'}
+            {tableData?.navigationMode === 'OFFSET' ? ' · 当前使用偏移分页，深页浏览受限' : ''}
           </Text>
         </div>
         <Space size={8} wrap>
@@ -105,22 +111,22 @@ export function TableWorkspace({
             备份此表
           </Button>
           <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
-          <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || readonlyConnection} onClick={onAddRow}>新增行</Button>
+          <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || editingDisabled} onClick={onAddRow}>新增行</Button>
           <Upload
             accept=".csv,.json,.sql"
             showUploadList={false}
-            disabled={!tableData || loading || readonlyConnection}
+            disabled={!tableData || loading || editingDisabled}
             beforeUpload={(file) => {
               onImportFile(file);
               return false;
             }}
           >
-            <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || readonlyConnection}>导入</Button>
+            <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
           </Upload>
           <Button
             size="small"
             icon={<EyeOutlined />}
-            disabled={!pendingCount || loading || readonlyConnection}
+            disabled={!pendingCount || loading || editingDisabled}
             onClick={() => {
               setPreviewOpen(true);
               onPreview();
@@ -128,11 +134,11 @@ export function TableWorkspace({
           >
             预览语句
           </Button>
-          <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || readonlyConnection} loading={loading} onClick={onCommit}>提交</Button>
+          <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交</Button>
         </Space>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable data={tableData} rows={tableRows} readonly={readonlyConnection} loading={loading} onEdit={onEdit} onDelete={onDelete} />
+        <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} onEdit={onEdit} onDelete={onDelete} />
       </div>
       <div className="grid-pagination table-pagination">
         <Text type="secondary">第 {page + 1} 页 · 本页 {tableRows.length} 行</Text>

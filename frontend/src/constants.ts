@@ -1,6 +1,6 @@
 import type { ConnectionForm } from './types';
 
-export const API = 'http://localhost:8080/api';
+export const API = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
 export const DB_TYPE_OPTIONS = [
   { value: 'h2', label: 'H2', url: 'jdbc:h2:mem:testdb' },

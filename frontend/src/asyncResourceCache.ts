@@ -3,6 +3,8 @@ export type AsyncResourceCacheOptions = {
   ttlMs?: number;
   /** Optional clock override for deterministic tests. */
   now?: () => number;
+  /** Maximum retained resolved values. Oldest entries are evicted first. */
+  maxEntries?: number;
 };
 
 type CacheEntry<Value> = {
@@ -20,11 +22,13 @@ export class AsyncResourceCache<Key, Value> {
   private readonly keyVersions = new Map<Key, number>();
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly maxEntries: number;
   private generation = 0;
 
   constructor(options: AsyncResourceCacheOptions = {}) {
     this.ttlMs = Math.max(0, options.ttlMs ?? 0);
     this.now = options.now ?? Date.now;
+    this.maxEntries = Math.max(1, options.maxEntries ?? 500);
   }
 
   get size(): number {
@@ -51,10 +55,16 @@ export class AsyncResourceCache<Key, Value> {
   }
 
   private store(key: Key, value: Value): Value {
+    this.values.delete(key);
     this.values.set(key, {
       value,
       expiresAt: this.ttlMs > 0 ? this.now() + this.ttlMs : undefined
     });
+    while (this.values.size > this.maxEntries) {
+      const oldest = this.values.keys().next().value as Key | undefined;
+      if (oldest === undefined) break;
+      this.values.delete(oldest);
+    }
     return value;
   }
 
@@ -117,6 +127,9 @@ export class AsyncResourceCache<Key, Value> {
       this.values.delete(key);
       return undefined;
     }
+    // Map insertion order doubles as a lightweight LRU list.
+    this.values.delete(key);
+    this.values.set(key, entry);
     return entry;
   }
 }

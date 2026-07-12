@@ -4,6 +4,7 @@ import com.example.dbadmin.dto.ApiDtos.BackupEnabledRequest;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupHistoryPage;
 import com.example.dbadmin.dto.ApiDtos.MessageResponse;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
@@ -14,6 +15,7 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 import java.nio.file.Path;
@@ -60,8 +62,8 @@ public class BackupController {
     }
 
     @PostMapping("/{id}/run")
-    public BackupTask run(@PathVariable long id, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return service.run(id, actor);
+    public ResponseEntity<BackupTask> run(@PathVariable long id, @RequestHeader(value = "X-User", required = false) String actor) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.enqueue(id, actor));
     }
 
     @GetMapping("/{id}/download")
@@ -74,8 +76,12 @@ public class BackupController {
     }
 
     @GetMapping("/{id}/history")
-    public List<BackupHistory> history(@PathVariable long id) {
-        return service.history(id);
+    public BackupHistoryPage history(
+            @PathVariable long id,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize
+    ) {
+        return service.history(id, page, pageSize);
     }
 
     @GetMapping("/{id}/history/{historyId}/download")

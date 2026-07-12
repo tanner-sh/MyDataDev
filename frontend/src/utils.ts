@@ -17,33 +17,43 @@ export function timestamp() {
   return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
-export function buildChanges(rows: TableRow[], keyColumns: string[]): RowChange[] {
+export function buildChanges(rows: TableRow[], _keyColumns: string[]): RowChange[] {
   const changes: RowChange[] = [];
-  for (const row of rows) {
-    if (row.inserted) {
-      changes.push({ type: 'INSERT', values: removeEmptyValues(row.values) });
+  for (const row of rows) {
+    if (row.inserted) {
+      const touched = new Set(row.touchedColumns || Object.keys(row.values));
+      changes.push({
+        type: 'INSERT',
+        values: Object.fromEntries(Object.entries(row.values).filter(([column]) => touched.has(column)))
+      });
       continue;
     }
     if (!row.original) continue;
     if (row.deleted) {
-      changes.push({ type: 'DELETE', key: key(row.original, keyColumns) });
+      changes.push({ type: 'DELETE', keyToken: row.keyToken });
       continue;
     }
-    const changedValues = diff(row.original, row.values);
-    if (Object.keys(changedValues).length > 0) {
-      changes.push({ type: 'UPDATE', key: key(row.original, keyColumns), values: changedValues });
+    const changedValues = diff(row.original, row.values);
+    if (Object.keys(changedValues).length > 0) {
+      changes.push({
+        type: 'UPDATE',
+        keyToken: row.keyToken,
+        values: changedValues,
+        originalValues: Object.fromEntries(Object.keys(changedValues).map((column) => [column, row.original?.[column]]))
+      });
     }
   }
   return changes;
 }
 
-export function key(row: Record<string, unknown>, keyColumns: string[]) {
-  return Object.fromEntries(keyColumns.map((column) => [column, row[column]]));
-}
-
-export function diff(original: Record<string, unknown>, values: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(values).filter(([column, value]) => String(original[column] ?? '') !== String(value ?? '')));
-}
+export function diff(original: Record<string, unknown>, values: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(values).filter(([column, value]) => !sameCellValue(original[column], value)));
+}
+
+export function sameCellValue(left: unknown, right: unknown) {
+  if (left == null || right == null) return left === right;
+  return Object.is(left, right) || String(left) === String(right);
+}
 
 export function removeEmptyValues(values: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ''));
@@ -79,11 +89,12 @@ export function backupStatusLabel(status?: string) {
   if (!status) return '尚未执行';
   if (status === 'SUCCESS') return '执行成功';
   if (status === 'FAILED') return '执行失败';
+  if (status === 'RUNNING') return '后台执行中';
   return status;
 }
 
 export function backupMethodLabel(method?: string) {
-  if (!method || method === 'SQL') return 'SQL 逻辑备份';
+  if (!method || method === 'SQL') return 'SQL 数据备份';
   if (method === 'MYSQLDUMP') return 'MySQL mysqldump';
   if (method === 'ORACLE_EXP') return 'Oracle exp';
   return method;

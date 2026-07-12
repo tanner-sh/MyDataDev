@@ -94,7 +94,7 @@ export function ConnectionFormPanel({ form, selected, editing, loading, onChange
             OceanBase 示例：jdbc:oceanbase://localhost:2881/demo；连接类型必须与租户兼容模式一致。
           </Text>
         )}
-        {editing && <Text type="secondary" className="form-hint-text">编辑已有连接时，密码为 ****** 或留空都表示沿用原密码。</Text>}
+        {editing && <Text type="secondary" className="form-hint-text">编辑已有连接时，****** 表示沿用原密码；清空后保存会删除已保存密码。</Text>}
         <Space className="form-actions" size={8}>
           <Button block onClick={onTest} loading={loading} disabled={jdbcUrlInvalid}>测试连接</Button>
           <Button block type="primary" icon={<SaveOutlined />} onClick={onSave} loading={loading} disabled={!canSubmit}>{editing ? '保存修改' : '保存连接'}</Button>

@@ -32,10 +32,15 @@ function parseCsvRows(text: string, columns: string[]) {
   const headers = canonicalHeaders(records[0].map((value) => value.trim()), columns);
   return records.slice(1)
     .filter((record) => record.some((value) => value !== ''))
-    .map((record) => Object.fromEntries(headers.flatMap((header, index) => {
-      const value = record[index] ?? '';
-      return value === '' ? [] : [[header, value]];
-    })));
+    .map((record, rowIndex) => {
+      if (record.length > headers.length && record.slice(headers.length).some((value) => value !== '')) {
+        throw new Error(`CSV 第 ${rowIndex + 2} 行包含超出表头的字段。`);
+      }
+      return Object.fromEntries(headers.flatMap((header, index) => {
+        const value = record[index] ?? '';
+        return value === '' ? [] : [[header, value]];
+      }));
+    });
 }
 
 function parseCsv(text: string) {
@@ -64,22 +69,36 @@ function parseCsv(text: string) {
     } else if (char === '\n') {
       row.push(cell);
       rows.push(row);
+      enforceImportRowLimit(rows.length - 1);
       row = [];
       cell = '';
     } else if (char !== '\r') {
       cell += char;
     }
   }
+  if (quoted) throw new Error('CSV 文件存在未闭合的引号。');
   row.push(cell);
   rows.push(row);
+  enforceImportRowLimit(rows.length - 1);
   return rows.filter((record, index) => index < rows.length - 1 || record.some((value) => value !== ''));
 }
 
 function parseJsonRows(text: string, columns: string[]) {
-  const parsed = JSON.parse(text);
-  if (!Array.isArray(parsed)) {
-    throw new Error('JSON 文件必须是对象数组。');
+  const parsed: unknown = JSON.parse(text);
+  if (isPositionalJsonExport(parsed)) {
+    enforceImportRowLimit(parsed.rows.length);
+    const headers = canonicalHeaders(parsed.columns, columns);
+    return parsed.rows.map((row, index) => {
+      if (!Array.isArray(row) || row.length !== headers.length) {
+        throw new Error(`JSON 第 ${index + 1} 行字段数量与 columns 不一致。`);
+      }
+      return Object.fromEntries(headers.map((header, columnIndex) => [header, row[columnIndex]]));
+    });
   }
+  if (!Array.isArray(parsed)) {
+    throw new Error('JSON 文件必须是对象数组，或包含 columns/rows 的查询导出格式。');
+  }
+  enforceImportRowLimit(parsed.length);
   return parsed.map((row, index) => {
     if (!row || Array.isArray(row) || typeof row !== 'object') {
       throw new Error(`JSON 第 ${index + 1} 行不是对象。`);
@@ -91,12 +110,25 @@ function parseJsonRows(text: string, columns: string[]) {
   });
 }
 
+function isPositionalJsonExport(value: unknown): value is { columns: string[]; rows: unknown[][] } {
+  if (!value || Array.isArray(value) || typeof value !== 'object') return false;
+  const candidate = value as { columns?: unknown; rows?: unknown };
+  return Array.isArray(candidate.columns)
+    && candidate.columns.every((column) => typeof column === 'string')
+    && Array.isArray(candidate.rows);
+}
+
 function parseSqlRows(text: string, tableName: string, columns: string[]) {
   const statements = splitSqlStatements(text).filter((statement) => statement.trim() !== '');
   if (statements.length === 0) {
     throw new Error('SQL 文件没有可导入的 INSERT 语句。');
   }
-  return statements.flatMap((statement, index) => parseInsertStatement(statement, index, tableName, columns));
+  const rows: Record<string, unknown>[] = [];
+  statements.forEach((statement, index) => {
+    rows.push(...parseInsertStatement(statement, index, tableName, columns));
+    enforceImportRowLimit(rows.length);
+  });
+  return rows;
 }
 
 function splitSqlStatements(text: string) {
@@ -128,7 +160,7 @@ function parseInsertStatement(statement: string, index: number, tableName: strin
     throw new Error(`SQL 第 ${index + 1} 条语句不是支持的 INSERT INTO ... VALUES 格式。`);
   }
   const targetTable = lastIdentifier(match[1]);
-  if (columnKey(targetTable) !== columnKey(tableName)) {
+  if (columnKey(targetTable) !== columnKey(tableName) && columnKey(targetTable) !== 'query_result') {
     throw new Error(`SQL 第 ${index + 1} 条语句目标表 ${targetTable} 与当前表 ${tableName} 不一致。`);
   }
   const headers = canonicalHeaders(splitComma(match[2]).map((value) => normalizeIdentifier(value.trim())), tableColumns);
@@ -168,6 +200,7 @@ function parseValueTuples(valuesSql: string) {
       depth--;
       if (depth === 0) {
         tuples.push(current);
+        enforceImportRowLimit(tuples.length);
         current = '';
       } else {
         current += char;
@@ -218,7 +251,9 @@ function parseSqlValue(value: string): unknown {
   if (/^null$/i.test(value)) return null;
   if (/^true$/i.test(value)) return true;
   if (/^false$/i.test(value)) return false;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  // Keep numeric literals as text. The backend coerces them using the target
+  // JDBC type, while JavaScript Number would corrupt BIGINT/DECIMAL values.
+  if (/^-?\d+(\.\d+)?$/.test(value)) return value;
   if (value.startsWith("'") && value.endsWith("'")) {
     return value.slice(1, -1).replace(/''/g, "'");
   }
@@ -226,7 +261,6 @@ function parseSqlValue(value: string): unknown {
 }
 
 function canonicalHeaders(headers: string[], columns: string[]) {
-  const normalizedColumns = new Map(columns.map((column) => [columnKey(column), column]));
   const normalizedHeaders = headers.map(normalizeIdentifier);
   if (normalizedHeaders.length === 0) {
     throw new Error('导入文件至少需要包含一个有效字段。');
@@ -234,16 +268,18 @@ function canonicalHeaders(headers: string[], columns: string[]) {
   if (normalizedHeaders.some((header) => header === '')) {
     throw new Error('导入字段不能为空。');
   }
-  const headerKeys = normalizedHeaders.map(columnKey);
-  const duplicates = normalizedHeaders.filter((_header, index) => headerKeys.indexOf(headerKeys[index]) !== index);
-  if (duplicates.length > 0) {
-    throw new Error(`导入字段重复：${duplicates[0]}`);
+  const resolved = normalizedHeaders.map((header) => {
+    if (columns.includes(header)) return header;
+    const folded = columns.filter((column) => columnKey(column) === columnKey(header));
+    if (folded.length === 1) return folded[0];
+    if (folded.length > 1) throw new Error(`导入字段大小写不明确，请使用精确名称：${header}`);
+    throw new Error(`导入字段不存在于当前表：${header}`);
+  });
+  const duplicate = resolved.find((header, index) => resolved.indexOf(header) !== index);
+  if (duplicate) {
+    throw new Error(`导入字段重复：${duplicate}`);
   }
-  const unknown = normalizedHeaders.find((header) => !normalizedColumns.has(columnKey(header)));
-  if (unknown) {
-    throw new Error(`导入字段不存在于当前表：${unknown}`);
-  }
-  return normalizedHeaders.map((header) => normalizedColumns.get(columnKey(header)) || header);
+  return resolved;
 }
 
 function lastIdentifier(tableRef: string) {
@@ -257,4 +293,10 @@ function normalizeIdentifier(value: string) {
 
 function columnKey(value: string) {
   return normalizeIdentifier(value).toLowerCase();
+}
+
+function enforceImportRowLimit(rowCount: number) {
+  if (rowCount > MAX_IMPORT_ROWS) {
+    throw new Error(`单次最多导入 ${MAX_IMPORT_ROWS} 行，请拆分文件后重试。`);
+  }
 }

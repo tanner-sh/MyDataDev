@@ -4,26 +4,33 @@ import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.ColumnDesign;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 public class OracleDialect extends DefaultDialect {
     private static final String PAGE_ROW_COLUMN = "__DBADMIN_PAGE_RN__";
 
     @Override
+    public DatabaseCapabilities capabilities() {
+        return new DatabaseCapabilities(true, true, true, true, List.of("ORACLE_EXP"));
+    }
+
+    @Override
     public boolean supports(String dbType, String jdbcUrl) {
         return "oracle".equalsIgnoreCase(dbType)
-                || (jdbcUrl != null && jdbcUrl.toLowerCase().startsWith("jdbc:oracle:"));
+                || (jdbcUrl != null && jdbcUrl.toLowerCase(Locale.ROOT).startsWith("jdbc:oracle:"));
     }
 
     @Override
     public String pageQuery(String baseSql, int limit, int offset) {
-        int upperBound = offset + limit;
+        long upperBound = (long) offset + limit;
         return "SELECT * FROM (SELECT dbadmin_page_source.*, ROWNUM " + PAGE_ROW_COLUMN + " FROM (" + baseSql
                 + ") dbadmin_page_source WHERE ROWNUM <= " + upperBound + ") WHERE " + PAGE_ROW_COLUMN + " > " + offset;
     }
@@ -67,7 +74,7 @@ public class OracleDialect extends DefaultDialect {
 
     @Override
     public Optional<String> nativeDdl(Connection connection, String schemaName, String objectName, String objectType) throws Exception {
-        String ddlType = objectType != null && objectType.toUpperCase().contains("VIEW") ? "VIEW" : "TABLE";
+        String ddlType = objectType != null && objectType.toUpperCase(Locale.ROOT).contains("VIEW") ? "VIEW" : "TABLE";
         StringBuilder sql = new StringBuilder("SELECT DBMS_METADATA.GET_DDL('")
                 .append(ddlType)
                 .append("', '")

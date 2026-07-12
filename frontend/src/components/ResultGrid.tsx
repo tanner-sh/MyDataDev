@@ -33,13 +33,12 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false }: { r
         fixed: 'left',
         render: (_value, _row, index) => (currentPage - 1) * pageSize + index + 1
       },
-      ...result.columns.map((column) => ({
-        title: column,
-        dataIndex: column,
-        key: column,
-        width: Math.max(140, Math.min(280, column.length * 14 + 48)),
+      ...result.columns.map((column, columnIndex) => ({
+        title: <span title={column.typeName}>{column.label}</span>,
+        key: column.key,
+        width: Math.max(140, Math.min(280, column.label.length * 14 + 48)),
         ellipsis: true,
-        render: renderCellValue
+        render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
       }))
     ];
   }, [currentPage, pageSize, result]);
@@ -47,8 +46,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false }: { r
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
     const start = (currentPage - 1) * pageSize;
-    return result.rows.slice(start, start + pageSize).map((row, index) => ({
-      ...row,
+    return result.rows.slice(start, start + pageSize).map((values, index) => ({
+      values,
       key: String(start + index)
     }));
   }, [currentPage, pageSize, result]);
@@ -65,7 +64,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false }: { r
           columns={columns}
           dataSource={rows}
           pagination={false}
-          scroll={{ x: 'max-content', ...(scrollY ? { y: scrollY } : {}) }}
+          virtual={Boolean(scrollY)}
+          scroll={{ x: Math.max(800, result.columns.length * 180 + 70), ...(scrollY ? { y: scrollY } : {}) }}
         />
       </div>
       <div className="grid-pagination result-grid-pagination">
@@ -94,5 +94,6 @@ function renderCellValue(value: unknown) {
   if (value == null) return <span className="cell-null">NULL</span>;
   if (value === '') return <span className="cell-empty">空字符串</span>;
   const text = String(value);
-  return <span className="grid-cell-value" title={text}>{text}</span>;
+  const title = text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text;
+  return <span className="grid-cell-value" title={title}>{text}</span>;
 }

@@ -171,7 +171,7 @@ function normalizePreferences(value: unknown): LayoutPreferences {
 }
 
 function normalizePageSize(value: number) {
-  const supported = [50, 100, 200, 500];
+  const supported = [50, 100, 200];
   return supported.includes(value) ? value : DEFAULT_LAYOUT_PREFERENCES.tablePageSize;
 }
 

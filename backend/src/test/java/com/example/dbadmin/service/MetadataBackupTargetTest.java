@@ -47,6 +47,7 @@ class MetadataBackupTargetTest {
         BackupTargetPage firstPage = service.backupTargetTables(1, "public", null, 0, 1, false);
         assertThat(firstPage.namespaceName()).isEqualTo("PUBLIC");
         assertThat(firstPage.total()).isEqualTo(2);
+        assertThat(firstPage.totalExact()).isFalse();
         assertThat(firstPage.hasMore()).isTrue();
         assertThat(firstPage.items().get(0).name()).isEqualTo("ALPHA");
 

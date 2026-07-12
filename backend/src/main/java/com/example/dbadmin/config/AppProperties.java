@@ -47,6 +47,7 @@ public class AppProperties {
 
     public static class Backup {
         private String directory = "./backups";
+        private int timeoutSeconds = 7200;
 
         public String getDirectory() {
             return directory;
@@ -54,6 +55,14 @@ public class AppProperties {
 
         public void setDirectory(String directory) {
             this.directory = directory;
+        }
+
+        public int getTimeoutSeconds() {
+            return timeoutSeconds;
+        }
+
+        public void setTimeoutSeconds(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
         }
     }
 }

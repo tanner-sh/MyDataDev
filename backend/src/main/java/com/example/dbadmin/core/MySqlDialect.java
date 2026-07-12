@@ -2,6 +2,7 @@ package com.example.dbadmin.core;
 
 import com.example.dbadmin.dto.ApiDtos.ColumnDesign;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
+import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -12,6 +13,19 @@ import java.util.Optional;
 
 public class MySqlDialect extends DefaultDialect {
     private static final String IDENTIFIER_QUOTE = String.valueOf((char) 96);
+
+    @Override
+    public DatabaseCapabilities capabilities() {
+        return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"));
+    }
+
+    @Override
+    public void configureStreamingStatement(Connection connection, Statement statement, int fetchSize, int timeoutSeconds) throws java.sql.SQLException {
+        if (timeoutSeconds > 0) statement.setQueryTimeout(timeoutSeconds);
+        // Connector/J uses this sentinel for a forward-only streaming result set
+        // unless cursor fetching has explicitly been enabled in the JDBC URL.
+        statement.setFetchSize(Integer.MIN_VALUE);
+    }
 
     @Override
     public boolean supports(String dbType, String jdbcUrl) {

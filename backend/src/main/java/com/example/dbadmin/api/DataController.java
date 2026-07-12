@@ -22,10 +22,10 @@ public class DataController {
             @RequestParam long connectionId,
             @RequestParam(required = false) String schemaName,
             @RequestParam String tableName,
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "100") int pageSize
     ) throws Exception {
-        return service.table(connectionId, schemaName, tableName, page, pageSize);
+        return service.table(connectionId, schemaName, tableName, cursor, pageSize);
     }
 
     @PostMapping("/preview")
@@ -34,7 +34,11 @@ public class DataController {
     }
 
     @PostMapping("/commit")
-    public DataCommitResponse commit(@Valid @RequestBody DataPreviewRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
-        return service.commit(request, actor);
+    public DataCommitResponse commit(
+            @Valid @RequestBody DataPreviewRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return service.commit(request, actor, productionConfirmation);
     }
 }

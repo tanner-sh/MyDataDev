@@ -30,7 +30,7 @@ public class BackupScheduler {
             try {
                 if (isDue(task, now)) {
                     lastTriggered.put(task.id(), now);
-                    backupService.run(task.id(), "scheduler");
+                    backupService.enqueue(task.id(), "scheduler");
                 }
             } catch (Exception ignored) {
                 // BackupService records execution failures on the task; invalid cron expressions are skipped.

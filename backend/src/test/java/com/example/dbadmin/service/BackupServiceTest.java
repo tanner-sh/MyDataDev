@@ -92,15 +92,18 @@ class BackupServiceTest {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         BackupService service = service("jdbc:mysql://localhost:3306/demo", "mysql", repository);
 
-        assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "/usr/bin/mysqldump", "--result-file=/tmp/out.sql", null), "admin"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("备份额外参数不能覆盖系统控制参数");
+        for (String argument : List.of("--result-file=/tmp/out.sql", "-psecret", "-P3307", "file=/tmp/out.sql", "parfile=/tmp/evil.par")) {
+            assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "/usr/bin/mysqldump", argument, null), "admin"))
+                    .as(argument)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("备份额外参数不能覆盖系统控制参数");
+        }
         verify(repository, never()).insert(any());
     }
 
     @Test
     void runsMysqlDumpWithEnvironmentPasswordAndControlledOutput() throws Exception {
-        Path script = tempDir.resolve("fake-mysqldump.sh");
+        Path script = tempDir.resolve("mysqldump");
         Files.writeString(script, """
                 #!/bin/sh
                 for arg in "$@"; do
@@ -131,8 +134,37 @@ class BackupServiceTest {
     }
 
     @Test
+    void keepsOraclePasswordOutOfProcessArgumentsAndUsesAParameterFile() throws Exception {
+        Path script = tempDir.resolve("exp");
+        Files.writeString(script, """
+                #!/bin/sh
+                printf '%s\n' "$@" > "$0.args"
+                for arg in "$@"; do
+                  case "$arg" in parfile=*) parfile="${arg#parfile=}" ;; esac
+                done
+                cp "$parfile" "$0.par"
+                out=$(sed -n 's/^file=//p' "$parfile")
+                : > "$out"
+                exit 0
+                """);
+        script.toFile().setExecutable(true);
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupTask task = new BackupTask(1, "oracle", 1, "DATABASE", null, null, "ORACLE_EXP", script.toString(), null, "//localhost:1521/ORCLPDB1", null, false, null, null, null, null, null);
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+        BackupService service = service("jdbc:oracle:thin:@//localhost:1521/ORCLPDB1", "oracle", repository);
+
+        service.run(1L, "admin");
+
+        String arguments = Files.readString(Path.of(script + ".args"));
+        String parameterFile = Files.readString(Path.of(script + ".par"));
+        assertThat(arguments).contains("parfile=").doesNotContain("secret").doesNotContain("userid=");
+        assertThat(parameterFile).contains("userid=sa/secret@//localhost:1521/ORCLPDB1");
+        assertThat(parameterFile).contains("full=y");
+    }
+
+    @Test
     void scrubsNativeBackupPasswordFromFailureMessage() throws Exception {
-        Path script = tempDir.resolve("fake-exp.sh");
+        Path script = tempDir.resolve("exp");
         Files.writeString(script, """
                 #!/bin/sh
                 echo 'failed with secret'
@@ -177,7 +209,6 @@ class BackupServiceTest {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         BackupHistoryRepository historyRepository = mock(BackupHistoryRepository.class);
         when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", file.toString(), 8L, Instant.now())));
-        when(historyRepository.findByTaskId(1L)).thenReturn(List.of(new BackupHistory(1, 1, 1, "SUCCESS", "ok", file.toString(), 8L, Instant.now(), Instant.now())));
         BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository, historyRepository);
 
         service.delete(1L, false, "admin");
@@ -194,7 +225,7 @@ class BackupServiceTest {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         BackupHistoryRepository historyRepository = mock(BackupHistoryRepository.class);
         when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", file.toString(), 8L, Instant.now())));
-        when(historyRepository.findByTaskId(1L)).thenReturn(List.of(new BackupHistory(1, 1, 1, "SUCCESS", "ok", file.toString(), 8L, Instant.now(), Instant.now())));
+        when(historyRepository.findPageByTaskId(1L, 100, 0L)).thenReturn(List.of(new BackupHistory(1, 1, 1, "SUCCESS", "ok", file.toString(), 8L, Instant.now(), Instant.now())));
         BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository, historyRepository);
 
         service.delete(1L, true, "admin");
@@ -210,7 +241,7 @@ class BackupServiceTest {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         BackupHistoryRepository historyRepository = mock(BackupHistoryRepository.class);
         when(repository.findById(1L)).thenReturn(Optional.of(new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, "SUCCESS", "ok", outside.toString(), 8L, Instant.now())));
-        when(historyRepository.findByTaskId(1L)).thenReturn(List.of(new BackupHistory(1, 1, 1, "SUCCESS", "ok", outside.toString(), 8L, Instant.now(), Instant.now())));
+        when(historyRepository.findPageByTaskId(1L, 100, 0L)).thenReturn(List.of(new BackupHistory(1, 1, 1, "SUCCESS", "ok", outside.toString(), 8L, Instant.now(), Instant.now())));
         BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository, historyRepository);
 
         assertThatThrownBy(() -> service.delete(1L, true, "admin"))
@@ -226,9 +257,12 @@ class BackupServiceTest {
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(40), note VARCHAR(80))");
             connection.createStatement().execute("CREATE TABLE roles(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("CREATE SCHEMA audit");
+            connection.createStatement().execute("CREATE TABLE audit.events(id INT PRIMARY KEY, detail VARCHAR(40))");
             connection.createStatement().execute("CREATE VIEW user_view AS SELECT * FROM users");
             connection.createStatement().execute("INSERT INTO users(id, name, note) VALUES (1, 'Alice', 'a ''quoted'' value')");
             connection.createStatement().execute("INSERT INTO roles(id, name) VALUES (10, 'Admin')");
+            connection.createStatement().execute("INSERT INTO audit.events(id, detail) VALUES (20, 'created')");
         }
 
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
@@ -249,6 +283,7 @@ class BackupServiceTest {
         assertThat(sql).contains("INSERT INTO \"PUBLIC\".\"USERS\"");
         assertThat(sql).contains("'a ''quoted'' value'");
         assertThat(sql).contains("INSERT INTO \"PUBLIC\".\"ROLES\"");
+        assertThat(sql).contains("INSERT INTO \"AUDIT\".\"EVENTS\"");
         assertThat(sql).doesNotContain("USER_VIEW");
     }
 
@@ -311,7 +346,7 @@ class BackupServiceTest {
         BackupHistory latest = new BackupHistory(2, 1, 1, "FAILED", "new failure", null, null, Instant.parse("2026-07-04T00:00:00Z"), Instant.parse("2026-07-04T00:01:00Z"));
         when(repository.findById(1L)).thenReturn(Optional.of(task));
         when(historyRepository.findByTaskIdAndId(1L, 1L)).thenReturn(Optional.of(deleted));
-        when(historyRepository.findByTaskId(1L)).thenReturn(List.of(latest));
+        when(historyRepository.findPageByTaskId(1L, 1, 0L)).thenReturn(List.of(latest));
         BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository, historyRepository);
 
         service.deleteHistory(1L, 1L, false, "admin");
@@ -331,7 +366,7 @@ class BackupServiceTest {
         BackupHistory history = new BackupHistory(1, 1, 1, "SUCCESS", "ok", file.toString(), 8L, Instant.now(), Instant.now());
         when(repository.findById(1L)).thenReturn(Optional.of(task));
         when(historyRepository.findByTaskIdAndId(1L, 1L)).thenReturn(Optional.of(history));
-        when(historyRepository.findByTaskId(1L)).thenReturn(List.of());
+        when(historyRepository.findPageByTaskId(1L, 1, 0L)).thenReturn(List.of());
         BackupService service = service("jdbc:h2:mem:" + UUID.randomUUID(), repository, historyRepository);
 
         service.deleteHistory(1L, 1L, true, "admin");

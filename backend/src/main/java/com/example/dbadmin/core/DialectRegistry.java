@@ -13,6 +13,11 @@ public class DialectRegistry {
             new OracleDialect(),
             new MySqlDialect(),
             new DamengDialect(),
+            new PostgreSqlDialect(),
+            new SqlServerDialect(),
+            new SqliteDialect(),
+            new ClickHouseDialect(),
+            new H2Dialect(),
             new DefaultDialect()
     );
 

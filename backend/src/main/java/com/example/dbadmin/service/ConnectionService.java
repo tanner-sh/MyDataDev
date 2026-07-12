@@ -3,17 +3,18 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.dto.ApiDtos.ConnectionRequest;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
+import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.List;
-import java.util.Properties;
+import java.util.Locale;
 
 @Service
 public class ConnectionService {
@@ -24,13 +25,22 @@ public class ConnectionService {
     private final AuditRepository audit;
     private final BackupTaskRepository backupTasks;
     private final MetadataCacheService metadataCache;
+    private final RemoteDataSourceRegistry dataSources;
+    private final DialectRegistry dialectRegistry;
 
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache) {
+    @Autowired
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
         this.backupTasks = backupTasks;
         this.metadataCache = metadataCache;
+        this.dataSources = dataSources;
+        this.dialectRegistry = dialectRegistry;
+    }
+
+    protected ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache) {
+        this(repository, crypto, audit, backupTasks, metadataCache, new RemoteDataSourceRegistry(), new DialectRegistry());
     }
 
     public List<ConnectionResponse> list() {
@@ -46,10 +56,14 @@ public class ConnectionService {
 
     public ConnectionResponse update(long id, ConnectionRequest request, String actor) {
         DbConnection old = require(id);
+        if (backupTasks.countRunningByConnectionId(id) > 0) {
+            throw new IllegalStateException("该连接有正在执行的备份任务，请等待备份完成后再修改连接。");
+        }
         String secret = reusesStoredPassword(request.password())
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
         repository.update(id, toModel(id, request, secret));
+        dataSources.evict(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
@@ -62,13 +76,13 @@ public class ConnectionService {
             throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
         }
         repository.delete(id);
+        dataSources.evict(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
     }
 
     public void test(TestConnectionRequest request) throws Exception {
-        try (Connection ignored = DriverManager.getConnection(request.jdbcUrl(), props(request.username(), request.password()))) {
-        }
+        dataSources.test(request.jdbcUrl().trim(), request.username(), request.password());
     }
 
     public void testExisting(long id) throws Exception {
@@ -85,13 +99,12 @@ public class ConnectionService {
         String password = reusesStoredPassword(request.password())
                 ? crypto.decrypt(old.encryptedPassword())
                 : request.password();
-        try (Connection ignored = DriverManager.getConnection(request.jdbcUrl(), props(request.username(), password))) {
-        }
+        dataSources.test(request.jdbcUrl().trim(), request.username(), password);
     }
 
     public Connection open(long id) throws Exception {
         DbConnection c = require(id);
-        return DriverManager.getConnection(c.jdbcUrl(), props(c.username(), crypto.decrypt(c.encryptedPassword())));
+        return dataSources.open(c, crypto.decrypt(c.encryptedPassword()));
     }
 
     public DbConnection require(long id) {
@@ -103,27 +116,22 @@ public class ConnectionService {
         return crypto.decrypt(c.encryptedPassword());
     }
 
-    private Properties props(String username, String password) {
-        Properties props = new Properties();
-        if (username != null) {
-            props.put("user", username);
-        }
-        if (password != null) {
-            props.put("password", password);
-        }
-        return props;
+    void resetRemoteSession(long id) {
+        dataSources.evict(id);
     }
 
     private boolean reusesStoredPassword(String password) {
-        return password == null || password.isBlank() || PASSWORD_MASK.equals(password);
+        // The explicit UI mask means "keep existing". An empty string means
+        // the user intentionally cleared the password (common for local DBs).
+        return password == null || PASSWORD_MASK.equals(password);
     }
 
     private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword) {
         return new DbConnection(
                 id,
-                r.name(),
-                r.dbType(),
-                r.jdbcUrl(),
+                r.name().trim(),
+                r.dbType().trim().toLowerCase(Locale.ROOT),
+                r.jdbcUrl().trim(),
                 r.username(),
                 encryptedPassword,
                 normalizeEnvironment(r.environment()),
@@ -134,12 +142,18 @@ public class ConnectionService {
     }
 
     private ConnectionResponse toResponse(DbConnection c) {
-        return new ConnectionResponse(c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), normalizeEnvironment(c.environment()), c.readonly());
+        return new ConnectionResponse(
+                c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), normalizeEnvironment(c.environment()), c.readonly(),
+                dialectRegistry.dialectFor(c).capabilities()
+        );
     }
 
     private String normalizeEnvironment(String environment) {
-        if ("test".equals(environment) || "prod".equals(environment)) {
-            return environment;
+        String normalized = environment == null ? "" : environment.trim().toLowerCase(Locale.ROOT);
+        if ("production".equals(normalized)) normalized = "prod";
+        if ("testing".equals(normalized)) normalized = "test";
+        if ("test".equals(normalized) || "prod".equals(normalized)) {
+            return normalized;
         }
         return "dev";
     }

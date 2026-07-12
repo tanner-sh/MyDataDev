@@ -38,6 +38,16 @@ public class BackupHistoryRepository {
         return jdbc.query("SELECT * FROM backup_history WHERE task_id = ? ORDER BY finished_at DESC, id DESC", mapper, taskId);
     }
 
+    public List<BackupHistory> findPageByTaskId(long taskId, int limit, long offset) {
+        return jdbc.query(
+                "SELECT * FROM backup_history WHERE task_id = ? ORDER BY finished_at DESC, id DESC LIMIT ? OFFSET ?",
+                mapper,
+                taskId,
+                limit,
+                offset
+        );
+    }
+
     public Optional<BackupHistory> findByTaskIdAndId(long taskId, long id) {
         List<BackupHistory> rows = jdbc.query("SELECT * FROM backup_history WHERE task_id = ? AND id = ?", mapper, taskId, id);
         return rows.stream().findFirst();

@@ -2,6 +2,7 @@ package com.example.dbadmin.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.util.List;
 import java.util.Map;
@@ -11,12 +12,12 @@ public final class ApiDtos {
     }
 
     public record ConnectionRequest(
-            @NotBlank String name,
-            @NotBlank String dbType,
-            @NotBlank String jdbcUrl,
-            String username,
-            String password,
-            String environment,
+            @NotBlank @Size(max = 120) String name,
+            @NotBlank @Size(max = 40) String dbType,
+            @NotBlank @Size(max = 1000) String jdbcUrl,
+            @Size(max = 240) String username,
+            @Size(max = 10_000) String password,
+            @Size(max = 40) String environment,
             boolean readonly
     ) {
     }
@@ -28,11 +29,21 @@ public final class ApiDtos {
             String jdbcUrl,
             String username,
             String environment,
-            boolean readonly
+            boolean readonly,
+            DatabaseCapabilities capabilities
     ) {
     }
 
-    public record TestConnectionRequest(@NotBlank String jdbcUrl, String username, String password) {
+    public record DatabaseCapabilities(
+            boolean tableBrowse,
+            boolean tableEdit,
+            boolean tableDesign,
+            boolean explain,
+            List<String> nativeBackupMethods
+    ) {
+    }
+
+    public record TestConnectionRequest(@NotBlank @Size(max = 1000) String jdbcUrl, @Size(max = 240) String username, @Size(max = 10_000) String password) {
     }
 
     public record MessageResponse(boolean ok, String message) {
@@ -45,6 +56,7 @@ public final class ApiDtos {
             String namespaceKind,
             List<DbObject> objects,
             int totalObjects,
+            boolean totalObjectsExact,
             int page,
             int pageSize,
             boolean hasMore,
@@ -58,7 +70,8 @@ public final class ApiDtos {
             String selectedSchema,
             List<DbObject> objects,
             String cachedAt,
-            boolean cacheHit
+            boolean cacheHit,
+            boolean hasMore
     ) {
     }
 
@@ -68,7 +81,16 @@ public final class ApiDtos {
     public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
     }
 
-    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, Long rowCount, String ddl, String ddlSource) {
+    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, String structureVersion) {
+        public ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName) {
+            this(schemaName, name, type, columns, indexes, primaryKeys, primaryKeyName, null);
+        }
+    }
+
+    public record ObjectDdlResponse(String ddl, String source) {
+    }
+
+    public record ObjectRowCountResponse(Long value, boolean exact, long elapsedMs) {
     }
 
     public record ObjectRelations(List<ObjectRelation> importedKeys, List<ObjectRelation> exportedKeys) {
@@ -80,10 +102,16 @@ public final class ApiDtos {
     public record ColumnInfo(String name, String type, int size, boolean nullable, String remarks, int ordinalPosition, String defaultValue) {
     }
 
-    public record IndexInfo(String name, String columnName, boolean unique) {
+    public record IndexInfo(String name, String columnName, boolean unique, int ordinalPosition) {
+        public IndexInfo(String name, String columnName, boolean unique) {
+            this(name, columnName, unique, 0);
+        }
     }
 
-    public record TableDesignRequest(String schemaName, @NotBlank String tableName, List<ColumnDesign> columns, List<IndexDesign> indexes, List<String> primaryKeys, String confirmation) {
+    public record TableDesignRequest(String schemaName, @NotBlank String tableName, List<ColumnDesign> columns, List<IndexDesign> indexes, List<String> primaryKeys, String structureVersion, String confirmation) {
+        public TableDesignRequest(String schemaName, String tableName, List<ColumnDesign> columns, List<IndexDesign> indexes, List<String> primaryKeys, String confirmation) {
+            this(schemaName, tableName, columns, indexes, primaryKeys, null, confirmation);
+        }
     }
 
     public record ColumnDesign(@NotBlank String name, @NotBlank String type, Integer size, boolean nullable, String defaultValue, String originalName, boolean deleted) {
@@ -95,16 +123,19 @@ public final class ApiDtos {
     public record TableDesignResponse(List<String> sql, String message) {
     }
 
-    public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {
+    public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, String executionId) {
     }
 
-    public record SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
-        public SqlResult(List<String> columns, List<Map<String, Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
+    public record ResultColumn(String key, String label, String typeName) {
+    }
+
+    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
+        public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
             this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false);
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, String executionId) {
     }
 
     public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
@@ -134,15 +165,49 @@ public final class ApiDtos {
     public record DataPreviewRequest(@NotNull Long connectionId, String schemaName, @NotBlank String tableName, List<RowChange> changes) {
     }
 
-    public record RowChange(@NotBlank String type, Map<String, Object> key, Map<String, Object> values) {
+    public record RowChange(@NotBlank String type, Map<String, Object> key, Map<String, Object> values, Map<String, Object> originalValues, String keyToken) {
+        public RowChange(String type, Map<String, Object> key, Map<String, Object> values, Map<String, Object> originalValues) {
+            this(type, key, values, originalValues, null);
+        }
+
+        public RowChange(String type, Map<String, Object> key, Map<String, Object> values) {
+            this(type, key, values, null, null);
+        }
     }
 
     public record DataPreviewResponse(List<String> sql) {
     }
 
-    public record TableDataResponse(List<String> columns, List<Map<String, Object>> rows, List<String> keyColumns, boolean editable, int page, int pageSize, boolean hasMore) {
-        public TableDataResponse(List<String> columns, List<Map<String, Object>> rows, List<String> keyColumns, boolean editable) {
-            this(columns, rows, keyColumns, editable, 0, rows == null ? 0 : rows.size(), false);
+    public record TableColumn(String name, String typeName, int jdbcType, boolean nullable, boolean editable, boolean truncated) {
+        public TableColumn(String name, String typeName, int jdbcType, boolean nullable, boolean editable) {
+            this(name, typeName, jdbcType, nullable, editable, false);
+        }
+
+        public TableColumn(String name, String typeName, int jdbcType, boolean nullable) {
+            this(name, typeName, jdbcType, nullable, true, false);
+        }
+    }
+
+    public record TableDataResponse(
+            List<TableColumn> columns,
+            List<Map<String, Object>> rows,
+            List<String> rowKeyTokens,
+            List<String> keyColumns,
+            boolean editable,
+            String navigationMode,
+            String nextCursor,
+            boolean hasMore
+    ) {
+        public TableDataResponse(
+                List<TableColumn> columns,
+                List<Map<String, Object>> rows,
+                List<String> keyColumns,
+                boolean editable,
+                String navigationMode,
+                String nextCursor,
+                boolean hasMore
+        ) {
+            this(columns, rows, List.of(), keyColumns, editable, navigationMode, nextCursor, hasMore);
         }
     }
 
@@ -152,7 +217,7 @@ public final class ApiDtos {
     public record ExportRequest(@NotNull Long connectionId, @NotBlank String sql, @NotBlank String format) {
     }
 
-    public record BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, List<String> tableNames, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
+    public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName) {
         public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
             this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName);
         }
@@ -173,8 +238,21 @@ public final class ApiDtos {
             int total,
             int page,
             int pageSize,
-            boolean hasMore
+            boolean hasMore,
+            boolean totalExact
     ) {
+        public BackupTargetPage(
+                String namespaceKind,
+                String currentNamespace,
+                String namespaceName,
+                List<BackupTargetItem> items,
+                int total,
+                int page,
+                int pageSize,
+                boolean hasMore
+        ) {
+            this(namespaceKind, currentNamespace, namespaceName, items, total, page, pageSize, hasMore, true);
+        }
     }
 
     public record CronPreviewRequest(@NotBlank String cron) {
@@ -184,5 +262,8 @@ public final class ApiDtos {
     }
 
     public record BackupEnabledRequest(boolean enabled) {
+    }
+
+    public record BackupHistoryPage(List<com.example.dbadmin.model.BackupHistory> items, int page, int pageSize, boolean hasMore) {
     }
 }
