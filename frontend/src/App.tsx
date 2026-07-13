@@ -3,11 +3,11 @@ import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
-import { API, DB_TYPE_OPTIONS, EMPTY_FORM, PASSWORD_MASK } from './constants';
-import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, ConnectionForm, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, normalizeEnvironment, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import { API, DB_TYPE_OPTIONS } from './constants';
+import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import { analyzeSqlCompletion, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
@@ -19,6 +19,15 @@ import { PaneResizer } from './components/PaneResizer';
 import { SqlHistoryDrawer } from './components/SqlHistoryDrawer';
 import { TableWorkspace } from './components/TableWorkspace';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
+import {
+  buildConnectionSaveRequest,
+  CLOSED_CONNECTION_EDITOR,
+  createBlankConnectionEditor,
+  createDuplicateConnectionEditor,
+  createEditConnectionEditor,
+  isConnectionEditorDirty,
+  updateConnectionEditorForm
+} from './connectionEditor';
 
 const { Text } = Typography;
 const OBJECT_PAGE_SIZE = 200;
@@ -54,8 +63,7 @@ export default function App() {
   const [connectionsReady, setConnectionsReady] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<number | null>(null);
   const [backups, setBackups] = useState<BackupTask[]>([]);
-  const [form, setForm] = useState<ConnectionForm>(EMPTY_FORM);
-  const [editingConnectionId, setEditingConnectionId] = useState<number | null>(null);
+  const [connectionEditor, setConnectionEditor] = useState(CLOSED_CONNECTION_EDITOR);
   const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
@@ -115,22 +123,7 @@ export default function App() {
   }, [activeObjectDetail, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
   const activeSqlTab = useMemo(() => sqlTabs.find((tab) => tab.id === activeSqlTabId) || sqlTabs[0], [activeSqlTabId, sqlTabs]);
-  const connectionFormBaseline = useMemo<ConnectionForm>(() => {
-    if (!editingConnectionId || selected?.id !== editingConnectionId) return EMPTY_FORM;
-    return {
-      name: selected.name,
-      dbType: selected.dbType,
-      jdbcUrl: selected.jdbcUrl,
-      username: selected.username || '',
-      password: PASSWORD_MASK,
-      environment: normalizeEnvironment(selected.environment),
-      readonly: selected.readonly
-    };
-  }, [editingConnectionId, selected]);
-  const connectionFormDirty = useMemo(
-    () => JSON.stringify(form) !== JSON.stringify(connectionFormBaseline),
-    [form, connectionFormBaseline]
-  );
+  const connectionFormDirty = isConnectionEditorDirty(connectionEditor);
   const antThemeConfig = useMemo(() => ({
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: { colorPrimary: '#2f74e8', borderRadius: 7, controlHeight: 34, fontSize: 13 }
@@ -269,7 +262,10 @@ export default function App() {
       try {
         const rows = await api<Connection[]>('/connections');
         setConnections(rows);
-        setSelected((current: Connection | null) => current ? rows.find((row) => row.id === current.id) || rows[0] || null : rows[0] || null);
+        setSelected((current: Connection | null) => {
+          const targetId = options.preferredConnectionId ?? current?.id;
+          return targetId ? rows.find((row) => row.id === targetId) || rows[0] || null : rows[0] || null;
+        });
         setConnectionsError('');
         setConnectionsReady(true);
         setConnectionsLoading(false);
@@ -349,24 +345,20 @@ export default function App() {
   }
 
   async function saveConnection() {
+    const editor = connectionEditor;
+    if (editor.mode === 'closed') return;
+    const request = buildConnectionSaveRequest(editor);
     setConnectionActionLoading(true);
     try {
-      const saved = editingConnectionId
-        ? await api<Connection>(`/connections/${editingConnectionId}`, { method: 'PUT', body: JSON.stringify(form) })
-        : await api<Connection>('/connections', { method: 'POST', body: JSON.stringify(form) });
-      applyConnectionSelection(saved);
-      setEditingConnectionId(saved.id);
-      setForm({
-        name: saved.name,
-        dbType: saved.dbType,
-        jdbcUrl: saved.jdbcUrl,
-        username: saved.username || '',
-        password: PASSWORD_MASK,
-        environment: normalizeEnvironment(saved.environment),
-        readonly: saved.readonly
+      const saved = await api<Connection>(request.path, {
+        method: request.method,
+        body: JSON.stringify(request.body)
       });
-      showSuccess(editingConnectionId ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
-      await refreshConnections();
+      const updatesActiveConnection = editor.mode === 'create' || selected?.id === saved.id;
+      if (updatesActiveConnection) applyConnectionSelection(saved);
+      setConnectionEditor(CLOSED_CONNECTION_EDITOR);
+      showSuccess(editor.mode === 'edit' ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
+      await refreshConnections({ preferredConnectionId: updatesActiveConnection ? saved.id : undefined });
     } catch (e) {
       showError(localizeMessage((e as Error).message));
     } finally {
@@ -375,6 +367,12 @@ export default function App() {
   }
 
   function requestSaveConnection() {
+    if (connectionEditor.mode === 'closed') return;
+    const changesActiveConnection = connectionEditor.mode === 'create' || selected?.id === connectionEditor.connectionId;
+    if (!changesActiveConnection) {
+      void saveConnection();
+      return;
+    }
     confirmDiscardObjectDesign(() => {
       if (pendingChanges.length === 0) {
         void saveConnection();
@@ -391,11 +389,14 @@ export default function App() {
     }, '保存连接配置');
   }
 
-  async function testConnection(target = form) {
+  async function testConnection() {
+    const editor = connectionEditor;
+    if (editor.mode === 'closed') return;
+    const target = editor.form;
     setConnectionActionLoading(true);
-    try {
-      if (editingConnectionId) {
-        await api<{ ok: boolean; message: string }>(`/connections/${editingConnectionId}/test`, {
+    try {
+      if (editor.mode === 'edit') {
+        await api<{ ok: boolean; message: string }>(`/connections/${editor.connectionId}/test`, {
           method: 'POST',
           body: JSON.stringify(target)
         });
@@ -460,9 +461,6 @@ export default function App() {
           setMode('sql');
         }
       }
-      if (editingConnectionId === connection.id) {
-        resetConnectionForm();
-      }
       await refreshConnections();
     } catch (e) {
       const rawMessage = (e as Error).message;
@@ -517,99 +515,45 @@ export default function App() {
       showInfo('请等待当前操作完成后再切换连接');
       return;
     }
-    confirmDiscardConnectionDraft(() => {
-      confirmDiscardObjectDesign(() => {
-        confirmDiscardTableChanges(() => {
-          resetConnectionForm();
-          applyConnectionSelection(connection);
-        }, `切换到连接“${connection.name}”`);
+    confirmDiscardObjectDesign(() => {
+      confirmDiscardTableChanges(() => {
+        applyConnectionSelection(connection);
       }, `切换到连接“${connection.name}”`);
-    });
+    }, `切换到连接“${connection.name}”`);
   }
 
   function editConnection(connection: Connection) {
-    const openEditor = () => {
-      if (selected?.id !== connection.id) applyConnectionSelection(connection);
-      setEditingConnectionId(connection.id);
-      setForm({
-        name: connection.name,
-        dbType: connection.dbType,
-        jdbcUrl: connection.jdbcUrl,
-        username: connection.username || '',
-        password: PASSWORD_MASK,
-        environment: normalizeEnvironment(connection.environment),
-        readonly: connection.readonly
-      });
-      setActiveDrawer('connections');
-      showInfo(`正在编辑连接：${connection.name}。密码显示为 ${PASSWORD_MASK} 表示沿用已保存密码。`);
-    };
-    const continueEditing = () => confirmDiscardTableChanges(openEditor, `编辑连接“${connection.name}”`);
-    confirmDiscardConnectionDraft(() => {
-      if (selected?.id === connection.id) {
-        continueEditing();
-        return;
-      }
-      confirmDiscardObjectDesign(continueEditing, `编辑连接“${connection.name}”`);
-    });
+    setConnectionEditor(createEditConnectionEditor(connection));
+    setActiveDrawer('connections');
   }
 
   function duplicateConnection(connection: Connection) {
-    confirmDiscardConnectionDraft(() => {
-      setEditingConnectionId(null);
-      setForm({
-        name: `${connection.name} 副本`,
-        dbType: connection.dbType,
-        jdbcUrl: connection.jdbcUrl,
-        username: connection.username || '',
-        password: '',
-        environment: normalizeEnvironment(connection.environment),
-        readonly: connection.readonly
-      });
-      setActiveDrawer('connections');
-      showInfo('已复制连接配置，请输入密码后保存为新连接。');
-    });
-  }
-
-  function resetConnectionForm() {
-    setEditingConnectionId(null);
-    setForm(EMPTY_FORM);
+    setConnectionEditor(createDuplicateConnectionEditor(connection));
+    setActiveDrawer('connections');
   }
 
-  function requestResetConnectionForm() {
-    confirmDiscardConnectionDraft(resetConnectionForm);
+  function openNewConnectionEditor() {
+    setConnectionEditor(createBlankConnectionEditor());
+    setActiveDrawer('connections');
   }
 
-  function confirmDiscardConnectionDraft(action: () => void) {
+  function closeConnectionEditor() {
     if (!connectionFormDirty) {
-      action();
-      return;
-    }
-    modalApi.confirm({
-      title: '放弃未保存的连接配置？',
-      content: '当前连接表单已修改，继续操作将丢失这些内容。',
-      okText: '放弃修改',
-      cancelText: '继续编辑',
-      okButtonProps: { danger: true },
-      onOk: action
-    });
-  }
-
-  function closeConnectionDrawer() {
-    if (!connectionFormDirty) {
-      setActiveDrawer(null);
+      setConnectionEditor(CLOSED_CONNECTION_EDITOR);
       return;
     }
     modalApi.confirm({
       title: '放弃未保存的连接配置？',
       content: '当前连接表单已修改，关闭后这些内容不会保留。',
-      okText: '放弃并关闭',
+      okText: '放弃修改',
       cancelText: '继续编辑',
       okButtonProps: { danger: true },
-      onOk: () => {
-        resetConnectionForm();
-        setActiveDrawer(null);
-      }
+      onOk: () => setConnectionEditor(CLOSED_CONNECTION_EDITOR)
     });
+  }
+
+  function closeConnectionDrawer() {
+    setActiveDrawer(null);
   }
 
   function discardTableChanges() {
@@ -1408,14 +1352,16 @@ export default function App() {
     setPreviewSql([]);
   }
 
-  function changeDbType(dbType: string) {
-    const preset = DB_TYPE_OPTIONS.find((option) => option.value === dbType);
-    setForm((current) => ({
-      ...current,
-      dbType,
-      jdbcUrl: preset ? preset.url : current.jdbcUrl
-    }));
-  }
+  function changeDbType(dbType: string) {
+    const preset = DB_TYPE_OPTIONS.find((option) => option.value === dbType);
+    setConnectionEditor((current) => current.mode === 'closed'
+      ? current
+      : updateConnectionEditorForm(current, {
+          ...current.form,
+          dbType,
+          jdbcUrl: preset ? preset.url : current.form.jdbcUrl
+        }));
+  }
 
   function addRow() {
     if (!tableData) return;
@@ -1917,7 +1863,7 @@ export default function App() {
         width={480}
         open={activeDrawer === 'connections'}
         rootClassName="management-drawer"
-        maskClosable={!connectionFormDirty}
+        extra={<Button type="primary" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>}
         onClose={closeConnectionDrawer}
       >
         <div className="connection-management-content">
@@ -1934,22 +1880,36 @@ export default function App() {
             onDuplicate={duplicateConnection}
             onDelete={deleteConnection}
           />
-          <ConnectionFormPanel
-            form={form}
-            selected={selected}
-            editing={Boolean(editingConnectionId)}
-            loading={connectionActionLoading}
-            onChange={setForm}
-            onDbTypeChange={changeDbType}
-            onReset={requestResetConnectionForm}
-            onEdit={editConnection}
-            onDuplicate={duplicateConnection}
-            onDelete={deleteConnection}
-            onTest={() => testConnection()}
-            onSave={requestSaveConnection}
-          />
         </div>
       </Drawer>
+
+      <Modal
+        title={connectionEditor.mode === 'edit'
+          ? `编辑连接：${connectionEditor.connectionName}`
+          : connectionEditor.mode === 'create' && connectionEditor.origin === 'duplicate'
+            ? '复制为新连接'
+            : '新建数据库连接'}
+        width={640}
+        open={connectionEditor.mode !== 'closed'}
+        footer={null}
+        maskClosable={!connectionFormDirty && !connectionActionLoading}
+        closable={!connectionActionLoading}
+        onCancel={closeConnectionEditor}
+        destroyOnHidden
+      >
+        {connectionEditor.mode !== 'closed' && (
+          <ConnectionFormPanel
+            form={connectionEditor.form}
+            editing={connectionEditor.mode === 'edit'}
+            loading={connectionActionLoading}
+            onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
+            onDbTypeChange={changeDbType}
+            onCancel={closeConnectionEditor}
+            onTest={testConnection}
+            onSave={requestSaveConnection}
+          />
+        )}
+      </Modal>
 
       <Drawer
         title="备份任务"

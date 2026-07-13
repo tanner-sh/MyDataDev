@@ -24,8 +24,8 @@ export const ENVIRONMENT_OPTIONS = [
 
 export const PASSWORD_MASK = '******';
 
-export const EMPTY_FORM: ConnectionForm = {
-  name: '本地 H2',
+export const EMPTY_FORM: ConnectionForm = {
+  name: '',
   dbType: 'h2',
   jdbcUrl: 'jdbc:h2:mem:testdb',
   username: 'sa',

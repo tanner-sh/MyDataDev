@@ -223,34 +223,6 @@ body {
   white-space: nowrap;
 }
 
-.connection-summary {
-  margin-bottom: 10px;
-  padding: 9px;
-  display: grid;
-  gap: 6px;
-  border: 1px solid #edf1f7;
-  border-radius: 6px;
-  background: #f8fbff;
-}
-
-.connection-summary-title {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.connection-summary-title .ant-tag,
-.connection-summary .ant-tag {
-  margin-inline-end: 0;
-}
-
-.connection-summary-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
-}
-
 .object-collapse {
   background: transparent;
 }
@@ -949,6 +921,12 @@ body {
 
 .form-actions .ant-space-item {
   min-width: 0;
+}
+
+.connection-editor-form .form-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  position: static;
+  padding-bottom: 0;
 }
 
 .backup-task-title {
@@ -1887,7 +1865,6 @@ body {
 .empty-state,
 .inspector-section,
 .connection-item,
-.connection-summary,
 .form-actions {
   background: var(--surface);
 }
@@ -1895,7 +1872,6 @@ body {
 .statement-sql,
 .history-sql,
 .connection-item,
-.connection-summary,
 .inspector-section {
   color: var(--text);
   border-color: var(--border) !important;

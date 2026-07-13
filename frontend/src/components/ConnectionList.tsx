@@ -46,8 +46,9 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
               <button className="connection-title-button connection-main-info" aria-label={`选择连接 ${connection.name}`} onClick={() => onSelect(connection)}>
                 <div className="connection-name-row">
                   <Text strong className="ellipsis-text">{connection.name}</Text>
+                  {selectedId === connection.id && <Tag color="processing">当前使用</Tag>}
                   {connection.readonly && <Tag color="orange">只读</Tag>}
-                </div>
+                </div>
                 <Space size={4} wrap className="connection-tags">
                   <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
                   <Tag>{environmentLabel(connection.environment)}</Tag>

@@ -148,4 +148,4 @@ export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };
 export type ResultRow = { key: string; values: unknown[] };
 export type EditableRow = TableRow;
-export type RefreshConnectionsOptions = { retry?: boolean };
+export type RefreshConnectionsOptions = { retry?: boolean; preferredConnectionId?: number };
