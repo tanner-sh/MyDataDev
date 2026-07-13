@@ -330,26 +330,6 @@ body {
   font-size: 12px;
 }
 
-.result-tabs {
-  height: 100%;
-  min-height: 0;
-  padding: 0 12px;
-  overflow: hidden;
-  background: #ffffff;
-}
-
-.result-tabs .ant-tabs-nav {
-  margin: 0;
-}
-
-.result-tabs .ant-tabs-content-holder,
-.result-tabs .ant-tabs-content,
-.result-tabs .ant-tabs-tabpane {
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-}
-
 .statement-result-panel {
   height: 100%;
   min-height: 0;
@@ -468,6 +448,18 @@ body {
   overflow: hidden;
 }
 
+.table-viewport-loading {
+  width: 100%;
+  height: 100%;
+  min-height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  background: var(--surface);
+}
+
 .grid-pagination {
   min-width: 0;
   min-height: 40px;
@@ -503,8 +495,14 @@ body {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
+}
+
+.statement-result-notices {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
 }
 
 .result-paging-hint {
@@ -688,15 +686,15 @@ body {
   flex: 0 0 auto;
 }
 
-.object-detail-tabs .ant-tabs-content-holder {
-  height: auto;
+.object-detail-tabs > .ant-tabs-body-holder {
+  height: 100%;
   min-height: 0;
   flex: 1 1 0;
   overflow: hidden;
 }
 
-.object-detail-tabs .ant-tabs-content,
-.object-detail-tabs .ant-tabs-tabpane {
+.object-detail-tabs > .ant-tabs-body-holder > .ant-tabs-body,
+.object-detail-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content {
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -823,10 +821,12 @@ body {
 }
 
 .ddl-viewer {
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -839,11 +839,15 @@ body {
 }
 
 .ddl-viewer pre {
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   max-height: none;
   margin: 0;
   padding: 12px;
   overflow: auto;
+  scrollbar-gutter: stable;
+  white-space: pre;
   border: 1px solid #dde3ee;
   border-radius: 6px;
   background: #0f172a;
@@ -854,10 +858,76 @@ body {
 }
 
 .table-designer {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: grid;
-  align-content: start;
+  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) auto;
   gap: 10px;
   padding-bottom: 12px;
+  overflow: hidden;
+}
+
+.designer-section {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.designer-notices {
+  max-height: 112px;
+  flex: 0 0 auto;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+
+.designer-notices:empty {
+  display: none;
+}
+
+.designer-table-viewport {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.designer-grid {
+  min-width: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+
+.designer-grid .ant-table-body {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #9aa6b7 #eef2f7;
+  overscroll-behavior: contain;
+}
+
+.designer-grid .ant-table-body::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.designer-grid .ant-table-body::-webkit-scrollbar-track {
+  background: #eef2f7;
+}
+
+.designer-grid .ant-table-body::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  border: 2px solid #eef2f7;
+  border-radius: 999px;
+  background: #9aa6b7;
+}
+
+.designer-grid .ant-table-body::-webkit-scrollbar-thumb:hover {
+  background: #718096;
 }
 
 .designer-toolbar {
@@ -869,7 +939,9 @@ body {
 }
 
 .designer-actions {
+  min-height: 32px;
   display: flex;
+  align-items: flex-end;
   justify-content: flex-end;
 }
 
@@ -889,14 +961,6 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.6;
-}
-
-.inspector-tabs .ant-tabs-nav {
-  margin-bottom: 10px;
-}
-
-.inspector-tabs .ant-tabs-content-holder {
-  min-width: 0;
 }
 
 .inspector-section {
@@ -1780,15 +1844,15 @@ body {
   flex: 0 0 auto;
 }
 
-.result-tabs > .ant-tabs-content-holder {
-  height: auto;
+.result-tabs > .ant-tabs-body-holder {
+  height: 100%;
   min-height: 0;
   flex: 1 1 0;
   overflow: hidden;
 }
 
-.result-tabs > .ant-tabs-content-holder > .ant-tabs-content,
-.result-tabs > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+.result-tabs > .ant-tabs-body-holder > .ant-tabs-body,
+.result-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content {
   height: 100%;
   min-height: 0;
   overflow: hidden;

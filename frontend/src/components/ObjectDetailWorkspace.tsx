@@ -121,8 +121,8 @@ export function ObjectDetailWorkspace({
             activeKey={activeTabKey}
             onChange={setActiveTabKey}
             items={[
-              { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} /> },
-              { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} /> },
+              { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} active={activeTabKey === 'columns'} /> },
+              { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} active={activeTabKey === 'indexes'} /> },
               { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'relations'} /> },
               { key: 'ddl', label: 'DDL', children: <DdlPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'ddl'} /> },
               {
@@ -132,6 +132,7 @@ export function ObjectDetailWorkspace({
                   <TableDesigner
                     connectionId={connectionId}
                     detail={detail}
+                    active={activeTabKey === 'designer'}
                     disabled={isView || readonlyConnection || !tableDesignSupported || loading}
                     readonlyConnection={readonlyConnection}
                     unsupported={!tableDesignSupported}
@@ -227,9 +228,9 @@ function SummaryMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ColumnTable({ rows, primaryKeys }: { rows: ColumnRow[]; primaryKeys: string[] }) {
+function ColumnTable({ rows, primaryKeys, active }: { rows: ColumnRow[]; primaryKeys: string[]; active: boolean }) {
   const [query, setQuery] = useState('');
-  const { viewportRef, scrollY } = useTableViewportHeight();
+  const { viewportRef, scrollY } = useTableViewportHeight({ active });
   const filteredRows = useMemo(() => {
     const keyword = query.trim().toLocaleLowerCase();
     if (!keyword) return rows;
@@ -270,23 +271,25 @@ function ColumnTable({ rows, primaryKeys }: { rows: ColumnRow[]; primaryKeys: st
         <Text type="secondary">显示 {filteredRows.length} / {rows.length} 个字段</Text>
       </div>
       <div ref={viewportRef} className="object-table-pane">
-        <Table
-          size="small"
-          className="data-grid object-detail-grid"
-          columns={columns}
-          dataSource={filteredRows}
-          pagination={false}
-          virtual={Boolean(scrollY)}
-          scroll={{ x: 1000, ...(scrollY ? { y: scrollY } : {}) }}
-          locale={{ emptyText: query ? '没有匹配的字段' : '暂无字段' }}
-        />
+        {scrollY === undefined ? <TableViewportLoading /> : (
+          <Table
+            size="small"
+            className="data-grid object-detail-grid"
+            columns={columns}
+            dataSource={filteredRows}
+            pagination={false}
+            virtual
+            scroll={{ x: 1000, y: scrollY }}
+            locale={{ emptyText: query ? '没有匹配的字段' : '暂无字段' }}
+          />
+        )}
       </div>
     </div>
   );
 }
 
-function IndexTable({ rows }: { rows: IndexRow[] }) {
-  const { viewportRef, scrollY } = useTableViewportHeight();
+function IndexTable({ rows, active }: { rows: IndexRow[]; active: boolean }) {
+  const { viewportRef, scrollY } = useTableViewportHeight({ active });
   const columns: ColumnsType<IndexRow> = [
     {
       title: '索引名', dataIndex: 'name', key: 'name',
@@ -300,18 +303,24 @@ function IndexTable({ rows }: { rows: IndexRow[] }) {
   ];
   return (
     <div ref={viewportRef} className="object-table-pane object-index-panel">
-      <Table
-        size="small"
-        className="data-grid object-detail-grid"
-        columns={columns}
-        dataSource={rows}
-        pagination={false}
-        virtual={Boolean(scrollY)}
-        scroll={{ x: 720, ...(scrollY ? { y: scrollY } : {}) }}
-        locale={{ emptyText: '当前对象没有索引' }}
-      />
+      {scrollY === undefined ? <TableViewportLoading /> : (
+        <Table
+          size="small"
+          className="data-grid object-detail-grid"
+          columns={columns}
+          dataSource={rows}
+          pagination={false}
+          virtual
+          scroll={{ x: 720, y: scrollY }}
+          locale={{ emptyText: '当前对象没有索引' }}
+        />
+      )}
     </div>
   );
+}
+
+function TableViewportLoading() {
+  return <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备表格…</Text></div>;
 }
 
 function RelationsPanel({ connectionId, detail, active }: { connectionId?: number; detail: ObjectDetail; active: boolean }) {
@@ -434,9 +443,10 @@ function DdlViewer({ ddl, source }: { ddl: string; source?: string }) {
   );
 }
 
-function TableDesigner({ connectionId, detail, disabled, readonlyConnection, unsupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
+function TableDesigner({ connectionId, detail, active, disabled, readonlyConnection, unsupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
   connectionId?: number;
   detail: ObjectDetail;
+  active: boolean;
   disabled?: boolean;
   readonlyConnection?: boolean;
   unsupported?: boolean;
@@ -454,6 +464,8 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
   const [productionConfirmation, setProductionConfirmation] = useState('');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const { viewportRef: columnViewportRef, scrollY: columnScrollY } = useTableViewportHeight({ active, reservedHeight: 2 });
+  const { viewportRef: indexViewportRef, scrollY: indexScrollY } = useTableViewportHeight({ active, reservedHeight: 2 });
   const requestIdRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
   const activeColumns = columns.filter((column) => !column.deleted);
@@ -569,50 +581,64 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
   }
 
   return (
-    <div className="table-designer object-tab-scroll">
-      {readonlyConnection && <Alert type="warning" showIcon message="当前连接为只读连接，不能执行结构变更。" />}
-      {unsupported && <Alert type="info" showIcon message="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
-      {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon message="视图暂不支持表设计器。" />}
-      {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon message={message} />}
-      <div className="designer-toolbar">
-        <Text strong>字段</Text>
-        <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setColumns((rows) => [...rows, newColumnRow(rows.length)])}>新增字段</Button>
-      </div>
-      <Table<DesignColumnRow>
-        size="small"
-        className="data-grid object-detail-grid"
-        rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
-        pagination={false}
-        dataSource={columns}
-        scroll={{ x: 'max-content' }}
-        columns={[
-          { title: '字段名', dataIndex: 'name', key: 'name', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { name: event.target.value })} /> },
-          { title: '类型', dataIndex: 'type', key: 'type', width: 130, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { type: event.target.value }, setColumns)} /> },
-          { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => updateColumn(row.key, { size: next || null }, setColumns)} /> },
-          { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateColumn(row.key, { nullable: event.target.checked }, setColumns)} /> },
-          { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { defaultValue: event.target.value }, setColumns)} /> },
-          { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox disabled={disabled || row.deleted} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
-          { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => toggleColumnDeleted(row)}>{row.deleted ? '恢复' : '删除'}</Button> }
-        ]}
-      />
-      <div className="designer-toolbar">
-        <Text strong>索引</Text>
-        <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setIndexes((rows) => [...rows, newIndexRow(rows.length)])}>新增索引</Button>
-      </div>
-      <Table<DesignIndexRow>
-        size="small"
-        className="data-grid object-detail-grid"
-        rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
-        pagination={false}
-        dataSource={indexes}
-        scroll={{ x: 'max-content' }}
-        columns={[
-          { title: '索引名', dataIndex: 'name', key: 'name', width: 170, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateIndex(row.key, { name: event.target.value }, setIndexes)} /> },
-          { title: '字段', dataIndex: 'columns', key: 'columns', render: (value, row) => <Select size="small" mode="multiple" className="full-width" disabled={disabled || row.deleted} value={value} options={columnOptions} onChange={(next) => updateIndex(row.key, { columns: next }, setIndexes)} /> },
-          { title: '唯一', dataIndex: 'unique', key: 'unique', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateIndex(row.key, { unique: event.target.checked }, setIndexes)} /> },
-          { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => setIndexes((rows) => rows.map((item) => item.key === row.key ? { ...item, deleted: !item.deleted } : item))}>{row.deleted ? '恢复' : '删除'}</Button> }
-        ]}
-      />
+    <div className="table-designer">
+      <section className="designer-section designer-column-section">
+        <div className="designer-notices">
+          {readonlyConnection && <Alert type="warning" showIcon message="当前连接为只读连接，不能执行结构变更。" />}
+          {unsupported && <Alert type="info" showIcon message="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
+          {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon message="视图暂不支持表设计器。" />}
+          {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon message={message} />}
+        </div>
+        <div className="designer-toolbar">
+          <Text strong>字段</Text>
+          <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setColumns((rows) => [...rows, newColumnRow(rows.length)])}>新增字段</Button>
+        </div>
+        <div ref={columnViewportRef} className="designer-table-viewport">
+          {columnScrollY === undefined ? <TableViewportLoading /> : (
+            <Table<DesignColumnRow>
+              size="small"
+              className="data-grid object-detail-grid designer-grid designer-column-grid"
+              rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
+              pagination={false}
+              dataSource={columns}
+              scroll={{ x: 900, y: columnScrollY }}
+              columns={[
+                { title: '字段名', dataIndex: 'name', key: 'name', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { name: event.target.value })} /> },
+                { title: '类型', dataIndex: 'type', key: 'type', width: 130, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { type: event.target.value }, setColumns)} /> },
+                { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => updateColumn(row.key, { size: next || null }, setColumns)} /> },
+                { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateColumn(row.key, { nullable: event.target.checked }, setColumns)} /> },
+                { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { defaultValue: event.target.value }, setColumns)} /> },
+                { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox disabled={disabled || row.deleted} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
+                { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => toggleColumnDeleted(row)}>{row.deleted ? '恢复' : '删除'}</Button> }
+              ]}
+            />
+          )}
+        </div>
+      </section>
+      <section className="designer-section designer-index-section">
+        <div className="designer-toolbar">
+          <Text strong>索引</Text>
+          <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setIndexes((rows) => [...rows, newIndexRow(rows.length)])}>新增索引</Button>
+        </div>
+        <div ref={indexViewportRef} className="designer-table-viewport">
+          {indexScrollY === undefined ? <TableViewportLoading /> : (
+            <Table<DesignIndexRow>
+              size="small"
+              className="data-grid object-detail-grid designer-grid designer-index-grid"
+              rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
+              pagination={false}
+              dataSource={indexes}
+              scroll={{ x: 720, y: indexScrollY }}
+              columns={[
+                { title: '索引名', dataIndex: 'name', key: 'name', width: 170, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateIndex(row.key, { name: event.target.value }, setIndexes)} /> },
+                { title: '字段', dataIndex: 'columns', key: 'columns', width: 360, render: (value, row) => <Select size="small" mode="multiple" className="full-width" disabled={disabled || row.deleted} value={value} options={columnOptions} onChange={(next) => updateIndex(row.key, { columns: next }, setIndexes)} /> },
+                { title: '唯一', dataIndex: 'unique', key: 'unique', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateIndex(row.key, { unique: event.target.checked }, setIndexes)} /> },
+                { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => setIndexes((rows) => rows.map((item) => item.key === row.key ? { ...item, deleted: !item.deleted } : item))}>{row.deleted ? '恢复' : '删除'}</Button> }
+              ]}
+            />
+          )}
+        </div>
+      </section>
       <div className="designer-actions">
         <Button type="primary" disabled={disabled} loading={submitting} onClick={previewDesign}>预览 DDL</Button>
       </div>

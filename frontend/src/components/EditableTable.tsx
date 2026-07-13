@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Button, Empty, Input, Table, Tooltip } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Button, Empty, Input, Spin, Table, Tooltip, Typography } from 'antd';
+import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { EditableRow, TableColumn, TableData, TableRow } from '../types';
@@ -14,6 +14,8 @@ export function EditableTable({ data, rows, readonly = false, loading = false, o
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
 }) {
+  const tableRef = useRef<TableRef>(null);
+  const lastScrolledDataRef = useRef<TableData | null>(null);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(data) });
   const columns = useMemo<ColumnsType<EditableRow>>(() => {
     if (!data) return [];
@@ -55,22 +57,34 @@ export function EditableTable({ data, rows, readonly = false, loading = false, o
     ];
   }, [data, loading, onDelete, onEdit, readonly]);
 
+  useLayoutEffect(() => {
+    if (!data || scrollY === undefined || !tableRef.current) return;
+    if (lastScrolledDataRef.current === data) return;
+    tableRef.current.scrollTo({ top: 0 });
+    lastScrolledDataRef.current = data;
+  }, [data, scrollY]);
+
   if (!data) return <Empty className="empty-state empty-state-fill" description="点击左侧对象树中的表来浏览数据。" />;
 
   return (
     <div ref={viewportRef} className="editable-table-viewport">
-      <Table<EditableRow>
-        size="small"
-        className="data-grid data-grid-fill editable-grid"
-        columns={columns}
-        dataSource={rows}
-        loading={loading}
-        rowKey="id"
-        pagination={false}
-        virtual={Boolean(scrollY)}
-        rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : isUpdated(row) ? 'updated-row' : ''}
-        scroll={{ x: Math.max(800, data.columns.length * 180 + 74), ...(scrollY ? { y: scrollY } : {}) }}
-      />
+      {scrollY === undefined ? (
+        <div className="table-viewport-loading"><Spin size="small" /><Typography.Text type="secondary">正在准备表格…</Typography.Text></div>
+      ) : (
+        <Table<EditableRow>
+          ref={tableRef}
+          size="small"
+          className="data-grid data-grid-fill editable-grid"
+          columns={columns}
+          dataSource={rows}
+          loading={loading}
+          rowKey="id"
+          pagination={false}
+          virtual
+          rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : isUpdated(row) ? 'updated-row' : ''}
+          scroll={{ x: Math.max(800, data.columns.length * 180 + 74), y: scrollY }}
+        />
+      )}
     </div>
   );
 }

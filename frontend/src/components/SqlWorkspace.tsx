@@ -1,6 +1,6 @@
 import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../monacoSetup';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
@@ -54,11 +54,20 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const draftRef = useRef(activeTab.sql);
   const onSqlChangeRef = useRef(onSqlChange);
+  const onResultPageChangeRef = useRef(onResultPageChange);
   const { elementRef: splitRef, height: splitHeight } = useVisibleElementHeight();
 
   useEffect(() => {
     onSqlChangeRef.current = onSqlChange;
   }, [onSqlChange]);
+
+  useEffect(() => {
+    onResultPageChangeRef.current = onResultPageChange;
+  }, [onResultPageChange]);
+
+  const handleResultPageChange = useCallback((result: SqlStatementResult, navigation: SqlPageNavigation) => {
+    onResultPageChangeRef.current(result, navigation);
+  }, []);
 
   useEffect(() => {
     draftRef.current = activeTab.sql;
@@ -78,12 +87,23 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
     onSqlChangeRef.current(draftRef.current);
   }
 
-  const resultItems = activeTab.results.map((result) => ({
-    key: statementResultKey(result),
-    label: result.status === 'FAILED' ? `错误 ${result.index}` : result.result.resultSet ? `结果 ${result.index}` : `影响 ${result.index}`,
-    children: <StatementResultPanel result={result} selected={selected} pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(result)}`} onPageChange={onResultPageChange} />
-  }));
-  const activeResultKey = activeTab.activeResultKey || resultItems[0]?.key;
+  const activeResultKey = activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined);
+  const resultItems = useMemo(() => activeTab.results.map((result) => {
+    const resultKey = statementResultKey(result);
+    return {
+      key: resultKey,
+      label: result.status === 'FAILED' ? `错误 ${result.index}` : result.result.resultSet ? `结果 ${result.index}` : `影响 ${result.index}`,
+      children: (
+        <StatementResultPanel
+          result={result}
+          selectedConnectionId={selected?.id}
+          active={activeResultKey === resultKey}
+          pagingLoading={pagingResultKey === `${activeTab.id}:${resultKey}`}
+          onPageChange={handleResultPageChange}
+        />
+      )
+    };
+  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, selected?.id]);
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
 
   return (
@@ -169,7 +189,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
         <div className="sql-results-pane">
           {activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selected={selected} pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={onResultPageChange} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={handleResultPageChange} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -183,14 +203,18 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   );
 }
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selected, pagingLoading, onPageChange }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, active, pagingLoading, onPageChange }: {
   result: SqlStatementResult;
-  selected: Connection | null;
+  selectedConnectionId?: number;
+  active: boolean;
   pagingLoading: boolean;
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
-  const pagingEnabled = !result.result.page || selected?.id === result.result.page.connectionId;
+  const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
+  const handlePageChange = useCallback((navigation: SqlPageNavigation) => {
+    onPageChange(result, navigation);
+  }, [onPageChange, result]);
   return (
     <div className="statement-result-panel">
       <div className="statement-result-meta">
@@ -208,9 +232,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
         <Alert type="error" showIcon message={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
       ) : (
         <div className="statement-result-content">
-          {result.result.page && !pagingEnabled && <Alert type="warning" showIcon message="该结果来自其他连接，请切回原连接后再翻页。" />}
-          {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
-          <ResultGrid result={result.result} fill pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} onPageChange={(navigation) => onPageChange(result, navigation)} />
+          <div className="statement-result-notices">
+            {result.result.page && !pagingEnabled && <Alert type="warning" showIcon message="该结果来自其他连接，请切回原连接后再翻页。" />}
+            {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
+          </div>
+          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} onPageChange={handlePageChange} />
         </div>
       )}
     </div>
