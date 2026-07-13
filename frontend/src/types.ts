@@ -56,7 +56,16 @@ export type Metadata = {
   cacheHit?: boolean;
 };
 export type ResultColumn = { key: string; label: string; typeName: string };
-export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean };
+export type SqlPageInfo = {
+  connectionId: number;
+  offset: number;
+  requestedPageSize: number;
+  effectivePageSize: number;
+  hasMore: boolean;
+  previousOffsets?: number[];
+};
+export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean; page?: SqlPageInfo | null };
+export type SqlPageNavigation = { offset: number; pageSize: number; previousOffsets: number[] };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';

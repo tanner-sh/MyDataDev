@@ -481,8 +481,36 @@ body {
   background: var(--surface-subtle);
 }
 
-.result-grid-pagination .ant-pagination {
+.result-grid-pagination {
+  justify-content: space-between;
+}
+
+.result-range-navigation,
+.result-range-label {
   min-width: max-content;
+}
+
+.result-range-label {
+  min-width: 120px;
+  text-align: center;
+}
+
+.result-grid-pagination .ant-input-number {
+  width: 96px;
+}
+
+.statement-result-content {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.result-paging-hint {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
 }
 
 .grid-cell-value {

@@ -2,9 +2,9 @@ import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import '../monacoSetup';
-import { Alert, Button, Dropdown, InputNumber, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
-import type { Connection, ExportFormat, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
@@ -24,7 +24,7 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, themeMode, editorSplitRatio, maxRows, onMaxRowsChange, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onResultTabChange }: {
+export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onResultTabChange, onResultPageChange }: {
   selected: Connection | null;
   tabs: SqlTab[];
   activeTabId: string;
@@ -33,10 +33,9 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   loading: boolean;
   cancelling: boolean;
   cancellable: boolean;
+  pagingResultKey: string | null;
   themeMode: 'light' | 'dark';
   editorSplitRatio: number;
-  maxRows: number;
-  onMaxRowsChange: (value: number) => void;
   onEditorSplitRatioChange: (value: number) => void;
   onTabChange: (tabId: string) => void;
   onTabAdd: () => void;
@@ -50,6 +49,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   onExport: (format: ExportFormat) => void;
   onOpenHistory: () => void;
   onResultTabChange: (key: string) => void;
+  onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const draftRef = useRef(activeTab.sql);
@@ -81,7 +81,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   const resultItems = activeTab.results.map((result) => ({
     key: statementResultKey(result),
     label: result.status === 'FAILED' ? `错误 ${result.index}` : result.result.resultSet ? `结果 ${result.index}` : `影响 ${result.index}`,
-    children: <StatementResultPanel result={result} />
+    children: <StatementResultPanel result={result} selected={selected} pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(result)}`} onPageChange={onResultPageChange} />
   }));
   const activeResultKey = activeTab.activeResultKey || resultItems[0]?.key;
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
@@ -94,21 +94,6 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
           <Text type="secondary" className="ellipsis-text">{selected?.jdbcUrl || '请先选择数据库连接'}</Text>
         </div>
         <Space size={8} wrap>
-          <Tooltip title="单条查询最多返回的行数；服务端也会限制总单元格和文本体积">
-            <Space.Compact size="small">
-              <Button size="small" disabled>最大行数</Button>
-              <InputNumber
-                size="small"
-                min={1}
-                max={10_000}
-                step={100}
-                value={maxRows}
-                disabled={loading}
-                aria-label="查询最大返回行数"
-                onChange={(value) => onMaxRowsChange(value || 500)}
-              />
-            </Space.Compact>
-          </Tooltip>
           <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
             <Button size="small" disabled={loading} onClick={() => { commitDraft(); onFormat(); }}>格式化</Button>
           </Tooltip>
@@ -184,7 +169,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
         <div className="sql-results-pane">
           {activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} />
+              <StatementResultPanel result={activeTab.results[0]} selected={selected} pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={onResultPageChange} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -198,8 +183,14 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
   );
 }
 
-const StatementResultPanel = memo(function StatementResultPanel({ result }: { result: SqlStatementResult }) {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selected, pagingLoading, onPageChange }: {
+  result: SqlStatementResult;
+  selected: Connection | null;
+  pagingLoading: boolean;
+  onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
+}) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
+  const pagingEnabled = !result.result.page || selected?.id === result.result.page.connectionId;
   return (
     <div className="statement-result-panel">
       <div className="statement-result-meta">
@@ -216,7 +207,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result }: { re
       {result.status === 'FAILED' ? (
         <Alert type="error" showIcon message={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
       ) : (
-        <ResultGrid result={result.result} fill />
+        <div className="statement-result-content">
+          {result.result.page && !pagingEnabled && <Alert type="warning" showIcon message="该结果来自其他连接，请切回原连接后再翻页。" />}
+          {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
+          <ResultGrid result={result.result} fill pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} onPageChange={(navigation) => onPageChange(result, navigation)} />
+        </div>
       )}
     </div>
   );

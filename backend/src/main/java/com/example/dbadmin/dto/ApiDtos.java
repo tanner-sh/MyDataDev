@@ -126,16 +126,26 @@ public final class ApiDtos {
     public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, String executionId) {
     }
 
+    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank String sql, Integer offset, Integer pageSize, String executionId) {
+    }
+
     public record ResultColumn(String key, String label, String typeName) {
     }
 
-    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
+    public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
+    }
+
+    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page) {
+        public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null);
+        }
+
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false, null);
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, String executionId) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, Integer pageSize, String executionId) {
     }
 
     public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {

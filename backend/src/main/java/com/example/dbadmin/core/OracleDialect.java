@@ -15,7 +15,10 @@ import java.util.Locale;
 import java.util.Optional;
 
 public class OracleDialect extends DefaultDialect {
-    private static final String PAGE_ROW_COLUMN = "__DBADMIN_PAGE_RN__";
+    // Oracle-compatible unquoted identifiers must start with a letter. Keep this
+    // helper unquoted so ResultSet metadata is consistent across Oracle and
+    // OceanBase Oracle mode.
+    private static final String PAGE_ROW_COLUMN = "DBADMIN_PAGE_RN";
 
     @Override
     public DatabaseCapabilities capabilities() {

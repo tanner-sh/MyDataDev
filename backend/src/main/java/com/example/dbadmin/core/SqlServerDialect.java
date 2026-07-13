@@ -21,7 +21,7 @@ public class SqlServerDialect extends DefaultDialect {
     @Override
     public String pageQuery(String baseSql, int limit, int offset) {
         String normalized = baseSql.toLowerCase(Locale.ROOT);
-        String ordered = normalized.contains(" order by ") ? baseSql : baseSql + " ORDER BY (SELECT NULL)";
+        String ordered = normalized.matches("(?s).*\\border\\s+by\\b.*") ? baseSql : baseSql + " ORDER BY (SELECT NULL)";
         return ordered + " OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
     }
 

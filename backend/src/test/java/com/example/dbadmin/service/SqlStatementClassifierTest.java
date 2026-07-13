@@ -53,4 +53,13 @@ class SqlStatementClassifierTest {
         assertThat(classifier.changesSession("SET search_path TO reporting")).isTrue();
         assertThat(classifier.changesSession("CREATE TABLE users(id INT)")).isFalse();
     }
+
+    @Test
+    void onlyEnablesAutomaticPagingForPlainTopLevelSelects() {
+        assertThat(classifier.isAutomaticallyPageable("SELECT * FROM users ORDER BY id")).isTrue();
+        assertThat(classifier.isAutomaticallyPageable("WITH q AS (SELECT * FROM users LIMIT 2) SELECT * FROM q")).isTrue();
+        assertThat(classifier.isAutomaticallyPageable("SELECT * FROM users LIMIT 20")).isFalse();
+        assertThat(classifier.isAutomaticallyPageable("SELECT TOP 20 * FROM users")).isFalse();
+        assertThat(classifier.isAutomaticallyPageable("SHOW TABLES")).isFalse();
+    }
 }

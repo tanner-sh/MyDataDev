@@ -28,6 +28,7 @@ public class SqlStatementClassifier {
     );
     private static final Set<String> OPERATIONS = union(QUERY, MUTATION, DDL);
     private static final Set<String> SELECT_SIDE_EFFECT_TOKENS = Set.of("NEXTVAL", "SETVAL", "UPDLOCK", "XLOCK");
+    private static final Set<String> TOP_LEVEL_PAGING_TOKENS = Set.of("LIMIT", "OFFSET", "FETCH", "TOP");
 
     public Kind classify(String sql) {
         if (sql == null || sql.isBlank()) return Kind.UNKNOWN;
@@ -47,6 +48,13 @@ public class SqlStatementClassifier {
 
     public boolean isQuery(String sql) {
         return classify(sql) == Kind.QUERY;
+    }
+
+    public boolean isAutomaticallyPageable(String sql) {
+        List<Token> tokens = tokens(sql);
+        Operation operation = tokens.isEmpty() ? null : operation(tokens);
+        if (operation == null || !"SELECT".equals(operation.word()) || classify(sql) != Kind.QUERY) return false;
+        return tokens.stream().noneMatch(token -> token.depth() == 0 && TOP_LEVEL_PAGING_TOKENS.contains(token.word()));
     }
 
     public boolean changesSession(String sql) {

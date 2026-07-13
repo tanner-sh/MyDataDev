@@ -9,6 +9,7 @@ import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlPageInfo;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlStatementResult;
@@ -126,10 +127,26 @@ public class SqlService {
         return execute(connectionId, sql, requestedMaxRows, actor, null, null);
     }
 
-    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation) throws Exception {
         List<StatementSegment> statements = scriptSplitter.split(sql);
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         if (statements.size() > 50) throw new IllegalArgumentException("一次最多执行 50 条 SQL");
+
+        if (requestedPageSize != null && statements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
+            long started = System.nanoTime();
+            try {
+                SqlResult result = executePage(connectionId, statements.get(0).sql(), 0, requestedPageSize, actor, executionId, productionConfirmation);
+                long elapsedMs = elapsed(started);
+                history.insert(connectionId, sql, "EXECUTE_SCRIPT", "SUCCESS", elapsedMs, null, actor);
+                SqlStatementResult statementResult = new SqlStatementResult(
+                        1, statements.get(0).sql(), statements.get(0).startOffset(), statements.get(0).endOffset(), "SUCCESS", null, result
+                );
+                return new SqlScriptResponse("SUCCESS", elapsedMs, 1, List.of(statementResult), false);
+            } catch (Exception e) {
+                history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsed(started), error(e), actor);
+                throw e;
+            }
+        }
 
         DbConnection dbConnection = connections.require(connectionId);
         for (StatementSegment statement : statements) {
@@ -207,7 +224,54 @@ public class SqlService {
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
-        return executeScript(connectionId, sql, requestedMaxRows, actor, null, null);
+        return executeScript(connectionId, sql, requestedMaxRows, null, actor, null, null);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {
+        return executeScript(connectionId, sql, requestedMaxRows, null, actor, executionId, productionConfirmation);
+    }
+
+    public SqlResult executePage(
+            long connectionId,
+            String sql,
+            Integer requestedOffset,
+            Integer requestedPageSize,
+            String actor,
+            String executionId,
+            String productionConfirmation
+    ) throws Exception {
+        String executionSql = singleStatement(sql, "分页查询");
+        if (!classifier.isAutomaticallyPageable(executionSql)) {
+            throw new IllegalArgumentException("当前 SQL 不支持自动分页；仅支持未自带分页子句的单条 SELECT。");
+        }
+        int offset = requestedOffset == null ? 0 : requestedOffset;
+        int maxOffset = Math.max(properties.getSql().getMaxPageOffset(), 0);
+        if (offset < 0 || offset > maxOffset) {
+            throw new IllegalArgumentException("查询偏移量必须在 0 到 " + maxOffset + " 之间。");
+        }
+        int rawPageSize = requestedPageSize == null ? DEFAULT_MAX_ROWS : Math.max(requestedPageSize, 1);
+        int pageSize = Math.min(normalizeMaxRows(rawPageSize), MAX_RESULT_CELLS);
+        DbConnection dbConnection = connections.require(connectionId);
+        executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        String pageSql = dialect.pageQuery(executionSql, pageSize + 1, offset);
+        long started = System.nanoTime();
+        try (Connection connection = connections.open(connectionId);
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
+             Statement statement = connection.createStatement()) {
+            dialect.configureReadStatement(connection, statement, Math.min(pageSize + 1, 500), properties.getSql().getTimeoutSeconds());
+            statement.setMaxRows(pageSize + 1);
+            String registeredId = executions.register(executionId, connectionId, statement);
+            try {
+                try (ResultSet rs = statement.executeQuery(pageSql)) {
+                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn());
+                    audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
+                    return result;
+                }
+            } finally {
+                executions.unregister(registeredId, statement);
+            }
+        }
     }
 
     public SqlResult explain(long connectionId, String sql, String actor, String productionConfirmation) throws Exception {
@@ -406,6 +470,47 @@ public class SqlService {
 
     private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows) throws Exception {
         return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS);
+    }
+
+    private SqlResult readPageResult(
+            ResultSet rs,
+            long startedNanos,
+            long connectionId,
+            int offset,
+            int requestedPageSize,
+            int pageSize,
+            String helperColumn
+    ) throws Exception {
+        ResultSetMetaData metadata = rs.getMetaData();
+        int columnCount = metadata.getColumnCount();
+        if (helperColumn != null && columnCount > 0 && helperColumn.equalsIgnoreCase(metadata.getColumnLabel(columnCount))) {
+            columnCount--;
+        }
+        List<ResultColumn> columns = new ArrayList<>();
+        for (int index = 1; index <= columnCount; index++) {
+            columns.add(new ResultColumn("c" + index, metadata.getColumnLabel(index), metadata.getColumnTypeName(index)));
+        }
+        int effectivePageSize = Math.min(pageSize, MAX_RESULT_CELLS / Math.max(columnCount, 1));
+        List<List<Object>> rows = new ArrayList<>();
+        long textChars = 0;
+        boolean payloadLimitReached = false;
+        while (rows.size() < effectivePageSize && rs.next()) {
+            List<Object> row = new ArrayList<>(columnCount);
+            for (int index = 1; index <= columnCount; index++) {
+                int remainingText = (int) Math.min(MAX_CELL_TEXT_CHARS, Math.max(0, MAX_RESULT_TEXT_CHARS - textChars));
+                Object value = serializableValue(rs.getObject(index), remainingText);
+                row.add(value);
+                if (value instanceof CharSequence text) textChars += text.length();
+            }
+            rows.add(row);
+            if (textChars >= MAX_RESULT_TEXT_CHARS) {
+                payloadLimitReached = true;
+                break;
+            }
+        }
+        boolean hasMore = payloadLimitReached || rs.next();
+        SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore);
+        return new SqlResult(columns, rows, -1, elapsed(startedNanos), true, effectivePageSize, payloadLimitReached, page);
     }
 
     private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget) throws Exception {

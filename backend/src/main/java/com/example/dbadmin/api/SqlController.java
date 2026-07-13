@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlRequest;
+import com.example.dbadmin.dto.ApiDtos.SqlPageRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
@@ -45,7 +46,16 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation);
+        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation);
+    }
+
+    @PostMapping("/query-page")
+    public SqlResult queryPage(
+            @Valid @RequestBody SqlPageRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(), actor, request.executionId(), productionConfirmation);
     }
 
     @PostMapping("/explain")

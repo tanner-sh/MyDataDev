@@ -7,7 +7,7 @@ export interface LayoutPreferences {
   explorerWidth: number;
   explorerCollapsed: boolean;
   editorSplitRatio: number;
-  sqlMaxRows: number;
+  sqlPageSize: number;
   tablePageSize: number;
 }
 
@@ -19,7 +19,7 @@ export interface LayoutPreferencesController extends LayoutPreferences {
   setExplorerCollapsed: (value: PreferenceUpdate<boolean>) => void;
   toggleExplorer: () => void;
   setEditorSplitRatio: (value: PreferenceUpdate<number>) => void;
-  setSqlMaxRows: (value: PreferenceUpdate<number>) => void;
+  setSqlPageSize: (value: PreferenceUpdate<number>) => void;
   setTablePageSize: (value: PreferenceUpdate<number>) => void;
 }
 
@@ -33,7 +33,7 @@ export const DEFAULT_LAYOUT_PREFERENCES: Readonly<LayoutPreferences> = {
   explorerWidth: 300,
   explorerCollapsed: false,
   editorSplitRatio: 0.52,
-  sqlMaxRows: 500,
+  sqlPageSize: 500,
   tablePageSize: 100
 };
 
@@ -97,10 +97,10 @@ export function useLayoutPreferences(): LayoutPreferencesController {
     }));
   }, []);
 
-  const setSqlMaxRows = useCallback((value: PreferenceUpdate<number>) => {
+  const setSqlPageSize = useCallback((value: PreferenceUpdate<number>) => {
     setPreferences((current) => ({
       ...current,
-      sqlMaxRows: Math.round(clamp(resolveUpdate(value, current.sqlMaxRows), 1, 10_000))
+      sqlPageSize: normalizeSqlPageSize(resolveUpdate(value, current.sqlPageSize))
     }));
   }, []);
 
@@ -118,7 +118,7 @@ export function useLayoutPreferences(): LayoutPreferencesController {
     setExplorerCollapsed,
     toggleExplorer,
     setEditorSplitRatio,
-    setSqlMaxRows,
+    setSqlPageSize,
     setTablePageSize
   };
 }
@@ -134,20 +134,20 @@ function readStoredPreferences(): LayoutPreferences {
       return { ...DEFAULT_LAYOUT_PREFERENCES };
     }
 
-    return normalizePreferences(JSON.parse(serialized) as unknown);
+    return normalizeLayoutPreferences(JSON.parse(serialized) as unknown);
   } catch {
     return { ...DEFAULT_LAYOUT_PREFERENCES };
   }
 }
 
-function normalizePreferences(value: unknown): LayoutPreferences {
+export function normalizeLayoutPreferences(value: unknown): LayoutPreferences {
   if (!isRecord(value)) {
     return { ...DEFAULT_LAYOUT_PREFERENCES };
   }
 
   const explorerWidth = finiteNumber(value.explorerWidth);
   const editorSplitRatio = finiteNumber(value.editorSplitRatio);
-  const sqlMaxRows = finiteNumber(value.sqlMaxRows);
+  const sqlPageSize = finiteNumber(value.sqlPageSize) ?? finiteNumber(value.sqlMaxRows);
   const tablePageSize = finiteNumber(value.tablePageSize);
 
   return {
@@ -165,7 +165,7 @@ function normalizePreferences(value: unknown): LayoutPreferences {
       EDITOR_SPLIT_RATIO_MIN,
       EDITOR_SPLIT_RATIO_MAX
     ),
-    sqlMaxRows: Math.round(clamp(sqlMaxRows ?? DEFAULT_LAYOUT_PREFERENCES.sqlMaxRows, 1, 10_000)),
+    sqlPageSize: normalizeSqlPageSize(sqlPageSize ?? DEFAULT_LAYOUT_PREFERENCES.sqlPageSize),
     tablePageSize: normalizePageSize(tablePageSize ?? DEFAULT_LAYOUT_PREFERENCES.tablePageSize)
   };
 }
@@ -173,6 +173,10 @@ function normalizePreferences(value: unknown): LayoutPreferences {
 function normalizePageSize(value: number) {
   const supported = [50, 100, 200];
   return supported.includes(value) ? value : DEFAULT_LAYOUT_PREFERENCES.tablePageSize;
+}
+
+function normalizeSqlPageSize(value: number) {
+  return Math.round(clamp(value, 1, 2_147_483_647));
 }
 
 function resolveUpdate<T>(update: PreferenceUpdate<T>, current: T): T {

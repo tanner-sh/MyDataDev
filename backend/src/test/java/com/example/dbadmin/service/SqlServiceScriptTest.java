@@ -167,6 +167,53 @@ class SqlServiceScriptTest {
     }
 
     @Test
+    void pagesSingleSelectWithoutLoadingTheWholeResult() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        var first = service.executePage(1L, "select x from system_range(1, 5) order by x", 0, 2, "admin", null, null);
+        var second = service.executePage(1L, "select x from system_range(1, 5) order by x", 2, 2, "admin", null, null);
+        var last = service.executePage(1L, "select x from system_range(1, 5) order by x", 4, 2, "admin", null, null);
+
+        assertThat(first.rows()).containsExactly(java.util.List.of("1"), java.util.List.of("2"));
+        assertThat(first.page().offset()).isZero();
+        assertThat(first.page().hasMore()).isTrue();
+        assertThat(second.rows()).containsExactly(java.util.List.of("3"), java.util.List.of("4"));
+        assertThat(second.page().hasMore()).isTrue();
+        assertThat(last.rows()).containsExactly(java.util.List.of("5"));
+        assertThat(last.page().hasMore()).isFalse();
+    }
+
+    @Test
+    void returnsPagingMetadataForNewScriptClients() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        SqlScriptResponse response = service.executeScript(
+                1L, "select x from system_range(1, 3) order by x", null, 2, "admin", null, null
+        );
+
+        var result = response.results().get(0).result();
+        assertThat(result.rows()).hasSize(2);
+        assertThat(result.page()).isNotNull();
+        assertThat(result.page().hasMore()).isTrue();
+        assertThat(result.truncated()).isFalse();
+    }
+
+    @Test
+    void keepsExplicitlyPagedSelectAsOneShotResult() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        SqlScriptResponse response = service.executeScript(
+                1L, "select x from system_range(1, 5) order by x limit 2", 500, "admin"
+        );
+
+        assertThat(response.results().get(0).result().rows()).hasSize(2);
+        assertThat(response.results().get(0).result().page()).isNull();
+    }
+
+    @Test
     void formatsClausesWithoutChangingQuotedTextOrComments() throws Exception {
         SqlService service = service(
                 "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1",

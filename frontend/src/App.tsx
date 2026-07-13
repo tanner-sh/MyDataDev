@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -56,6 +56,7 @@ export default function App() {
   const [tableLoading, setTableLoading] = useState(false);
   const [backupLoading, setBackupLoading] = useState(false);
   const [sqlLoading, setSqlLoading] = useState(false);
+  const [sqlPagingResultKey, setSqlPagingResultKey] = useState<string | null>(null);
   const [sqlCancellable, setSqlCancellable] = useState(false);
   const [sqlCancelling, setSqlCancelling] = useState(false);
   const [connectionsLoading, setConnectionsLoading] = useState(false);
@@ -841,7 +842,7 @@ export default function App() {
         const data = await api<SqlResult>(path, {
           method: 'POST',
           headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
-          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows, executionId })
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, executionId })
         });
         const result: SqlStatementResult = {
           index: 1,
@@ -858,7 +859,7 @@ export default function App() {
         const data = await api<SqlScriptResult>('/sql/execute-script', {
           method: 'POST',
           headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
-          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, maxRows: layoutPreferences.sqlMaxRows, executionId })
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, pageSize: layoutPreferences.sqlPageSize, executionId })
         });
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
@@ -893,6 +894,56 @@ export default function App() {
         setSqlLoading(false);
       }
     } finally {
+      sqlBusyRef.current = false;
+    }
+  }
+
+  async function loadSqlResultPage(statementResult: SqlStatementResult, navigation: SqlPageNavigation) {
+    const page = statementResult.result.page;
+    if (!page || !selected || selected.id !== page.connectionId) {
+      showInfo('请切回该结果所属的数据库连接后再翻页');
+      return;
+    }
+    if (sqlBusyRef.current) {
+      showInfo('已有 SQL 操作正在处理，请等待完成后重试');
+      return;
+    }
+    const tabId = activeSqlTab.id;
+    const resultKey = statementResultKey(statementResult)!;
+    const executionId = crypto.randomUUID();
+    sqlBusyRef.current = true;
+    sqlExecutionIdRef.current = executionId;
+    setSqlPagingResultKey(`${tabId}:${resultKey}`);
+    setSqlCancellable(true);
+    setSqlLoading(true);
+    layoutPreferences.setSqlPageSize(navigation.pageSize);
+    try {
+      const data = await api<SqlResult>('/sql/query-page', {
+        method: 'POST',
+        headers: selected.environment === 'prod' ? { 'X-Production-Confirmation': selected.name } : undefined,
+        body: JSON.stringify({
+          connectionId: page.connectionId,
+          sql: statementResult.sql,
+          offset: navigation.offset,
+          pageSize: navigation.pageSize,
+          executionId
+        })
+      });
+      if (data.page) data.page.previousOffsets = navigation.previousOffsets;
+      setSqlTabs((tabs) => tabs.map((tab) => tab.id !== tabId ? tab : {
+        ...tab,
+        results: tab.results.map((item) => statementResultKey(item) === resultKey ? { ...item, result: data } : item),
+        message: `已加载第 ${data.page ? data.page.offset + 1 : navigation.offset + 1} 行起的查询结果，返回 ${data.rows.length} 行`,
+        statusKind: 'success'
+      }));
+    } catch (e) {
+      const errorMessage = localizeMessage((e as Error).message);
+      showError(errorMessage);
+    } finally {
+      if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
+      setSqlPagingResultKey(null);
+      setSqlCancellable(false);
+      setSqlLoading(false);
       sqlBusyRef.current = false;
     }
   }
@@ -1780,10 +1831,9 @@ export default function App() {
                 loading={sqlLoading}
                 cancelling={sqlCancelling}
                 cancellable={sqlCancellable}
+                pagingResultKey={sqlPagingResultKey}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
-                maxRows={layoutPreferences.sqlMaxRows}
-                onMaxRowsChange={layoutPreferences.setSqlMaxRows}
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
                 onTabChange={setActiveSqlTabId}
                 onTabAdd={addSqlTab}
@@ -1797,6 +1847,7 @@ export default function App() {
                 onExport={exportSql}
                 onOpenHistory={openSqlHistory}
                 onResultTabChange={(key) => updateActiveSqlTab({ activeResultKey: key })}
+                onResultPageChange={(result, navigation) => void loadSqlResultPage(result, navigation)}
               />
             ) : mode === 'table' ? (
               <TableWorkspace

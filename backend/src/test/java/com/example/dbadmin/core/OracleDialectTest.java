@@ -29,8 +29,24 @@ class OracleDialectTest {
     void buildsOracle11gCompatiblePagination() {
         String sql = dialect.pageQuery("SELECT * FROM \"APP\".\"USER\"", 100, 200);
 
-        assertThat(sql).isEqualTo("SELECT * FROM (SELECT dbadmin_page_source.*, ROWNUM __DBADMIN_PAGE_RN__ FROM (SELECT * FROM \"APP\".\"USER\") dbadmin_page_source WHERE ROWNUM <= 300) WHERE __DBADMIN_PAGE_RN__ > 200");
-        assertThat(dialect.paginationHelperColumn()).isEqualTo("__DBADMIN_PAGE_RN__");
+        assertThat(sql).isEqualTo("SELECT * FROM (SELECT dbadmin_page_source.*, ROWNUM DBADMIN_PAGE_RN FROM (SELECT * FROM \"APP\".\"USER\") dbadmin_page_source WHERE ROWNUM <= 300) WHERE DBADMIN_PAGE_RN > 200");
+        assertThat(dialect.paginationHelperColumn()).isEqualTo("DBADMIN_PAGE_RN");
+    }
+
+    @Test
+    void buildsOceanBaseOracleCompatiblePaginationWithLegalHelperIdentifier() {
+        OceanBaseOracleDialect oceanBase = new OceanBaseOracleDialect();
+
+        String sql = oceanBase.pageQuery(
+                "SELECT * FROM \"SWHY_FBIP\".\"SIM_BILLTYPE\" ORDER BY \"PK_BILLTYPE\"",
+                501,
+                0
+        );
+
+        assertThat(sql)
+                .contains("ROWNUM DBADMIN_PAGE_RN")
+                .contains("WHERE DBADMIN_PAGE_RN > 0")
+                .doesNotContain("__DBADMIN_PAGE_RN__");
     }
 
     @Test
