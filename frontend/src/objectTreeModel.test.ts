@@ -1,7 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   collapseObjectBranch,
-  createObjectOpenIntent,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -16,8 +15,6 @@ function object(name: string, type = 'TABLE', schemaName = 'PUBLIC'): DbObject {
 }
 
 describe('object tree model', () => {
-  afterEach(() => vi.useRealTimers());
-
   it('groups tables before views and sorts names naturally', () => {
     const groups = groupDatabaseObjects([
       object('view_a', 'VIEW'),
@@ -59,23 +56,4 @@ describe('object tree model', () => {
     expect(withLoadedObjectStructure(summaryObject)).toBe(summaryObject);
   });
 
-  it('delays a single-click action and lets double-click replace it', () => {
-    vi.useFakeTimers();
-    const detail = vi.fn();
-    const openTable = vi.fn();
-    const intent = createObjectOpenIntent(220);
-
-    intent.single(detail);
-    vi.advanceTimersByTime(219);
-    expect(detail).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(detail).toHaveBeenCalledOnce();
-
-    detail.mockClear();
-    intent.single(detail);
-    intent.double(openTable);
-    vi.runAllTimers();
-    expect(detail).not.toHaveBeenCalled();
-    expect(openTable).toHaveBeenCalledOnce();
-  });
 });

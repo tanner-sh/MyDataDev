@@ -82,7 +82,7 @@ export function AppHeader({
                   <Text strong ellipsis>{connection.name}</Text>
                   <Text type="secondary" ellipsis>{connection.jdbcUrl}</Text>
                 </div>
-                <Tag bordered={false}>{environmentLabel(connection.environment)}</Tag>
+                <Tag variant="filled">{environmentLabel(connection.environment)}</Tag>
               </div>
             );
           }}
@@ -93,11 +93,11 @@ export function AppHeader({
         />
         {selected && (
           <Space size={4} className="connection-context-tags">
-            <Tag color="blue" bordered={false}>{dbTypeLabel(selected.dbType)}</Tag>
-            <Tag color={selected.environment === 'prod' ? 'red' : 'default'} bordered={false}>
+            <Tag color="blue" variant="filled">{dbTypeLabel(selected.dbType)}</Tag>
+            <Tag color={selected.environment === 'prod' ? 'red' : 'default'} variant="filled">
               {environmentLabel(selected.environment)}
             </Tag>
-            {selected.readonly && <Tag color="orange" bordered={false}>只读</Tag>}
+            {selected.readonly && <Tag color="orange" variant="filled">只读</Tag>}
           </Space>
         )}
       </div>

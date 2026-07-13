@@ -231,7 +231,7 @@ export default function App() {
       modalApi.confirm({
         title: `确认在生产连接上${action}`,
         content: (
-          <Space direction="vertical" className="full-width">
+          <Space orientation="vertical" className="full-width">
             <Text>请输入连接名 <Text code>{selected.name}</Text> 以确认本次生产库操作。</Text>
             <Input autoFocus placeholder={selected.name} onChange={(event) => { input = event.target.value; }} />
           </Space>
@@ -1384,7 +1384,7 @@ export default function App() {
     }
   }
 
-  function editCell(rowId: string, column: string, value: unknown) {
+  const editCell = useCallback((rowId: string, column: string, value: unknown) => {
     setTableRows((rows) => rows.map((row) => {
       if (row.id !== rowId) return row;
       if (row.inserted) {
@@ -1401,9 +1401,9 @@ export default function App() {
       }
       return { ...row, values: { ...row.values, [column]: value } };
     }));
-    setPreviewSql([]);
-  }
-
+    setPreviewSql([]);
+  }, []);
+
   function changeDbType(dbType: string) {
     const preset = DB_TYPE_OPTIONS.find((option) => option.value === dbType);
     setConnectionEditor((current) => current.mode === 'closed'
@@ -1454,15 +1454,15 @@ export default function App() {
     }
   }
 
-  function deleteRow(rowId: string) {
+  const deleteRow = useCallback((rowId: string) => {
     setTableRows((rows) => rows.flatMap((row) => {
       if (row.id !== rowId) return [row];
       return row.inserted ? [] : [{ ...row, deleted: !row.deleted }];
     }));
-    setPreviewSql([]);
-  }
-
-  async function previewChanges() {
+    setPreviewSql([]);
+  }, []);
+
+  async function previewChanges() {
     if (!selected || !activeTable) return;
     if (!pendingChanges.length) {
       showInfo('没有待提交的变更');
@@ -1687,9 +1687,9 @@ export default function App() {
             <Text strong ellipsis>{selected.name}</Text>
           </div>
           <Space size={4} wrap>
-            <Tag bordered={false} color="blue">{dbTypeLabel(selected.dbType)}</Tag>
-            {selected.readonly && <Tag bordered={false} color="orange">只读</Tag>}
-            {metadata?.selectedSchema && <Tag bordered={false}>{namespaceLabel} · {metadata.selectedSchema}</Tag>}
+            <Tag variant="filled" color="blue">{dbTypeLabel(selected.dbType)}</Tag>
+            {selected.readonly && <Tag variant="filled" color="orange">只读</Tag>}
+            {metadata?.selectedSchema && <Tag variant="filled">{namespaceLabel} · {metadata.selectedSchema}</Tag>}
           </Space>
           <Text type="secondary" ellipsis title={selected.jdbcUrl}>{selected.jdbcUrl}</Text>
         </div>
@@ -1900,8 +1900,8 @@ export default function App() {
       </div>
 
       <Drawer
-        title="资源管理器"
-        width={380}
+        title={null}
+        size={380}
         open={compactLayout && mobileExplorerOpen}
         closeIcon={null}
         rootClassName="mobile-explorer-drawer"
@@ -1912,8 +1912,8 @@ export default function App() {
 
       <Drawer
         title="连接管理"
-        width={480}
-        open={activeDrawer === 'connections'}
+        size={480}
+        open={activeDrawer === 'connections' && connectionEditor.mode === 'closed'}
         rootClassName="management-drawer"
         extra={<Button type="primary" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>}
         onClose={closeConnectionDrawer}
@@ -1944,7 +1944,7 @@ export default function App() {
         width={640}
         open={connectionEditor.mode !== 'closed'}
         footer={null}
-        maskClosable={!connectionFormDirty && !connectionActionLoading}
+        mask={{ closable: !connectionFormDirty && !connectionActionLoading }}
         closable={!connectionActionLoading}
         onCancel={closeConnectionEditor}
         destroyOnHidden
@@ -1965,7 +1965,7 @@ export default function App() {
 
       <Drawer
         title="备份任务"
-        width={720}
+        size={640}
         open={activeDrawer === 'backups'}
         rootClassName="management-drawer backup-management-drawer"
         onClose={() => setActiveDrawer(null)}

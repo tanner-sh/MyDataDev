@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Checkbox, Empty, Input, InputNumber, Layout, Modal, Popconfirm, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, AutoComplete, Button, Checkbox, Empty, Input, InputNumber, Layout, Modal, Popconfirm, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
 import { api } from '../api';
@@ -15,6 +15,7 @@ type ColumnRow = ObjectDetail['columns'][number] & { key: string };
 type IndexRow = { key: string; name: string; columns: string[]; unique: boolean; primary: boolean };
 type DesignColumnRow = ColumnDesign & { key: string };
 type DesignIndexRow = IndexDesign & { key: string };
+const COLUMN_TYPE_OPTIONS = ['VARCHAR', 'CHAR', 'TEXT', 'INTEGER', 'BIGINT', 'DECIMAL', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'JSON', 'BLOB'].map((value) => ({ value, label: value }));
 
 export interface ObjectDetailWorkspaceProps {
   connectionId?: number;
@@ -132,7 +133,6 @@ export function ObjectDetailWorkspace({
                   <TableDesigner
                     connectionId={connectionId}
                     detail={detail}
-                    active={activeTabKey === 'designer'}
                     disabled={isView || readonlyConnection || !tableDesignSupported || loading}
                     readonlyConnection={readonlyConnection}
                     unsupported={!tableDesignSupported}
@@ -204,7 +204,7 @@ function ObjectSummary({ connectionId, detail }: { connectionId?: number; detail
             cancelText="取消"
             onConfirm={loadRowCount}
           >
-            <Button size="small" type="link" loading={loading}>未统计</Button>
+            <Button size="small" type="link" loading={loading}>点击统计</Button>
           </Popconfirm>
         )}
         {error && <Text type="danger" title={error}>统计失败</Text>}
@@ -353,7 +353,7 @@ function RelationsPanel({ connectionId, detail, active }: { connectionId?: numbe
     };
   }, [active, connectionId, detail, relations]);
 
-  if (error) return <Alert type="error" showIcon message="关系加载失败" description={error} />;
+  if (error) return <Alert type="error" showIcon title="关系加载失败" description={error} />;
   if (!relations) return <Empty className="empty-state" description="正在加载关系..." />;
   return (
     <div className="object-tab-scroll relations-panel">
@@ -423,7 +423,7 @@ function DdlPanel({ connectionId, detail, active }: { connectionId?: number; det
     };
   }, [active, connectionId, ddl, detail.name, detail.schemaName]);
 
-  if (error) return <Alert type="error" showIcon message="DDL 加载失败" description={error} />;
+  if (error) return <Alert type="error" showIcon title="DDL 加载失败" description={error} />;
   if (!ddl) return <div className="object-lazy-loading"><Spin size="small" /><Text type="secondary">正在按需加载 DDL…</Text></div>;
   return <DdlViewer ddl={ddl.ddl} source={ddl.source} />;
 }
@@ -443,10 +443,9 @@ function DdlViewer({ ddl, source }: { ddl: string; source?: string }) {
   );
 }
 
-function TableDesigner({ connectionId, detail, active, disabled, readonlyConnection, unsupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
+function TableDesigner({ connectionId, detail, disabled, readonlyConnection, unsupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
   connectionId?: number;
   detail: ObjectDetail;
-  active: boolean;
   disabled?: boolean;
   readonlyConnection?: boolean;
   unsupported?: boolean;
@@ -464,8 +463,6 @@ function TableDesigner({ connectionId, detail, active, disabled, readonlyConnect
   const [productionConfirmation, setProductionConfirmation] = useState('');
   const [message, setMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const { viewportRef: columnViewportRef, scrollY: columnScrollY } = useTableViewportHeight({ active, reservedHeight: 2 });
-  const { viewportRef: indexViewportRef, scrollY: indexScrollY } = useTableViewportHeight({ active, reservedHeight: 2 });
   const requestIdRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
   const activeColumns = columns.filter((column) => !column.deleted);
@@ -580,39 +577,53 @@ function TableDesigner({ connectionId, detail, active, disabled, readonlyConnect
     updateColumn(row.key, { deleted: deleting }, setColumns);
   }
 
+  function resetDesign() {
+    const nextColumns = designColumns(detail);
+    const nextIndexes = designIndexes(detail);
+    const nextPrimaryKeys = [...detail.primaryKeys];
+    setColumns(nextColumns);
+    setIndexes(nextIndexes);
+    setPrimaryKeys(nextPrimaryKeys);
+    setPreview([]);
+    setMessage('已撤销未保存的结构修改');
+  }
+
   return (
     <div className="table-designer">
       <section className="designer-section designer-column-section">
         <div className="designer-notices">
-          {readonlyConnection && <Alert type="warning" showIcon message="当前连接为只读连接，不能执行结构变更。" />}
-          {unsupported && <Alert type="info" showIcon message="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
-          {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon message="视图暂不支持表设计器。" />}
-          {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon message={message} />}
+          {readonlyConnection && <Alert type="warning" showIcon title="当前连接为只读连接，不能执行结构变更。" />}
+          {unsupported && <Alert type="info" showIcon title="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
+          {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon title="视图暂不支持表设计器。" />}
+          {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon title={message} />}
         </div>
         <div className="designer-toolbar">
           <Text strong>字段</Text>
-          <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setColumns((rows) => [...rows, newColumnRow(rows.length)])}>新增字段</Button>
+          <Space size={6}>
+            {dirty && <Text type="warning">有未保存修改</Text>}
+            <Button size="small" disabled={disabled || !dirty} onClick={resetDesign}>撤销全部</Button>
+            <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setColumns((rows) => [...rows, newColumnRow(rows.length)])}>新增字段</Button>
+          </Space>
         </div>
-        <div ref={columnViewportRef} className="designer-table-viewport">
-          {columnScrollY === undefined ? <TableViewportLoading /> : (
+        <div className="designer-table-viewport">
             <Table<DesignColumnRow>
               size="small"
               className="data-grid object-detail-grid designer-grid designer-column-grid"
               rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
               pagination={false}
               dataSource={columns}
-              scroll={{ x: 900, y: columnScrollY }}
+              scroll={{ x: 900 }}
+              sticky
               columns={[
                 { title: '字段名', dataIndex: 'name', key: 'name', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { name: event.target.value })} /> },
-                { title: '类型', dataIndex: 'type', key: 'type', width: 130, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { type: event.target.value }, setColumns)} /> },
+                { title: '类型', dataIndex: 'type', key: 'type', width: 150, render: (value, row) => <AutoComplete size="small" className="full-width" disabled={disabled || row.deleted} value={value} options={COLUMN_TYPE_OPTIONS} filterOption={(input, option) => String(option?.value || '').includes(input.toUpperCase())} onChange={(next) => updateColumn(row.key, { type: next.toUpperCase() }, setColumns)} /> },
                 { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => updateColumn(row.key, { size: next || null }, setColumns)} /> },
-                { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateColumn(row.key, { nullable: event.target.checked }, setColumns)} /> },
+                { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新字段'}允许为空`} disabled={disabled || row.deleted} checked={value} onChange={(event) => updateColumn(row.key, { nullable: event.target.checked }, setColumns)} /> },
                 { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { defaultValue: event.target.value }, setColumns)} /> },
-                { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox disabled={disabled || row.deleted} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
+                { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox aria-label={`${row.name || '新字段'}设为主键`} disabled={disabled || row.deleted} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
                 { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => toggleColumnDeleted(row)}>{row.deleted ? '恢复' : '删除'}</Button> }
               ]}
             />
-          )}
         </div>
       </section>
       <section className="designer-section designer-index-section">
@@ -620,23 +631,22 @@ function TableDesigner({ connectionId, detail, active, disabled, readonlyConnect
           <Text strong>索引</Text>
           <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setIndexes((rows) => [...rows, newIndexRow(rows.length)])}>新增索引</Button>
         </div>
-        <div ref={indexViewportRef} className="designer-table-viewport">
-          {indexScrollY === undefined ? <TableViewportLoading /> : (
+        <div className="designer-table-viewport">
             <Table<DesignIndexRow>
               size="small"
               className="data-grid object-detail-grid designer-grid designer-index-grid"
               rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
               pagination={false}
               dataSource={indexes}
-              scroll={{ x: 720, y: indexScrollY }}
+              scroll={{ x: 720 }}
+              sticky
               columns={[
                 { title: '索引名', dataIndex: 'name', key: 'name', width: 170, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateIndex(row.key, { name: event.target.value }, setIndexes)} /> },
                 { title: '字段', dataIndex: 'columns', key: 'columns', width: 360, render: (value, row) => <Select size="small" mode="multiple" className="full-width" disabled={disabled || row.deleted} value={value} options={columnOptions} onChange={(next) => updateIndex(row.key, { columns: next }, setIndexes)} /> },
-                { title: '唯一', dataIndex: 'unique', key: 'unique', width: 80, render: (value, row) => <Checkbox disabled={disabled || row.deleted} checked={value} onChange={(event) => updateIndex(row.key, { unique: event.target.checked }, setIndexes)} /> },
+                { title: '唯一', dataIndex: 'unique', key: 'unique', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新索引'}设为唯一索引`} disabled={disabled || row.deleted} checked={value} onChange={(event) => updateIndex(row.key, { unique: event.target.checked }, setIndexes)} /> },
                 { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => setIndexes((rows) => rows.map((item) => item.key === row.key ? { ...item, deleted: !item.deleted } : item))}>{row.deleted ? '恢复' : '删除'}</Button> }
               ]}
             />
-          )}
         </div>
       </section>
       <div className="designer-actions">
@@ -646,7 +656,7 @@ function TableDesigner({ connectionId, detail, active, disabled, readonlyConnect
         title="确认执行结构变更"
         open={confirmOpen}
         confirmLoading={submitting}
-        maskClosable={!submitting}
+        mask={{ closable: !submitting }}
         keyboard={!submitting}
         cancelButtonProps={{ disabled: submitting }}
         okButtonProps={{ disabled: confirmation !== tableName || preview.length === 0 || Boolean(productionConfirmationText && productionConfirmation !== productionConfirmationText) }}
@@ -654,11 +664,11 @@ function TableDesigner({ connectionId, detail, active, disabled, readonlyConnect
         onOk={executeDesign}
         onCancel={() => { if (!submitting) setConfirmOpen(false); }}
       >
-        <Alert type="warning" showIcon message={`请输入完整表名 ${tableName} 后执行。DDL 可能不可回滚。`} />
+        <Alert type="warning" showIcon title={`请输入完整表名 ${tableName} 后执行。DDL 可能不可回滚。`} />
         <Input className="design-confirm-input" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={tableName} />
         {productionConfirmationText && (
           <>
-            <Alert type="error" showIcon message={`生产连接保护：还需输入连接名 ${productionConfirmationText}。`} />
+            <Alert type="error" showIcon title={`生产连接保护：还需输入连接名 ${productionConfirmationText}。`} />
             <Input className="design-confirm-input" value={productionConfirmation} onChange={(event) => setProductionConfirmation(event.target.value)} placeholder={productionConfirmationText} />
           </>
         )}

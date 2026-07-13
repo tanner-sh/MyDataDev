@@ -529,6 +529,106 @@ body {
   padding: 4px !important;
 }
 
+.editable-grid .ant-table-thead > tr > th {
+  padding-right: 0 !important;
+}
+
+.resizable-column-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.resizable-column-title > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.column-resize-handle {
+  width: 10px;
+  height: 24px;
+  flex: 0 0 auto;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.column-resize-handle::after {
+  content: "";
+  display: block;
+  width: 2px;
+  height: 16px;
+  margin: 4px auto;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.column-resize-handle:hover::after,
+.column-resize-handle:focus-visible::after {
+  background: var(--primary);
+}
+
+.editable-grid .ant-table-body {
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  overscroll-behavior: contain;
+}
+
+.editable-grid .ant-table-body::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.editable-grid .ant-table-body::-webkit-scrollbar-track {
+  background: var(--surface-subtle);
+}
+
+.editable-grid .ant-table-body::-webkit-scrollbar-thumb {
+  border: 3px solid var(--surface-subtle);
+  border-radius: 999px;
+  background: #8b99ab;
+}
+
+.editable-cell-display {
+  min-width: 0;
+  min-height: 24px;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: text;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.editable-cell-display:not(.is-disabled):hover,
+.editable-cell-display:not(.is-disabled):focus-visible {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 7%, var(--surface));
+  outline: none;
+}
+
+.editable-cell-value {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editable-cell-state,
+.editable-cell-empty {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.editable-cell-state {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface-subtle);
+}
+
 .editable-cell-control {
   min-width: 0;
   display: flex;
@@ -537,13 +637,37 @@ body {
 }
 
 .editable-cell-control .ant-input {
-  min-width: 96px;
+  min-width: 80px;
+  flex: 1 1 auto;
 }
 
 .editable-cell-control .ant-btn {
   flex: 0 0 auto;
   padding-inline: 4px;
   font-size: 10px;
+}
+
+.table-toolbar-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.table-more-actions {
+  display: none;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .inserted-row > td {
@@ -596,6 +720,31 @@ body {
   color: #172033;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
+}
+
+.history-search {
+  margin-bottom: 12px;
+}
+
+.history-list {
+  display: grid;
+  gap: 10px;
+}
+
+.history-item {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.history-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .object-detail-tabs {
@@ -862,20 +1011,20 @@ body {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-rows: minmax(0, 3fr) minmax(0, 2fr) auto;
+  display: block;
   gap: 10px;
   padding-bottom: 12px;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .designer-section {
   min-width: 0;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 8px;
-  overflow: hidden;
+  overflow: visible;
+  margin-bottom: 16px;
 }
 
 .designer-notices {
@@ -892,9 +1041,8 @@ body {
 
 .designer-table-viewport {
   min-width: 0;
-  min-height: 0;
-  flex: 1 1 0;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .designer-grid {
@@ -936,6 +1084,11 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  padding: 4px 0;
+  background: var(--surface);
 }
 
 .designer-actions {
@@ -1023,6 +1176,41 @@ body {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.backup-context-header {
+  justify-content: flex-start;
+}
+
+.backup-task-list,
+.backup-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.backup-task-item,
+.backup-history-item {
+  min-width: 0;
+  padding: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.backup-task-content,
+.backup-history-content {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 4px;
+}
+
+.backup-task-actions,
+.backup-history-actions {
+  flex: 0 0 auto;
 }
 
 @media (max-width: 1180px) {
@@ -2045,8 +2233,16 @@ body {
 }
 
 .connection-actions .ant-btn {
+  width: auto;
   min-width: 32px;
   height: 32px;
+  padding-inline: 9px;
+  white-space: nowrap;
+}
+
+.connection-actions .ant-btn.ant-btn-icon-only {
+  width: 32px;
+  padding-inline: 0;
 }
 
 .compact-form .ant-form-item-label > label,
@@ -2135,15 +2331,20 @@ body {
     padding-inline: 8px;
   }
 
-  .workspace-toolbar > .ant-space {
-    max-width: 56%;
-    flex-wrap: nowrap !important;
-    overflow-x: auto;
-    scrollbar-width: none;
+  .table-workspace .toolbar-title {
+    max-width: 42%;
   }
 
-  .workspace-toolbar > .ant-space::-webkit-scrollbar {
+  .table-toolbar-actions {
+    flex: 0 0 auto;
+  }
+
+  .table-secondary-actions {
     display: none;
+  }
+
+  .table-more-actions {
+    display: inline-flex;
   }
 }
 
@@ -2179,8 +2380,22 @@ body {
     display: none;
   }
 
-  .workspace-toolbar > .ant-space {
-    max-width: 68%;
+  .table-workspace .toolbar-title {
+    max-width: 32%;
+  }
+
+  .table-primary-actions {
+    gap: 4px !important;
+  }
+
+  .table-primary-actions .ant-btn:not(.ant-btn-primary) > span:last-child,
+  .table-more-actions > span:last-child {
+    display: none;
+  }
+
+  .table-more-actions {
+    width: 32px;
+    padding-inline: 0;
   }
 
   .result-tabs,

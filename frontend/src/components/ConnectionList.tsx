@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Empty, List, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Empty, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DeleteOutlined, EditOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
@@ -26,7 +26,7 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
     );
   }
   if (connectionsError && connections.length === 0) {
-    return <Alert type="warning" showIcon message={connectionsError} />;
+    return <Alert type="warning" showIcon title={connectionsError} />;
   }
   if (!connectionsReady) {
     return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在准备连接列表" /></Card>;
@@ -35,13 +35,11 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
     return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /></Card>;
   }
   return (
-    <Space direction="vertical" size={8} className="full-width">
-      {connectionsError && <Alert type="warning" showIcon message={connectionsError} />}
-      <List
-        className="connection-list"
-        dataSource={connections}
-        renderItem={(connection) => (
-          <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
+    <Space orientation="vertical" size={8} className="full-width">
+      {connectionsError && <Alert type="warning" showIcon title={connectionsError} />}
+      <div className="connection-list">
+        {connections.map((connection) => (
+          <div key={connection.id} className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
             <div className="connection-card">
               <div className="connection-main-info">
                 <div className="connection-name-row">
@@ -58,7 +56,7 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
               <Space size={2} className="connection-actions">
                 {selectedId !== connection.id && (
                   <Tooltip title="切换使用">
-                    <Button size="small" icon={<SwapOutlined />} aria-label={`切换使用 ${connection.name}`} onClick={() => onSwitch(connection)} />
+                    <Button size="small" type="primary" icon={<SwapOutlined />} aria-label={`切换使用 ${connection.name}`} onClick={() => onSwitch(connection)} />
                   </Tooltip>
                 )}
                 <Tooltip title="测试连接">
@@ -84,9 +82,9 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
                 </Popconfirm>
               </Space>
             </div>
-          </List.Item>
-        )}
-      />
+          </div>
+        ))}
+      </div>
     </Space>
   );
 }

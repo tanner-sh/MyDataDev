@@ -9,8 +9,8 @@ import {
   Empty,
   Form,
   Input,
-  List,
   Modal,
+  Pagination,
   Popconfirm,
   Select,
   Space,
@@ -134,6 +134,7 @@ export function BackupPanel({
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
   const [taskAction, setTaskAction] = useState<string | null>(null);
+  const [taskPage, setTaskPage] = useState(0);
   const [historyTask, setHistoryTask] = useState<BackupTask | null>(null);
   const [histories, setHistories] = useState<BackupHistory[]>([]);
   const [historyPage, setHistoryPage] = useState(0);
@@ -146,6 +147,10 @@ export function BackupPanel({
   const [schedulePreviewError, setSchedulePreviewError] = useState('');
   const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false);
   const [listSchedulePreviews, setListSchedulePreviews] = useState<Record<string, BackupSchedulePreview>>({});
+
+  useEffect(() => {
+    setTaskPage((current) => Math.min(current, Math.max(0, Math.ceil(backups.length / 10) - 1)));
+  }, [backups.length]);
 
   const scope = Form.useWatch('scope', form) || 'DATABASE';
   const schemaName = Form.useWatch('schemaName', form) || '';
@@ -464,25 +469,23 @@ export function BackupPanel({
   }
 
   const methodOptions = backupMethodOptions(selected, backupMethod);
+  const visibleBackups = backups.slice(taskPage * 10, taskPage * 10 + 10);
 
   return (
     <section className="inspector-section">
       {modalContextHolder}
-      <div className="inspector-section-header">
-        <Text strong>备份任务</Text>
+      <div className="inspector-section-header backup-context-header">
+        <Text type="secondary">当前连接</Text>
         <Tag>{selected ? selected.name : '未选择连接'}</Tag>
       </div>
-      <Space direction="vertical" size={10} className="full-width">
+      <Space orientation="vertical" size={10} className="full-width">
         <Space.Compact block>
           <Button size="small" icon={<PlusOutlined />} disabled={!selected || loading} onClick={openDatabaseTask}>新建任务</Button>
           <Button size="small" icon={<PlusOutlined />} disabled={!selected || !activeTable || loading} onClick={() => openTableTask()}>备份当前表</Button>
         </Space.Compact>
-        <List
-          size="small"
-          pagination={backups.length > 10 ? { pageSize: 10, showSizeChanger: false, size: 'small' } : false}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务' : '请选择连接'} /> }}
-          dataSource={backups}
-          renderItem={(backup) => {
+        {backups.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务，点击上方按钮创建' : '请选择连接'} /> : (
+          <div className="backup-task-list">
+          {visibleBackups.map((backup) => {
             const taskRunning = backup.lastStatus === 'RUNNING';
             const scheduled = Boolean(backup.cron?.trim());
             const taskSchedulePreview = backup.cron ? listSchedulePreviews[backup.cron.trim()] : undefined;
@@ -494,10 +497,23 @@ export function BackupPanel({
               scheduled && nextRunAt ? `下次执行：${formatHistoryTime(nextRunAt)}` : ''
             ].filter(Boolean).join(' · ');
             return (
-              <List.Item
-                actions={[
+              <article className="backup-task-item" key={backup.id}>
+                <div className="backup-task-content">
+                  <Space size={4} wrap>
+                    <span className="backup-task-title">{backup.name}</span>
+                    <Tag color={!scheduled ? 'default' : backup.enabled ? 'blue' : 'orange'}>
+                      {!scheduled ? '手动任务' : backup.enabled ? '计划运行中' : '计划已暂停'}
+                    </Tag>
+                    <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : backup.lastStatus === 'RUNNING' ? 'blue' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
+                  </Space>
+                  <Space orientation="vertical" size={1}>
+                    <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope, effectiveNamespaceKind)}</Text>
+                    <Text type="secondary">{backupTargetLabel(backup, effectiveNamespaceKind)} · {describeBackupSchedule(backup.cron)}{taskZoneId ? `（${taskZoneId}）` : ''}</Text>
+                    {recentDetails && <Text type="secondary">{recentDetails}</Text>}
+                  </Space>
+                </div>
+                <Space size={4} className="backup-task-actions">
                   <Button
-                    key="run"
                     type="primary"
                     size="small"
                     icon={<PlayCircleOutlined />}
@@ -509,8 +525,8 @@ export function BackupPanel({
                     }}
                   >
                     立即执行
-                  </Button>,
-                  <Tooltip key="more" title="更多操作">
+                  </Button>
+                  <Tooltip title="更多操作">
                     <Dropdown
                       trigger={['click']}
                       disabled={loading || runningTaskId !== null || Boolean(taskAction)}
@@ -519,30 +535,13 @@ export function BackupPanel({
                       <Button size="small" type="text" icon={<MoreOutlined />} aria-label={`${backup.name} 更多操作`} />
                     </Dropdown>
                   </Tooltip>
-                ]}
-              >
-                <List.Item.Meta
-                  title={(
-                    <Space size={4} wrap>
-                      <span className="backup-task-title">{backup.name}</span>
-                      <Tag color={!scheduled ? 'default' : backup.enabled ? 'blue' : 'orange'}>
-                        {!scheduled ? '手动任务' : backup.enabled ? '计划运行中' : '计划已暂停'}
-                      </Tag>
-                      <Tag color={backup.lastStatus === 'SUCCESS' ? 'green' : backup.lastStatus === 'FAILED' ? 'red' : backup.lastStatus === 'RUNNING' ? 'blue' : 'default'}>{backupStatusLabel(backup.lastStatus)}</Tag>
-                    </Space>
-                  )}
-                  description={(
-                    <Space direction="vertical" size={1}>
-                      <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope, effectiveNamespaceKind)}</Text>
-                      <Text type="secondary">{backupTargetLabel(backup, effectiveNamespaceKind)} · {describeBackupSchedule(backup.cron)}{taskZoneId ? `（${taskZoneId}）` : ''}</Text>
-                      {recentDetails && <Text type="secondary">{recentDetails}</Text>}
-                    </Space>
-                  )}
-                />
-              </List.Item>
+                </Space>
+              </article>
             );
-          }}
-        />
+          })}
+          {backups.length > 10 && <Pagination size="small" current={taskPage + 1} pageSize={10} total={backups.length} showSizeChanger={false} onChange={(page) => setTaskPage(page - 1)} />}
+          </div>
+        )}
       </Space>
 
       <Modal
@@ -554,7 +553,7 @@ export function BackupPanel({
         okButtonProps={{ danger: true, disabled: loading && deletingTaskId === null }}
         cancelButtonProps={{ disabled: deletingTaskId !== null }}
         closable={deletingTaskId === null}
-        maskClosable={deletingTaskId === null}
+        mask={{ closable: deletingTaskId === null }}
         onCancel={() => {
           if (deleteTarget) {
             setDeleteFiles((current) => {
@@ -567,7 +566,7 @@ export function BackupPanel({
         }}
         onOk={() => deleteTarget && deleteTask(deleteTarget.id)}
       >
-        <Space direction="vertical" size={12} className="full-width">
+        <Space orientation="vertical" size={12} className="full-width">
           <Text>确定删除任务“{deleteTarget?.name}”吗？此操作无法撤销。</Text>
           <Checkbox
             checked={deleteTarget ? Boolean(deleteFiles[deleteTarget.id]) : false}
@@ -594,7 +593,7 @@ export function BackupPanel({
         cancelText="取消"
         okButtonProps={{ disabled: !selected || loading }}
         cancelButtonProps={{ disabled: loading }}
-        maskClosable={!loading}
+        mask={{ closable: !loading }}
       >
         <Form
           form={form}
@@ -685,7 +684,7 @@ export function BackupPanel({
               }}
             />
           </Form.Item>
-          {!nativeBackup && <Alert type="warning" showIcon message="SQL 数据备份仅逐行导出数据、不包含表结构；遇到二进制字段会停止并报错，超大库优先使用数据库原生备份工具。" />}
+          {!nativeBackup && <Alert type="warning" showIcon title="SQL 数据备份仅逐行导出数据、不包含表结构；遇到二进制字段会停止并报错，超大库优先使用数据库原生备份工具。" />}
 
           <Divider titlePlacement="start" plain>执行计划</Divider>
           <Form.Item label="执行频率" name="scheduleKind" rules={[{ required: true, message: '请选择执行频率' }]}>
@@ -780,7 +779,7 @@ export function BackupPanel({
         title={historyTask ? `${historyTask.name} 执行历史` : '执行历史'}
         open={Boolean(historyTask)}
         footer={null}
-        maskClosable={!deletingHistoryId}
+        mask={{ closable: !deletingHistoryId }}
         closable={!deletingHistoryId}
         onCancel={() => {
           if (deletingHistoryId) return;
@@ -793,78 +792,46 @@ export function BackupPanel({
           setDeleteHistoryFiles({});
         }}
       >
-        <List
-          size="small"
-          loading={historyLoading}
-          pagination={false}
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> }}
-          dataSource={histories}
-          renderItem={(history) => (
-            <List.Item
-              actions={[
-                <Tooltip key="download" title={history.filePath ? '下载备份文件' : '没有可下载的备份文件'}>
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={<DownloadOutlined />}
-                    aria-label="下载备份文件"
-                    disabled={!history.filePath || loading || deletingHistoryId !== null}
-                    onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)}
-                  />
-                </Tooltip>,
-                <Popconfirm
-                  key="delete"
-                  title="删除备份历史"
-                  description={(
-                    <Checkbox
-                      checked={Boolean(deleteHistoryFiles[history.id])}
-                      disabled={!history.filePath}
-                      onChange={(event) => setDeleteHistoryFiles((current) => ({ ...current, [history.id]: event.target.checked }))}
+        <Spin spinning={historyLoading}>
+          {histories.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> : (
+            <div className="backup-history-list">
+              {histories.map((history) => (
+                <article className="backup-history-item" key={history.id}>
+                  <div className="backup-history-content">
+                    <Space size={6} wrap>
+                      <Tag color={history.status === 'SUCCESS' ? 'green' : history.status === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(history.status)}</Tag>
+                      <Text>{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text>
+                    </Space>
+                    <Space orientation="vertical" size={2} className="full-width">
+                      {history.fileSize ? <Text type="secondary">文件大小：{formatFileSize(history.fileSize)}</Text> : null}
+                      {history.message ? <Text type="secondary" className="backup-history-message">{history.message}</Text> : null}
+                    </Space>
+                  </div>
+                  <Space size={2} className="backup-history-actions">
+                    <Tooltip title={history.filePath ? '下载备份文件' : '没有可下载的备份文件'}>
+                      <Button size="small" type="text" icon={<DownloadOutlined />} aria-label="下载备份文件" disabled={!history.filePath || loading || deletingHistoryId !== null} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />
+                    </Tooltip>
+                    <Popconfirm
+                      title="删除备份历史"
+                      description={<Checkbox checked={Boolean(deleteHistoryFiles[history.id])} disabled={!history.filePath} onChange={(event) => setDeleteHistoryFiles((current) => ({ ...current, [history.id]: event.target.checked }))}>同时删除备份文件</Checkbox>}
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => deleteHistory(history.id)}
                     >
-                      同时删除备份文件
-                    </Checkbox>
-                  )}
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => deleteHistory(history.id)}
-                >
-                  <Tooltip title="删除备份历史">
-                    <Button
-                      size="small"
-                      type="text"
-                      danger
-                      icon={<DeleteOutlined />}
-                      aria-label="删除备份历史"
-                      loading={deletingHistoryId === history.id}
-                      disabled={historyTask?.lastStatus === 'RUNNING' || (loading && deletingHistoryId !== history.id)}
-                    />
-                  </Tooltip>
-                </Popconfirm>
-              ]}
-            >
-              <List.Item.Meta
-                title={(
-                  <Space size={6} wrap>
-                    <Tag color={history.status === 'SUCCESS' ? 'green' : history.status === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(history.status)}</Tag>
-                    <Text>{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text>
+                      <Tooltip title="删除备份历史"><Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label="删除备份历史" loading={deletingHistoryId === history.id} disabled={historyTask?.lastStatus === 'RUNNING' || (loading && deletingHistoryId !== history.id)} /></Tooltip>
+                    </Popconfirm>
                   </Space>
-                )}
-                description={(
-                  <Space direction="vertical" size={2} className="full-width">
-                    {history.fileSize ? <Text type="secondary">文件大小：{formatFileSize(history.fileSize)}</Text> : null}
-                    {history.message ? <Text type="secondary" className="backup-history-message">{history.message}</Text> : null}
-                  </Space>
-                )}
-              />
-            </List.Item>
+                </article>
+              ))}
+            </div>
           )}
-        />
+        </Spin>
         <div className="backup-history-pagination">
           <Text type="secondary">第 {historyPage + 1} 页 · 本页 {histories.length} 条</Text>
           <Space.Compact>
             <Button size="small" icon={<LeftOutlined />} disabled={historyLoading || historyPage === 0} onClick={() => historyTask && void loadHistoryPage(historyTask, historyPage - 1)}>上一页</Button>
-            <Button size="small" icon={<RightOutlined />} iconPosition="end" disabled={historyLoading || !historyHasMore} onClick={() => historyTask && void loadHistoryPage(historyTask, historyPage + 1)}>下一页</Button>
+            <Button size="small" icon={<RightOutlined />} iconPlacement="end" disabled={historyLoading || !historyHasMore} onClick={() => historyTask && void loadHistoryPage(historyTask, historyPage + 1)}>下一页</Button>
           </Space.Compact>
         </div>
       </Modal>
@@ -975,14 +942,14 @@ function RemoteNameSelect({ value, onChange, active, disabled, multiple, maxCoun
 
 function SchedulePreview({ cron, preview, loading, error, previewAvailable }: { cron: string; preview: BackupSchedulePreview | null; loading: boolean; error: string; previewAvailable: boolean }) {
   if (!cron && !error) return null;
-  if (error) return <Alert type="error" showIcon message="执行计划无法预览" description={error} />;
+  if (error) return <Alert type="error" showIcon title="执行计划无法预览" description={error} />;
   return (
     <Alert
       type="info"
       showIcon
-      message={<Space wrap><span>生成的 Cron</span><Text code>{cron}</Text>{loading && <Spin size="small" />}</Space>}
+      title={<Space wrap><span>生成的 Cron</span><Text code>{cron}</Text>{loading && <Spin size="small" />}</Space>}
       description={preview ? (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Text>服务端时区：{preview.zoneId}</Text>
           {preview.nextRuns.slice(0, 3).map((run, index) => <Text key={`${run}-${index}`}>第 {index + 1} 次：{formatHistoryTime(run)}</Text>)}
         </Space>

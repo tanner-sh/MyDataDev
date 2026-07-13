@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
-import { Badge, Button, Drawer, Layout, Select, Space, Typography, Upload } from 'antd';
+import { useEffect, useRef, useState } from 'react';
+import { Badge, Button, Drawer, Dropdown, Layout, Select, Space, Typography, Upload } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   ArrowLeftOutlined,
   CloudServerOutlined,
   EyeOutlined,
   LeftOutlined,
+  MoreOutlined,
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
@@ -70,9 +72,24 @@ export function TableWorkspace({
   onPageSizeChange?: (pageSize: number) => void;
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
   const editingDisabled = readonlyConnection || !editingSupported;
+  const secondaryMenu: MenuProps = {
+    items: [
+      { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading || !onBackupTable },
+      { key: 'reload', icon: <ReloadOutlined />, label: '刷新数据', disabled: !activeTable || loading },
+      { key: 'add', icon: <PlusOutlined />, label: '新增行', disabled: !tableData || loading || editingDisabled },
+      { key: 'import', icon: <UploadOutlined />, label: '导入数据', disabled: !tableData || loading || editingDisabled }
+    ],
+    onClick: ({ key }) => {
+      if (key === 'backup') onBackupTable?.();
+      if (key === 'reload') onReload();
+      if (key === 'add') onAddRow();
+      if (key === 'import') importInputRef.current?.click();
+    }
+  };
 
   useEffect(() => {
     setPreviewOpen(false);
@@ -101,41 +118,53 @@ export function TableWorkspace({
             {tableData?.navigationMode === 'OFFSET' ? ' · 当前使用偏移分页，深页浏览受限' : ''}
           </Text>
         </div>
-        <Space size={8} wrap>
-          <Button
-            size="small"
-            icon={<CloudServerOutlined />}
-            disabled={!activeTable || loading || !onBackupTable}
-            onClick={onBackupTable}
-          >
-            备份此表
-          </Button>
-          <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
-          <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || editingDisabled} onClick={onAddRow}>新增行</Button>
-          <Upload
+        <div className="table-toolbar-actions">
+          <Space size={8} className="table-secondary-actions">
+            <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading || !onBackupTable} onClick={onBackupTable}>备份此表</Button>
+            <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
+            <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || editingDisabled} onClick={onAddRow}>新增行</Button>
+            <Upload
+              accept=".csv,.json,.sql"
+              showUploadList={false}
+              disabled={!tableData || loading || editingDisabled}
+              beforeUpload={(file) => {
+                onImportFile(file);
+                return false;
+              }}
+            >
+              <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
+            </Upload>
+          </Space>
+          <Dropdown menu={secondaryMenu} trigger={['click']}>
+            <Button className="table-more-actions" size="small" icon={<MoreOutlined />} aria-label="更多表格操作">更多</Button>
+          </Dropdown>
+          <Space size={8} className="table-primary-actions">
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              disabled={!pendingCount || loading || editingDisabled}
+              onClick={() => {
+                setPreviewOpen(true);
+                onPreview();
+              }}
+            >
+              预览
+            </Button>
+            <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交</Button>
+          </Space>
+          <input
+            ref={importInputRef}
+            className="visually-hidden"
+            type="file"
             accept=".csv,.json,.sql"
-            showUploadList={false}
-            disabled={!tableData || loading || editingDisabled}
-            beforeUpload={(file) => {
-              onImportFile(file);
-              return false;
+            tabIndex={-1}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) onImportFile(file);
+              event.currentTarget.value = '';
             }}
-          >
-            <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
-          </Upload>
-          <Button
-            size="small"
-            icon={<EyeOutlined />}
-            disabled={!pendingCount || loading || editingDisabled}
-            onClick={() => {
-              setPreviewOpen(true);
-              onPreview();
-            }}
-          >
-            预览语句
-          </Button>
-          <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交</Button>
-        </Space>
+          />
+        </div>
       </Header>
       <div className="table-grid-pane">
         <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} onEdit={onEdit} onDelete={onDelete} />
@@ -163,7 +192,7 @@ export function TableWorkspace({
           <Button
             size="small"
             icon={<RightOutlined />}
-            iconPosition="end"
+            iconPlacement="end"
             disabled={!tableData || loading || !hasMore || !onPageChange}
             onClick={() => onPageChange?.(page + 1)}
           >
@@ -178,7 +207,7 @@ export function TableWorkspace({
       <Drawer
         title="变更语句预览"
         placement="bottom"
-        height={260}
+        size={260}
         open={previewOpen}
         getContainer={false}
         rootClassName="workspace-bottom-drawer"

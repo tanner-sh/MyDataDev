@@ -17,7 +17,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Key, ReactNode, UIEvent } from 'react';
 import {
   collapseObjectBranch,
-  createObjectOpenIntent,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -114,7 +113,6 @@ export function ObjectTree({
   onBackupTable
 }: ObjectTreeProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
-  const openIntentRef = useRef(createObjectOpenIntent());
   const groups = useMemo(() => groupDatabaseObjects(objects), [objects]);
   const groupKeys = useMemo(() => groups.map((group) => treeNodeKey('object-type', group.objects[0]?.schemaName || '', group.key)), [groups]);
   const [expandedKeys, setExpandedKeys] = useState<Key[]>(groupKeys);
@@ -126,12 +124,6 @@ export function ObjectTree({
   useEffect(() => {
     setExpandedKeys((current) => [...new Set([...groupKeys, ...current])]);
   }, [groupKeys.join('|')]);
-
-  useEffect(() => {
-    openIntentRef.current.cancel();
-  }, [objects]);
-
-  useEffect(() => () => openIntentRef.current.cancel(), []);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -243,12 +235,12 @@ export function ObjectTree({
         <div className={`object-tree-row object-tree-object-row${row.selected ? ' is-selected' : ''}`} style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded} aria-selected={row.selected}>
           <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'} ${displayName} 的结构`} onClick={() => setObjectExpanded(row.object, row.key, !row.expanded)} />
           <TreeIcon>{objectIcon(row.object)}</TreeIcon>
-          <button className="object-tree-row-main object-tree-object-trigger" type="button" title={displayName} onClick={() => openIntentRef.current.single(() => onOpenDetail(row.object))} onDoubleClick={() => openIntentRef.current.double(() => isView ? onOpenDetail(row.object) : onOpenTable(row.object))}>
+          <button className="object-tree-row-main object-tree-object-trigger" type="button" title={`${displayName} · 查看详情`} onClick={() => onOpenDetail(row.object)}>
             <span className="object-tree-object-name"><HighlightedName name={row.object.name} keyword={keyword} /></span>
           </button>
           <span className="object-tree-actions">
-            {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => { openIntentRef.current.cancel(); onOpenTable(row.object); }} /></Tooltip>}
-            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { openIntentRef.current.cancel(); if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); } }}>
+            {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
+            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); } }}>
               <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
             </Dropdown>
           </span>

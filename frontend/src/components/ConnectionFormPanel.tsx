@@ -1,5 +1,6 @@
 import { Button, Checkbox, Form, Input, Select, Space, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
+import { useState } from 'react';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from '../constants';
 import type { ConnectionForm } from '../types';
 import { normalizeEnvironment } from '../utils';
@@ -16,6 +17,7 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
   onTest: () => void;
   onSave: () => void;
 }) {
+  const [touched, setTouched] = useState({ name: false, jdbcUrl: false });
   const nameInvalid = form.name.trim().length === 0;
   const jdbcUrlInvalid = form.jdbcUrl.trim().length === 0 || !form.jdbcUrl.trim().startsWith('jdbc:');
   const canSubmit = !nameInvalid && !jdbcUrlInvalid && !loading;
@@ -23,14 +25,14 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
   return (
     <section className="connection-editor-form">
       <Form layout="vertical" size="small" className="compact-form" disabled={loading}>
-        <Form.Item label="连接名称" required validateStatus={nameInvalid ? 'error' : undefined} help={nameInvalid ? '请输入便于识别的连接名称' : undefined}>
-          <Input value={form.name} maxLength={80} placeholder="例如：生产只读库" onChange={(event) => onChange({ ...form, name: event.target.value })} />
+        <Form.Item label="连接名称" required validateStatus={touched.name && nameInvalid ? 'error' : undefined} help={touched.name && nameInvalid ? '请输入便于识别的连接名称' : undefined}>
+          <Input value={form.name} maxLength={80} placeholder="例如：生产只读库" onBlur={() => setTouched((current) => ({ ...current, name: true }))} onChange={(event) => onChange({ ...form, name: event.target.value })} />
         </Form.Item>
         <Form.Item label="数据库类型">
           <Select value={form.dbType} options={DB_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={onDbTypeChange} />
         </Form.Item>
-        <Form.Item label="数据库地址" required validateStatus={jdbcUrlInvalid ? 'error' : undefined} help={jdbcUrlInvalid ? '请输入以 jdbc: 开头的数据库地址' : undefined}>
-          <Input value={form.jdbcUrl} placeholder="jdbc:数据库类型://主机:端口/数据库" onChange={(event) => onChange({ ...form, jdbcUrl: event.target.value })} />
+        <Form.Item label="数据库地址" required validateStatus={touched.jdbcUrl && jdbcUrlInvalid ? 'error' : undefined} help={touched.jdbcUrl && jdbcUrlInvalid ? '请输入以 jdbc: 开头的数据库地址' : undefined}>
+          <Input value={form.jdbcUrl} placeholder="jdbc:数据库类型://主机:端口/数据库" onBlur={() => setTouched((current) => ({ ...current, jdbcUrl: true }))} onChange={(event) => onChange({ ...form, jdbcUrl: event.target.value })} />
         </Form.Item>
         <Form.Item label="用户名">
           <Input value={form.username} onChange={(event) => onChange({ ...form, username: event.target.value })} />

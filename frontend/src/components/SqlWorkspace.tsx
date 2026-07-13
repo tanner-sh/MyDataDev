@@ -147,7 +147,7 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
           </Tooltip>
         </Space>
       </Header>
-      {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon message="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}
+      {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon title="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}
       <Tabs
         className="sql-tabs"
         type="editable-card"
@@ -230,11 +230,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
         </details>
       </div>
       {result.status === 'FAILED' ? (
-        <Alert type="error" showIcon message={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
+        <Alert type="error" showIcon title={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
       ) : (
         <div className="statement-result-content">
           <div className="statement-result-notices">
-            {result.result.page && !pagingEnabled && <Alert type="warning" showIcon message="该结果来自其他连接，请切回原连接后再翻页。" />}
+            {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
             {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
           </div>
           <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} onPageChange={handlePageChange} />

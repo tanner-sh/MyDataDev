@@ -77,25 +77,3 @@ export function collapseObjectBranch(keys: Key[], objectKey: Key) {
     return value !== target && !value.startsWith(`${target}:`);
   });
 }
-
-export function createObjectOpenIntent(delayMs = 220) {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const cancel = () => {
-    if (timer) clearTimeout(timer);
-    timer = null;
-  };
-  return {
-    single(action: () => void) {
-      cancel();
-      timer = setTimeout(() => {
-        timer = null;
-        action();
-      }, delayMs);
-    },
-    double(action: () => void) {
-      cancel();
-      action();
-    },
-    cancel
-  };
-}
