@@ -100,14 +100,17 @@ function EditableCell({ rowId, column, value, inserted, touched, disabled, onCom
 }) {
   const normalizedValue = String(value ?? '');
   const [draft, setDraft] = useState(normalizedValue);
+  const draftRef = useRef(normalizedValue);
   const mode = inserted && !touched ? 'default' : value == null ? 'null' : 'value';
 
   useEffect(() => {
+    draftRef.current = normalizedValue;
     setDraft(normalizedValue);
   }, [column.name, normalizedValue, rowId, touched]);
 
   const commit = () => {
-    if (mode === 'value' && draft !== normalizedValue) onCommit(rowId, column.name, draft);
+    const latestDraft = draftRef.current;
+    if (mode === 'value' && latestDraft !== normalizedValue) onCommit(rowId, column.name, latestDraft);
   };
 
   return (
@@ -119,13 +122,18 @@ function EditableCell({ rowId, column, value, inserted, touched, disabled, onCom
         placeholder={mode === 'default' ? 'DEFAULT' : mode === 'null' ? 'NULL' : undefined}
         aria-label={`${column.name}，行 ${rowId}`}
         onChange={(event) => {
-          setDraft(event.target.value);
-          if (mode !== 'value') onCommit(rowId, column.name, event.target.value);
+          const nextDraft = event.target.value;
+          draftRef.current = nextDraft;
+          setDraft(nextDraft);
+          if (mode !== 'value') onCommit(rowId, column.name, nextDraft);
         }}
         onBlur={commit}
         onPressEnter={(event) => event.currentTarget.blur()}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') setDraft(normalizedValue);
+          if (event.key === 'Escape') {
+            draftRef.current = normalizedValue;
+            setDraft(normalizedValue);
+          }
         }}
       />
       {!disabled && inserted && touched && (

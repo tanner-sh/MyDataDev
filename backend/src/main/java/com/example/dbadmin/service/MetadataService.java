@@ -388,16 +388,14 @@ public class MetadataService {
         Set<String> invalidUniqueIndexes = new HashSet<>();
         try (ResultSet rs = meta.getIndexInfo(scope.catalog(), scope.schemaPattern(), table, true, false)) {
             while (rs.next()) {
-                String name = rs.getString("INDEX_NAME");
-                String column = rs.getString("COLUMN_NAME");
-                if (name == null || rs.getBoolean("NON_UNIQUE")) continue;
-                String filterCondition = rs.getString("FILTER_CONDITION");
-                if (column == null || filterCondition != null && !filterCondition.isBlank()) {
-                    invalidUniqueIndexes.add(name);
+                JdbcIndexMetadata index = readIndexMetadata(rs);
+                if (index.name() == null || index.nonUnique()) continue;
+                if (index.columnName() == null || index.filterCondition() != null && !index.filterCondition().isBlank()) {
+                    invalidUniqueIndexes.add(index.name());
                     continue;
                 }
-                short position = rs.getShort("ORDINAL_POSITION");
-                uniqueIndexes.computeIfAbsent(name, ignored -> new TreeMap<>()).put(position, column);
+                uniqueIndexes.computeIfAbsent(index.name(), ignored -> new TreeMap<>())
+                        .put((short) index.ordinalPosition(), index.columnName());
             }
         }
         RowIdentity identity = uniqueIndexes.entrySet().stream()
@@ -708,9 +706,12 @@ public class MetadataService {
         String pkName = null;
         try (ResultSet rs = meta.getPrimaryKeys(catalog, schema, table)) {
             while (rs.next()) {
-                ordered.put(rs.getShort("KEY_SEQ"), rs.getString("COLUMN_NAME"));
+                String columnName = rs.getString("COLUMN_NAME");
+                short keySequence = rs.getShort("KEY_SEQ");
+                String currentPkName = rs.getString("PK_NAME");
+                ordered.put(keySequence, columnName);
                 if (pkName == null) {
-                    pkName = rs.getString("PK_NAME");
+                    pkName = currentPkName;
                 }
             }
         }
@@ -758,20 +759,34 @@ public class MetadataService {
         String tablePattern = metadataPattern(meta, table, MatchMode.EXACT);
         try (ResultSet rs = meta.getColumns(catalog, schemaPattern, tablePattern, "%")) {
             while (rs.next()) {
-                cols.add(new ColumnInfo(
-                        rs.getString("COLUMN_NAME"),
-                        rs.getString("TYPE_NAME"),
-                        rs.getInt("COLUMN_SIZE"),
-                        // Unknown nullability is unsafe for row identity and
-                        // must be treated as nullable.
-                        rs.getInt("NULLABLE") != DatabaseMetaData.columnNoNulls,
-                        rs.getString("REMARKS"),
-                        rs.getInt("ORDINAL_POSITION"),
-                        rs.getString("COLUMN_DEF")
-                ));
+                cols.add(readColumnInfo(rs));
             }
         }
         return cols;
+    }
+
+    static ColumnInfo readColumnInfo(ResultSet rs) throws Exception {
+        // Oracle exposes COLUMN_DEF as a stream-backed LONG value. JDBC metadata
+        // columns therefore have to be consumed in result-set order; reading a
+        // later column first closes the stream and causes ORA-17027.
+        String name = rs.getString("COLUMN_NAME");
+        String type = rs.getString("TYPE_NAME");
+        int size = rs.getInt("COLUMN_SIZE");
+        int nullability = rs.getInt("NULLABLE");
+        String remarks = rs.getString("REMARKS");
+        String defaultValue = rs.getString("COLUMN_DEF");
+        int ordinalPosition = rs.getInt("ORDINAL_POSITION");
+        return new ColumnInfo(
+                name,
+                type,
+                size,
+                // Unknown nullability is unsafe for row identity and must be
+                // treated as nullable.
+                nullability != DatabaseMetaData.columnNoNulls,
+                remarks,
+                ordinalPosition,
+                defaultValue
+        );
     }
 
     private String structureVersion(
@@ -821,32 +836,50 @@ public class MetadataService {
         Set<String> unsupported = new HashSet<>();
         try (ResultSet rs = meta.getIndexInfo(catalog, schema, table, false, false)) {
             while (rs.next()) {
-                String name = rs.getString("INDEX_NAME");
-                String col = rs.getString("COLUMN_NAME");
-                if (name == null) continue;
-                String filterCondition = rs.getString("FILTER_CONDITION");
-                if (col == null || filterCondition != null && !filterCondition.isBlank()) {
-                    unsupported.add(name);
+                JdbcIndexMetadata index = readIndexMetadata(rs);
+                if (index.name() == null) continue;
+                if (index.columnName() == null || index.filterCondition() != null && !index.filterCondition().isBlank()) {
+                    unsupported.add(index.name());
                     continue;
                 }
-                indexes.add(new IndexInfo(name, col, !rs.getBoolean("NON_UNIQUE"), rs.getInt("ORDINAL_POSITION")));
+                indexes.add(new IndexInfo(index.name(), index.columnName(), !index.nonUnique(), index.ordinalPosition()));
             }
         }
         return indexes.stream().filter(index -> !unsupported.contains(index.name())).toList();
     }
 
+    static JdbcIndexMetadata readIndexMetadata(ResultSet rs) throws Exception {
+        // Keep the reads in DatabaseMetaData#getIndexInfo column order. In
+        // particular FILTER_CONDITION may be stream-backed on Oracle.
+        boolean nonUnique = rs.getBoolean("NON_UNIQUE");
+        String name = rs.getString("INDEX_NAME");
+        int ordinalPosition = rs.getInt("ORDINAL_POSITION");
+        String columnName = rs.getString("COLUMN_NAME");
+        String filterCondition = rs.getString("FILTER_CONDITION");
+        return new JdbcIndexMetadata(name, columnName, nonUnique, ordinalPosition, filterCondition);
+    }
+
+    record JdbcIndexMetadata(String name, String columnName, boolean nonUnique, int ordinalPosition, String filterCondition) {}
+
     private List<ObjectRelation> relations(ResultSet rs, DatabaseDialect dialect) throws Exception {
         try (rs) {
             List<ObjectRelation> relations = new ArrayList<>();
             while (rs.next()) {
+                String pkNamespace = relationNamespace(rs, dialect, "PKTABLE");
+                String pkTableName = rs.getString("PKTABLE_NAME");
+                String pkColumnName = rs.getString("PKCOLUMN_NAME");
+                String fkNamespace = relationNamespace(rs, dialect, "FKTABLE");
+                String fkTableName = rs.getString("FKTABLE_NAME");
+                String fkColumnName = rs.getString("FKCOLUMN_NAME");
+                String constraintName = rs.getString("FK_NAME");
                 relations.add(new ObjectRelation(
-                        rs.getString("FK_NAME"),
-                        relationNamespace(rs, dialect, "PKTABLE"),
-                        rs.getString("PKTABLE_NAME"),
-                        rs.getString("PKCOLUMN_NAME"),
-                        relationNamespace(rs, dialect, "FKTABLE"),
-                        rs.getString("FKTABLE_NAME"),
-                        rs.getString("FKCOLUMN_NAME")
+                        constraintName,
+                        pkNamespace,
+                        pkTableName,
+                        pkColumnName,
+                        fkNamespace,
+                        fkTableName,
+                        fkColumnName
                 ));
             }
             return relations;

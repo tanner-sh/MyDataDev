@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -22,10 +23,59 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class MetadataServiceTest {
+    @Test
+    void readsColumnMetadataInJdbcOrderForOracleStreamValues() throws Exception {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getString("COLUMN_NAME")).thenReturn("STATUS");
+        when(rs.getString("TYPE_NAME")).thenReturn("VARCHAR2");
+        when(rs.getInt("COLUMN_SIZE")).thenReturn(20);
+        when(rs.getInt("NULLABLE")).thenReturn(java.sql.DatabaseMetaData.columnNullable);
+        when(rs.getString("REMARKS")).thenReturn("状态");
+        when(rs.getString("COLUMN_DEF")).thenReturn("'READY'");
+        when(rs.getInt("ORDINAL_POSITION")).thenReturn(3);
+
+        var column = MetadataService.readColumnInfo(rs);
+
+        assertThat(column.name()).isEqualTo("STATUS");
+        assertThat(column.defaultValue()).isEqualTo("'READY'");
+        assertThat(column.ordinalPosition()).isEqualTo(3);
+        var ordered = inOrder(rs);
+        ordered.verify(rs).getString("COLUMN_NAME");
+        ordered.verify(rs).getString("TYPE_NAME");
+        ordered.verify(rs).getInt("COLUMN_SIZE");
+        ordered.verify(rs).getInt("NULLABLE");
+        ordered.verify(rs).getString("REMARKS");
+        ordered.verify(rs).getString("COLUMN_DEF");
+        ordered.verify(rs).getInt("ORDINAL_POSITION");
+    }
+
+    @Test
+    void readsIndexMetadataBeforeOracleFilterConditionStreamCloses() throws Exception {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getBoolean("NON_UNIQUE")).thenReturn(false);
+        when(rs.getString("INDEX_NAME")).thenReturn("PK_ASSET");
+        when(rs.getInt("ORDINAL_POSITION")).thenReturn(1);
+        when(rs.getString("COLUMN_NAME")).thenReturn("ID");
+        when(rs.getString("FILTER_CONDITION")).thenReturn(null);
+
+        var index = MetadataService.readIndexMetadata(rs);
+
+        assertThat(index.name()).isEqualTo("PK_ASSET");
+        assertThat(index.columnName()).isEqualTo("ID");
+        assertThat(index.nonUnique()).isFalse();
+        var ordered = inOrder(rs);
+        ordered.verify(rs).getBoolean("NON_UNIQUE");
+        ordered.verify(rs).getString("INDEX_NAME");
+        ordered.verify(rs).getInt("ORDINAL_POSITION");
+        ordered.verify(rs).getString("COLUMN_NAME");
+        ordered.verify(rs).getString("FILTER_CONDITION");
+    }
+
     @Test
     void inspectLoadsObjectSummariesWithoutColumnsOrIndexes() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";

@@ -118,8 +118,9 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
             <Button size="small" disabled={loading} onClick={() => { commitDraft(); onFormat(); }}>格式化</Button>
           </Tooltip>
           <Button size="small" icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
-          <Dropdown
-            menu={{
+          <Dropdown
+            trigger={['click']}
+            menu={{
               items: [
                 { key: 'csv', label: '导出 CSV' },
                 { key: 'json', label: '导出 JSON' },
