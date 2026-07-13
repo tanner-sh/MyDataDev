@@ -1,18 +1,18 @@
 import { Alert, Button, Card, Empty, List, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
-import { CopyOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, EditOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
 
 const { Text } = Typography;
 
-export function ConnectionList({ connections, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSelect, onEdit, onTest, onDuplicate, onDelete }: {
+export function ConnectionList({ connections, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSwitch, onEdit, onTest, onDuplicate, onDelete }: {
   connections: Connection[];
   selectedId?: number;
   connectionsLoading: boolean;
   connectionsError: string;
   connectionsReady: boolean;
   testingConnectionId: number | null;
-  onSelect: (connection: Connection) => void;
+  onSwitch: (connection: Connection) => void;
   onEdit: (connection: Connection) => void;
   onTest: (connection: Connection) => void;
   onDuplicate: (connection: Connection) => void;
@@ -43,7 +43,7 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
         renderItem={(connection) => (
           <List.Item className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
             <div className="connection-card">
-              <button className="connection-title-button connection-main-info" aria-label={`选择连接 ${connection.name}`} onClick={() => onSelect(connection)}>
+              <div className="connection-main-info">
                 <div className="connection-name-row">
                   <Text strong className="ellipsis-text">{connection.name}</Text>
                   {selectedId === connection.id && <Tag color="processing">当前使用</Tag>}
@@ -54,8 +54,13 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
                   <Tag>{environmentLabel(connection.environment)}</Tag>
                 </Space>
                 <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
-              </button>
+              </div>
               <Space size={2} className="connection-actions">
+                {selectedId !== connection.id && (
+                  <Tooltip title="切换使用">
+                    <Button size="small" icon={<SwapOutlined />} aria-label={`切换使用 ${connection.name}`} onClick={() => onSwitch(connection)} />
+                  </Tooltip>
+                )}
                 <Tooltip title="测试连接">
                   <Button size="small" icon={<ThunderboltOutlined />} aria-label={`测试连接 ${connection.name}`} loading={testingConnectionId === connection.id} onClick={() => onTest(connection)} />
                 </Tooltip>

@@ -509,7 +509,7 @@ export default function App() {
     setObjectDetailLoading(false);
   }
 
-  function selectConnection(connection: Connection) {
+  function selectConnection(connection: Connection, onSelected?: () => void) {
     if (selected?.id === connection.id) return;
     if (sqlLoading || tableLoading || objectDetailLoading) {
       showInfo('请等待当前操作完成后再切换连接');
@@ -518,6 +518,7 @@ export default function App() {
     confirmDiscardObjectDesign(() => {
       confirmDiscardTableChanges(() => {
         applyConnectionSelection(connection);
+        onSelected?.();
       }, `切换到连接“${connection.name}”`);
     }, `切换到连接“${connection.name}”`);
   }
@@ -1874,7 +1875,7 @@ export default function App() {
             connectionsError={connectionsError}
             connectionsReady={connectionsReady}
             testingConnectionId={testingConnectionId}
-            onSelect={selectConnection}
+            onSwitch={(connection) => selectConnection(connection, closeConnectionDrawer)}
             onEdit={editConnection}
             onTest={testSavedConnection}
             onDuplicate={duplicateConnection}

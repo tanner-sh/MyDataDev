@@ -204,17 +204,6 @@ body {
   padding-inline: 0;
 }
 
-.connection-title-button {
-  width: 100%;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
 .ellipsis-text {
   display: block;
   max-width: 100%;
@@ -1215,8 +1204,7 @@ body {
   background: var(--primary-soft);
 }
 
-.explorer-empty-connection:focus-visible,
-.connection-title-button:focus-visible {
+.explorer-empty-connection:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
 }
