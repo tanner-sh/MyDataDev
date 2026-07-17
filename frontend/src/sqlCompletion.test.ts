@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
-import { analyzeSqlCompletion, getCurrentSqlStatement, parseSqlTableReferences } from './sqlCompletion';
+import { analyzeSqlCompletion, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences } from './sqlCompletion';
 
 describe('SQL completion context', () => {
   it('only analyzes the statement containing the cursor', () => {
@@ -45,6 +45,15 @@ describe('SQL completion context', () => {
 
     expect(tableContext.mode).toBe('table');
     expect(references[0]).toMatchObject({ schemaName: 'Trade', name: 'Order', alias: 'o' });
+  });
+
+  it('keeps literal underscores in table prefixes and refreshes capped suggestions while typing', () => {
+    const sql = 'select * from si_';
+    const context = analyzeSqlCompletion(sql, sql.length);
+
+    expect(context.mode).toBe('table');
+    expect(context.replacement.prefix).toBe('si_');
+    expect(isSqlCompletionListIncomplete(context)).toBe(true);
   });
 
   it('does not suggest inside strings or comments', () => {

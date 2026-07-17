@@ -3,7 +3,7 @@ import type { OnMount } from '@monaco-editor/react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import '../monacoSetup';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
-import { DownloadOutlined, HistoryOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, PlayCircleOutlined, StopOutlined } from '@ant-design/icons';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
@@ -115,34 +115,42 @@ export function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, l
         </div>
         <Space size={8} wrap>
           <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
-            <Button size="small" disabled={loading} onClick={() => { commitDraft(); onFormat(); }}>格式化</Button>
+            <Button size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(); }} />
           </Tooltip>
-          <Button size="small" icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>历史</Button>
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'csv', label: '导出 CSV' },
-                { key: 'json', label: '导出 JSON' },
-                { key: 'sql', label: '导出 SQL' },
-                { key: 'xml', label: '导出 XML' }
-              ],
-              onClick: ({ key }) => {
-                commitDraft();
-                onExport(key as ExportFormat);
-              }
-            }}
-          >
-            <Button size="small" icon={<DownloadOutlined />} disabled={!selected || loading}>导出</Button>
-          </Dropdown>
-          <Button size="small" disabled={!selected || loading || !selected.capabilities?.explain} onClick={() => { commitDraft(); onExplain(); }}>执行计划</Button>
+          <Tooltip title="SQL 历史">
+            <Button size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected} onClick={onOpenHistory} />
+          </Tooltip>
+          <Tooltip title="导出当前或选中查询">
+            <span>
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: [
+                    { key: 'csv', label: '导出 CSV' },
+                    { key: 'json', label: '导出 JSON' },
+                    { key: 'sql', label: '导出 SQL' },
+                    { key: 'xml', label: '导出 XML' }
+                  ],
+                  onClick: ({ key }) => {
+                    commitDraft();
+                    onExport(key as ExportFormat);
+                  }
+                }}
+              >
+                <Button size="small" icon={<DownloadOutlined />} aria-label="导出查询" disabled={!selected || loading} />
+              </Dropdown>
+            </span>
+          </Tooltip>
+          <Tooltip title="查看当前或选中 SQL 的执行计划">
+            <span><Button size="small" icon={<FundProjectionScreenOutlined />} aria-label="查看 SQL 执行计划" disabled={!selected || loading || !selected.capabilities?.explain} onClick={() => { commitDraft(); onExplain(); }} /></span>
+          </Tooltip>
           <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
             {loading && cancellable ? (
-              <Button size="small" danger icon={<StopOutlined />} loading={cancelling} onClick={onCancel}>取消执行</Button>
+              <Button size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel} />
             ) : loading ? (
-              <Button size="small" type="primary" loading disabled>处理中</Button>
+              <Button size="small" type="primary" aria-label="SQL 处理中" loading disabled />
             ) : (
-              <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={!selected} onClick={() => { commitDraft(); onExecute(); }}>执行</Button>
+              <Button size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(); }} />
             )}
           </Tooltip>
         </Space>

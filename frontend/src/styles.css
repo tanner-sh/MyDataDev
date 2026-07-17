@@ -491,6 +491,26 @@ body {
   width: 96px;
 }
 
+.result-filter-dropdown {
+  width: 260px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.result-filter-dropdown > .ant-select,
+.result-filter-dropdown > .ant-input-affix-wrapper {
+  width: 100%;
+}
+
+.result-filter-actions {
+  justify-content: flex-end;
+}
+
+.result-filter-icon-active {
+  color: var(--primary);
+}
+
 .statement-result-content {
   min-width: 0;
   min-height: 0;

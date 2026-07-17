@@ -115,6 +115,22 @@ class MetadataServiceTest {
     }
 
     @Test
+    void completionTreatsUnderscoreAsALiteralPrefixCharacter() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE si_table(id BIGINT PRIMARY KEY)");
+            connection.createStatement().execute("CREATE TABLE sim_table(id BIGINT PRIMARY KEY)");
+            connection.createStatement().execute("CREATE TABLE sie_table(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+        MetadataResponse metadata = service.inspect(1L, null, null, 0, 200, false);
+
+        var completion = service.completionCatalog(1L, metadata.selectedSchema(), "si_", 100, false);
+
+        assertThat(completion.objects()).extracting("name").containsExactly("SI_TABLE");
+    }
+
+    @Test
     void defaultsToCurrentSchemaAndLoadsOtherSchemasOnDemand() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

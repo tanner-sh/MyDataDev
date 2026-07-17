@@ -10,7 +10,9 @@ import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedul
 import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
-import { analyzeSqlCompletion, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
+import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
+import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
+import { getSqlFormatTarget } from './sqlFormatTarget';
 import { AppHeader } from './components/AppHeader';
 import { ConnectionFormPanel } from './components/ConnectionFormPanel';
 import { ConnectionList } from './components/ConnectionList';
@@ -261,11 +263,16 @@ export default function App() {
         await sleep(delays[attempt]);
       }
       try {
-        const rows = await api<Connection[]>('/connections');
-        setConnections(rows);
+        const rows = await api<Connection[]>('/connections');
+        setConnections(rows);
         setSelected((current: Connection | null) => {
-          const targetId = options.preferredConnectionId ?? current?.id;
-          return targetId ? rows.find((row) => row.id === targetId) || rows[0] || null : rows[0] || null;
+          const target = resolveSelectedConnection(rows, [
+            options.preferredConnectionId,
+            current?.id,
+            readSelectedConnectionId()
+          ]);
+          writeSelectedConnectionId(target?.id);
+          return target;
         });
         setConnectionsError('');
         setConnectionsReady(true);
@@ -452,6 +459,7 @@ export default function App() {
         } else {
           invalidateConnectionRequests();
           setSelected(null);
+          writeSelectedConnectionId(null);
           setMetadata(null);
           setMetadataQuery({ schema: '', keyword: '' });
           setMetadataAppliedKeyword('');
@@ -477,6 +485,7 @@ export default function App() {
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
     setSelected(connection);
+    writeSelectedConnectionId(connection.id);
     setMetadata(null);
     setMetadataQuery({ schema: '', keyword: '' });
     setMetadataAppliedKeyword('');
@@ -949,9 +958,20 @@ export default function App() {
   }
 
   async function formatSql() {
-    const currentSql = editorRef.current?.getValue() ?? activeSqlTab.sql;
-    if (!currentSql.trim()) {
-      updateActiveSqlTab({ message: '请输入要格式化的 SQL', statusKind: 'info' });
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    const modelVersion = model?.getVersionId();
+    const currentSql = model?.getValue() ?? activeSqlTab.sql;
+    const selection = editor?.getSelection();
+    const cursor = model && editor
+      ? model.getOffsetAt(editor.getPosition() || { lineNumber: 1, column: 1 })
+      : 0;
+    const target = getSqlFormatTarget(currentSql, cursor, selection && model && !selection.isEmpty() ? {
+      start: model.getOffsetAt(selection.getStartPosition()),
+      end: model.getOffsetAt(selection.getEndPosition())
+    } : undefined);
+    if (!target) {
+      updateActiveSqlTab({ message: '当前语句没有可格式化的 SQL', statusKind: 'info' });
       return;
     }
     if (sqlBusyRef.current) {
@@ -962,8 +982,37 @@ export default function App() {
     setSqlLoading(true);
     setSqlCancellable(false);
     try {
-      const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: currentSql }) });
-      updateActiveSqlTab({ sql: data.sql, message: 'SQL 格式化完成', statusKind: 'success' });
+      const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: target.sql }) });
+      if (editor && model && editor.getModel() === model) {
+        if (modelVersion !== undefined && model.getVersionId() !== modelVersion) {
+          updateActiveSqlTab({ message: 'SQL 内容已变化，本次格式化结果未应用', statusKind: 'info' });
+          return;
+        }
+        const start = model.getPositionAt(target.start);
+        const end = model.getPositionAt(target.end);
+        editor.executeEdits('format-sql', [{
+          range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column },
+          text: data.sql,
+          forceMoveMarkers: true
+        }]);
+        const formattedEnd = model.getPositionAt(target.start + data.sql.length);
+        if (target.selected) {
+          editor.setSelection({
+            startLineNumber: start.lineNumber,
+            startColumn: start.column,
+            endLineNumber: formattedEnd.lineNumber,
+            endColumn: formattedEnd.column
+          });
+        } else {
+          const relativeCursor = Math.max(0, cursor - target.start);
+          editor.setPosition(model.getPositionAt(target.start + Math.min(relativeCursor, data.sql.length)));
+        }
+        editor.focus();
+        updateActiveSqlTab({ sql: model.getValue(), message: `当前${target.selected ? '选中' : '光标所在'}语句格式化完成`, statusKind: 'success' });
+      } else {
+        const nextSql = `${currentSql.slice(0, target.start)}${data.sql}${currentSql.slice(target.end)}`;
+        updateActiveSqlTab({ sql: nextSql, message: '当前语句格式化完成', statusKind: 'success' });
+      }
     } catch (e) {
       const errorMessage = `格式化失败：${localizeMessage((e as Error).message)}`;
       updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
@@ -1250,7 +1299,11 @@ export default function App() {
         _context: Monaco.languages.CompletionContext,
         token: Monaco.CancellationToken
       ) => {
-        return { suggestions: await sqlCompletionItems(model, position, monaco, token) };
+        const completionContext = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
+        return {
+          suggestions: await sqlCompletionItems(model, position, monaco, token),
+          incomplete: isSqlCompletionListIncomplete(completionContext)
+        };
       }
     });
     completionProviderRef.current = provider;

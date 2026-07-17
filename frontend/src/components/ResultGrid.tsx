@@ -1,10 +1,12 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Empty, InputNumber, Space, Spin, Table, Tooltip, Typography } from 'antd';
-import { LeftOutlined, RightOutlined, VerticalLeftOutlined } from '@ant-design/icons';
+import { Button, Empty, Input, InputNumber, Select, Space, Spin, Table, Tooltip, Typography } from 'antd';
+import { FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableRef } from 'antd/es/table';
+import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
+import { compareResultValues, filterResultRows, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 
 const { Text } = Typography;
 
@@ -17,6 +19,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   onPageChange?: (navigation: SqlPageNavigation) => void;
 }) {
   const [pageSizeDraft, setPageSizeDraft] = useState(500);
+  const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
+  const [sortState, setSortState] = useState<{ key: string; order: 'ascend' | 'descend' }>();
   const tableRef = useRef<TableRef>(null);
   const lastScrolledRowsRef = useRef<SqlResult['rows'] | null>(null);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
@@ -27,6 +31,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   useEffect(() => {
     if (result?.page?.requestedPageSize) setPageSizeDraft(result.page.requestedPageSize);
   }, [result?.page?.requestedPageSize]);
+
+  useEffect(() => {
+    setColumnFilters({});
+    setSortState(undefined);
+  }, [result?.rows]);
 
   useLayoutEffect(() => {
     if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
@@ -51,19 +60,41 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         key: column.key,
         width: Math.max(140, Math.min(280, column.label.length * 14 + 48)),
         ellipsis: true,
+        sorter: (left: ResultRow, right: ResultRow) => compareResultValues(left.values[columnIndex], right.values[columnIndex]),
+        sortOrder: sortState?.key === column.key ? sortState.order : null,
+        filteredValue: columnFilters[column.key] ? ['active'] : null,
+        filterIcon: (filtered: boolean) => <FilterFilled className={filtered ? 'result-filter-icon-active' : undefined} />,
+        filterDropdown: ({ confirm, close }: FilterDropdownProps) => (
+          <ResultFilterDropdown
+            condition={columnFilters[column.key]}
+            onApply={(condition) => {
+              setColumnFilters((current) => ({ ...current, [column.key]: condition }));
+              confirm({ closeDropdown: true });
+            }}
+            onReset={() => {
+              setColumnFilters((current) => {
+                const next = { ...current };
+                delete next[column.key];
+                return next;
+              });
+              close();
+            }}
+          />
+        ),
+        onFilter: () => true,
         shouldCellUpdate: (record: ResultRow, previous: ResultRow) => record !== previous,
         render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
       }))
     ];
-  }, [result?.columns, result?.resultSet, rowOffset]);
+  }, [columnFilters, result?.columns, result?.resultSet, rowOffset, sortState]);
 
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
-    return result.rows.map((values, index) => ({
+    return filterResultRows(result.rows, result.columns, columnFilters).map((values) => ({
       values,
-      key: String(rowOffset + index)
+      key: String(rowOffset + result.rows.indexOf(values))
     }));
-  }, [result?.resultSet, result?.rows, rowOffset]);
+  }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset]);
 
   if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
   if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
@@ -84,6 +115,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             loading={pagingLoading}
             virtual
             scroll={{ x: Math.max(800, result.columns.length * 180 + 70), y: scrollY }}
+            onChange={(_pagination, _filters, sorter) => {
+              const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
+              const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
+              setSortState(key && current.order ? { key, order: current.order } : undefined);
+            }}
           />
         )}
       </div>
@@ -91,7 +127,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         {result.page ? (
           <>
             <Text type="secondary">
-              本批 {rowCount} 行 · {result.elapsedMs}ms
+              {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`} · {result.elapsedMs}ms
               {result.page.effectivePageSize < result.page.requestedPageSize ? ` · 服务端单批上限 ${result.page.effectivePageSize}` : ''}
             </Text>
             <Space size={4} className="result-range-navigation">
@@ -125,12 +161,55 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             </Space.Compact>
           </>
         ) : (
-          <Text type="secondary">共 {rowCount} 行 · {result.elapsedMs}ms（当前结果不支持翻页）</Text>
+          <Text type="secondary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`} · {result.elapsedMs}ms（当前结果不支持翻页）</Text>
         )}
       </div>
     </div>
   );
 });
+
+const FILTER_OPTIONS: Array<{ value: ResultFilterOperator; label: string }> = [
+  { value: 'contains', label: '包含' },
+  { value: 'notContains', label: '不包含' },
+  { value: 'equals', label: '等于' },
+  { value: 'notEquals', label: '不等于' },
+  { value: 'empty', label: '为空' },
+  { value: 'notEmpty', label: '非空' }
+];
+
+function ResultFilterDropdown({ condition, onApply, onReset }: {
+  condition?: ResultColumnFilter;
+  onApply: (condition: ResultColumnFilter) => void;
+  onReset: () => void;
+}) {
+  const [operator, setOperator] = useState<ResultFilterOperator>(condition?.operator || 'contains');
+  const [value, setValue] = useState(condition?.value || '');
+  const valueDisabled = operator === 'empty' || operator === 'notEmpty';
+
+  useEffect(() => {
+    setOperator(condition?.operator || 'contains');
+    setValue(condition?.value || '');
+  }, [condition]);
+
+  return (
+    <div className="result-filter-dropdown" onKeyDown={(event) => event.stopPropagation()}>
+      <Select value={operator} options={FILTER_OPTIONS} onChange={setOperator} />
+      <Input
+        autoFocus
+        allowClear
+        disabled={valueDisabled}
+        placeholder={valueDisabled ? '无需输入筛选值' : '输入筛选值'}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onPressEnter={() => onApply({ operator, value })}
+      />
+      <Space className="result-filter-actions">
+        <Button size="small" onClick={onReset}>重置</Button>
+        <Button size="small" type="primary" icon={<SearchOutlined />} onClick={() => onApply({ operator, value })}>筛选</Button>
+      </Space>
+    </div>
+  );
+}
 
 function renderCellValue(value: unknown) {
   if (value == null) return <span className="cell-null">NULL</span>;

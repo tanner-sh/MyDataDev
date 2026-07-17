@@ -311,6 +311,11 @@ export function analyzeSqlCompletion(sql: string, cursorPosition: number): SqlCo
   };
 }
 
+/** Monaco must ask the provider again as a table prefix grows instead of fuzzy-filtering a capped list. */
+export function isSqlCompletionListIncomplete(context: SqlCompletionContext): boolean {
+  return context.mode === 'table';
+}
+
 /** Parses FROM/JOIN/UPDATE/INTO table names and their explicit or implicit aliases. */
 export function parseSqlTableReferences(tokensOrSql: SqlToken[] | string): SqlTableReference[] {
   const tokens = (typeof tokensOrSql === 'string' ? tokenizeSql(tokensOrSql) : tokensOrSql)
