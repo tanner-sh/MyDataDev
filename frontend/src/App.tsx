@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveTable, BackupEditorRequest, BackupHistoryPage, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -190,16 +190,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (activeDrawer !== 'backups') return;
     refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
-  }, [selected?.id]);
+  }, [activeDrawer, selected?.id]);
 
   useEffect(() => {
-    if (!selected || !backups.some((task) => task.lastStatus === 'RUNNING')) return;
+    if (activeDrawer !== 'backups' || !selected || !backups.some((task) => task.lastStatus === 'RUNNING')) return;
     const timer = window.setInterval(() => {
-      void refreshBackups(selected).catch(() => undefined);
+      if (document.hidden) return;
+      void api<ActiveOperations>(`/restores/operations/active?connectionId=${selected.id}`).then((active) => {
+        if (active.backups.length === 0) {
+          void refreshBackups(selected).catch(() => undefined);
+          return;
+        }
+        setBackups((current) => current.map((task) => {
+          const execution = active.backups.find((item) => item.taskId === task.id);
+          return execution ? { ...task, lastStatus: execution.status, lastMessage: execution.message } : task;
+        }));
+      }).catch(() => undefined);
     }, 2_000);
     return () => window.clearInterval(timer);
-  }, [backups, selected?.id]);
+  }, [activeDrawer, backups, selected?.id]);
 
   useEffect(() => {
     if (selected) {
@@ -1600,7 +1611,9 @@ export default function App() {
         extraArgs: form.extraArgs,
         nativeConnectName: form.nativeConnectName,
         cron: form.cron,
-        enabled: form.enabled
+        enabled: form.enabled,
+        retentionDays: form.retentionDays,
+        retentionCount: form.retentionCount
       };
       const task = id
         ? await api<BackupTask>(`/backups/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
@@ -1645,9 +1658,9 @@ export default function App() {
   async function runBackup(id: number) {
     setBackupLoading(true);
     try {
-      const task = await api<BackupTask>(`/backups/${id}/run`, { method: 'POST' });
-      showSuccess(localizeMessage(task.lastMessage || '备份任务已执行'));
-      await refreshBackups(selected);
+      const result = await api<BackupRunResponse>(`/backups/${id}/run`, { method: 'POST' });
+      showSuccess(localizeMessage(result.execution.message || '备份任务已进入后台队列'));
+      setBackups((current) => current.map((task) => task.id === id ? result.task : task));
     } catch (e) {
       showError(`备份执行失败：${localizeMessage((e as Error).message)}`);
       await refreshBackups(selected);
@@ -1681,6 +1694,17 @@ export default function App() {
       throw e;
     } finally {
       setBackupLoading(false);
+    }
+  }
+
+  async function cancelBackupHistory(taskId: number, historyId: number) {
+    try {
+      await api<BackupHistory>(`/backups/${taskId}/history/${historyId}/cancel`, { method: 'POST' });
+      showSuccess('已发送取消备份请求');
+      await refreshBackups(selected);
+    } catch (e) {
+      showError(`取消备份失败：${localizeMessage((e as Error).message)}`);
+      throw e;
     }
   }
 
@@ -2017,14 +2041,16 @@ export default function App() {
       </Modal>
 
       <Drawer
-        title="备份任务"
-        size={640}
+        title="备份与恢复"
+        size={960}
         open={activeDrawer === 'backups'}
         rootClassName="management-drawer backup-management-drawer"
         onClose={() => setActiveDrawer(null)}
+        destroyOnHidden
       >
         <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载备份管理…</div>}>
           <BackupPanel
+          connections={connections}
           backups={backups}
           selected={selected}
           activeTable={currentBackupTable}
@@ -2040,6 +2066,7 @@ export default function App() {
           onRun={runBackup}
           onDownload={downloadBackup}
           onLoadHistory={loadBackupHistory}
+          onCancelHistory={cancelBackupHistory}
           onDeleteHistory={deleteBackupHistory}
           onDownloadHistory={downloadBackupHistory}
           />

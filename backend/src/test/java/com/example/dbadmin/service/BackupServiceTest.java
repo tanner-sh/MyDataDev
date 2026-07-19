@@ -77,14 +77,19 @@ class BackupServiceTest {
     }
 
     @Test
-    void rejectsNativeBackupWithoutToolPath() {
+    void acceptsAutomaticNativeBackupWithoutToolPath() {
         BackupTaskRepository repository = mock(BackupTaskRepository.class);
         BackupService service = service("jdbc:mysql://localhost:3306/demo", "mysql", repository);
+        BackupTask saved = new BackupTask(1, "native", 1, "DATABASE", null, null, "MYSQLDUMP", null, null, null, null, false, null, null, null, null, null);
+        when(repository.insert(any())).thenReturn(1L);
+        when(repository.findById(1L)).thenReturn(Optional.of(saved));
 
-        assertThatThrownBy(() -> service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "", null, null), "admin"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("原生备份需要填写工具路径。");
-        verify(repository, never()).insert(any());
+        BackupTask created = service.create(new com.example.dbadmin.dto.ApiDtos.BackupTaskRequest("native", 1L, "DATABASE", null, null, "", false, "MYSQLDUMP", "", null, null), "admin");
+
+        assertThat(created.toolPath()).isNull();
+        ArgumentCaptor<BackupTask> task = ArgumentCaptor.forClass(BackupTask.class);
+        verify(repository).insert(task.capture());
+        assertThat(task.getValue().toolPath()).isNull();
     }
 
     @Test
@@ -429,7 +434,7 @@ class BackupServiceTest {
     }
 
     @Test
-    void failsBackupForBlobColumnsInsteadOfWritingNull() throws Exception {
+    void writesBlobColumnsAsHexLiteral() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE files(id INT PRIMARY KEY, payload BLOB)");
@@ -444,14 +449,14 @@ class BackupServiceTest {
         when(repository.findById(1L)).thenReturn(Optional.of(task("TABLE", "PUBLIC", "FILES")));
         BackupService service = service(url, repository);
 
-        assertThatThrownBy(() -> service.run(1L, "admin"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("SQL 备份暂不支持二进制字段");
-        verify(repository).updateStatus(eq(1L), eq("FAILED"), contains("SQL 备份暂不支持二进制字段"));
+        service.run(1L, "admin");
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), anyString(), path.capture(), anyLong());
+        assertThat(Files.readString(Path.of(path.getValue()))).contains("X'010203'");
     }
 
     @Test
-    void failsBackupForBinaryColumnsInsteadOfWritingNull() throws Exception {
+    void writesBinaryColumnsAsHexLiteral() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE files(id INT PRIMARY KEY, payload VARBINARY(16))");
@@ -466,10 +471,10 @@ class BackupServiceTest {
         when(repository.findById(1L)).thenReturn(Optional.of(task("TABLE", "PUBLIC", "FILES")));
         BackupService service = service(url, repository);
 
-        assertThatThrownBy(() -> service.run(1L, "admin"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("SQL 备份暂不支持二进制字段");
-        verify(repository).updateStatus(eq(1L), eq("FAILED"), contains("SQL 备份暂不支持二进制字段"));
+        service.run(1L, "admin");
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), anyString(), path.capture(), anyLong());
+        assertThat(Files.readString(Path.of(path.getValue()))).contains("X'040506'");
     }
 
     private BackupService service(String url, BackupTaskRepository repository) {

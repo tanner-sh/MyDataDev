@@ -8,6 +8,7 @@ import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionRepository;
+import com.example.dbadmin.repo.RestoreJobRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -27,9 +28,10 @@ public class ConnectionService {
     private final MetadataCacheService metadataCache;
     private final RemoteDataSourceRegistry dataSources;
     private final DialectRegistry dialectRegistry;
+    private final RestoreJobRepository restoreJobs;
 
     @Autowired
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry) {
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry, RestoreJobRepository restoreJobs) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
@@ -37,10 +39,15 @@ public class ConnectionService {
         this.metadataCache = metadataCache;
         this.dataSources = dataSources;
         this.dialectRegistry = dialectRegistry;
+        this.restoreJobs = restoreJobs;
+    }
+
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry) {
+        this(repository, crypto, audit, backupTasks, metadataCache, dataSources, dialectRegistry, null);
     }
 
     protected ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache) {
-        this(repository, crypto, audit, backupTasks, metadataCache, new RemoteDataSourceRegistry(), new DialectRegistry());
+        this(repository, crypto, audit, backupTasks, metadataCache, new RemoteDataSourceRegistry(), new DialectRegistry(), null);
     }
 
     public List<ConnectionResponse> list() {
@@ -59,6 +66,9 @@ public class ConnectionService {
         if (backupTasks.countRunningByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的备份任务，请等待备份完成后再修改连接。");
         }
+        if (restoreJobs != null && restoreJobs.countActiveByConnectionId(id) > 0) {
+            throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再修改连接。");
+        }
         String secret = reusesStoredPassword(request.password())
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
@@ -74,6 +84,9 @@ public class ConnectionService {
         int refs = backupTasks.countByConnectionId(id);
         if (refs > 0) {
             throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
+        }
+        if (restoreJobs != null && restoreJobs.countActiveByConnectionId(id) > 0) {
+            throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
         }
         repository.delete(id);
         dataSources.evict(id);

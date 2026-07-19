@@ -5,6 +5,8 @@ import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupHistoryPage;
+import com.example.dbadmin.dto.ApiDtos.BackupRunResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupTaskPage;
 import com.example.dbadmin.dto.ApiDtos.MessageResponse;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
@@ -35,6 +37,22 @@ public class BackupController {
         return service.list(connectionId);
     }
 
+    @GetMapping("/page")
+    public BackupTaskPage page(@RequestParam long connectionId,
+                               @RequestParam(required = false) String keyword,
+                               @RequestParam(required = false) String status,
+                               @RequestParam(required = false) Integer page,
+                               @RequestParam(required = false) Integer pageSize) {
+        return service.page(connectionId, keyword, status, page, pageSize);
+    }
+
+    @GetMapping("/history")
+    public BackupHistoryPage historyByConnection(@RequestParam long connectionId,
+                                                 @RequestParam(required = false) Integer page,
+                                                 @RequestParam(required = false) Integer pageSize) {
+        return service.historyByConnection(connectionId, page, pageSize);
+    }
+
     @PostMapping
     public BackupTask create(@Valid @RequestBody BackupTaskRequest request, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
         return service.create(request, actor);
@@ -62,8 +80,14 @@ public class BackupController {
     }
 
     @PostMapping("/{id}/run")
-    public ResponseEntity<BackupTask> run(@PathVariable long id, @RequestHeader(value = "X-User", required = false) String actor) {
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.enqueue(id, actor));
+    public ResponseEntity<BackupRunResponse> run(@PathVariable long id, @RequestHeader(value = "X-User", required = false) String actor) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.enqueueWithExecution(id, actor));
+    }
+
+    @PostMapping("/{id}/history/{historyId}/cancel")
+    public BackupHistory cancel(@PathVariable long id, @PathVariable long historyId,
+                                @RequestHeader(value = "X-User", required = false) String actor) {
+        return service.cancel(id, historyId, actor);
     }
 
     @GetMapping("/{id}/download")

@@ -31,6 +31,7 @@ public class BackupTaskRepository {
             rs.getString("scope"),
             rs.getString("schema_name"),
             rs.getString("table_name"),
+            null,
             stringOrDefault(rs.getString("backup_method"), "SQL"),
             rs.getString("tool_path"),
             rs.getString("extra_args"),
@@ -41,7 +42,9 @@ public class BackupTaskRepository {
             rs.getString("last_message"),
             rs.getString("last_file_path"),
             rs.getObject("last_file_size", Long.class),
-            toInstant(rs.getTimestamp("last_run_at"))
+            toInstant(rs.getTimestamp("last_run_at")),
+            rs.getObject("retention_days", Integer.class),
+            rs.getObject("retention_count", Integer.class)
     );
 
     public BackupTaskRepository(JdbcTemplate jdbc) {
@@ -54,6 +57,18 @@ public class BackupTaskRepository {
 
     public List<BackupTask> findByConnectionId(long connectionId) {
         return attachTargets(jdbc.query("SELECT * FROM backup_task WHERE connection_id = ? ORDER BY id DESC", mapper, connectionId));
+    }
+
+    public List<BackupTask> findPage(long connectionId, String keyword, String status, int limit, long offset) {
+        String safeKeyword = keyword == null ? "" : keyword.trim().toLowerCase(java.util.Locale.ROOT);
+        String safeStatus = status == null ? "" : status.trim().toUpperCase(java.util.Locale.ROOT);
+        return attachTargets(jdbc.query("""
+                SELECT * FROM backup_task
+                WHERE connection_id = ?
+                  AND (? = '' OR LOWER(name) LIKE ?)
+                  AND (? = '' OR last_status = ?)
+                ORDER BY id DESC LIMIT ? OFFSET ?
+                """, mapper, connectionId, safeKeyword, "%" + safeKeyword + "%", safeStatus, safeStatus, limit, offset));
     }
 
     public Optional<BackupTask> findById(long id) {
@@ -80,8 +95,8 @@ public class BackupTaskRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled, retention_days, retention_count)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, task.name());
             ps.setLong(2, task.connectionId());
@@ -94,6 +109,8 @@ public class BackupTaskRepository {
             ps.setString(9, task.nativeConnectName());
             ps.setString(10, task.cron());
             ps.setBoolean(11, task.enabled());
+            ps.setObject(12, task.retentionDays());
+            ps.setObject(13, task.retentionCount());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -110,10 +127,10 @@ public class BackupTaskRepository {
     public void update(long id, BackupTask task) {
         jdbc.update("""
                         UPDATE backup_task
-                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?
+                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?, retention_days = ?, retention_count = ?
                         WHERE id = ?
                         """,
-                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), id);
+                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), task.retentionDays(), task.retentionCount(), id);
         writeTargets(id, task.tableNames());
     }
 
@@ -188,7 +205,8 @@ public class BackupTaskRepository {
         return new BackupTask(
                 task.id(), task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), tableNames,
                 task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(),
-                task.lastStatus(), task.lastMessage(), task.lastFilePath(), task.lastFileSize(), task.lastRunAt()
+                task.lastStatus(), task.lastMessage(), task.lastFilePath(), task.lastFileSize(), task.lastRunAt(),
+                task.retentionDays(), task.retentionCount()
         );
     }
 

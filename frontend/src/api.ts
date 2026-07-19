@@ -15,9 +15,10 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: { 'Content-Type': 'application/json', 'X-User': 'admin', ...(init?.headers || {}) }
+  const isFormData = init?.body instanceof FormData;
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    headers: { ...(!isFormData ? { 'Content-Type': 'application/json' } : {}), 'X-User': 'admin', ...(init?.headers || {}) }
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText })) as Record<string, unknown>;

@@ -39,8 +39,17 @@ public final class ApiDtos {
             boolean tableEdit,
             boolean tableDesign,
             boolean explain,
-            List<String> nativeBackupMethods
+            List<String> nativeBackupMethods,
+            List<String> nativeRestoreMethods
     ) {
+        public DatabaseCapabilities(boolean tableBrowse, boolean tableEdit, boolean tableDesign, boolean explain, List<String> nativeBackupMethods) {
+            this(tableBrowse, tableEdit, tableDesign, explain, nativeBackupMethods,
+                    nativeBackupMethods == null ? List.of() : nativeBackupMethods.stream().map(method -> switch (method) {
+                        case "MYSQLDUMP" -> "MYSQL";
+                        case "ORACLE_EXP" -> "ORACLE_IMP";
+                        default -> method;
+                    }).toList());
+        }
     }
 
     public record TestConnectionRequest(@NotBlank @Size(max = 1000) String jdbcUrl, @Size(max = 240) String username, @Size(max = 10_000) String password) {
@@ -227,13 +236,17 @@ public final class ApiDtos {
     public record ExportRequest(@NotNull Long connectionId, @NotBlank String sql, @NotBlank String format) {
     }
 
-    public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName) {
+    public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName, Integer retentionDays, Integer retentionCount) {
+        public BackupTaskRequest(String name, Long connectionId, String scope, String schemaName, String tableName, List<String> tableNames, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
+            this(name, connectionId, scope, schemaName, tableName, tableNames, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName, null, null);
+        }
+
         public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName) {
-            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName);
+            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName, null, null);
         }
 
         public BackupTaskRequest(@NotBlank String name, @NotNull Long connectionId, @NotBlank String scope, String schemaName, String tableName, String cron, boolean enabled) {
-            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, "SQL", null, null, null);
+            this(name, connectionId, scope, schemaName, tableName, null, cron, enabled, "SQL", null, null, null, null, null);
         }
     }
 
@@ -275,5 +288,74 @@ public final class ApiDtos {
     }
 
     public record BackupHistoryPage(List<com.example.dbadmin.model.BackupHistory> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    public record BackupRunResponse(com.example.dbadmin.model.BackupTask task, com.example.dbadmin.model.BackupHistory execution) {
+    }
+
+    public record BackupTaskPage(List<com.example.dbadmin.model.BackupTask> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    public record RestoreSourceRef(@NotBlank String kind, @NotNull Long id) {
+    }
+
+    public record RestorePreflightRequest(
+            @NotNull RestoreSourceRef source,
+            @NotNull Long targetConnectionId,
+            @NotBlank @Size(max = 40) String sourceDbType,
+            @NotBlank @Size(max = 40) String fileFormat,
+            @NotBlank @Size(max = 20) String conflictMode,
+            Map<String, String> namespaceMapping,
+            @Size(max = 1000) String toolPath,
+            @Size(max = 100_000) String extraArgs
+    ) {
+    }
+
+    public record RestorePreflightResponse(
+            boolean valid,
+            String planToken,
+            String fileFormat,
+            String sourceDbType,
+            String targetDbType,
+            long statementCount,
+            List<String> namespaces,
+            List<String> tables,
+            List<String> warnings,
+            List<String> errors
+    ) {
+    }
+
+    public record RestoreStartRequest(
+            @NotBlank String planToken,
+            @NotNull RestoreSourceRef source,
+            @NotNull Long targetConnectionId,
+            @NotBlank String sourceDbType,
+            @NotBlank String fileFormat,
+            @NotBlank String conflictMode,
+            Map<String, String> namespaceMapping,
+            String toolPath,
+            String extraArgs,
+            String productionConfirmation
+    ) {
+    }
+
+    public record RestoreJobPage(List<com.example.dbadmin.model.RestoreJob> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    public record ActiveOperations(List<com.example.dbadmin.model.BackupHistory> backups, List<com.example.dbadmin.model.RestoreJob> restores) {
+    }
+
+    public record NativeToolStatus(
+            String tool,
+            String displayName,
+            boolean available,
+            String resolvedPath,
+            String version,
+            String source,
+            String message
+    ) {
+    }
+
+    public record NativeToolsResponse(String detectedAt, List<NativeToolStatus> tools) {
     }
 }

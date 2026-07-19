@@ -6,6 +6,8 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupHistoryPage;
+import com.example.dbadmin.dto.ApiDtos.BackupRunResponse;
+import com.example.dbadmin.dto.ApiDtos.BackupTaskPage;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
@@ -13,6 +15,7 @@ import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
+import com.example.dbadmin.repo.RestoreJobRepository;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -50,6 +53,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -68,10 +72,12 @@ public class BackupService {
     private final AppProperties properties;
     private final DialectRegistry dialectRegistry;
     private final BackupExecutionCoordinator coordinator;
+    private final RestoreJobRepository restoreJobs;
+    private final NativeToolLocator nativeTools;
     private final Object[] taskLocks = taskLocks();
 
     @Autowired
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator) {
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.connections = connections;
@@ -79,10 +85,16 @@ public class BackupService {
         this.properties = properties;
         this.dialectRegistry = dialectRegistry;
         this.coordinator = coordinator;
+        this.restoreJobs = restoreJobs;
+        this.nativeTools = nativeTools;
+    }
+
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator) {
+        this(repository, historyRepository, connections, audit, properties, dialectRegistry, coordinator, null, new NativeToolLocator(properties));
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
-        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator());
+        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator(), null, new NativeToolLocator(properties));
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
@@ -100,6 +112,15 @@ public class BackupService {
 
     public List<BackupTask> list(Long connectionId) {
         return connectionId == null ? repository.findAll() : repository.findByConnectionId(connectionId);
+    }
+
+    public BackupTaskPage page(long connectionId, String keyword, String status, Integer page, Integer pageSize) {
+        int safePage = Math.max(page == null ? 0 : page, 0);
+        int size = Math.min(Math.max(pageSize == null ? 10 : pageSize, 1), 100);
+        List<BackupTask> rows = repository.findPage(connectionId, keyword, status, size + 1, (long) safePage * size);
+        boolean hasMore = rows.size() > size;
+        if (hasMore) rows = rows.subList(0, size);
+        return new BackupTaskPage(List.copyOf(rows), safePage, size, hasMore);
     }
 
     public BackupTask create(BackupTaskRequest request, String actor) {
@@ -161,6 +182,9 @@ public class BackupService {
     public void delete(long id, boolean deleteFile, String actor) throws Exception {
         synchronized (taskLock(id)) {
             requireNotRunning(id);
+            if (restoreJobs != null && restoreJobs.countActiveByBackupTaskId(id) > 0) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_IN_USE_BY_RESTORE", "该备份任务的历史文件正在用于恢复，暂不能删除。");
+            }
             BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
             if (deleteFile) {
                 long offset = 0;
@@ -178,25 +202,77 @@ public class BackupService {
     }
 
     public BackupTask run(long id, String actor) throws Exception {
+        return runInternal(id, actor, null);
+    }
+
+    private BackupTask runInternal(long id, String actor, Long executionId) throws Exception {
         BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
         DbConnection connection = connections.require(task.connectionId());
         Instant startedAt = Instant.now();
+        if (executionId != null) {
+            historyRepository.updateExecution(executionId, "RUNNING", "PREPARING", 0, 1L, "正在准备备份。", null, null, null, null);
+        }
         BackupFile backup;
         try {
             backup = runBackup(task, connection);
         } catch (Exception e) {
-            String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-            recordHistory(new BackupHistory(0, id, connection.id(), "FAILED", message, null, null, startedAt, Instant.now()));
-            updateStatus(id, "FAILED", message, null, null);
-            audit.log(actor, "BACKUP_TASK_RUN_FAILED", task.name(), message);
+            boolean cancelled = e instanceof InterruptedException || Thread.currentThread().isInterrupted()
+                    || executionId != null && historyRepository.findById(executionId).map(BackupHistory::cancelRequested).orElse(false);
+            String message = cancelled ? "备份已取消。" : e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            String status = cancelled ? "CANCELLED" : "FAILED";
+            if (executionId == null) {
+                recordHistory(new BackupHistory(0, id, connection.id(), status, message, null, null, startedAt, Instant.now(),
+                        fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), null,
+                        status, 0L, 1L, cancelled));
+            } else {
+                historyRepository.updateExecution(executionId, status, status, 0, 1L, message, null, null, null, Instant.now());
+            }
+            updateStatus(id, status, message, null, null);
+            audit.log(actor, cancelled ? "BACKUP_TASK_CANCELLED" : "BACKUP_TASK_RUN_FAILED", task.name(), message);
             throw e;
         }
         String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
         String filePath = backup.path().toAbsolutePath().normalize().toString();
-        recordHistory(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now()));
+        String checksum = FileIntegrity.sha256(backup.path());
+        if (executionId == null) {
+            recordHistory(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now(),
+                    fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), checksum,
+                    "COMPLETED", 1L, 1L, false));
+        } else {
+            historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", 1, 1L, message, filePath, backup.size(), checksum, Instant.now());
+        }
         updateStatus(id, "SUCCESS", message, filePath, backup.size());
         audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
+        cleanupRetention(task);
         return repository.findById(id).orElseThrow();
+    }
+
+    private String fileFormat(String method) {
+        return switch (normalizeBackupMethod(method)) {
+            case "MYSQLDUMP" -> "MYSQLDUMP";
+            case "ORACLE_EXP" -> "ORACLE_DMP";
+            default -> "SQL";
+        };
+    }
+
+    private void cleanupRetention(BackupTask task) {
+        if (task.retentionDays() == null && task.retentionCount() == null) return;
+        try {
+            List<BackupHistory> successful = historyRepository.findSuccessfulByTaskId(task.id());
+            Instant cutoff = task.retentionDays() == null ? null : Instant.now().minus(task.retentionDays(), java.time.temporal.ChronoUnit.DAYS);
+            for (int index = 0; index < successful.size(); index++) {
+                BackupHistory history = successful.get(index);
+                boolean overCount = task.retentionCount() != null && index >= task.retentionCount();
+                boolean overDays = cutoff != null && history.finishedAt() != null && history.finishedAt().isBefore(cutoff);
+                if (!overCount && !overDays) continue;
+                if (restoreJobs != null && restoreJobs.countActiveBySource("HISTORY", history.id()) > 0) continue;
+                deleteHistoryFile(history);
+                historyRepository.delete(history.id());
+            }
+            refreshTaskSummary(task.id());
+        } catch (Exception error) {
+            log.warn("Unable to apply backup retention task={}", task.id(), error);
+        }
     }
 
     private void recordHistory(BackupHistory history) {
@@ -217,15 +293,32 @@ public class BackupService {
     }
 
     public BackupTask enqueue(long id, String actor) {
+        return enqueueInternal(id, actor).task();
+    }
+
+    public BackupRunResponse enqueueWithExecution(long id, String actor) {
+        return enqueueInternal(id, actor);
+    }
+
+    private BackupRunResponse enqueueInternal(long id, String actor) {
         synchronized (taskLock(id)) {
             BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+            if (coordinator.isRunning(id)) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请勿重复启动。");
+            }
+            DbConnection connection = connections.require(task.connectionId());
+            long connectionId = connection == null ? task.connectionId() : connection.id();
+            String sourceDbType = connection == null ? null : connection.dbType();
+            long executionId = historyRepository.insert(new BackupHistory(0, id, connectionId, "QUEUED", "备份任务已进入后台执行队列。",
+                    null, null, Instant.now(), null, fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()),
+                    sourceDbType, null, "QUEUED", 0L, 1L, false));
             try {
                 boolean accepted = coordinator.submit(
                         id,
                         () -> repository.updateStatus(id, "RUNNING", "备份任务已进入后台执行队列。"),
                         () -> {
                             try {
-                                run(id, actor);
+                                runInternal(id, actor, executionId);
                             } catch (Exception ignored) {
                                 // run records the failed history and task status.
                             }
@@ -236,10 +329,38 @@ public class BackupService {
                 }
             } catch (RejectedExecutionException e) {
                 repository.updateStatus(id, "FAILED", "备份执行队列已满，任务未启动。");
+                historyRepository.updateExecution(executionId, "FAILED", "FAILED", 0, 1L, "备份执行队列已满，任务未启动。", null, null, null, Instant.now());
                 throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
             }
-            return repository.findById(task.id()).orElseThrow();
+            return new BackupRunResponse(repository.findById(task.id()).orElseThrow(), historyRepository.findById(executionId).orElseThrow());
         }
+    }
+
+    public BackupHistory cancel(long taskId, long historyId, String actor) {
+        synchronized (taskLock(taskId)) {
+            BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                    .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+            if (!Set.of("QUEUED", "RUNNING").contains(history.status())) return history;
+            historyRepository.requestCancel(historyId);
+            coordinator.cancel(taskId);
+            historyRepository.updateExecution(historyId, "CANCELLED", "CANCELLED", value(history.progressCurrent()), history.progressTotal(), "备份已取消。", null, null, null, Instant.now());
+            repository.updateStatus(taskId, "CANCELLED", "备份已取消。");
+            audit.log(actor, "BACKUP_TASK_CANCEL", String.valueOf(taskId), "history=" + historyId);
+            return historyRepository.findById(historyId).orElseThrow();
+        }
+    }
+
+    public BackupHistoryPage historyByConnection(long connectionId, Integer page, Integer pageSize) {
+        int safePage = Math.max(page == null ? 0 : page, 0);
+        int safePageSize = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
+        List<BackupHistory> rows = historyRepository.findPageByConnectionId(connectionId, safePageSize + 1, (long) safePage * safePageSize);
+        boolean hasMore = rows.size() > safePageSize;
+        if (hasMore) rows = rows.subList(0, safePageSize);
+        return new BackupHistoryPage(List.copyOf(rows), safePage, safePageSize, hasMore);
+    }
+
+    private long value(Long value) {
+        return value == null ? 0 : value;
     }
 
     public Path backupFile(long id) {
@@ -292,6 +413,9 @@ public class BackupService {
             BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
             BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
                     .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+            if (restoreJobs != null && restoreJobs.countActiveBySource("HISTORY", historyId) > 0) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_IN_USE_BY_RESTORE", "该备份文件正在用于恢复，暂不能删除。");
+            }
             if (deleteFile) {
                 deleteHistoryFile(history);
             }
@@ -332,11 +456,10 @@ public class BackupService {
         String toolPath = blankToNull(request.toolPath());
         String extraArgs = validateExtraArgs(request.extraArgs());
         String nativeConnectName = blankToNull(request.nativeConnectName());
-        if (!"SQL".equals(backupMethod) && toolPath == null) {
-            throw new IllegalArgumentException("原生备份需要填写工具路径。");
-        }
+        Integer retentionDays = validateRetention(request.retentionDays(), "保留天数", 3650);
+        Integer retentionCount = validateRetention(request.retentionCount(), "最大保留份数", 10000);
         if (!"SQL".equals(backupMethod)) {
-            validateNativeToolPath(backupMethod, toolPath);
+            nativeTools.validateOverrideName(backupTool(backupMethod), toolPath);
         }
         String requestedSchema = Set.of("SCHEMA", "TABLES").contains(scope) ? blankToNull(request.schemaName()) : null;
         ResolvedTarget resolved;
@@ -355,8 +478,14 @@ public class BackupService {
         return new BackupTask(
                 id, request.name().trim(), request.connectionId(), scope, resolved.namespace(), tableName, tableNames,
                 backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage,
-                lastFilePath, lastFileSize, lastRunAt
+                lastFilePath, lastFileSize, lastRunAt, retentionDays, retentionCount
         );
+    }
+
+    private Integer validateRetention(Integer value, String label, int max) {
+        if (value == null) return null;
+        if (value < 1 || value > max) throw new IllegalArgumentException(label + "必须在 1 到 " + max + " 之间。");
+        return value;
     }
 
     private void validateCron(String cron, boolean enabled) {
@@ -397,15 +526,14 @@ public class BackupService {
         // Connections are editable after a task is created. Revalidate the
         // saved method against the current dialect before invoking a tool.
         String method = validateBackupMethod(task.backupMethod(), connection);
-        if (!"SQL".equals(method)) validateNativeToolPath(method, task.toolPath());
         return switch (method) {
-            case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection));
-            case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection));
+            case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.MYSQLDUMP, task.toolPath()).path().toString());
+            case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.ORACLE_EXP, task.toolPath()).path().toString());
             default -> writeSqlBackup(task, connection);
         };
     }
 
-    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, ResolvedTarget resolved) throws Exception {
+    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
         MysqlJdbcTarget target = mysqlTarget(connection.jdbcUrl());
         String database = "DATABASE".equals(resolved.scope()) ? target.database() : resolved.namespace();
         if (database == null || database.isBlank()) {
@@ -413,7 +541,7 @@ public class BackupService {
         }
         Path file = backupPath(task, "mysqldump", ".sql");
         List<String> command = new ArrayList<>();
-        command.add(task.toolPath());
+        command.add(toolPath);
         command.add("--host=" + target.host());
         command.add("--port=" + target.port());
         if (connection.username() != null && !connection.username().isBlank()) {
@@ -434,7 +562,7 @@ public class BackupService {
         return new BackupFile(file, Files.size(file));
     }
 
-    private BackupFile runOracleExp(BackupTask task, DbConnection connection, ResolvedTarget resolved) throws Exception {
+    private BackupFile runOracleExp(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
         validateOracleNativeTarget(resolved);
         String username = blankToNull(connection.username());
         if (username == null) {
@@ -468,7 +596,7 @@ public class BackupService {
         }
         Path parameterFile = writeOracleParameterFile(file, parameters);
         List<String> command = new ArrayList<>();
-        command.add(task.toolPath());
+        command.add(toolPath);
         command.add("parfile=" + parameterFile.toAbsolutePath().normalize());
         command.addAll(extraArgs(task.extraArgs()));
         try {
@@ -612,15 +740,8 @@ public class BackupService {
         return args.isEmpty() ? null : String.join("\n", args);
     }
 
-    private void validateNativeToolPath(String backupMethod, String toolPath) {
-        String normalizedPath = toolPath == null ? "" : toolPath.replace('\\', '/');
-        String executable = normalizedPath.substring(normalizedPath.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
-        Set<String> allowed = "MYSQLDUMP".equals(backupMethod)
-                ? Set.of("mysqldump", "mysqldump.exe")
-                : Set.of("exp", "exp.exe");
-        if (!allowed.contains(executable)) {
-            throw new IllegalArgumentException("工具路径必须指向 " + ("MYSQLDUMP".equals(backupMethod) ? "mysqldump" : "Oracle exp") + " 可执行文件。");
-        }
+    private NativeToolLocator.Tool backupTool(String backupMethod) {
+        return "MYSQLDUMP".equals(backupMethod) ? NativeToolLocator.Tool.MYSQLDUMP : NativeToolLocator.Tool.ORACLE_EXP;
     }
 
     private List<String> extraArgs(String extraArgs) {
@@ -707,9 +828,21 @@ public class BackupService {
                 writer.write("-- MyDataDev SQL Backup\n");
                 writer.write("-- Task: " + sqlCommentValue(task.name()) + "\n");
                 writer.write("-- Connection: " + sqlCommentValue(dbConnection.name()) + "\n");
+                writer.write("-- Format-Version: 2\n");
+                writer.write("-- Source-Db-Type: " + sqlCommentValue(dbConnection.dbType()) + "\n");
                 writer.write("-- Generated At: " + Instant.now() + "\n\n");
                 for (TableRef table : resolved.tables()) {
-                    writeTableBackup(connection, writer, table, dialect);
+                    ensureBackupNotInterrupted();
+                    writeCreateTable(connection, writer, table, dialect, dbConnection.dbType());
+                }
+                for (TableRef table : resolved.tables()) {
+                    ensureBackupNotInterrupted();
+                    writeTableBackup(connection, writer, table, dialect, dbConnection.dbType());
+                }
+                Set<String> selectedTables = resolved.tables().stream().map(this::tableKey).collect(java.util.stream.Collectors.toSet());
+                for (TableRef table : resolved.tables()) {
+                    ensureBackupNotInterrupted();
+                    writeTableConstraints(connection, writer, table, dialect, selectedTables);
                 }
             }
         } catch (Exception e) {
@@ -965,7 +1098,98 @@ public class BackupService {
         }
     }
 
-    private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect) throws Exception {
+    private void writeCreateTable(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
+        String quoteString = identifierQuote(connection);
+        String qualified = table(table.schema(), table.name(), quoteString);
+        DatabaseMetaData meta = connection.getMetaData();
+        DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
+        String schemaPattern = scope.schemaPattern() == null ? null : metadataExactPattern(meta, scope.schemaPattern());
+        List<String> definitions = new ArrayList<>();
+        try (ResultSet columns = meta.getColumns(scope.catalog(), schemaPattern, table.name(), "%")) {
+            while (columns.next()) {
+                String name = columns.getString("COLUMN_NAME");
+                String type = columns.getString("TYPE_NAME");
+                int size = columns.getInt("COLUMN_SIZE");
+                int scale = columns.getInt("DECIMAL_DIGITS");
+                boolean nullable = columns.getInt("NULLABLE") != DatabaseMetaData.columnNoNulls;
+                String defaultValue = columns.getString("COLUMN_DEF");
+                boolean autoIncrement = "YES".equalsIgnoreCase(safeMetadataString(columns, "IS_AUTOINCREMENT"));
+                StringBuilder definition = new StringBuilder(quote(name, quoteString)).append(' ').append(columnType(type, size, scale));
+                if (defaultValue != null && !defaultValue.isBlank() && !autoIncrement) definition.append(" DEFAULT ").append(defaultValue.trim());
+                if (!nullable) definition.append(" NOT NULL");
+                if (autoIncrement) definition.append(identityClause(dbType));
+                definitions.add(definition.toString());
+            }
+        }
+        List<String> primaryKeys = new ArrayList<>();
+        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schemaPattern, table.name())) {
+            java.util.TreeMap<Short, String> ordered = new java.util.TreeMap<>();
+            while (keys.next()) ordered.put(keys.getShort("KEY_SEQ"), keys.getString("COLUMN_NAME"));
+            primaryKeys.addAll(ordered.values());
+        }
+        if (!primaryKeys.isEmpty()) definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ")");
+        writer.write("-- Table structure: " + sqlCommentValue(qualified) + "\n");
+        writer.write("CREATE TABLE " + qualified + " (\n  " + String.join(",\n  ", definitions) + "\n);\n\n");
+    }
+
+    private void writeTableConstraints(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, Set<String> selectedTables) throws Exception {
+        String quoteString = identifierQuote(connection);
+        String qualified = table(table.schema(), table.name(), quoteString);
+        DatabaseMetaData meta = connection.getMetaData();
+        DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
+        String schemaPattern = scope.schemaPattern() == null ? null : metadataExactPattern(meta, scope.schemaPattern());
+        Set<String> primaryIndexNames = new HashSet<>();
+        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schemaPattern, table.name())) {
+            while (keys.next()) {
+                String name = keys.getString("PK_NAME");
+                if (name != null) primaryIndexNames.add(name);
+            }
+        }
+        Map<String, IndexBackup> indexes = new LinkedHashMap<>();
+        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schemaPattern, table.name(), false, false)) {
+            while (rows.next()) {
+                String name = rows.getString("INDEX_NAME");
+                String column = rows.getString("COLUMN_NAME");
+                if (name == null || column == null || primaryIndexNames.contains(name)) continue;
+                IndexBackup index = indexes.get(name);
+                if (index == null) {
+                    index = new IndexBackup(!rows.getBoolean("NON_UNIQUE"), new java.util.TreeMap<>());
+                    indexes.put(name, index);
+                }
+                index.columns().put(rows.getShort("ORDINAL_POSITION"), column);
+            }
+        }
+        for (Map.Entry<String, IndexBackup> entry : indexes.entrySet()) {
+            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + quote(entry.getKey(), quoteString) + " ON " + qualified + " ("
+                    + entry.getValue().columns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+        }
+        Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
+        try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schemaPattern, table.name())) {
+            while (rows.next()) {
+                String name = rows.getString("FK_NAME");
+                String pkSchema = rows.getString("PKTABLE_SCHEM");
+                String pkCatalog = rows.getString("PKTABLE_CAT");
+                String referencedNamespace = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? pkCatalog : pkSchema;
+                String referencedTable = rows.getString("PKTABLE_NAME");
+                if (!selectedTables.contains(tableKey(new TableRef(referencedNamespace, referencedTable)))) continue;
+                ForeignKeyBackup key = foreignKeys.computeIfAbsent(name == null ? "fk_" + table.name() + "_" + foreignKeys.size() : name,
+                        ignored -> new ForeignKeyBackup(referencedNamespace, referencedTable, new java.util.TreeMap<>(), new java.util.TreeMap<>()));
+                short sequence = rows.getShort("KEY_SEQ");
+                key.localColumns().put(sequence, rows.getString("FKCOLUMN_NAME"));
+                key.referencedColumns().put(sequence, rows.getString("PKCOLUMN_NAME"));
+            }
+        }
+        for (Map.Entry<String, ForeignKeyBackup> entry : foreignKeys.entrySet()) {
+            ForeignKeyBackup key = entry.getValue();
+            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + quote(entry.getKey(), quoteString) + " FOREIGN KEY ("
+                    + key.localColumns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
+                    + table(key.referencedNamespace(), key.referencedTable(), quoteString) + " ("
+                    + key.referencedColumns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+        }
+        if (!indexes.isEmpty() || !foreignKeys.isEmpty()) writer.write("\n");
+    }
+
+    private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
         String quoteString = identifierQuote(connection);
         String tableName = table(table.schema(), table.name(), quoteString);
         writer.write("-- Table: " + sqlCommentValue(tableName) + "\n");
@@ -980,10 +1204,11 @@ public class BackupService {
             String columnSql = columns.stream().map(column -> quote(column, quoteString)).reduce((a, b) -> a + ", " + b).orElse("");
             long rows = 0;
             while (rs.next()) {
+                ensureBackupNotInterrupted();
                 writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES (");
                 for (int i = 1; i <= md.getColumnCount(); i++) {
                     if (i > 1) writer.write(", ");
-                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1));
+                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1), dbType);
                 }
                 writer.write(");\n");
                 rows++;
@@ -993,7 +1218,7 @@ public class BackupService {
         }
     }
 
-    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName) throws Exception {
+    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName, String dbType) throws Exception {
         if (value instanceof Clob clob) {
             writer.write('\'');
             try (Reader reader = clob.getCharacterStream()) {
@@ -1010,7 +1235,55 @@ public class BackupService {
             writer.write('\'');
             return;
         }
+        if (value instanceof Blob blob) {
+            try (InputStream input = blob.getBinaryStream()) {
+                writeBinary(writer, input.readAllBytes(), dbType);
+            }
+            return;
+        }
+        if (value instanceof byte[] bytes) {
+            writeBinary(writer, bytes, dbType);
+            return;
+        }
         writer.write(literal(value, tableName, columnName));
+    }
+
+    private void writeBinary(BufferedWriter writer, byte[] bytes, String dbType) throws Exception {
+        String hex = HexFormat.of().formatHex(bytes);
+        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+        if (normalized.equals("postgresql")) writer.write("decode('" + hex + "', 'hex')");
+        else if (normalized.equals("sqlserver")) writer.write("0x" + hex);
+        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("hextoraw('" + hex + "')");
+        else writer.write("X'" + hex + "'");
+    }
+
+    private void ensureBackupNotInterrupted() throws InterruptedException {
+        if (Thread.currentThread().isInterrupted()) throw new InterruptedException("备份已取消。");
+    }
+
+    private String safeMetadataString(ResultSet rows, String column) {
+        try { return rows.getString(column); } catch (Exception ignored) { return null; }
+    }
+
+    private String columnType(String raw, int size, int scale) {
+        String type = raw == null || raw.isBlank() ? "VARCHAR" : raw;
+        String upper = type.toUpperCase(Locale.ROOT);
+        if (type.contains("(")) return type;
+        if ((upper.contains("CHAR") || upper.contains("BINARY")) && size > 0 && size < 1_000_000) return type + "(" + size + ")";
+        if ((upper.contains("DECIMAL") || upper.contains("NUMERIC") || upper.equals("NUMBER")) && size > 0) return type + "(" + size + "," + Math.max(0, scale) + ")";
+        return type;
+    }
+
+    private String identityClause(String dbType) {
+        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+        if (Set.of("mysql", "mariadb", "oceanbase-mysql").contains(normalized)) return " AUTO_INCREMENT";
+        if (normalized.equals("sqlserver")) return " IDENTITY(1,1)";
+        if (!normalized.equals("sqlite")) return " GENERATED BY DEFAULT AS IDENTITY";
+        return "";
+    }
+
+    private String tableKey(TableRef table) {
+        return (table.schema() == null ? "" : table.schema().toLowerCase(Locale.ROOT)) + "\u0000" + table.name().toLowerCase(Locale.ROOT);
     }
 
     private String validateScope(String scope, List<String> tableNames) {
@@ -1185,6 +1458,14 @@ public class BackupService {
     }
 
     private record BackupFile(Path path, long size) {
+    }
+
+    private record IndexBackup(boolean unique, java.util.TreeMap<Short, String> columns) {
+    }
+
+    private record ForeignKeyBackup(String referencedNamespace, String referencedTable,
+                                    java.util.TreeMap<Short, String> localColumns,
+                                    java.util.TreeMap<Short, String> referencedColumns) {
     }
 
     private record MysqlJdbcTarget(String host, int port, String database) {

@@ -9,6 +9,7 @@ import {
   Empty,
   Form,
   Input,
+  InputNumber,
   Modal,
   Pagination,
   Popconfirm,
@@ -16,6 +17,7 @@ import {
   Space,
   Spin,
   Tag,
+  Tabs,
   Tooltip,
   Typography
 } from 'antd';
@@ -47,8 +49,11 @@ import type {
   BackupTargetQuery,
   BackupTask,
   BackupTaskForm,
-  Connection
+  Connection,
+  NativeToolStatus,
+  NativeToolsResponse
 } from '../types';
+import { api } from '../api';
 import {
   cronFromSchedule,
   describeBackupSchedule,
@@ -66,12 +71,17 @@ import {
   formatHistoryTime,
   normalizeBackupScope
 } from '../utils';
+import { BackupHistoryCenter } from './BackupHistoryCenter';
+import { RestoreCenter } from './RestoreCenter';
+import { nativeToolForBackup, requestedToolPath } from '../nativeTools';
+import type { NativeToolMode } from '../nativeTools';
 
 const { Text } = Typography;
 const TARGET_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 20;
 
 export type BackupPanelProps = {
+  connections: Connection[];
   backups: BackupTask[];
   selected: Connection | null;
   activeTable: ActiveTable | null;
@@ -87,6 +97,7 @@ export type BackupPanelProps = {
   onRun: (id: number) => void;
   onDownload: (id: number) => void;
   onLoadHistory: (id: number, page: number, pageSize: number) => Promise<BackupHistoryPage>;
+  onCancelHistory: (taskId: number, historyId: number) => Promise<void>;
   onDeleteHistory: (taskId: number, historyId: number, deleteFile: boolean) => Promise<void>;
   onDownloadHistory: (taskId: number, historyId: number) => void;
 };
@@ -98,12 +109,47 @@ type BackupTaskEditorValues = BackupScheduleFields & {
   tableNames?: string[];
   backupMethod?: BackupMethod | string;
   toolPath?: string;
+  toolMode: NativeToolMode;
   extraArgs?: string;
   nativeConnectName?: string;
   enabled: boolean;
+  retentionDays?: number;
+  retentionCount?: number;
 };
 
-export function BackupPanel({
+export function BackupPanel(props: BackupPanelProps) {
+  const [activeTab, setActiveTab] = useState('tasks');
+  const [restoreHistory, setRestoreHistory] = useState<BackupHistory | null>(null);
+  const [nativeTools, setNativeTools] = useState<NativeToolStatus[]>([]);
+  const [nativeToolsLoading, setNativeToolsLoading] = useState(false);
+  const [nativeToolsError, setNativeToolsError] = useState('');
+
+  const loadNativeTools = useCallback(async () => {
+    setNativeToolsLoading(true);
+    setNativeToolsError('');
+    try {
+      const response = await api<NativeToolsResponse>('/native-tools');
+      setNativeTools(response.tools);
+    } catch (error) {
+      setNativeToolsError((error as Error).message || '无法检测服务器工具');
+    } finally {
+      setNativeToolsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void loadNativeTools(); }, [loadNativeTools]);
+
+  return <div className="backup-center-shell">
+    <Tabs activeKey={activeTab} onChange={setActiveTab} destroyOnHidden items={[
+      { key: 'tasks', label: '备份任务', children: <BackupTasksPanel {...props} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
+      { key: 'history', label: '备份历史', children: <BackupHistoryCenter selected={props.selected} onRestore={(history) => { setRestoreHistory(history); setActiveTab('restore'); }} /> },
+      { key: 'restore', label: '恢复中心', children: <RestoreCenter connections={props.connections} selected={props.selected} initialHistory={restoreHistory} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> }
+    ]} />
+  </div>;
+}
+
+function BackupTasksPanel({
+  connections: _connections,
   backups,
   selected,
   activeTable,
@@ -119,9 +165,14 @@ export function BackupPanel({
   onRun,
   onDownload,
   onLoadHistory,
+  onCancelHistory,
   onDeleteHistory,
-  onDownloadHistory
-}: BackupPanelProps) {
+  onDownloadHistory,
+  nativeTools,
+  nativeToolsLoading,
+  nativeToolsError,
+  onRefreshNativeTools
+}: BackupPanelProps & NativeToolDiscoveryProps) {
   const [form] = Form.useForm<BackupTaskEditorValues>();
   const [modal, modalContextHolder] = Modal.useModal();
   const initialDraftRef = useRef('');
@@ -142,6 +193,7 @@ export function BackupPanel({
   const [historyLoading, setHistoryLoading] = useState(false);
   const historyRequestIdRef = useRef(0);
   const [deletingHistoryId, setDeletingHistoryId] = useState<number | null>(null);
+  const [cancellingHistoryId, setCancellingHistoryId] = useState<number | null>(null);
   const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
   const [schedulePreview, setSchedulePreview] = useState<BackupSchedulePreview | null>(null);
   const [schedulePreviewError, setSchedulePreviewError] = useState('');
@@ -155,6 +207,7 @@ export function BackupPanel({
   const scope = Form.useWatch('scope', form) || 'DATABASE';
   const schemaName = Form.useWatch('schemaName', form) || '';
   const backupMethod = Form.useWatch('backupMethod', form) || 'SQL';
+  const toolMode = Form.useWatch('toolMode', form) || 'AUTO';
   const scheduleKind = Form.useWatch('scheduleKind', form) || 'MANUAL';
   const scheduleTime = Form.useWatch('scheduleTime', form);
   const weeklyDays = Form.useWatch('weeklyDays', form);
@@ -289,7 +342,8 @@ export function BackupPanel({
       ...emptyEditorDraft(),
       name: `${selected.name} 备份任务`,
       backupMethod: defaultBackupMethod(selected),
-      toolPath: defaultToolPath(selected)
+      toolMode: 'AUTO',
+      toolPath: ''
     }, null);
   }
 
@@ -303,7 +357,8 @@ export function BackupPanel({
       schemaName: target.schemaName || '',
       tableNames: [target.tableName],
       backupMethod: defaultBackupMethod(selected),
-      toolPath: defaultToolPath(selected)
+      toolMode: 'AUTO',
+      toolPath: ''
     }, null);
   }
 
@@ -318,9 +373,12 @@ export function BackupPanel({
       schemaName: task.schemaName || '',
       tableNames,
       backupMethod: task.backupMethod || 'SQL',
+      toolMode: task.toolPath ? 'MANUAL' : 'AUTO',
       toolPath: task.toolPath || '',
       extraArgs: task.extraArgs || '',
       nativeConnectName: task.nativeConnectName || '',
+      retentionDays: task.retentionDays,
+      retentionCount: task.retentionCount,
       enabled: Boolean(task.cron?.trim()) && task.enabled
     }, task.id);
   }
@@ -360,11 +418,13 @@ export function BackupPanel({
       tableNames: values.scope === 'TABLES' ? tables : undefined,
       tableName: values.scope === 'TABLES' && tables.length === 1 ? tables[0] : undefined,
       backupMethod: values.backupMethod || 'SQL',
-      toolPath: values.toolPath?.trim(),
+      toolPath: requestedToolPath(values.toolMode, values.toolPath),
       extraArgs: values.extraArgs?.trim(),
       nativeConnectName: values.nativeConnectName?.trim(),
       cron: cron || undefined,
-      enabled: Boolean(cron) && values.enabled
+      enabled: Boolean(cron) && values.enabled,
+      retentionDays: values.retentionDays,
+      retentionCount: values.retentionCount
     };
     try {
       await onSave(editingId, payload);
@@ -431,6 +491,17 @@ export function BackupPanel({
       // The parent owns API error feedback; preserve the history row and selection.
     } finally {
       setDeletingHistoryId(null);
+    }
+  }
+
+  async function cancelHistory(historyId: number) {
+    if (!historyTask) return;
+    setCancellingHistoryId(historyId);
+    try {
+      await onCancelHistory(historyTask.id, historyId);
+      await loadHistoryPage(historyTask, historyPage);
+    } finally {
+      setCancellingHistoryId(null);
     }
   }
 
@@ -677,14 +748,11 @@ export function BackupPanel({
             <Select
               options={methodOptions}
               onChange={(nextMethod) => {
-                const currentPath = form.getFieldValue('toolPath');
-                if (!currentPath || currentPath === defaultToolPath(selected, backupMethod)) {
-                  form.setFieldValue('toolPath', defaultToolPath(selected, nextMethod));
-                }
+                if (form.getFieldValue('toolMode') === 'AUTO') form.setFieldValue('toolPath', '');
               }}
             />
           </Form.Item>
-          {!nativeBackup && <Alert type="warning" showIcon title="SQL 数据备份仅逐行导出数据、不包含表结构；遇到二进制字段会停止并报错，超大库优先使用数据库原生备份工具。" />}
+          {!nativeBackup && <Alert type="info" showIcon title="SQL 备份包含表结构、数据、索引和约束，并支持跨数据库恢复；超大数据库仍建议使用原生工具。" />}
 
           <Divider titlePlacement="start" plain>执行计划</Divider>
           <Form.Item label="执行频率" name="scheduleKind" rules={[{ required: true, message: '请选择执行频率' }]}>
@@ -755,11 +823,24 @@ export function BackupPanel({
             items={[{
               key: 'advanced',
               label: '高级设置',
-              children: nativeBackup ? (
-                <>
-                  <Form.Item label="工具路径" name="toolPath" rules={[{ required: true, whitespace: true, message: '原生备份需要填写工具路径' }]}>
-                    <Input placeholder={backupMethod === 'ORACLE_EXP' ? 'exp' : 'mysqldump'} />
+              children: <>
+                <Space size={12} align="start" className="full-width backup-retention-fields">
+                  <Form.Item label="保留天数" name="retentionDays" extra="留空表示不限天数">
+                    <InputNumber min={1} max={3650} placeholder="不限制" />
                   </Form.Item>
+                  <Form.Item label="最大保留份数" name="retentionCount" extra="留空表示不限份数">
+                    <InputNumber min={1} max={10000} placeholder="不限制" />
+                  </Form.Item>
+                </Space>
+                {nativeBackup ? <>
+                  <Form.Item label="工具路径模式" name="toolMode">
+                    <Select options={[{ value: 'AUTO', label: '自动发现（每次执行重新解析）' }, { value: 'MANUAL', label: '手动指定路径' }]} />
+                  </Form.Item>
+                  {toolMode === 'AUTO' ? <NativeToolStatusAlert status={nativeTools.find((item) => item.tool === nativeToolForBackup(backupMethod))} loading={nativeToolsLoading} error={nativeToolsError} onRefresh={onRefreshNativeTools} /> : (
+                    <Form.Item label="工具路径" name="toolPath" rules={[{ required: true, whitespace: true, message: '请输入原生备份工具路径' }]}>
+                      <Input placeholder={backupMethod === 'ORACLE_EXP' ? '/opt/oracle/bin/exp' : '/usr/local/bin/mysqldump'} />
+                    </Form.Item>
+                  )}
                   {backupMethod === 'ORACLE_EXP' && (
                     <Form.Item label="连接名覆盖" name="nativeConnectName">
                       <Input placeholder="//host:1521/service 或 host:1521:SID" />
@@ -768,8 +849,8 @@ export function BackupPanel({
                   <Form.Item label="额外参数" name="extraArgs" extra="一行填写一个参数；连接和输出文件等系统参数不能覆盖。">
                     <Input.TextArea rows={3} placeholder="例如：--single-transaction" />
                   </Form.Item>
-                </>
-              ) : <Text type="secondary">SQL 数据备份无需配置外部工具。</Text>
+                </> : <Text type="secondary">SQL 数据备份无需配置外部工具。</Text>}
+              </>
             }]}
           />
         </Form>
@@ -808,6 +889,17 @@ export function BackupPanel({
                     </Space>
                   </div>
                   <Space size={2} className="backup-history-actions">
+                    {(history.status === 'QUEUED' || history.status === 'RUNNING') && (
+                      <Popconfirm
+                        title="取消本次备份？"
+                        description="已经生成的未完成文件会被清理。"
+                        okText="取消备份"
+                        cancelText="继续执行"
+                        onConfirm={() => cancelHistory(history.id)}
+                      >
+                        <Tooltip title="取消本次备份"><Button size="small" type="text" danger icon={<PauseCircleOutlined />} aria-label="取消本次备份" loading={cancellingHistoryId === history.id} disabled={cancellingHistoryId !== null || deletingHistoryId !== null} /></Tooltip>
+                      </Popconfirm>
+                    )}
                     <Tooltip title={history.filePath ? '下载备份文件' : '没有可下载的备份文件'}>
                       <Button size="small" type="text" icon={<DownloadOutlined />} aria-label="下载备份文件" disabled={!history.filePath || loading || deletingHistoryId !== null} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />
                     </Tooltip>
@@ -965,6 +1057,7 @@ function emptyEditorDraft(): BackupTaskEditorValues {
     schemaName: '',
     tableNames: [],
     backupMethod: 'SQL',
+    toolMode: 'AUTO',
     toolPath: '',
     extraArgs: '',
     nativeConnectName: '',
@@ -1006,8 +1099,21 @@ function defaultBackupMethod(connection: Connection | null): BackupMethod {
   return 'SQL';
 }
 
-function defaultToolPath(connection: Connection | null, method: string = defaultBackupMethod(connection)) {
-  if (method === 'MYSQLDUMP') return 'mysqldump';
-  if (method === 'ORACLE_EXP') return 'exp';
-  return '';
+type NativeToolDiscoveryProps = {
+  nativeTools: NativeToolStatus[];
+  nativeToolsLoading: boolean;
+  nativeToolsError: string;
+  onRefreshNativeTools: () => Promise<void>;
+};
+
+function NativeToolStatusAlert({ status, loading, error, onRefresh }: { status?: NativeToolStatus; loading: boolean; error: string; onRefresh: () => Promise<void> }) {
+  const available = status?.available;
+  return <Alert
+    className="native-tool-status-alert"
+    type={available ? 'success' : error ? 'error' : 'warning'}
+    showIcon
+    title={loading ? '正在检测应用服务器上的工具…' : available ? `已发现 ${status.displayName}` : status?.displayName ? `未发现 ${status.displayName}` : '尚未获得工具检测结果'}
+    description={available ? <Space orientation="vertical" size={0}><Text code>{status.resolvedPath}</Text>{status.version && <Text type="secondary">{status.version}</Text>}</Space> : error || status?.message}
+    action={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void onRefresh()}>重新检测</Button>}
+  />;
 }

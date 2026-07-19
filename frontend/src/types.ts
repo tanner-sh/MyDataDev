@@ -15,6 +15,7 @@ export type DatabaseCapabilities = {
   tableDesign: boolean;
   explain: boolean;
   nativeBackupMethods: string[];
+  nativeRestoreMethods?: string[];
 };
 
 export type DbObject = {
@@ -113,6 +114,8 @@ export type BackupTask = {
   lastRunAt?: string;
   zoneId?: string;
   nextRunAt?: string;
+  retentionDays?: number;
+  retentionCount?: number;
 };
 export type BackupHistory = {
   id: number;
@@ -124,6 +127,14 @@ export type BackupHistory = {
   fileSize?: number;
   startedAt?: string;
   finishedAt?: string;
+  fileFormat?: RestoreFileFormat;
+  backupMethod?: BackupMethod | string;
+  sourceDbType?: string;
+  checksumSha256?: string;
+  phase?: string;
+  progressCurrent?: number;
+  progressTotal?: number;
+  cancelRequested?: boolean;
 };
 export type BackupHistoryPage = { items: BackupHistory[]; page: number; pageSize: number; hasMore: boolean };
 export type BackupTaskForm = {
@@ -139,7 +150,69 @@ export type BackupTaskForm = {
   nativeConnectName?: string;
   cron?: string;
   enabled: boolean;
+  retentionDays?: number;
+  retentionCount?: number;
 };
+export type BackupRunResponse = { task: BackupTask; execution: BackupHistory };
+export type BackupTaskPage = { items: BackupTask[]; page: number; pageSize: number; hasMore: boolean };
+export type RestoreFileFormat = 'SQL' | 'MYSQLDUMP' | 'ORACLE_DMP';
+export type RestoreConflictMode = 'SAFE' | 'OVERWRITE' | 'APPEND';
+export type RestoreSourceRef = { kind: 'HISTORY' | 'UPLOAD'; id: number };
+export type RestoreUpload = {
+  id: number;
+  originalName: string;
+  filePath: string;
+  fileSize: number;
+  checksumSha256: string;
+  fileFormat: RestoreFileFormat;
+  sourceDbType?: string;
+  createdAt: string;
+  expiresAt: string;
+};
+export type RestorePreflight = {
+  valid: boolean;
+  planToken?: string;
+  fileFormat: RestoreFileFormat;
+  sourceDbType: string;
+  targetDbType: string;
+  statementCount: number;
+  namespaces: string[];
+  tables: string[];
+  warnings: string[];
+  errors: string[];
+};
+export type RestoreJob = {
+  id: number;
+  sourceKind: string;
+  sourceId: number;
+  sourceName?: string;
+  fileFormat: RestoreFileFormat;
+  sourceDbType?: string;
+  targetConnectionId: number;
+  targetDbType: string;
+  conflictMode: RestoreConflictMode;
+  status: string;
+  phase?: string;
+  progressCurrent?: number;
+  progressTotal?: number;
+  message?: string;
+  cancelRequested?: boolean;
+  startedAt?: string;
+  finishedAt?: string;
+  createdAt: string;
+};
+export type RestoreJobPage = { items: RestoreJob[]; page: number; pageSize: number; hasMore: boolean };
+export type ActiveOperations = { backups: BackupHistory[]; restores: RestoreJob[] };
+export type NativeToolStatus = {
+  tool: 'MYSQLDUMP' | 'MYSQL' | 'ORACLE_EXP' | 'ORACLE_IMP';
+  displayName: string;
+  available: boolean;
+  resolvedPath?: string;
+  version?: string;
+  source?: string;
+  message?: string;
+};
+export type NativeToolsResponse = { detectedAt: string; tools: NativeToolStatus[] };
 export type ActiveTable = { schemaName?: string; tableName: string };
 export type TableColumn = { name: string; typeName: string; jdbcType: number; nullable: boolean; editable?: boolean; truncated?: boolean };
 export type TableRow = { id: string; values: Record<string, unknown>; original?: Record<string, unknown>; keyToken?: string; touchedColumns?: string[]; deleted?: boolean; inserted?: boolean };

@@ -28,3 +28,13 @@ app:
   backup:
     directory: ./backups
     timeout-seconds: 7200
+  restore:
+    max-upload-bytes: 21474836480
+    upload-ttl-hours: 24
+  native-tools:
+    probe-timeout-seconds: 3
+    extra-search-paths: []
+
+spring.servlet.multipart:
+  max-file-size: 20GB
+  max-request-size: 20GB

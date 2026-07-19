@@ -27,7 +27,9 @@ public record BackupTask(
         String lastMessage,
         String lastFilePath,
         Long lastFileSize,
-        Instant lastRunAt
+        Instant lastRunAt,
+        Integer retentionDays,
+        Integer retentionCount
 ) {
     public BackupTask {
         String normalizedScope = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
@@ -51,6 +53,7 @@ public record BackupTask(
             String scope,
             String schemaName,
             String tableName,
+            List<String> tableNames,
             String backupMethod,
             String toolPath,
             String extraArgs,
@@ -63,7 +66,30 @@ public record BackupTask(
             Long lastFileSize,
             Instant lastRunAt
     ) {
-        this(id, name, connectionId, scope, schemaName, tableName, null, backupMethod, toolPath, extraArgs, nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
+        this(id, name, connectionId, scope, schemaName, tableName, tableNames, backupMethod, toolPath, extraArgs,
+                nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
+    }
+
+    public BackupTask(
+            long id,
+            String name,
+            long connectionId,
+            String scope,
+            String schemaName,
+            String tableName,
+            String backupMethod,
+            String toolPath,
+            String extraArgs,
+            String nativeConnectName,
+            String cron,
+            boolean enabled,
+            String lastStatus,
+            String lastMessage,
+            String lastFilePath,
+            Long lastFileSize,
+            Instant lastRunAt
+    ) {
+        this(id, name, connectionId, scope, schemaName, tableName, null, backupMethod, toolPath, extraArgs, nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
     }
 
     public BackupTask(
@@ -81,7 +107,7 @@ public record BackupTask(
             Long lastFileSize,
             Instant lastRunAt
     ) {
-        this(id, name, connectionId, scope, schemaName, tableName, null, "SQL", null, null, null, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt);
+        this(id, name, connectionId, scope, schemaName, tableName, null, "SQL", null, null, null, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
     }
 
     @JsonProperty("zoneId")

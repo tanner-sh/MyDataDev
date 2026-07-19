@@ -10,10 +10,12 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Future;
 
 @Component
 public class BackupExecutionCoordinator {
     private final Set<Long> running = ConcurrentHashMap.newKeySet();
+    private final java.util.Map<Long, Future<?>> futures = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
             2,
             2,
@@ -28,13 +30,16 @@ public class BackupExecutionCoordinator {
         if (!running.add(taskId)) return false;
         try {
             beforeStart.run();
-            executor.execute(() -> {
+            Future<?> future = executor.submit(() -> {
                 try {
                     task.run();
                 } finally {
                     running.remove(taskId);
+                    futures.remove(taskId);
                 }
             });
+            futures.put(taskId, future);
+            if (future.isDone()) futures.remove(taskId, future);
             return true;
         } catch (RuntimeException e) {
             running.remove(taskId);
@@ -44,6 +49,13 @@ public class BackupExecutionCoordinator {
 
     public boolean isRunning(long taskId) {
         return running.contains(taskId);
+    }
+
+    public boolean cancel(long taskId) {
+        Future<?> future = futures.remove(taskId);
+        boolean cancelled = future != null && future.cancel(true);
+        if (cancelled) running.remove(taskId);
+        return cancelled;
     }
 
     @PreDestroy

@@ -85,8 +85,9 @@ npm run build
 - 表数据编辑：支持表格浏览、新增行、编辑行、删除行、SQL 预览和提交；无主键或唯一键时限制危险编辑。
 - 数据导入：支持 CSV、JSON、SQL 文件导入为待提交插入行。
 - 备份任务管理：支持按连接展示备份任务，新建、编辑、启停、删除、手动执行、定时执行、下载最近备份文件。
-- 多方式备份：支持内置 SQL 逻辑备份、MySQL/MariaDB `mysqldump`、Oracle `exp`，任务内可配置工具路径和有限额外参数。
-- SQL 备份生成：支持全库或单表导出为 SQL `INSERT` 文件；CLOB 会完整写出，BLOB/VARBINARY 当前会明确失败并提示。
+- 多方式备份：支持内置 SQL 逻辑备份、MySQL/MariaDB `mysqldump`、Oracle `exp`，原生工具支持自动发现或手动覆盖路径。
+- 备份与恢复：支持备份校验值、保留策略、历史下载，以及 SQL、MySQL dump、Oracle dmp 的预检和后台恢复。
+- SQL 备份生成：支持导出表结构、数据、索引和约束；CLOB、BLOB 和 VARBINARY 会转换为对应数据库字面量。
 - 审计记录：连接、SQL 执行、数据提交和备份操作会写入审计或历史记录。
 
 ## 备份说明
@@ -99,7 +100,7 @@ npm run build
 - `MYSQLDUMP`：调用后端服务器上的 `mysqldump`，支持 MySQL/MariaDB 全库或单表备份，密码通过环境变量传递。
 - `ORACLE_EXP`：调用后端服务器上的 Oracle `exp`，支持全库或单表备份，复杂连接名可在任务中覆盖。
 
-原生备份工具必须安装在运行后端服务的机器上。额外参数按“一行一个参数”填写，输出文件、账号、密码、数据库范围等关键参数由系统控制。
+原生备份和恢复工具必须安装在运行后端服务的机器或容器内。自动模式会在每次备份执行或恢复预检时，依次从固定配置、`MYSQL_HOME`/`ORACLE_HOME`、后端进程 `PATH`、额外搜索目录和有限常见安装目录中解析工具；也可以在界面中手动指定路径。额外参数按“一行一个参数”填写，输出文件、账号、密码、数据库范围等关键参数由系统控制。
 
 定时备份使用 Spring cron 表达式。启用定时任务时必须填写合法 cron；空 cron 表示手动任务。
 
@@ -113,6 +114,9 @@ npm run build
 - `app.sql.max-rows`：SQL 查询默认最大行数
 - `app.sql.timeout-seconds`：SQL 执行超时时间
 - `app.backup.directory`：备份文件输出目录
+- `app.native-tools.mysqldump-path`、`mysql-path`、`oracle-exp-path`、`oracle-imp-path`：可选的原生工具固定路径
+- `app.native-tools.extra-search-paths`：自动发现时额外检查的目录列表
+- `app.native-tools.probe-timeout-seconds`：版本探测超时，默认 `3` 秒
 
 不要将真实数据库凭据或生产密钥提交到 Git。
 

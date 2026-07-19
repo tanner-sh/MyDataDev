@@ -2247,6 +2247,84 @@ body {
   max-width: 340px;
 }
 
+.backup-center-shell > .ant-tabs > .ant-tabs-nav {
+  margin: 0 0 12px;
+}
+
+.backup-retention-fields > .ant-space-item {
+  flex: 1 1 0;
+}
+
+.backup-retention-fields .ant-input-number {
+  width: 100%;
+}
+
+.restore-center {
+  display: grid;
+  gap: 14px;
+}
+
+.restore-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.restore-card {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.restore-card h5 {
+  margin-top: 0;
+}
+
+.restore-confirm-card {
+  max-width: 560px;
+}
+
+.restore-upload-icon {
+  margin-bottom: 8px;
+  color: var(--primary);
+  font-size: 30px;
+}
+
+.restore-preflight {
+  white-space: normal;
+}
+
+.native-tool-status-alert {
+  margin-bottom: 16px;
+}
+
+.native-tool-status-alert .ant-alert-description {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.backup-history-center .ant-list-item,
+.restore-center .ant-list-item {
+  padding-inline: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: var(--surface);
+}
+
+@media (max-width: 760px) {
+  .restore-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .backup-retention-fields {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}
+
 .connection-item.selected {
   border-color: color-mix(in srgb, var(--primary) 50%, var(--border)) !important;
   background: var(--primary-soft);
