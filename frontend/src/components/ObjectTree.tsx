@@ -13,7 +13,7 @@ import {
 } from '@ant-design/icons';
 import { Button, Dropdown, Empty, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Key, ReactNode, UIEvent } from 'react';
 import {
   collapseObjectBranch,
@@ -98,7 +98,7 @@ function TreeIcon({ children }: { children?: ReactNode }) {
   return <span className="object-tree-row-icon" aria-hidden="true">{children}</span>;
 }
 
-export function ObjectTree({
+export const ObjectTree = memo(function ObjectTree({
   objects,
   activeObject,
   keyword,
@@ -120,6 +120,9 @@ export function ObjectTree({
   const [structureLoadingKeys, setStructureLoadingKeys] = useState<Set<string>>(() => new Set());
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(400);
+  const scrollFrameRef = useRef<number | null>(null);
+  const latestScrollRef = useRef({ top: 0, height: 0, clientHeight: 0 });
+  const loadMoreRequestedRef = useRef(false);
 
   useEffect(() => {
     setExpandedKeys((current) => [...new Set([...groupKeys, ...current])]);
@@ -134,6 +137,14 @@ export function ObjectTree({
     observer?.observe(viewport);
     return () => observer?.disconnect();
   }, []);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current != null) cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!loadingMore) loadMoreRequestedRef.current = false;
+  }, [loadingMore, objects.length]);
 
   const selectedObjectKey = useMemo(() => {
     if (!activeObject) return null;
@@ -187,8 +198,18 @@ export function ObjectTree({
 
   function handleScroll(event: UIEvent<HTMLDivElement>) {
     const viewport = event.currentTarget;
-    setScrollTop(viewport.scrollTop);
-    if (hasMore && !loadingMore && onLoadMore && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < ROW_HEIGHT * 8) onLoadMore();
+    latestScrollRef.current = { top: viewport.scrollTop, height: viewport.scrollHeight, clientHeight: viewport.clientHeight };
+    if (scrollFrameRef.current != null) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const latest = latestScrollRef.current;
+      setScrollTop(latest.top);
+      if (hasMore && !loadingMore && onLoadMore && !loadMoreRequestedRef.current
+          && latest.height - latest.top - latest.clientHeight < ROW_HEIGHT * 8) {
+        loadMoreRequestedRef.current = true;
+        onLoadMore();
+      }
+    });
   }
 
   function objectMenuItems(object: DbObject, expanded: boolean): MenuProps['items'] {
@@ -271,7 +292,7 @@ export function ObjectTree({
       </div>
     );
   }
-}
+});
 
 function flattenRows(
   groups: ReturnType<typeof groupDatabaseObjects>,

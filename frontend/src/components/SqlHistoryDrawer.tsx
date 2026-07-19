@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { Button, Drawer, Empty, Input, Pagination, Space, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import type { SqlHistory } from '../types';
@@ -6,7 +6,7 @@ import { formatHistoryTime } from '../utils';
 
 const { Text } = Typography;
 
-export function SqlHistoryDrawer({ open, history, onClose, onPick }: {
+export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({ open, history, onClose, onPick }: {
   open: boolean;
   history: SqlHistory[];
   onClose: () => void;
@@ -53,4 +53,4 @@ export function SqlHistoryDrawer({ open, history, onClose, onPick }: {
       )}
     </Drawer>
   );
-}
+});

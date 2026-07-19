@@ -11,6 +11,7 @@ public class AppProperties {
     private final Sql sql = new Sql();
     private final Backup backup = new Backup();
     private final Restore restore = new Restore();
+    private final SqlFile sqlFile = new SqlFile();
     private final NativeTools nativeTools = new NativeTools();
 
     public String getCryptoKey() {
@@ -31,6 +32,10 @@ public class AppProperties {
 
     public Restore getRestore() {
         return restore;
+    }
+
+    public SqlFile getSqlFile() {
+        return sqlFile;
     }
 
     public NativeTools getNativeTools() {
@@ -107,6 +112,25 @@ public class AppProperties {
         public void setUploadTtlHours(int uploadTtlHours) {
             this.uploadTtlHours = uploadTtlHours;
         }
+    }
+
+    public static class SqlFile {
+        private String directory = "./sql-files";
+        private long maxUploadBytes = 20L * 1024 * 1024 * 1024;
+        private int readyTtlHours = 24;
+        private int statementTimeoutSeconds = 7200;
+        private int maxStatementChars = 128 * 1024 * 1024;
+
+        public String getDirectory() { return directory; }
+        public void setDirectory(String directory) { this.directory = directory; }
+        public long getMaxUploadBytes() { return maxUploadBytes; }
+        public void setMaxUploadBytes(long maxUploadBytes) { this.maxUploadBytes = maxUploadBytes; }
+        public int getReadyTtlHours() { return readyTtlHours; }
+        public void setReadyTtlHours(int readyTtlHours) { this.readyTtlHours = readyTtlHours; }
+        public int getStatementTimeoutSeconds() { return statementTimeoutSeconds; }
+        public void setStatementTimeoutSeconds(int statementTimeoutSeconds) { this.statementTimeoutSeconds = statementTimeoutSeconds; }
+        public int getMaxStatementChars() { return maxStatementChars; }
+        public void setMaxStatementChars(int maxStatementChars) { this.maxStatementChars = maxStatementChars; }
     }
 
     public static class NativeTools {

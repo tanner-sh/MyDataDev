@@ -31,6 +31,12 @@ app:
   restore:
     max-upload-bytes: 21474836480
     upload-ttl-hours: 24
+  sql-file:
+    directory: ./sql-files
+    max-upload-bytes: 21474836480
+    ready-ttl-hours: 24
+    statement-timeout-seconds: 7200
+    max-statement-chars: 134217728
   native-tools:
     probe-timeout-seconds: 3
     extra-search-paths: []

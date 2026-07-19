@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
+import { memo } from 'react';
 
 const { Text } = Typography;
 
@@ -28,7 +29,7 @@ type AppHeaderProps = {
   onToggleTheme: () => void;
 };
 
-export function AppHeader({
+export const AppHeader = memo(function AppHeader({
   connections,
   selected,
   connectionsLoading,
@@ -131,4 +132,4 @@ export function AppHeader({
       </Space>
     </header>
   );
-}
+});

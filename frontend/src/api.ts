@@ -28,6 +28,37 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export function uploadBinary<T>(path: string, file: File, onProgress: (percent: number) => void, signal?: AbortSignal): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open('POST', `${API}${path}`);
+    request.responseType = 'json';
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    request.setRequestHeader('X-User', 'admin');
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) onProgress(Math.round(event.loaded * 100 / event.total));
+    };
+    request.onload = () => {
+      const payload = request.response && typeof request.response === 'object'
+        ? request.response as Record<string, unknown>
+        : {};
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve(payload as T);
+      } else {
+        reject(new ApiError(typeof payload.message === 'string' ? payload.message : request.statusText, request.status, payload));
+      }
+    };
+    request.onerror = () => reject(new ApiError('SQL 文件上传失败，请检查网络连接', request.status || 0));
+    request.onabort = () => reject(new DOMException('SQL 文件上传已取消', 'AbortError'));
+    if (signal) {
+      if (signal.aborted) request.abort();
+      else signal.addEventListener('abort', () => request.abort(), { once: true });
+    }
+    request.send(file);
+  });
+}
+
 export function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

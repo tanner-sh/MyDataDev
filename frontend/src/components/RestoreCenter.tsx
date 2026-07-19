@@ -38,6 +38,7 @@ import type {
 import { formatFileSize, formatHistoryTime } from '../utils';
 import { nativeToolForRestore, requestedToolPath } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
+import { useVisiblePolling } from '../hooks/useVisiblePolling';
 
 const { Text, Title } = Typography;
 
@@ -100,11 +101,13 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
     void loadJobs();
   }, [targetId]);
 
-  useEffect(() => {
-    if (!targetId || !jobs.some((job) => ['QUEUED', 'RUNNING'].includes(job.status))) return;
-    pollWasActive.current = true;
-    const timer = window.setInterval(async () => {
-      if (document.hidden) return;
+  useVisiblePolling({
+    enabled: Boolean(targetId) && jobs.some((job) => ['QUEUED', 'RUNNING'].includes(job.status)),
+    intervalMs: 2_000,
+    resetKey: targetId,
+    task: async () => {
+      if (!targetId) return;
+      pollWasActive.current = true;
       try {
         const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${targetId}`);
         setJobs((current) => current.map((job) => active.restores.find((item) => item.id === job.id) || job));
@@ -115,9 +118,8 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
       } catch {
         // Keep the last known state; a manual refresh remains available.
       }
-    }, 2_000);
-    return () => window.clearInterval(timer);
-  }, [jobs, targetId]);
+    }
+  });
 
   async function loadHistories() {
     if (!selected) return;

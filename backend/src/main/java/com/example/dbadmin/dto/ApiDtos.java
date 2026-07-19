@@ -6,6 +6,7 @@ import jakarta.validation.constraints.Size;
 
 import java.util.List;
 import java.util.Map;
+import java.time.Instant;
 
 public final class ApiDtos {
     private ApiDtos() {
@@ -167,6 +168,45 @@ public final class ApiDtos {
     }
 
     public record SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs, String errorMessage, String actor, String createdAt) {
+    }
+
+    public record SqlFileExecutionStartRequest(String productionConfirmation) {
+    }
+
+    public record SqlFileExecutionResponse(
+            long id,
+            long connectionId,
+            String connectionName,
+            String targetDbType,
+            String fileName,
+            long fileSize,
+            String checksumSha256,
+            String detectedCharset,
+            String status,
+            String phase,
+            long processedBytes,
+            Long statementTotal,
+            long statementCurrent,
+            long queryCount,
+            long mutationCount,
+            long ddlCount,
+            long unknownCount,
+            long successCount,
+            long queryRowCount,
+            Long failedStatementIndex,
+            String failedSqlPreview,
+            String message,
+            boolean metadataChanged,
+            boolean sessionChanged,
+            boolean cancelRequested,
+            Instant expiresAt,
+            Instant startedAt,
+            Instant finishedAt,
+            Instant createdAt
+    ) {
+    }
+
+    public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {
     }
 
     public record SqlCompletionRequest(@NotNull Long connectionId, String sql, Integer cursorPosition) {

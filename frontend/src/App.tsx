@@ -1,26 +1,24 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
-import { Button, ConfigProvider, Drawer, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Space, Spin, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, createSqlTab, dbTypeLabel, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
 import { AppHeader } from './components/AppHeader';
-import { ConnectionFormPanel } from './components/ConnectionFormPanel';
-import { ConnectionList } from './components/ConnectionList';
-import { ObjectTree } from './components/ObjectTree';
 import { PaneResizer } from './components/PaneResizer';
-import { SqlHistoryDrawer } from './components/SqlHistoryDrawer';
-import { TableWorkspace } from './components/TableWorkspace';
+import { ResourceExplorer } from './components/ResourceExplorer';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
+import { useStableEvent } from './hooks/useStableEvent';
+import { useVisiblePolling } from './hooks/useVisiblePolling';
 import {
   buildConnectionSaveRequest,
   CLOSED_CONNECTION_EDITOR,
@@ -37,8 +35,13 @@ const MAX_TABLE_CHANGES = 1_000;
 const MAX_STRUCTURE_CACHE_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
+const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
+const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ObjectDetailWorkspace = lazy(() => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace })));
+const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
+const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
+const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -77,6 +80,10 @@ export default function App() {
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyFeatureLoaded, setHistoryFeatureLoaded] = useState(false);
+  const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
+  const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
+  const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
   const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
@@ -98,6 +105,7 @@ export default function App() {
   const executeRef = useRef<() => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
   const sqlTabSeqRef = useRef(1);
+  const sqlFileRequestSeqRef = useRef(0);
   const backupEditorRequestSeqRef = useRef(0);
   const metadataSearchTimerRef = useRef<number | null>(null);
   const metadataAbortRef = useRef<AbortController | null>(null);
@@ -194,23 +202,27 @@ export default function App() {
     refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [activeDrawer, selected?.id]);
 
-  useEffect(() => {
-    if (activeDrawer !== 'backups' || !selected || !backups.some((task) => task.lastStatus === 'RUNNING')) return;
-    const timer = window.setInterval(() => {
-      if (document.hidden) return;
-      void api<ActiveOperations>(`/restores/operations/active?connectionId=${selected.id}`).then((active) => {
+  useVisiblePolling({
+    enabled: activeDrawer === 'backups' && Boolean(selected) && backups.some((task) => task.lastStatus === 'RUNNING'),
+    intervalMs: 2_000,
+    resetKey: selected?.id,
+    task: async () => {
+      if (!selected) return;
+      try {
+        const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${selected.id}`);
         if (active.backups.length === 0) {
-          void refreshBackups(selected).catch(() => undefined);
+          await refreshBackups(selected).catch(() => undefined);
           return;
         }
         setBackups((current) => current.map((task) => {
           const execution = active.backups.find((item) => item.taskId === task.id);
           return execution ? { ...task, lastStatus: execution.status, lastMessage: execution.message } : task;
         }));
-      }).catch(() => undefined);
-    }, 2_000);
-    return () => window.clearInterval(timer);
-  }, [activeDrawer, backups, selected?.id]);
+      } catch {
+        // Keep the last known state; a manual refresh remains available.
+      }
+    }
+  });
 
   useEffect(() => {
     if (selected) {
@@ -1051,6 +1063,7 @@ export default function App() {
   async function openSqlHistory() {
     try {
       await refreshSqlHistory();
+      setHistoryFeatureLoaded(true);
       setHistoryOpen(true);
     } catch (e) {
       const errorMessage = `历史记录加载失败：${localizeMessage((e as Error).message)}`;
@@ -1117,7 +1130,7 @@ export default function App() {
     setSqlTabs((tabs) => tabs.map((tab) => tab.id === activeSqlTab.id ? { ...tab, ...patch } : tab));
   }
 
-  function addSqlTab() {
+  function addSqlTab() {
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
     const tab = createSqlTab(nextIndex);
@@ -1161,6 +1174,25 @@ export default function App() {
     // React state may still contain the last committed draft when a toolbar
     // action or Ctrl/Cmd+Enter is triggered.
     return { sql: model?.getValue() ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
+  }
+
+  function selectSqlFile(file: File) {
+    if (!selected) {
+      showInfo('请先选择数据库连接');
+      return;
+    }
+    setSqlFileCandidate({ requestId: ++sqlFileRequestSeqRef.current, file, connection: selected });
+    setSqlFileFeatureLoaded(true);
+    setSqlFileTasksOpen(true);
+  }
+
+  function openSqlFileTasks() {
+    setSqlFileFeatureLoaded(true);
+    setSqlFileTasksOpen(true);
+  }
+
+  function handleSqlFileMetadataChanged(connectionId: number) {
+    if (selected?.id === connectionId) void loadMetadata(selected, { page: 0, refresh: true }).catch(() => undefined);
   }
 
   function statementResultKey(result?: SqlStatementResult) {
@@ -1713,147 +1745,110 @@ export default function App() {
     showInfo('已交由浏览器流式下载历史备份文件');
   }
 
-  const sqlStatus: WorkspaceStatus = sqlLoading
+  const sqlStatus = useMemo<WorkspaceStatus>(() => sqlLoading
     ? { kind: 'loading', text: '正在执行 SQL…' }
-    : sqlStatusFromTab(activeSqlTab);
-  const tableStatus: WorkspaceStatus = tableLoading
+    : sqlStatusFromTab(activeSqlTab), [activeSqlTab, sqlLoading]);
+  const tableStatus = useMemo<WorkspaceStatus>(() => tableLoading
     ? { kind: 'loading', text: '正在处理表数据…' }
-    : workspaceStatus;
-  const objectStatus: WorkspaceStatus = objectDetailLoading
+    : workspaceStatus, [tableLoading, workspaceStatus]);
+  const objectStatus = useMemo<WorkspaceStatus>(() => objectDetailLoading
     ? { kind: 'loading', text: '正在加载对象详情…' }
-    : workspaceStatus;
-  const explorerActiveObject = mode === 'object' && activeObjectDetail
+    : workspaceStatus, [objectDetailLoading, workspaceStatus]);
+  const explorerActiveObject = useMemo(() => mode === 'object' && activeObjectDetail
     ? { schemaName: activeObjectDetail.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeObjectDetail.name }
     : mode === 'table' && activeTable
       ? { schemaName: activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeTable.tableName }
-      : null;
+      : null, [activeObjectDetail, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
+  const refreshExplorer = useStableEvent(() => requestRefreshDatabaseObjects());
+  const closeMobileExplorer = useStableEvent(() => setMobileExplorerOpen(false));
+  const openConnectionsFromExplorer = useStableEvent(() => setActiveDrawer('connections'));
+  const changeExplorerSchema = useStableEvent((schema: string) => {
+    clearMetadataSearchTimer();
+    setMetadataQuery((current) => ({ ...current, schema }));
+    void loadMetadata(selected, { schema, page: 0 });
+  });
+  const changeExplorerKeyword = useStableEvent((keyword: string) => queueMetadataSearch(keyword));
+  const searchExplorer = useStableEvent((keyword: string) => runMetadataSearch(keyword));
+  const loadMoreExplorerObjects = useStableEvent(() => {
+    if (metadata?.hasMore && !metadataLoading) void loadMetadata(selected, { page: metadata.page + 1, append: true, background: true });
+  });
+  const loadExplorerObjectStructure = useStableEvent((object: DbObject) => loadObjectStructure(object));
+  const openExplorerObjectDetail = useStableEvent((object: DbObject) => openObjectDetail(object));
+  const openExplorerTable = useStableEvent((object: DbObject) => openTable(object));
+  const backupExplorerTable = useStableEvent((object: DbObject) => openBackupTaskEditor({ schemaName: object.schemaName, tableName: object.name }));
+  const toggleExplorerFromHeader = useStableEvent(() => compactLayout
+    ? setMobileExplorerOpen((current) => !current)
+    : layoutPreferences.toggleExplorer());
+  const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
+  const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
+  const openConnectionsFromHeader = useStableEvent(() => setActiveDrawer('connections'));
+  const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
+  const toggleThemeFromHeader = useStableEvent(() => layoutPreferences.setThemeMode((current) => current === 'light' ? 'dark' : 'light'));
+  const addSqlTabEvent = useStableEvent(() => addSqlTab());
+  const closeSqlTabEvent = useStableEvent((tabId: string) => closeSqlTab(tabId));
+  const changeSqlEvent = useStableEvent((sql: string) => updateActiveSqlTab({ sql }));
+  const mountSqlEditorEvent = useStableEvent<Parameters<OnMount>, ReturnType<OnMount>>((...args) => handleEditorMount(...args));
+  const formatSqlEvent = useStableEvent(() => formatSql());
+  const explainSqlEvent = useStableEvent(() => execute('/sql/explain'));
+  const executeSqlEvent = useStableEvent(() => execute());
+  const cancelSqlEvent = useStableEvent(() => cancelSqlExecution());
+  const exportSqlEvent = useStableEvent((format: ExportFormat) => exportSql(format));
+  const openSqlHistoryEvent = useStableEvent(() => openSqlHistory());
+  const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
+  const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());
+  const changeSqlResultTabEvent = useStableEvent((key: string) => updateActiveSqlTab({ activeResultKey: key }));
+  const changeSqlResultPageEvent = useStableEvent((result: SqlStatementResult, navigation: SqlPageNavigation) => loadSqlResultPage(result, navigation));
+  const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
+  const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
+  const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
+  const changeTablePageEvent = useStableEvent((page: number) => confirmDiscardTableChanges(() => void loadTable(activeTable, { page }), `切换到第 ${page + 1} 页`));
+  const changeTablePageSizeEvent = useStableEvent((pageSize: number) => confirmDiscardTableChanges(() => {
+    layoutPreferences.setTablePageSize(pageSize);
+    void loadTable(activeTable, { page: 0, pageSize, reset: true });
+  }, `将每页行数调整为 ${pageSize}`));
+  const addTableRowEvent = useStableEvent(() => addRow());
+  const importTableRowsEvent = useStableEvent((file: File) => importRows(file));
+  const previewTableChangesEvent = useStableEvent(() => previewChanges());
+  const commitTableChangesEvent = useStableEvent(() => commitChanges());
+  const returnFromObjectEvent = useStableEvent(() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台'));
+  const reloadObjectDetailEvent = useStableEvent(() => requestRefreshDatabaseObjects());
+  const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
+  const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory) => {
+    updateActiveSqlTab({ sql: historyItem.sql });
+    setHistoryOpen(false);
+  });
+  const closeSqlFileTasksEvent = useStableEvent(() => {
+    setSqlFileTasksOpen(false);
+    setSqlFileCandidate(undefined);
+  });
+  const handleSqlFileMetadataEvent = useStableEvent((connectionId: number) => handleSqlFileMetadataChanged(connectionId));
 
   const explorerPanel = (
-    <div className="resource-explorer">
-      <div className="explorer-header">
-        <div>
-          <Text strong>资源管理器</Text>
-          <Text type="secondary">数据库对象</Text>
-        </div>
-        <Space size={2}>
-          <Tooltip title="刷新对象缓存">
-            <Button
-              type="text"
-              size="small"
-              icon={<ReloadOutlined />}
-              loading={metadataLoading}
-              disabled={!selected}
-              aria-label="刷新对象缓存"
-              onClick={requestRefreshDatabaseObjects}
-            >
-              刷新
-            </Button>
-          </Tooltip>
-          {compactLayout && (
-            <Tooltip title="关闭资源管理器">
-              <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭资源管理器" onClick={() => setMobileExplorerOpen(false)} />
-            </Tooltip>
-          )}
-        </Space>
-      </div>
-
-      {selected ? (
-        <div className="explorer-connection-summary">
-          <div className="explorer-connection-title">
-            <span className="connection-dot" aria-hidden="true" />
-            <Text strong ellipsis>{selected.name}</Text>
-          </div>
-          <Space size={4} wrap>
-            <Tag variant="filled" color="blue">{dbTypeLabel(selected.dbType)}</Tag>
-            {selected.readonly && <Tag variant="filled" color="orange">只读</Tag>}
-            {metadata?.selectedSchema && <Tag variant="filled">{namespaceLabel} · {metadata.selectedSchema}</Tag>}
-          </Space>
-          <Text type="secondary" ellipsis title={selected.jdbcUrl}>{selected.jdbcUrl}</Text>
-        </div>
-      ) : (
-        <button className="explorer-empty-connection" onClick={() => setActiveDrawer('connections')}>
-          尚未选择连接，打开连接管理
-        </button>
-      )}
-
-      <div className="explorer-filters">
-        <Select
-          size="small"
-          allowClear
-          showSearch
-          className="full-width"
-          placeholder={`选择${namespaceLabel}`}
-          value={metadataQuery.schema || metadata?.selectedSchema || undefined}
-          disabled={!selected || metadataBlockingLoading}
-          options={(metadata?.schemas || []).map((schema) => ({
-            value: schema,
-            label: schema === metadata?.currentSchema ? `${schema}（当前）` : schema
-          }))}
-          onChange={(schema) => {
-            const nextSchema = schema || '';
-            clearMetadataSearchTimer();
-            setMetadataQuery((current) => ({ ...current, schema: nextSchema }));
-            loadMetadata(selected, { schema: nextSchema, page: 0 });
-          }}
-        />
-        <Input.Search
-          size="small"
-          allowClear
-          loading={metadataLoading && !metadataBlockingLoading}
-          placeholder="搜索表或视图"
-          disabled={!selected || metadataBlockingLoading}
-          value={metadataQuery.keyword}
-          onChange={(event) => queueMetadataSearch(event.target.value)}
-          onSearch={runMetadataSearch}
-        />
-      </div>
-
-      {connectionsError && <div className="explorer-error" role="alert">{connectionsError}</div>}
-      <div className="object-tree-scroll" aria-busy={metadataLoading}>
-        {metadataBlockingLoading ? (
-          <div className="explorer-loading" role="status">
-            <Spin size="small" />
-            <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
-          </div>
-        ) : (
-          <ObjectTree
-            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
-            objects={objects}
-            activeObject={explorerActiveObject}
-            keyword={metadataAppliedKeyword}
-            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表或视图' : `当前${namespaceLabel}暂无数据库对象`}
-            structureLoadingKey={structureLoadingKey}
-            hasMore={metadata?.hasMore}
-            loadingMore={metadataLoading && !metadataBlockingLoading}
-            onLoadMore={() => {
-              if (metadata?.hasMore && !metadataLoading) void loadMetadata(selected, { page: metadata.page + 1, append: true, background: true });
-            }}
-            onLoadStructure={loadObjectStructure}
-            onOpenDetail={openObjectDetail}
-            onOpenTable={openTable}
-            onBackupTable={(object) => openBackupTaskEditor({ schemaName: object.schemaName, tableName: object.name })}
-          />
-        )}
-        {metadataLoading && !metadataBlockingLoading && (
-          <div className="explorer-tree-loading-indicator" role="status">
-            <Spin size="small" />
-            <span>正在更新对象…</span>
-          </div>
-        )}
-      </div>
-      <div className="explorer-footer">
-        {metadata?.cachedAt && (
-          <span className="metadata-cache-status">
-            已展示 {objects.length}/{metadata.totalObjectsExact === false ? `至少 ${metadata.totalObjects}` : metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
-          </span>
-        )}
-        {metadata?.hasMore && (
-          <Button size="small" block disabled={metadataLoading} onClick={() => loadMetadata(selected, { page: metadata.page + 1, append: true, background: true })}>
-            加载更多对象
-          </Button>
-        )}
-      </div>
-    </div>
+    <ResourceExplorer
+      compactLayout={compactLayout}
+      selected={selected}
+      metadata={metadata}
+      metadataQuery={metadataQuery}
+      metadataAppliedKeyword={metadataAppliedKeyword}
+      metadataLoading={metadataLoading}
+      metadataBlockingLoading={metadataBlockingLoading}
+      connectionsError={connectionsError}
+      structureLoadingKey={structureLoadingKey}
+      objects={objects}
+      activeObject={explorerActiveObject}
+      namespaceLabel={namespaceLabel}
+      onRefresh={refreshExplorer}
+      onClose={closeMobileExplorer}
+      onOpenConnections={openConnectionsFromExplorer}
+      onSchemaChange={changeExplorerSchema}
+      onKeywordChange={changeExplorerKeyword}
+      onSearch={searchExplorer}
+      onLoadMore={loadMoreExplorerObjects}
+      onLoadStructure={loadExplorerObjectStructure}
+      onOpenDetail={openExplorerObjectDetail}
+      onOpenTable={openExplorerTable}
+      onBackupTable={backupExplorerTable}
+    />
   );
 
   return (
@@ -1870,12 +1865,12 @@ export default function App() {
           connectionsLoading={connectionsLoading}
           explorerCollapsed={compactLayout ? !mobileExplorerOpen : layoutPreferences.explorerCollapsed}
           themeMode={layoutPreferences.themeMode}
-          onToggleExplorer={() => compactLayout ? setMobileExplorerOpen((current) => !current) : layoutPreferences.toggleExplorer()}
-          onSelectConnection={selectConnection}
-          onRefreshConnections={() => refreshConnections()}
-          onOpenConnections={() => setActiveDrawer('connections')}
-          onOpenBackups={() => setActiveDrawer('backups')}
-          onToggleTheme={() => layoutPreferences.setThemeMode((current) => current === 'light' ? 'dark' : 'light')}
+          onToggleExplorer={toggleExplorerFromHeader}
+          onSelectConnection={selectConnectionFromHeader}
+          onRefreshConnections={refreshConnectionsFromHeader}
+          onOpenConnections={openConnectionsFromHeader}
+          onOpenBackups={openBackupsFromHeader}
+          onToggleTheme={toggleThemeFromHeader}
         />
 
         <div className="app-body">
@@ -1913,18 +1908,20 @@ export default function App() {
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
                 onTabChange={setActiveSqlTabId}
-                onTabAdd={addSqlTab}
-                onTabClose={closeSqlTab}
-                onSqlChange={(sql) => updateActiveSqlTab({ sql })}
-                onEditorMount={handleEditorMount}
-                onFormat={formatSql}
-                onExplain={() => execute('/sql/explain')}
-                onExecute={() => execute()}
-                onCancel={cancelSqlExecution}
-                onExport={exportSql}
-                onOpenHistory={openSqlHistory}
-                onResultTabChange={(key) => updateActiveSqlTab({ activeResultKey: key })}
-                onResultPageChange={(result, navigation) => void loadSqlResultPage(result, navigation)}
+                onTabAdd={addSqlTabEvent}
+                onTabClose={closeSqlTabEvent}
+                onSqlChange={changeSqlEvent}
+                onEditorMount={mountSqlEditorEvent}
+                onFormat={formatSqlEvent}
+                onExplain={explainSqlEvent}
+                onExecute={executeSqlEvent}
+                onCancel={cancelSqlEvent}
+                onExport={exportSqlEvent}
+                onOpenHistory={openSqlHistoryEvent}
+                onSqlFileSelect={selectSqlFileEvent}
+                onOpenSqlFileTasks={openSqlFileTasksEvent}
+                onResultTabChange={changeSqlResultTabEvent}
+                onResultPageChange={changeSqlResultPageEvent}
               />
             ) : mode === 'table' ? (
               <TableWorkspace
@@ -1940,18 +1937,15 @@ export default function App() {
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
                 editingSupported={selected?.capabilities?.tableEdit ?? false}
-                onBackToSql={() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台')}
-                onBackupTable={() => openBackupTaskEditor()}
-                onReload={() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表')}
-                onPageChange={(page) => confirmDiscardTableChanges(() => void loadTable(activeTable, { page }), `切换到第 ${page + 1} 页`)}
-                onPageSizeChange={(pageSize) => confirmDiscardTableChanges(() => {
-                  layoutPreferences.setTablePageSize(pageSize);
-                  void loadTable(activeTable, { page: 0, pageSize, reset: true });
-                }, `将每页行数调整为 ${pageSize}`)}
-                onAddRow={addRow}
-                onImportFile={importRows}
-                onPreview={previewChanges}
-                onCommit={commitChanges}
+                onBackToSql={returnFromTableEvent}
+                onBackupTable={backupCurrentTableEvent}
+                onReload={reloadTableEvent}
+                onPageChange={changeTablePageEvent}
+                onPageSizeChange={changeTablePageSizeEvent}
+                onAddRow={addTableRowEvent}
+                onImportFile={importTableRowsEvent}
+                onPreview={previewTableChangesEvent}
+                onCommit={commitTableChangesEvent}
                 onEdit={editCell}
                 onDelete={deleteRow}
               />
@@ -1964,10 +1958,10 @@ export default function App() {
                 detail={activeObjectDetail}
                 status={objectStatus}
                 loading={objectDetailLoading}
-                onBackToSql={() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台')}
-                onOpenTable={openTable}
-                onReloadDetail={requestRefreshDatabaseObjects}
-                onBackupTable={() => openBackupTaskEditor()}
+                onBackToSql={returnFromObjectEvent}
+                onOpenTable={openExplorerTable}
+                onReloadDetail={reloadObjectDetailEvent}
+                onBackupTable={backupCurrentTableEvent}
                 onDesignDirtyChange={updateObjectDesignDirty}
               />
             )}
@@ -1996,19 +1990,23 @@ export default function App() {
         onClose={closeConnectionDrawer}
       >
         <div className="connection-management-content">
-          <ConnectionList
-            connections={connections}
-            selectedId={selected?.id}
-            connectionsLoading={connectionsLoading}
-            connectionsError={connectionsError}
-            connectionsReady={connectionsReady}
-            testingConnectionId={testingConnectionId}
-            onSwitch={(connection) => selectConnection(connection, closeConnectionDrawer)}
-            onEdit={editConnection}
-            onTest={testSavedConnection}
-            onDuplicate={duplicateConnection}
-            onDelete={deleteConnection}
-          />
+          {activeDrawer === 'connections' && (
+            <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载连接管理…</div>}>
+              <ConnectionList
+                connections={connections}
+                selectedId={selected?.id}
+                connectionsLoading={connectionsLoading}
+                connectionsError={connectionsError}
+                connectionsReady={connectionsReady}
+                testingConnectionId={testingConnectionId}
+                onSwitch={(connection) => selectConnection(connection, closeConnectionDrawer)}
+                onEdit={editConnection}
+                onTest={testSavedConnection}
+                onDuplicate={duplicateConnection}
+                onDelete={deleteConnection}
+              />
+            </Suspense>
+          )}
         </div>
       </Drawer>
 
@@ -2027,16 +2025,18 @@ export default function App() {
         destroyOnHidden
       >
         {connectionEditor.mode !== 'closed' && (
-          <ConnectionFormPanel
-            form={connectionEditor.form}
-            editing={connectionEditor.mode === 'edit'}
-            loading={connectionActionLoading}
-            onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
-            onDbTypeChange={changeDbType}
-            onCancel={closeConnectionEditor}
-            onTest={testConnection}
-            onSave={requestSaveConnection}
-          />
+          <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载连接表单…</div>}>
+            <ConnectionFormPanel
+              form={connectionEditor.form}
+              editing={connectionEditor.mode === 'edit'}
+              loading={connectionActionLoading}
+              onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
+              onDbTypeChange={changeDbType}
+              onCancel={closeConnectionEditor}
+              onTest={testConnection}
+              onSave={requestSaveConnection}
+            />
+          </Suspense>
         )}
       </Modal>
 
@@ -2072,15 +2072,28 @@ export default function App() {
           />
         </Suspense>
       </Drawer>
-      <SqlHistoryDrawer
-        open={historyOpen}
-        history={sqlHistory}
-        onClose={() => setHistoryOpen(false)}
-        onPick={(historyItem) => {
-          updateActiveSqlTab({ sql: historyItem.sql });
-          setHistoryOpen(false);
-        }}
-      />
+      {historyFeatureLoaded && (
+        <Suspense fallback={null}>
+          <SqlHistoryDrawer
+            open={historyOpen}
+            history={sqlHistory}
+            onClose={closeSqlHistoryEvent}
+            onPick={pickSqlHistoryEvent}
+          />
+        </Suspense>
+      )}
+      {sqlFileFeatureLoaded && (
+        <Suspense fallback={null}>
+          <SqlFileExecutionDrawer
+            open={sqlFileTasksOpen}
+            candidate={sqlFileCandidate}
+            connections={connections}
+            selected={selected}
+            onClose={closeSqlFileTasksEvent}
+            onMetadataChanged={handleSqlFileMetadataEvent}
+          />
+        </Suspense>
+      )}
     </ConfigProvider>
   );
 }

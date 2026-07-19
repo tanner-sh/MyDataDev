@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Badge, Button, Drawer, Dropdown, Layout, Select, Space, Typography, Upload } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -22,7 +22,7 @@ const { Header } = Layout;
 const { Text } = Typography;
 const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
 
-export function TableWorkspace({
+export const TableWorkspace = memo(function TableWorkspace({
   activeTable,
   tableData,
   tableRows,
@@ -217,4 +217,4 @@ export function TableWorkspace({
       </Drawer>
     </div>
   );
-}
+});
