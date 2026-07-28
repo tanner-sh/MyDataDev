@@ -13,6 +13,9 @@ public class AppProperties {
     private final Restore restore = new Restore();
     private final SqlFile sqlFile = new SqlFile();
     private final NativeTools nativeTools = new NativeTools();
+    private final BackgroundTasks backgroundTasks = new BackgroundTasks();
+    private final Maintenance maintenance = new Maintenance();
+    private final RemotePool remotePool = new RemotePool();
 
     public String getCryptoKey() {
         return cryptoKey;
@@ -40,6 +43,18 @@ public class AppProperties {
 
     public NativeTools getNativeTools() {
         return nativeTools;
+    }
+
+    public BackgroundTasks getBackgroundTasks() {
+        return backgroundTasks;
+    }
+
+    public Maintenance getMaintenance() {
+        return maintenance;
+    }
+
+    public RemotePool getRemotePool() {
+        return remotePool;
     }
 
     public static class Sql {
@@ -75,6 +90,7 @@ public class AppProperties {
     public static class Backup {
         private String directory = "./backups";
         private int timeoutSeconds = 7200;
+        private int sqlInsertBatchSize = 100;
 
         public String getDirectory() {
             return directory;
@@ -90,6 +106,14 @@ public class AppProperties {
 
         public void setTimeoutSeconds(int timeoutSeconds) {
             this.timeoutSeconds = timeoutSeconds;
+        }
+
+        public int getSqlInsertBatchSize() {
+            return sqlInsertBatchSize;
+        }
+
+        public void setSqlInsertBatchSize(int sqlInsertBatchSize) {
+            this.sqlInsertBatchSize = sqlInsertBatchSize;
         }
     }
 
@@ -120,6 +144,7 @@ public class AppProperties {
         private int readyTtlHours = 24;
         private int statementTimeoutSeconds = 7200;
         private int maxStatementChars = 128 * 1024 * 1024;
+        private int commitBatchSize = 100;
 
         public String getDirectory() { return directory; }
         public void setDirectory(String directory) { this.directory = directory; }
@@ -131,6 +156,62 @@ public class AppProperties {
         public void setStatementTimeoutSeconds(int statementTimeoutSeconds) { this.statementTimeoutSeconds = statementTimeoutSeconds; }
         public int getMaxStatementChars() { return maxStatementChars; }
         public void setMaxStatementChars(int maxStatementChars) { this.maxStatementChars = maxStatementChars; }
+        public int getCommitBatchSize() { return commitBatchSize; }
+        public void setCommitBatchSize(int commitBatchSize) { this.commitBatchSize = commitBatchSize; }
+    }
+
+    public static class BackgroundTasks {
+        private int cancelPollIntervalMs = 1_000;
+        private int progressIntervalMs = 500;
+        private int maxConcurrentUploads = 2;
+        private int maxPerConnection = 1;
+        private int backupWorkerThreads = 2;
+        private int sqlFileWorkerThreads = 2;
+        private int queueCapacity = 20;
+
+        public int getCancelPollIntervalMs() { return cancelPollIntervalMs; }
+        public void setCancelPollIntervalMs(int cancelPollIntervalMs) { this.cancelPollIntervalMs = cancelPollIntervalMs; }
+        public int getProgressIntervalMs() { return progressIntervalMs; }
+        public void setProgressIntervalMs(int progressIntervalMs) { this.progressIntervalMs = progressIntervalMs; }
+        public int getMaxConcurrentUploads() { return maxConcurrentUploads; }
+        public void setMaxConcurrentUploads(int maxConcurrentUploads) { this.maxConcurrentUploads = maxConcurrentUploads; }
+        public int getMaxPerConnection() { return maxPerConnection; }
+        public void setMaxPerConnection(int maxPerConnection) { this.maxPerConnection = maxPerConnection; }
+        public int getBackupWorkerThreads() { return backupWorkerThreads; }
+        public void setBackupWorkerThreads(int backupWorkerThreads) { this.backupWorkerThreads = backupWorkerThreads; }
+        public int getSqlFileWorkerThreads() { return sqlFileWorkerThreads; }
+        public void setSqlFileWorkerThreads(int sqlFileWorkerThreads) { this.sqlFileWorkerThreads = sqlFileWorkerThreads; }
+        public int getQueueCapacity() { return queueCapacity; }
+        public void setQueueCapacity(int queueCapacity) { this.queueCapacity = queueCapacity; }
+    }
+
+    public static class Maintenance {
+        private int sqlHistoryRetentionDays = 90;
+        private int auditRetentionDays = 180;
+        private int jobRetentionDays = 90;
+        private int cleanupBatchSize = 500;
+
+        public int getSqlHistoryRetentionDays() { return sqlHistoryRetentionDays; }
+        public void setSqlHistoryRetentionDays(int sqlHistoryRetentionDays) { this.sqlHistoryRetentionDays = sqlHistoryRetentionDays; }
+        public int getAuditRetentionDays() { return auditRetentionDays; }
+        public void setAuditRetentionDays(int auditRetentionDays) { this.auditRetentionDays = auditRetentionDays; }
+        public int getJobRetentionDays() { return jobRetentionDays; }
+        public void setJobRetentionDays(int jobRetentionDays) { this.jobRetentionDays = jobRetentionDays; }
+        public int getCleanupBatchSize() { return cleanupBatchSize; }
+        public void setCleanupBatchSize(int cleanupBatchSize) { this.cleanupBatchSize = cleanupBatchSize; }
+    }
+
+    public static class RemotePool {
+        private int maxPools = 20;
+        private int maximumPoolSize = 3;
+        private int connectionTimeoutMs = 10_000;
+
+        public int getMaxPools() { return maxPools; }
+        public void setMaxPools(int maxPools) { this.maxPools = maxPools; }
+        public int getMaximumPoolSize() { return maximumPoolSize; }
+        public void setMaximumPoolSize(int maximumPoolSize) { this.maximumPoolSize = maximumPoolSize; }
+        public int getConnectionTimeoutMs() { return connectionTimeoutMs; }
+        public void setConnectionTimeoutMs(int connectionTimeoutMs) { this.connectionTimeoutMs = connectionTimeoutMs; }
     }
 
     public static class NativeTools {

@@ -133,10 +133,10 @@ public final class ApiDtos {
     public record TableDesignResponse(List<String> sql, String message) {
     }
 
-    public record SqlRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, String executionId) {
+    public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId) {
     }
 
-    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank String sql, Integer offset, Integer pageSize, String executionId) {
+    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer offset, Integer pageSize, @Size(max = 120) String executionId) {
     }
 
     public record ResultColumn(String key, String label, String typeName) {
@@ -155,7 +155,7 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank String sql, Integer maxRows, Integer pageSize, String executionId) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId) {
     }
 
     public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
@@ -209,13 +209,13 @@ public final class ApiDtos {
     public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {
     }
 
-    public record SqlCompletionRequest(@NotNull Long connectionId, String sql, Integer cursorPosition) {
+    public record SqlCompletionRequest(@NotNull Long connectionId, @Size(max = 2_000_000) String sql, Integer cursorPosition) {
     }
 
     public record SqlCompletionItem(String label, String kind, String insertText, String detail) {
     }
 
-    public record FormatRequest(@NotBlank String sql) {
+    public record FormatRequest(@NotBlank @Size(max = 2_000_000) String sql) {
     }
 
     public record FormatResponse(String sql) {
@@ -273,7 +273,7 @@ public final class ApiDtos {
     public record DataCommitResponse(List<String> sql, int affectedRows) {
     }
 
-    public record ExportRequest(@NotNull Long connectionId, @NotBlank String sql, @NotBlank String format) {
+    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format) {
     }
 
     public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName, Integer retentionDays, Integer retentionCount) {

@@ -30,10 +30,13 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.FileStore;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
@@ -47,6 +50,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -64,14 +68,19 @@ public class RestoreService {
     private final BackupExecutionCoordinator coordinator;
     private final ObjectMapper objectMapper;
     private final NativeToolLocator nativeTools;
+    private final BackgroundTaskControl taskControl;
+    private final LargeFileUploadGuard uploadGuard;
     private final Map<String, PreparedPlan> plans = new ConcurrentHashMap<>();
     private final Map<Long, Statement> runningStatements = new ConcurrentHashMap<>();
     private final Map<Long, Process> runningProcesses = new ConcurrentHashMap<>();
+    private final Map<Long, List<String>> preparedTables = new ConcurrentHashMap<>();
+    private final Map<Long, FileFingerprint> verifiedSources = new ConcurrentHashMap<>();
 
     public RestoreService(RestoreUploadRepository uploads, RestoreJobRepository jobs, BackupHistoryRepository histories,
                           ConnectionService connections, ExecutionGuard guard, AuditRepository audit, AppProperties properties,
                           SqlRestoreTranslator translator, DialectRegistry dialectRegistry,
-                          BackupExecutionCoordinator coordinator, ObjectMapper objectMapper, NativeToolLocator nativeTools) {
+                          BackupExecutionCoordinator coordinator, ObjectMapper objectMapper, NativeToolLocator nativeTools,
+                          BackgroundTaskControl taskControl, LargeFileUploadGuard uploadGuard) {
         this.uploads = uploads;
         this.jobs = jobs;
         this.histories = histories;
@@ -84,6 +93,8 @@ public class RestoreService {
         this.coordinator = coordinator;
         this.objectMapper = objectMapper;
         this.nativeTools = nativeTools;
+        this.taskControl = taskControl;
+        this.uploadGuard = uploadGuard;
     }
 
     @PostConstruct
@@ -97,23 +108,46 @@ public class RestoreService {
         String format = normalizeFormat(fileFormat, file.getOriginalFilename());
         Path root = restoreRoot().resolve("uploads");
         Files.createDirectories(root);
+        if (file.getSize() > 0) {
+            FileStore store = Files.getFileStore(root);
+            if (store.getUsableSpace() < file.getSize() + 100L * 1024 * 1024) {
+                throw new IllegalStateException("服务器恢复文件目录剩余空间不足。");
+            }
+        }
         String extension = extension(file.getOriginalFilename());
         Path target = root.resolve("upload-" + UUID.randomUUID() + extension).normalize();
         if (!target.startsWith(root.toAbsolutePath().normalize())) throw new IllegalArgumentException("上传文件名不安全。");
-        try (InputStream input = file.getInputStream()) {
-            Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        long size = 0;
+        if (!uploadGuard.tryAcquire()) {
+            throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "UPLOAD_BUSY", "当前大文件上传数量已达上限，请稍后重试。");
+        }
+        try (InputStream input = file.getInputStream();
+             var output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
+            byte[] buffer = new byte[128 * 1024];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read == 0) continue;
+                size += read;
+                if (size > properties.getRestore().getMaxUploadBytes()) {
+                    throw new IllegalArgumentException("上传文件超过允许大小。");
+                }
+                digest.update(buffer, 0, read);
+                output.write(buffer, 0, read);
+            }
         } catch (Exception error) {
             Files.deleteIfExists(target);
             throw error;
+        } finally {
+            uploadGuard.release();
         }
-        long size = Files.size(target);
-        if (size > properties.getRestore().getMaxUploadBytes()) {
+        if (size == 0) {
             Files.deleteIfExists(target);
-            throw new IllegalArgumentException("上传文件超过允许大小。");
+            throw new IllegalArgumentException("请选择要恢复的文件。");
         }
         Instant expires = Instant.now().plus(Math.max(1, properties.getRestore().getUploadTtlHours()), ChronoUnit.HOURS);
         RestoreUpload draft = new RestoreUpload(0, safeName(file.getOriginalFilename()), target.toAbsolutePath().toString(), size,
-                FileIntegrity.sha256(target), format, blankToNull(sourceDbType), Instant.now(), expires);
+                HexFormat.of().formatHex(digest.digest()), format, blankToNull(sourceDbType), Instant.now(), expires);
         long id = uploads.insert(draft);
         return uploads.findById(id).orElseThrow();
     }
@@ -122,7 +156,7 @@ public class RestoreService {
         SourceFile source = resolveSource(request.source(), request.fileFormat(), request.sourceDbType());
         DbConnection target = connections.require(request.targetConnectionId());
         if (target.readonly()) throw new ApiProblemException(HttpStatus.FORBIDDEN, "READONLY_CONNECTION", "当前连接为只读连接，不允许恢复数据。");
-        verifyChecksum(source.path(), source.checksum());
+        FileFingerprint fingerprint = verifyChecksum(source.path(), source.checksum());
         String mode = normalizeMode(request.conflictMode());
         Map<String, String> mappings = safeMappings(request.namespaceMapping());
         List<String> warnings = new ArrayList<>();
@@ -163,7 +197,7 @@ public class RestoreService {
         if (valid) {
             token = UUID.randomUUID().toString();
             plans.put(token, new PreparedPlan(token, Instant.now().plus(10, ChronoUnit.MINUTES), request, source, target.dbType(),
-                    statementCount, namespaces, tables, resolvedToolPath));
+                    statementCount, namespaces, tables, resolvedToolPath, fingerprint));
         }
         return new RestorePreflightResponse(valid, token, source.format(), source.dbType(), target.dbType(), statementCount,
                 namespaces, tables, List.copyOf(warnings), List.copyOf(errors));
@@ -188,12 +222,35 @@ public class RestoreService {
                 target.id(), target.dbType(), normalizeMode(request.conflictMode()), mappingJson, "QUEUED", "QUEUED", 0L,
                 plan.statementCount(), "恢复任务已进入队列。", false, actor, null, null, Instant.now());
         long id = jobs.insert(draft);
+        String operationKey = restoreOperationKey(id);
+        if (!taskControl.tryAcquire(target.id(), operationKey)) {
+            jobs.updateProgress(id, "FAILED", "CONNECTION_BUSY", 0, plan.statementCount(), "该连接已有后台重任务正在执行。", null, Instant.now());
+            throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。");
+        }
+        preparedTables.put(id, plan.tables());
+        verifiedSources.put(id, plan.fingerprint());
         try {
-            boolean accepted = coordinator.submit(-id, () -> { }, () -> run(id, plan.resolvedToolPath(), request.extraArgs()));
+            boolean accepted = coordinator.submit(-id, () -> { }, () -> {
+                try {
+                    run(id, plan.resolvedToolPath(), request.extraArgs());
+                } finally {
+                    taskControl.release(target.id(), operationKey);
+                    preparedTables.remove(id);
+                    verifiedSources.remove(id);
+                }
+            });
             if (!accepted) throw new ApiProblemException(HttpStatus.CONFLICT, "RESTORE_ALREADY_RUNNING", "该恢复任务正在执行，请勿重复启动。");
         } catch (RejectedExecutionException error) {
+            taskControl.release(target.id(), operationKey);
+            preparedTables.remove(id);
+            verifiedSources.remove(id);
             jobs.updateProgress(id, "FAILED", "FAILED", 0, plan.statementCount(), "恢复执行队列已满，任务未启动。", null, Instant.now());
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "RESTORE_QUEUE_FULL", "恢复执行队列已满，请稍后重试。");
+        } catch (RuntimeException error) {
+            taskControl.release(target.id(), operationKey);
+            preparedTables.remove(id);
+            verifiedSources.remove(id);
+            throw error;
         }
         audit.log(actor, "RESTORE_START", target.name(), plan.source().name());
         return jobs.findById(id).orElseThrow();
@@ -202,7 +259,9 @@ public class RestoreService {
     public RestoreJobPage list(Long connectionId, Integer page, Integer pageSize) {
         int safePage = Math.max(page == null ? 0 : page, 0);
         int size = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
-        List<RestoreJob> rows = jobs.findPage(connectionId, size + 1, (long) safePage * size);
+        long offset = (long) safePage * size;
+        if (offset > 1_000_000) throw new IllegalArgumentException("恢复历史分页偏移过大，请缩小页码。");
+        List<RestoreJob> rows = jobs.findPage(connectionId, size + 1, offset);
         boolean hasMore = rows.size() > size;
         if (hasMore) rows = rows.subList(0, size);
         return new RestoreJobPage(List.copyOf(rows), safePage, size, hasMore);
@@ -216,11 +275,13 @@ public class RestoreService {
         RestoreJob job = get(id);
         if (!Set.of("QUEUED", "RUNNING").contains(job.status())) return job;
         jobs.requestCancel(id);
+        taskControl.requestCancel(restoreOperationKey(id));
         coordinator.cancel(-id);
         Statement statement = runningStatements.get(id);
         if (statement != null) statement.cancel();
         Process process = runningProcesses.get(id);
         if (process != null) process.destroyForcibly();
+        taskControl.release(job.targetConnectionId(), restoreOperationKey(id));
         jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(job.progressCurrent()), job.progressTotal(), "恢复已取消。", null, Instant.now());
         audit.log(actor, "RESTORE_CANCEL", job.sourceName(), "job=" + id);
         return get(id);
@@ -234,7 +295,7 @@ public class RestoreService {
         RestoreJob job = get(id);
         jobs.updateProgress(id, "RUNNING", "PREPARING", 0, job.progressTotal(), "正在准备恢复。", Instant.now(), null);
         try {
-            verifyChecksum(Path.of(job.sourceFilePath()), job.sourceChecksum());
+            verifyUnchanged(Path.of(job.sourceFilePath()), job.sourceChecksum(), verifiedSources.get(id));
             if ("SQL".equals(job.fileFormat())) runSql(job);
             else runNative(job, toolPath, extraArgs);
             ensureNotCancelled(id);
@@ -264,29 +325,37 @@ public class RestoreService {
         try (Connection connection = connections.open(target.id())) {
             connection.setAutoCommit(false);
             if ("OVERWRITE".equals(job.conflictMode())) {
-                PreparedPlan tablePlan = new PreparedPlan("", Instant.now(), null,
-                        new SourceFile(job.sourceKind(), job.sourceId(), job.sourceName(), Path.of(job.sourceFilePath()), job.sourceChecksum(), job.fileFormat(), job.sourceDbType()),
-                        target.dbType(), 0, List.of(), translator.analyze(Path.of(job.sourceFilePath()), job.sourceDbType(), target.dbType(), mappings).tables(), null);
-                dropMappedTables(connection, dialect, tablePlan.tables(), mappings);
+                List<String> tables = preparedTables.get(job.id());
+                if (tables == null) {
+                    throw new IllegalStateException("恢复预检结果已丢失，请重新预检后启动。");
+                }
+                dropMappedTables(connection, dialect, tables, mappings);
                 connection.commit();
             }
             long[] current = {0};
+            long[] lastProgressNanos = {0};
             try {
-                translator.translate(Path.of(job.sourceFilePath()), job.sourceDbType(), target.dbType(), mappings, job.conflictMode(), (index, sql, data) -> {
-                    ensureNotCancelled(job.id());
-                    try (Statement statement = connection.createStatement()) {
+                try (Statement statement = connection.createStatement()) {
+                    statement.setQueryTimeout(Math.max(1, properties.getBackup().getTimeoutSeconds()));
+                    translator.translate(Path.of(job.sourceFilePath()), job.sourceDbType(), target.dbType(), mappings, job.conflictMode(), (index, sql, data) -> {
+                        ensureNotCancelled(job.id());
                         runningStatements.put(job.id(), statement);
-                        statement.setQueryTimeout(Math.max(1, properties.getBackup().getTimeoutSeconds()));
-                        statement.execute(sql);
-                    } finally {
-                        runningStatements.remove(job.id());
-                    }
-                    current[0] = index;
-                    if (data && current[0] % 500 == 0) connection.commit();
-                    jobs.updateProgress(job.id(), "RUNNING", data ? "RESTORING_DATA" : "RESTORING_SCHEMA", current[0], job.progressTotal(),
-                            "正在执行第 " + current[0] + " 条语句。", null, null);
-                });
+                        try {
+                            statement.execute(sql);
+                        } finally {
+                            runningStatements.remove(job.id());
+                        }
+                        current[0] = index;
+                        if (data && current[0] % 500 == 0) connection.commit();
+                        if (progressDue(lastProgressNanos)) {
+                            jobs.updateProgress(job.id(), "RUNNING", data ? "RESTORING_DATA" : "RESTORING_SCHEMA", current[0], job.progressTotal(),
+                                    "正在执行第 " + current[0] + " 条语句。", null, null);
+                        }
+                    });
+                }
                 connection.commit();
+                jobs.updateProgress(job.id(), "RUNNING", "FINALIZING", current[0], job.progressTotal(),
+                        "SQL 恢复语句执行完成，正在收尾。", null, null);
             } catch (Exception error) {
                 try { connection.rollback(); } catch (Exception ignored) { }
                 throw error;
@@ -428,7 +497,22 @@ public class RestoreService {
     }
 
     private void ensureNotCancelled(long id) {
-        if (jobs.findById(id).map(RestoreJob::cancelRequested).orElse(true)) throw new CancelledException();
+        if (taskControl.isCancelled(restoreOperationKey(id),
+                () -> jobs.findById(id).map(RestoreJob::cancelRequested).orElse(true))) {
+            throw new CancelledException();
+        }
+    }
+
+    private boolean progressDue(long[] lastProgressNanos) {
+        long now = System.nanoTime();
+        long interval = Math.max(100, properties.getBackgroundTasks().getProgressIntervalMs()) * 1_000_000L;
+        if (lastProgressNanos[0] != 0 && now - lastProgressNanos[0] < interval) return false;
+        lastProgressNanos[0] = now;
+        return true;
+    }
+
+    private String restoreOperationKey(long id) {
+        return "restore:" + id;
     }
 
     @Scheduled(fixedDelay = 60 * 60 * 1000, initialDelay = 60 * 1000)
@@ -447,10 +531,30 @@ public class RestoreService {
         return Path.of(properties.getBackup().getDirectory()).toAbsolutePath().normalize();
     }
 
-    private void verifyChecksum(Path path, String expected) throws Exception {
+    private FileFingerprint verifyChecksum(Path path, String expected) throws Exception {
         if (!Files.isRegularFile(path)) throw new IllegalStateException("恢复文件不存在。");
+        BasicFileAttributes before = Files.readAttributes(path, BasicFileAttributes.class);
         String actual = FileIntegrity.sha256(path);
         if (expected != null && !expected.equalsIgnoreCase(actual)) throw new IllegalStateException("恢复文件校验失败，文件内容已发生变化。");
+        BasicFileAttributes after = Files.readAttributes(path, BasicFileAttributes.class);
+        FileFingerprint fingerprint = fingerprint(after);
+        if (!fingerprint(before).equals(fingerprint)) {
+            throw new IllegalStateException("恢复文件在校验期间发生变化，请重新预检。");
+        }
+        return fingerprint;
+    }
+
+    private void verifyUnchanged(Path path, String expected, FileFingerprint verified) throws Exception {
+        if (!Files.isRegularFile(path)) throw new IllegalStateException("恢复文件不存在。");
+        FileFingerprint current = fingerprint(Files.readAttributes(path, BasicFileAttributes.class));
+        if (verified == null || !verified.equals(current)) {
+            verifyChecksum(path, expected);
+        }
+    }
+
+    private FileFingerprint fingerprint(BasicFileAttributes attributes) {
+        return new FileFingerprint(attributes.size(), attributes.lastModifiedTime().toMillis(),
+                attributes.fileKey() == null ? null : attributes.fileKey().toString());
     }
 
     private String uncheckedChecksum(Path path) {
@@ -551,7 +655,8 @@ public class RestoreService {
     private record SourceFile(String kind, long id, String name, Path path, String checksum, String format, String dbType) { }
     private record PreparedPlan(String token, Instant expiresAt, RestorePreflightRequest request, SourceFile source,
                                 String targetDbType, long statementCount, List<String> namespaces, List<String> tables,
-                                String resolvedToolPath) { }
+                                String resolvedToolPath, FileFingerprint fingerprint) { }
+    private record FileFingerprint(long size, long modifiedMillis, String fileKey) { }
     private record TableName(String namespace, String name) { }
     private record MysqlTarget(String host, int port, String database) { }
     private static final class CancelledException extends RuntimeException { }

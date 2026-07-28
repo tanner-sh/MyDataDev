@@ -83,6 +83,8 @@ const HISTORY_PAGE_SIZE = 20;
 export type BackupPanelProps = {
   connections: Connection[];
   backups: BackupTask[];
+  taskPage: number;
+  taskHasMore: boolean;
   selected: Connection | null;
   activeTable: ActiveTable | null;
   loading: boolean;
@@ -97,6 +99,7 @@ export type BackupPanelProps = {
   onRun: (id: number) => void;
   onDownload: (id: number) => void;
   onLoadHistory: (id: number, page: number, pageSize: number) => Promise<BackupHistoryPage>;
+  onLoadTaskPage: (page: number) => Promise<void>;
   onCancelHistory: (taskId: number, historyId: number) => Promise<void>;
   onDeleteHistory: (taskId: number, historyId: number, deleteFile: boolean) => Promise<void>;
   onDownloadHistory: (taskId: number, historyId: number) => void;
@@ -137,7 +140,9 @@ export function BackupPanel(props: BackupPanelProps) {
     }
   }, []);
 
-  useEffect(() => { void loadNativeTools(); }, [loadNativeTools]);
+  useEffect(() => {
+    if (activeTab === 'restore' && nativeTools.length === 0 && !nativeToolsLoading) void loadNativeTools();
+  }, [activeTab, loadNativeTools, nativeTools.length, nativeToolsLoading]);
 
   return <div className="backup-center-shell">
     <Tabs activeKey={activeTab} onChange={setActiveTab} destroyOnHidden items={[
@@ -151,6 +156,8 @@ export function BackupPanel(props: BackupPanelProps) {
 function BackupTasksPanel({
   connections: _connections,
   backups,
+  taskPage,
+  taskHasMore,
   selected,
   activeTable,
   loading,
@@ -165,6 +172,7 @@ function BackupTasksPanel({
   onRun,
   onDownload,
   onLoadHistory,
+  onLoadTaskPage,
   onCancelHistory,
   onDeleteHistory,
   onDownloadHistory,
@@ -185,7 +193,6 @@ function BackupTasksPanel({
   const [deletingTaskId, setDeletingTaskId] = useState<number | null>(null);
   const [runningTaskId, setRunningTaskId] = useState<number | null>(null);
   const [taskAction, setTaskAction] = useState<string | null>(null);
-  const [taskPage, setTaskPage] = useState(0);
   const [historyTask, setHistoryTask] = useState<BackupTask | null>(null);
   const [histories, setHistories] = useState<BackupHistory[]>([]);
   const [historyPage, setHistoryPage] = useState(0);
@@ -199,10 +206,6 @@ function BackupTasksPanel({
   const [schedulePreviewError, setSchedulePreviewError] = useState('');
   const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false);
   const [listSchedulePreviews, setListSchedulePreviews] = useState<Record<string, BackupSchedulePreview>>({});
-
-  useEffect(() => {
-    setTaskPage((current) => Math.min(current, Math.max(0, Math.ceil(backups.length / 10) - 1)));
-  }, [backups.length]);
 
   const scope = Form.useWatch('scope', form) || 'DATABASE';
   const schemaName = Form.useWatch('schemaName', form) || '';
@@ -223,11 +226,18 @@ function BackupTasksPanel({
     monthlyDay,
     advancedCron
   }), [advancedCron, monthlyDay, scheduleKind, scheduleTime, weeklyDays]);
-  const scheduledCronKey = useMemo(() => [...new Set(backups
+
+  useEffect(() => {
+    if (editorOpen && nativeBackup && toolMode === 'AUTO' && nativeTools.length === 0 && !nativeToolsLoading) {
+      void onRefreshNativeTools();
+    }
+  }, [editorOpen, nativeBackup, nativeTools.length, nativeToolsLoading, onRefreshNativeTools, toolMode]);
+  const visibleBackups = backups;
+  const scheduledCronKey = useMemo(() => [...new Set(visibleBackups
     .filter((task) => task.cron?.trim() && (!task.zoneId || (task.enabled && !task.nextRunAt)))
     .map((task) => task.cron!.trim()))]
     .sort()
-    .join('\u0000'), [backups]);
+    .join('\u0000'), [visibleBackups]);
 
   const namespaceLoader = useCallback(async (query: BackupTargetQuery) => {
     if (!onLoadNamespaces) return emptyTargetPage(query.page, query.pageSize);
@@ -540,7 +550,6 @@ function BackupTasksPanel({
   }
 
   const methodOptions = backupMethodOptions(selected, backupMethod);
-  const visibleBackups = backups.slice(taskPage * 10, taskPage * 10 + 10);
 
   return (
     <section className="inspector-section">
@@ -610,7 +619,17 @@ function BackupTasksPanel({
               </article>
             );
           })}
-          {backups.length > 10 && <Pagination size="small" current={taskPage + 1} pageSize={10} total={backups.length} showSizeChanger={false} onChange={(page) => setTaskPage(page - 1)} />}
+          {(taskPage > 0 || taskHasMore) && (
+            <Pagination
+              size="small"
+              current={taskPage + 1}
+              pageSize={10}
+              total={(taskPage + 1) * 10 + (taskHasMore ? 1 : 0)}
+              showSizeChanger={false}
+              disabled={loading}
+              onChange={(page) => void onLoadTaskPage(page - 1)}
+            />
+          )}
           </div>
         )}
       </Space>

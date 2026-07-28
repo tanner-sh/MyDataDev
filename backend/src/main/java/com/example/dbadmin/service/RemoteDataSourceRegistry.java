@@ -1,9 +1,14 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.DbConnection;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.metrics.micrometer.MicrometerMetricsTrackerFactory;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
@@ -20,6 +25,25 @@ public class RemoteDataSourceRegistry {
     private static final int MAX_POOL_SIZE = 3;
     private static final long CONNECTION_TIMEOUT_MS = 10_000;
     private final Map<Long, PoolEntry> pools = new LinkedHashMap<>();
+    private final int maxPools;
+    private final int maximumPoolSize;
+    private final long connectionTimeoutMs;
+    private final MeterRegistry meterRegistry;
+
+    public RemoteDataSourceRegistry() {
+        this.maxPools = MAX_POOLS;
+        this.maximumPoolSize = MAX_POOL_SIZE;
+        this.connectionTimeoutMs = CONNECTION_TIMEOUT_MS;
+        this.meterRegistry = null;
+    }
+
+    @Autowired
+    public RemoteDataSourceRegistry(AppProperties properties, ObjectProvider<MeterRegistry> meterRegistry) {
+        this.maxPools = Math.max(1, properties.getRemotePool().getMaxPools());
+        this.maximumPoolSize = Math.max(2, properties.getRemotePool().getMaximumPoolSize());
+        this.connectionTimeoutMs = Math.max(1_000, properties.getRemotePool().getConnectionTimeoutMs());
+        this.meterRegistry = meterRegistry.getIfAvailable();
+    }
 
     public Connection open(DbConnection connection, String password) throws Exception {
         HikariDataSource dataSource;
@@ -93,7 +117,7 @@ public class RemoteDataSourceRegistry {
     }
 
     private void makeRoom() {
-        if (pools.size() < MAX_POOLS) return;
+        if (pools.size() < maxPools) return;
         Map.Entry<Long, PoolEntry> idle = pools.entrySet().stream()
                 .filter(entry -> entry.getValue().pendingBorrows() == 0)
                 .filter(entry -> entry.getValue().dataSource().getHikariPoolMXBean() == null
@@ -111,8 +135,8 @@ public class RemoteDataSourceRegistry {
         config.setPassword(password);
         config.setReadOnly(readonly);
         config.setMinimumIdle(0);
-        config.setMaximumPoolSize(MAX_POOL_SIZE);
-        config.setConnectionTimeout(CONNECTION_TIMEOUT_MS);
+        config.setMaximumPoolSize(maximumPoolSize);
+        config.setConnectionTimeout(connectionTimeoutMs);
         config.setValidationTimeout(5_000);
         config.setIdleTimeout(60_000);
         config.setMaxLifetime(600_000);
@@ -120,6 +144,7 @@ public class RemoteDataSourceRegistry {
         // network attempt so one unreachable database cannot block every pool.
         config.setInitializationFailTimeout(-1);
         config.setPoolName("dbadmin-" + poolName + "-" + Integer.toUnsignedString(System.identityHashCode(config)));
+        if (meterRegistry != null) config.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(meterRegistry));
         return new HikariDataSource(config);
     }
 

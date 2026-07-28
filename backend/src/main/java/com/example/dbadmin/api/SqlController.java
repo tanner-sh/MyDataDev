@@ -95,12 +95,10 @@ public class SqlController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         String format = normalizedExportFormat(request.format());
-        ExportService.PreparedExport prepared = exportService.prepare(
-                request.connectionId(), request.sql(), format, actor, productionConfirmation
-        );
+        exportService.validate(request.connectionId(), request.sql(), format, productionConfirmation);
         StreamingResponseBody body = output -> {
             try {
-                prepared.writeTo(output);
+                exportService.stream(request.connectionId(), request.sql(), format, actor, productionConfirmation, output);
             } catch (java.io.IOException e) {
                 throw e;
             } catch (Exception e) {
@@ -109,10 +107,9 @@ public class SqlController {
         };
         return ResponseEntity.ok()
                 .contentType(exportContentType(format))
-                .contentLength(prepared.size())
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"query-result." + format + "\"")
                 .header("X-Export-Row-Limit", String.valueOf(ExportService.EXPORT_MAX_ROWS))
-                .header("X-Export-Truncated", String.valueOf(prepared.truncated()))
+                .header("X-Export-Truncated", "unknown")
                 .body(body);
     }
 

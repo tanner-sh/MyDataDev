@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 @Component
@@ -25,6 +26,7 @@ public class NativeToolLocator {
     private final AppProperties properties;
     private final Map<String, String> environment;
     private final String osName;
+    private final Map<Tool, CachedStatus> statusCache = new ConcurrentHashMap<>();
 
     @Autowired
     public NativeToolLocator(AppProperties properties) {
@@ -60,6 +62,14 @@ public class NativeToolLocator {
     }
 
     public NativeToolStatus detect(Tool tool) {
+        CachedStatus cached = statusCache.get(tool);
+        if (cached != null && cached.expiresAtNanos() > System.nanoTime()) return cached.status();
+        NativeToolStatus status = detectUncached(tool);
+        statusCache.put(tool, new CachedStatus(status, System.nanoTime() + TimeUnit.MINUTES.toNanos(5)));
+        return status;
+    }
+
+    private NativeToolStatus detectUncached(Tool tool) {
         try {
             ResolvedTool resolved = resolve(tool, null);
             return new NativeToolStatus(tool.name(), tool.displayName(), true, resolved.path().toString(), resolved.version(), resolved.source(), "已自动发现");
@@ -69,7 +79,12 @@ public class NativeToolLocator {
     }
 
     public List<NativeToolStatus> detectAll() {
-        return java.util.Arrays.stream(Tool.values()).map(this::detect).toList();
+        return java.util.Arrays.stream(Tool.values()).parallel().map(this::detect).toList();
+    }
+
+    public List<NativeToolStatus> detectAll(boolean refresh) {
+        if (refresh) statusCache.clear();
+        return detectAll();
     }
 
     public void validateOverrideName(Tool tool, String override) {
@@ -243,4 +258,5 @@ public class NativeToolLocator {
     public record ResolvedTool(Tool tool, Path path, String version, String source) { }
     private record Candidate(Path path, String source) { }
     private record Probe(boolean success, String version, String message) { }
+    private record CachedStatus(NativeToolStatus status, long expiresAtNanos) { }
 }

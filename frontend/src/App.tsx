@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -34,6 +34,8 @@ const OBJECT_PAGE_SIZE = 200;
 const MAX_TABLE_CHANGES = 1_000;
 const MAX_STRUCTURE_CACHE_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
+const MAX_SQL_TABS = 20;
+const MAX_RETAINED_RESULT_UNITS = 400_000;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -42,6 +44,45 @@ const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionD
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
+
+function resultUnits(tab: SqlTab) {
+  return tab.results.reduce((total, statement) => {
+    const result = statement.result;
+    if (!result?.resultSet) return total;
+    let units = result.rows.length * Math.max(result.columns.length, 1);
+    for (const row of result.rows) {
+      for (const value of row) {
+        if (typeof value === 'string') units += Math.ceil(value.length / 100);
+      }
+    }
+    return total + units;
+  }, 0);
+}
+
+function enforceResultBudget(tabs: SqlTab[], protectedTabId: string) {
+  let retained = 0;
+  const keep = new Set<string>();
+  const candidates = [
+    ...tabs.filter((tab) => tab.id === protectedTabId),
+    ...tabs.filter((tab) => tab.id !== protectedTabId).reverse()
+  ];
+  for (const tab of candidates) {
+    const units = resultUnits(tab);
+    if (tab.id === protectedTabId || retained + units <= MAX_RETAINED_RESULT_UNITS) {
+      keep.add(tab.id);
+      retained += units;
+    }
+  }
+  return tabs.map((tab) => {
+    if (keep.has(tab.id) || tab.results.length === 0) return tab;
+    return {
+      ...tab,
+      results: [],
+      activeResultKey: undefined,
+      message: '为控制浏览器内存，已释放该标签页的旧结果；SQL 文本仍保留，可重新执行。'
+    };
+  });
+}
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -67,8 +108,10 @@ export default function App() {
   const [connectionsLoading, setConnectionsLoading] = useState(false);
   const [connectionsError, setConnectionsError] = useState('');
   const [connectionsReady, setConnectionsReady] = useState(false);
-  const [testingConnectionId, setTestingConnectionId] = useState<number | null>(null);
-  const [backups, setBackups] = useState<BackupTask[]>([]);
+  const [testingConnectionId, setTestingConnectionId] = useState<number | null>(null);
+  const [backups, setBackups] = useState<BackupTask[]>([]);
+  const [backupTaskPage, setBackupTaskPage] = useState(0);
+  const [backupTaskHasMore, setBackupTaskHasMore] = useState(false);
   const [connectionEditor, setConnectionEditor] = useState(CLOSED_CONNECTION_EDITOR);
   const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
@@ -199,7 +242,7 @@ export default function App() {
 
   useEffect(() => {
     if (activeDrawer !== 'backups') return;
-    refreshBackups(selected).catch(() => showError('备份任务加载失败，可稍后刷新。'));
+    refreshBackups(selected, 0).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [activeDrawer, selected?.id]);
 
   useVisiblePolling({
@@ -312,16 +355,20 @@ export default function App() {
     }
   }
 
-  async function refreshBackups(conn = selected) {
+  async function refreshBackups(conn = selected, pageNumber = backupTaskPage) {
     if (!conn) {
       setBackups([]);
+      setBackupTaskPage(0);
+      setBackupTaskHasMore(false);
       return;
     }
     const requestId = ++backupRequestSeqRef.current;
     try {
-      const rows = await api<BackupTask[]>(`/backups?connectionId=${conn.id}`);
+      const page = await api<BackupTaskPage>(`/backups/page?connectionId=${conn.id}&page=${pageNumber}&pageSize=10`);
       if (requestId === backupRequestSeqRef.current && selectedIdRef.current === conn.id) {
-        setBackups(rows);
+        setBackups(page.items);
+        setBackupTaskPage(page.page);
+        setBackupTaskHasMore(page.hasMore);
       }
     } catch (error) {
       if (requestId === backupRequestSeqRef.current && selectedIdRef.current === conn.id) throw error;
@@ -962,12 +1009,12 @@ export default function App() {
         })
       });
       if (data.page) data.page.previousOffsets = navigation.previousOffsets;
-      setSqlTabs((tabs) => tabs.map((tab) => tab.id !== tabId ? tab : {
-        ...tab,
-        results: tab.results.map((item) => statementResultKey(item) === resultKey ? { ...item, result: data } : item),
-        message: `已加载第 ${data.page ? data.page.offset + 1 : navigation.offset + 1} 行起的查询结果，返回 ${data.rows.length} 行`,
-        statusKind: 'success'
-      }));
+      setSqlTabs((tabs) => enforceResultBudget(tabs.map((tab) => tab.id !== tabId ? tab : {
+          ...tab,
+          results: tab.results.map((item) => statementResultKey(item) === resultKey ? { ...item, result: data } : item),
+          message: `已加载第 ${data.page ? data.page.offset + 1 : navigation.offset + 1} 行起的查询结果，返回 ${data.rows.length} 行`,
+          statusKind: 'success'
+        }), tabId));
     } catch (e) {
       const errorMessage = localizeMessage((e as Error).message);
       showError(errorMessage);
@@ -1126,12 +1173,19 @@ export default function App() {
     }
   }
 
-  function updateActiveSqlTab(patch: Partial<SqlTab>) {
-    setSqlTabs((tabs) => tabs.map((tab) => tab.id === activeSqlTab.id ? { ...tab, ...patch } : tab));
-  }
-
+  function updateActiveSqlTab(patch: Partial<SqlTab>) {
+    setSqlTabs((tabs) => enforceResultBudget(
+      tabs.map((tab) => tab.id === activeSqlTab.id ? { ...tab, ...patch } : tab),
+      activeSqlTab.id
+    ));
+  }
+
   function addSqlTab() {
-    const nextIndex = sqlTabSeqRef.current + 1;
+    if (sqlTabs.length >= MAX_SQL_TABS) {
+      toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
+      return;
+    }
+    const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
     const tab = createSqlTab(nextIndex);
     setSqlTabs((tabs) => [...tabs, tab]);
@@ -1255,9 +1309,9 @@ export default function App() {
     model: Monaco.editor.ITextModel,
     position: Monaco.Position,
     monaco: Parameters<OnMount>[1],
-    token: Monaco.CancellationToken
+    token: Monaco.CancellationToken,
+    context: ReturnType<typeof analyzeSqlCompletion> = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position))
   ) {
-    const context = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
     if (context.insideCommentOrString || context.mode === 'none') return [];
     const start = model.getPositionAt(context.replacement.start);
     const end = model.getPositionAt(context.replacement.end);
@@ -1270,6 +1324,8 @@ export default function App() {
     const keywords = sqlKeywordCompletionItems(monaco, range);
     const connectionId = selectedIdRef.current;
     if (!connectionId) return keywords;
+    await sleep(80);
+    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
     const schemaName = metadataRef.current?.selectedSchema || '';
     const prefix = context.replacement.prefix.toLowerCase();
     let catalog: CompletionCatalog;
@@ -1344,7 +1400,7 @@ export default function App() {
       ) => {
         const completionContext = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
         return {
-          suggestions: await sqlCompletionItems(model, position, monaco, token),
+          suggestions: await sqlCompletionItems(model, position, monaco, token, completionContext),
           incomplete: isSqlCompletionListIncomplete(completionContext)
         };
       }
@@ -1651,7 +1707,7 @@ export default function App() {
         ? await api<BackupTask>(`/backups/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await api<BackupTask>('/backups', { method: 'POST', body: JSON.stringify(payload) });
       showSuccess(id ? `已更新备份任务：${task.name}` : `已创建备份任务：${task.name}`);
-      await refreshBackups(selected);
+      await refreshBackups(selected, id ? backupTaskPage : 0);
     } catch (e) {
       showError(`${id ? '更新' : '创建'}备份任务失败：${localizeMessage((e as Error).message)}`);
       throw e;
@@ -1665,7 +1721,7 @@ export default function App() {
     try {
       const task = await api<BackupTask>(`/backups/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
       showSuccess(`${task.name} 已${task.enabled ? '启用' : '停用'}`);
-      await refreshBackups(selected);
+      await refreshBackups(selected, backupTaskPage);
     } catch (e) {
       showError(`更新备份任务状态失败：${localizeMessage((e as Error).message)}`);
     } finally {
@@ -1678,7 +1734,7 @@ export default function App() {
     try {
       await api<{ ok: boolean; message: string }>(`/backups/${id}?deleteFile=${deleteFile}`, { method: 'DELETE' });
       showSuccess(deleteFile ? '已删除备份任务和所有历史备份文件' : '已删除备份任务');
-      await refreshBackups(selected);
+      await refreshBackups(selected, backups.length === 1 && backupTaskPage > 0 ? backupTaskPage - 1 : backupTaskPage);
     } catch (e) {
       showError(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
       throw e;
@@ -1783,6 +1839,19 @@ export default function App() {
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openConnectionsFromHeader = useStableEvent(() => setActiveDrawer('connections'));
   const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
+  const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
+  const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
+  const previewBackupScheduleEvent = useStableEvent((cron: string) => previewBackupSchedule(cron));
+  const saveBackupEvent = useStableEvent((id: number | null, form: BackupTaskForm) => saveBackup(id, form));
+  const toggleBackupEvent = useStableEvent((id: number, enabled: boolean) => toggleBackup(id, enabled));
+  const deleteBackupEvent = useStableEvent((id: number, deleteFile: boolean) => deleteBackup(id, deleteFile));
+  const runBackupEvent = useStableEvent((id: number) => runBackup(id));
+  const downloadBackupEvent = useStableEvent((id: number) => downloadBackup(id));
+  const loadBackupHistoryEvent = useStableEvent((id: number, page: number, pageSize: number) => loadBackupHistory(id, page, pageSize));
+  const loadBackupTaskPageEvent = useStableEvent((page: number) => refreshBackups(selected, page));
+  const cancelBackupHistoryEvent = useStableEvent((taskId: number, historyId: number) => cancelBackupHistory(taskId, historyId));
+  const deleteBackupHistoryEvent = useStableEvent((taskId: number, historyId: number, deleteFile: boolean) => deleteBackupHistory(taskId, historyId, deleteFile));
+  const downloadBackupHistoryEvent = useStableEvent((taskId: number, historyId: number) => downloadBackupHistory(taskId, historyId));
   const toggleThemeFromHeader = useStableEvent(() => layoutPreferences.setThemeMode((current) => current === 'light' ? 'dark' : 'light'));
   const addSqlTabEvent = useStableEvent(() => addSqlTab());
   const closeSqlTabEvent = useStableEvent((tabId: string) => closeSqlTab(tabId));
@@ -1893,7 +1962,12 @@ export default function App() {
 
           <main className="app-content">
             <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载工作区…</div>}>
-            {mode === 'sql' ? (
+            {mode === 'sql' && !selected ? (
+              <div className="empty-state empty-state-fill">
+                <Typography.Title level={4}>选择数据库连接后加载 SQL 工作台</Typography.Title>
+                <Text type="secondary">编辑器和数据库元数据会在连接确定后按需加载。</Text>
+              </div>
+            ) : mode === 'sql' ? (
               <SqlWorkspace
                 selected={selected}
                 tabs={sqlTabs}
@@ -2052,23 +2126,26 @@ export default function App() {
           <BackupPanel
           connections={connections}
           backups={backups}
+          taskPage={backupTaskPage}
+          taskHasMore={backupTaskHasMore}
           selected={selected}
           activeTable={currentBackupTable}
           loading={backupLoading}
           namespaceKind={metadata?.namespaceKind}
           editorRequest={backupEditorRequest}
-          onLoadNamespaces={loadBackupNamespaces}
-          onLoadTables={loadBackupTables}
-          onPreviewSchedule={previewBackupSchedule}
-          onSave={saveBackup}
-          onToggle={toggleBackup}
-          onDelete={deleteBackup}
-          onRun={runBackup}
-          onDownload={downloadBackup}
-          onLoadHistory={loadBackupHistory}
-          onCancelHistory={cancelBackupHistory}
-          onDeleteHistory={deleteBackupHistory}
-          onDownloadHistory={downloadBackupHistory}
+          onLoadNamespaces={loadBackupNamespacesEvent}
+          onLoadTables={loadBackupTablesEvent}
+          onPreviewSchedule={previewBackupScheduleEvent}
+          onSave={saveBackupEvent}
+          onToggle={toggleBackupEvent}
+          onDelete={deleteBackupEvent}
+          onRun={runBackupEvent}
+          onDownload={downloadBackupEvent}
+          onLoadHistory={loadBackupHistoryEvent}
+          onLoadTaskPage={loadBackupTaskPageEvent}
+          onCancelHistory={cancelBackupHistoryEvent}
+          onDeleteHistory={deleteBackupHistoryEvent}
+          onDownloadHistory={downloadBackupHistoryEvent}
           />
         </Suspense>
       </Drawer>

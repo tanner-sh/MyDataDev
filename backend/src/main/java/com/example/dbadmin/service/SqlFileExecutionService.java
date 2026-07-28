@@ -17,10 +17,13 @@ import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -52,11 +55,15 @@ public class SqlFileExecutionService {
     private final AuditRepository audit;
     private final AppProperties properties;
     private final SqlFileExecutionCoordinator coordinator;
+    private final BackgroundTaskControl taskControl;
+    private final LargeFileUploadGuard uploadGuard;
     private final Map<Long, Statement> runningStatements = new ConcurrentHashMap<>();
+    private final Map<Long, FileFingerprint> analyzedSources = new ConcurrentHashMap<>();
 
     public SqlFileExecutionService(SqlFileExecutionRepository jobs, ConnectionService connections, ExecutionGuard guard,
                                    SqlStatementClassifier classifier, SqlScriptSplitter scriptSplitter, DialectRegistry dialects, MetadataService metadata,
-                                   AuditRepository audit, AppProperties properties, SqlFileExecutionCoordinator coordinator) {
+                                   AuditRepository audit, AppProperties properties, SqlFileExecutionCoordinator coordinator,
+                                   BackgroundTaskControl taskControl, LargeFileUploadGuard uploadGuard) {
         this.jobs = jobs;
         this.connections = connections;
         this.guard = guard;
@@ -67,6 +74,8 @@ public class SqlFileExecutionService {
         this.audit = audit;
         this.properties = properties;
         this.coordinator = coordinator;
+        this.taskControl = taskControl;
+        this.uploadGuard = uploadGuard;
     }
 
     @PostConstruct
@@ -96,6 +105,9 @@ public class SqlFileExecutionService {
         if (!target.startsWith(root)) throw new IllegalArgumentException("SQL 文件路径不安全。");
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long size = 0;
+        if (!uploadGuard.tryAcquire()) {
+            throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "UPLOAD_BUSY", "当前大文件上传数量已达上限，请稍后重试。");
+        }
         try (var output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
             byte[] buffer = new byte[128 * 1024];
             int read;
@@ -109,6 +121,8 @@ public class SqlFileExecutionService {
         } catch (Exception error) {
             Files.deleteIfExists(target);
             throw error;
+        } finally {
+            uploadGuard.release();
         }
         if (size == 0) {
             Files.deleteIfExists(target);
@@ -128,6 +142,8 @@ public class SqlFileExecutionService {
             throw error;
         }
         try {
+            analyzedSources.put(id, fingerprint(Files.readAttributes(target, BasicFileAttributes.class)));
+            taskControl.clear(sqlFileOperationKey(id));
             coordinator.submit(id, () -> analyze(id));
         } catch (RejectedExecutionException error) {
             jobs.markTerminal(id, "FAILED", "QUEUE_FULL", 0, 0, 0, null, null, "SQL 文件分析队列已满，任务未启动。");
@@ -150,10 +166,24 @@ public class SqlFileExecutionService {
         if (jobs.countRunningByConnection(connection.id()) > 0) {
             throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_ALREADY_RUNNING", "该连接已有 SQL 文件任务正在执行。");
         }
-        if (!jobs.queue(id)) throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_NOT_READY", "SQL 文件任务状态已发生变化。");
+        String operationKey = sqlFileOperationKey(id);
+        if (!taskControl.tryAcquire(connection.id(), operationKey)) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。");
+        }
+        if (!jobs.queue(id)) {
+            taskControl.release(connection.id(), operationKey);
+            throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_NOT_READY", "SQL 文件任务状态已发生变化。");
+        }
         try {
-            coordinator.submit(id, () -> execute(id));
+            coordinator.submit(id, () -> {
+                try {
+                    execute(id);
+                } finally {
+                    taskControl.release(connection.id(), operationKey);
+                }
+            });
         } catch (RejectedExecutionException error) {
+            taskControl.release(connection.id(), operationKey);
             jobs.markTerminal(id, "FAILED", "QUEUE_FULL", 0, 0, 0, null, null, "SQL 文件执行队列已满，任务未启动。");
             deleteFileQuietly(job);
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "SQL_FILE_QUEUE_FULL", "SQL 文件执行队列已满，请稍后重试。");
@@ -166,9 +196,13 @@ public class SqlFileExecutionService {
         SqlFileExecution job = require(id);
         if (!Set.of("ANALYZING", "READY", "QUEUED", "RUNNING").contains(job.status())) return response(job);
         jobs.requestCancel(id);
+        taskControl.requestCancel(sqlFileOperationKey(id));
         Statement statement = runningStatements.get(id);
         if (statement != null) try { statement.cancel(); } catch (Exception ignored) { }
         coordinator.cancel(id);
+        if (Set.of("QUEUED", "RUNNING").contains(job.status())) {
+            taskControl.release(job.connectionId(), sqlFileOperationKey(id));
+        }
         jobs.markTerminal(id, "CANCELLED", "CANCELLED", job.statementCurrent(), job.successCount(), job.queryRowCount(),
                 null, null, "SQL 文件任务已取消。");
         deleteFileQuietly(job);
@@ -181,7 +215,9 @@ public class SqlFileExecutionService {
     public SqlFileExecutionPage list(Long connectionId, Integer page, Integer pageSize) {
         int safePage = Math.max(page == null ? 0 : page, 0);
         int size = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
-        var rows = jobs.findPage(connectionId, size + 1, (long) safePage * size);
+        long offset = (long) safePage * size;
+        if (offset > 1_000_000) throw new IllegalArgumentException("SQL 文件任务分页偏移过大，请缩小页码。");
+        var rows = jobs.findPage(connectionId, size + 1, offset);
         boolean hasMore = rows.size() > size;
         if (hasMore) rows = rows.subList(0, size);
         return new SqlFileExecutionPage(rows.stream().map(this::response).toList(), safePage, size, hasMore);
@@ -192,29 +228,25 @@ public class SqlFileExecutionService {
         try {
             ensureNotCancelled(id);
             Path path = checkedPath(job);
-            Charset charset = SqlFileStatementReader.detectCharset(path);
-            long[] counts = new long[5];
-            boolean[] flags = new boolean[2];
-            SqlFileStatementReader.read(path, charset, job.targetDbType(), properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
-                ensureNotCancelled(id);
-                var parts = scriptSplitter.split(sql);
-                if (parts.stream().anyMatch(part -> TRANSACTION_CONTROL.matcher(part.sql()).find())) {
-                    throw new IllegalArgumentException("第 " + index + " 个执行单元包含事务控制语句；SQL 文件任务采用逐条提交，请移除该语句。");
-                }
-                SqlStatementClassifier.Kind kind = strongestKind(parts.stream().map(part -> classifier.classify(part.sql())).toList());
-                counts[0]++;
-                switch (kind) {
-                    case QUERY -> counts[1]++;
-                    case MUTATION -> counts[2]++;
-                    case DDL -> { counts[3]++; flags[0] = true; }
-                    case UNKNOWN -> counts[4]++;
-                }
-                flags[1] = flags[1] || parts.stream().anyMatch(part -> classifier.changesSession(part.sql()));
-            }, bytes -> {
-                ensureNotCancelled(id);
-                jobs.updateAnalysisProgress(id, Math.min(bytes, job.fileSize()));
-            });
-            if (counts[0] == 0) throw new IllegalArgumentException("SQL 文件中没有可执行语句。");
+            FileFingerprint before = fingerprint(Files.readAttributes(path, BasicFileAttributes.class));
+            FileFingerprint uploaded = analyzedSources.get(id);
+            if (uploaded == null || !uploaded.equals(before)) verifyChecksum(job);
+            Charset bomCharset = SqlFileStatementReader.detectBomCharset(path);
+            Charset charset = bomCharset == null ? StandardCharsets.UTF_8 : bomCharset;
+            FileAnalysis analysis;
+            try {
+                analysis = analyzeFile(job, path, charset);
+            } catch (CharacterCodingException invalidUtf8) {
+                if (bomCharset != null) throw invalidUtf8;
+                charset = Charset.forName("GB18030");
+                analysis = analyzeFile(job, path, charset);
+            }
+            if (analysis.counts()[0] == 0) throw new IllegalArgumentException("SQL 文件中没有可执行语句。");
+            FileFingerprint after = fingerprint(Files.readAttributes(path, BasicFileAttributes.class));
+            if (!before.equals(after)) throw new IllegalStateException("SQL 文件在分析期间发生变化，请重新选择文件。");
+            analyzedSources.put(id, after);
+            long[] counts = analysis.counts();
+            boolean[] flags = analysis.flags();
             jobs.markReady(id, charset.name(), counts[0], counts[1], counts[2], counts[3], counts[4], flags[0], flags[1]);
         } catch (CancelledException ignored) {
             jobs.markTerminal(id, "CANCELLED", "CANCELLED", 0, 0, 0, null, null, "SQL 文件解析已取消。");
@@ -225,6 +257,34 @@ public class SqlFileExecutionService {
         }
     }
 
+    private FileAnalysis analyzeFile(SqlFileExecution job, Path path, Charset charset) throws Exception {
+        long[] counts = new long[5];
+        boolean[] flags = new boolean[2];
+        long[] lastProgressNanos = {0};
+        SqlFileStatementReader.read(path, charset, job.targetDbType(), properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
+            ensureNotCancelled(job.id());
+            var parts = scriptSplitter.split(sql);
+            if (parts.stream().anyMatch(part -> TRANSACTION_CONTROL.matcher(part.sql()).find())) {
+                throw new IllegalArgumentException("第 " + index + " 个执行单元包含事务控制语句；SQL 文件任务采用分批提交，请移除该语句。");
+            }
+            SqlStatementClassifier.Kind kind = strongestKind(parts.stream().map(part -> classifier.classify(part.sql())).toList());
+            counts[0]++;
+            switch (kind) {
+                case QUERY -> counts[1]++;
+                case MUTATION -> counts[2]++;
+                case DDL -> { counts[3]++; flags[0] = true; }
+                case UNKNOWN -> counts[4]++;
+            }
+            flags[1] = flags[1] || parts.stream().anyMatch(part -> classifier.changesSession(part.sql()));
+        }, bytes -> {
+            ensureNotCancelled(job.id());
+            if (progressDue(lastProgressNanos)) {
+                jobs.updateAnalysisProgress(job.id(), Math.min(bytes, job.fileSize()));
+            }
+        });
+        return new FileAnalysis(counts, flags);
+    }
+
     private void execute(long id) {
         SqlFileExecution job = require(id);
         long[] current = {0};
@@ -233,45 +293,62 @@ public class SqlFileExecutionService {
         try {
             jobs.markRunning(id);
             ensureNotCancelled(id);
-            verifyChecksum(job);
+            verifyUnchanged(job);
             DbConnection target = connections.require(job.connectionId());
             DatabaseDialect dialect = dialects.dialectFor(target);
             try (Connection connection = connections.open(job.connectionId())) {
                 connection.setAutoCommit(false);
-                SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
-                        properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
-                    ensureNotCancelled(id);
-                    current[0] = index;
-                    try (Statement statement = connection.createStatement()) {
-                        runningStatements.put(id, statement);
-                        dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
-                        boolean result = statement.execute(sql);
-                        while (true) {
-                            if (result) {
-                                try (ResultSet rows = statement.getResultSet()) {
-                                    while (rows.next()) {
-                                        queryRows[0]++;
-                                        if ((queryRows[0] & 4095) == 0) ensureNotCancelled(id);
+                long[] pending = {0};
+                long[] lastProgressNanos = {0};
+                int commitBatchSize = Math.max(1, properties.getSqlFile().getCommitBatchSize());
+                try (Statement statement = connection.createStatement()) {
+                    runningStatements.put(id, statement);
+                    dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
+                    SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
+                            properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
+                        ensureNotCancelled(id);
+                        current[0] = index;
+                        try {
+                            boolean result = statement.execute(sql);
+                            while (true) {
+                                if (result) {
+                                    try (ResultSet rows = statement.getResultSet()) {
+                                        while (rows.next()) {
+                                            queryRows[0]++;
+                                            if ((queryRows[0] & 4095) == 0) ensureNotCancelled(id);
+                                        }
                                     }
+                                } else if (statement.getUpdateCount() == -1) {
+                                    break;
                                 }
-                            } else if (statement.getUpdateCount() == -1) {
-                                break;
+                                result = statement.getMoreResults();
                             }
-                            result = statement.getMoreResults();
+                            pending[0]++;
+                            if (pending[0] >= commitBatchSize) {
+                                connection.commit();
+                                success[0] += pending[0];
+                                pending[0] = 0;
+                            }
+                            if (progressDue(lastProgressNanos)) {
+                                long executed = success[0] + pending[0];
+                                jobs.updateExecutionProgress(id, index, executed, queryRows[0], "已执行第 " + index + " / " + job.statementTotal() + " 条语句。");
+                            }
+                        } catch (CancelledException error) {
+                            try { connection.rollback(); } catch (Exception ignored) { }
+                            throw error;
+                        } catch (Exception error) {
+                            try { connection.rollback(); } catch (Exception ignored) { }
+                            throw new StatementFailure(index, sql, error);
                         }
-                        connection.commit();
-                        success[0]++;
-                        jobs.updateExecutionProgress(id, index, success[0], queryRows[0], "已执行第 " + index + " / " + job.statementTotal() + " 条语句。");
-                    } catch (CancelledException error) {
-                        try { connection.rollback(); } catch (Exception ignored) { }
-                        throw error;
-                    } catch (Exception error) {
-                        try { connection.rollback(); } catch (Exception ignored) { }
-                        throw new StatementFailure(index, sql, error);
-                    } finally {
-                        runningStatements.remove(id);
-                    }
-                }, ignored -> ensureNotCancelled(id));
+                    }, ignored -> ensureNotCancelled(id));
+                    connection.commit();
+                    success[0] += pending[0];
+                    pending[0] = 0;
+                    jobs.updateExecutionProgress(id, current[0], success[0], queryRows[0],
+                            "已执行全部 " + current[0] + " 条语句，正在收尾。");
+                } finally {
+                    runningStatements.remove(id);
+                }
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
                     "SQL 文件执行完成，共成功 " + success[0] + " 条语句。");
@@ -287,6 +364,7 @@ public class SqlFileExecutionService {
             audit.log(job.actor(), "SQL_FILE_FAILED", "connection:" + job.connectionId(), "job=" + id + "; " + safeMessage(error));
         } finally {
             runningStatements.remove(id);
+            analyzedSources.remove(id);
             if (job.metadataChanged()) metadata.invalidateConnection(job.connectionId());
             if (job.sessionChanged()) connections.resetRemoteSession(job.connectionId());
             deleteFileQuietly(job);
@@ -306,7 +384,9 @@ public class SqlFileExecutionService {
     }
 
     private void ensureNotCancelled(long id) {
-        if (Thread.currentThread().isInterrupted() || jobs.isCancelRequested(id)) throw new CancelledException();
+        if (taskControl.isCancelled(sqlFileOperationKey(id), () -> jobs.isCancelRequested(id))) {
+            throw new CancelledException();
+        }
     }
 
     private Path root() { return Path.of(properties.getSqlFile().getDirectory()).toAbsolutePath().normalize(); }
@@ -328,8 +408,34 @@ public class SqlFileExecutionService {
         }
     }
 
+    private void verifyUnchanged(SqlFileExecution job) throws Exception {
+        Path path = checkedPath(job);
+        FileFingerprint verified = analyzedSources.get(job.id());
+        FileFingerprint current = fingerprint(Files.readAttributes(path, BasicFileAttributes.class));
+        if (verified == null || !verified.equals(current)) verifyChecksum(job);
+    }
+
+    private FileFingerprint fingerprint(BasicFileAttributes attributes) {
+        return new FileFingerprint(attributes.size(), attributes.lastModifiedTime().toMillis(),
+                attributes.fileKey() == null ? null : attributes.fileKey().toString());
+    }
+
+    private boolean progressDue(long[] lastProgressNanos) {
+        long now = System.nanoTime();
+        long interval = Math.max(100, properties.getBackgroundTasks().getProgressIntervalMs()) * 1_000_000L;
+        if (lastProgressNanos[0] != 0 && now - lastProgressNanos[0] < interval) return false;
+        lastProgressNanos[0] = now;
+        return true;
+    }
+
+    private String sqlFileOperationKey(long id) {
+        return "sql-file:" + id;
+    }
+
     private void deleteFileQuietly(SqlFileExecution job) {
         try { Files.deleteIfExists(checkedPath(job)); } catch (Exception ignored) { }
+        analyzedSources.remove(job.id());
+        taskControl.clear(sqlFileOperationKey(job.id()));
     }
 
     private String safeFileName(String raw) {
@@ -361,6 +467,8 @@ public class SqlFileExecutionService {
     }
 
     private static final class CancelledException extends RuntimeException { }
+    private record FileAnalysis(long[] counts, boolean[] flags) { }
+    private record FileFingerprint(long size, long modifiedMillis, String fileKey) { }
     private static final class StatementFailure extends Exception {
         private final long index;
         private final String sql;

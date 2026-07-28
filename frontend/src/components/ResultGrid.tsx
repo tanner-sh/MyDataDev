@@ -21,6 +21,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const [pageSizeDraft, setPageSizeDraft] = useState(500);
   const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
   const [sortState, setSortState] = useState<{ key: string; order: 'ascend' | 'descend' }>();
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>([]);
   const tableRef = useRef<TableRef>(null);
   const lastScrolledRowsRef = useRef<SqlResult['rows'] | null>(null);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
@@ -37,6 +38,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     setSortState(undefined);
   }, [result?.rows]);
 
+  useEffect(() => {
+    if (!result?.resultSet) {
+      setVisibleColumnKeys([]);
+      return;
+    }
+    setVisibleColumnKeys(result.columns.slice(0, 50).map((column) => column.key));
+  }, [result?.columns, result?.resultSet]);
+
   useLayoutEffect(() => {
     if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
     if (lastScrolledRowsRef.current === result.rows) return;
@@ -46,6 +55,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
 
   const columns = useMemo<ColumnsType<ResultRow>>(() => {
     if (!result?.resultSet) return [];
+    const visible = new Set(visibleColumnKeys);
     return [
       {
         title: '序号',
@@ -55,7 +65,9 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         shouldCellUpdate: (record, previous) => record !== previous,
         render: (_value, _row, index) => rowOffset + index + 1
       },
-      ...result.columns.map((column, columnIndex) => ({
+      ...result.columns.map((column, columnIndex) => ({ column, columnIndex }))
+        .filter(({ column }) => visible.has(column.key))
+        .map(({ column, columnIndex }) => ({
         title: <span title={column.typeName}>{column.label}</span>,
         key: column.key,
         width: Math.max(140, Math.min(280, column.label.length * 14 + 48)),
@@ -86,13 +98,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
       }))
     ];
-  }, [columnFilters, result?.columns, result?.resultSet, rowOffset, sortState]);
+  }, [columnFilters, result?.columns, result?.resultSet, rowOffset, sortState, visibleColumnKeys]);
 
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
+    const originalIndexes = new Map(result.rows.map((values, index) => [values, index]));
     return filterResultRows(result.rows, result.columns, columnFilters).map((values) => ({
       values,
-      key: String(rowOffset + result.rows.indexOf(values))
+      key: String(rowOffset + (originalIndexes.get(values) ?? 0))
     }));
   }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset]);
 
@@ -114,7 +127,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             pagination={false}
             loading={pagingLoading}
             virtual
-            scroll={{ x: Math.max(800, result.columns.length * 180 + 70), y: scrollY }}
+            scroll={{ x: Math.max(800, visibleColumnKeys.length * 180 + 70), y: scrollY }}
             onChange={(_pagination, _filters, sorter) => {
               const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
               const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
@@ -124,6 +137,18 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         )}
       </div>
       <div className="grid-pagination result-grid-pagination">
+        {result.columns.length > 20 && (
+          <Select
+            mode="multiple"
+            size="small"
+            maxTagCount="responsive"
+            className="result-column-selector"
+            aria-label="选择结果列"
+            value={visibleColumnKeys}
+            options={result.columns.map((column) => ({ value: column.key, label: column.label }))}
+            onChange={(keys) => setVisibleColumnKeys(keys.length > 0 ? keys : [result.columns[0].key])}
+          />
+        )}
         {result.page ? (
           <>
             <Text type="secondary">

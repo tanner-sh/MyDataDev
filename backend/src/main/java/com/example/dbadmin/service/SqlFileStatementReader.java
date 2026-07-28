@@ -21,6 +21,15 @@ final class SqlFileStatementReader {
     }
 
     static Charset detectCharset(Path path) throws Exception {
+        Charset bom = detectBomCharset(path);
+        if (bom != null) return bom;
+        if (valid(path, StandardCharsets.UTF_8)) return StandardCharsets.UTF_8;
+        Charset gb18030 = Charset.forName("GB18030");
+        if (valid(path, gb18030)) return gb18030;
+        throw new IllegalArgumentException("无法识别 SQL 文件编码；仅支持带 BOM 的 UTF 编码、UTF-8 和 GB18030。");
+    }
+
+    static Charset detectBomCharset(Path path) throws IOException {
         byte[] prefix = new byte[3];
         int read;
         try (InputStream input = Files.newInputStream(path)) {
@@ -35,10 +44,7 @@ final class SqlFileStatementReader {
         if (read >= 2 && (prefix[0] & 0xff) == 0xfe && (prefix[1] & 0xff) == 0xff) {
             return StandardCharsets.UTF_16BE;
         }
-        if (valid(path, StandardCharsets.UTF_8)) return StandardCharsets.UTF_8;
-        Charset gb18030 = Charset.forName("GB18030");
-        if (valid(path, gb18030)) return gb18030;
-        throw new IllegalArgumentException("无法识别 SQL 文件编码；仅支持带 BOM 的 UTF 编码、UTF-8 和 GB18030。");
+        return null;
     }
 
     private static boolean valid(Path path, Charset charset) throws IOException {

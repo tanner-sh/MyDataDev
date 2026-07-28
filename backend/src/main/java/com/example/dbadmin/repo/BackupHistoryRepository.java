@@ -128,6 +128,26 @@ public class BackupHistoryRepository {
         return jdbc.query("SELECT * FROM backup_history WHERE task_id = ? AND status = 'SUCCESS' ORDER BY finished_at DESC, id DESC", mapper, taskId);
     }
 
+    public List<BackupHistory> findRetentionCandidates(long taskId, Integer keepCount, Instant cutoff, int limit) {
+        int normalizedKeepCount = keepCount == null ? Integer.MAX_VALUE : Math.max(keepCount, 0);
+        Timestamp normalizedCutoff = cutoff == null ? null : Timestamp.from(cutoff);
+        return jdbc.query("""
+                SELECT candidate.* FROM (
+                  SELECT history.*, ROW_NUMBER() OVER (ORDER BY finished_at DESC, id DESC) AS retention_rank
+                  FROM backup_history history
+                  WHERE history.task_id = ? AND history.status = 'SUCCESS'
+                ) candidate
+                WHERE (candidate.retention_rank > ? OR (? IS NOT NULL AND candidate.finished_at < ?))
+                  AND NOT EXISTS (
+                    SELECT 1 FROM restore_job job
+                    WHERE job.source_kind = 'HISTORY' AND job.source_id = candidate.id
+                      AND job.status IN ('QUEUED','RUNNING')
+                  )
+                ORDER BY candidate.finished_at, candidate.id
+                LIMIT ?
+                """, mapper, taskId, normalizedKeepCount, normalizedCutoff, normalizedCutoff, limit);
+    }
+
     public List<BackupHistory> findActive(Long connectionId) {
         return connectionId == null
                 ? jdbc.query("SELECT * FROM backup_history WHERE status IN ('QUEUED','RUNNING') ORDER BY id", mapper)

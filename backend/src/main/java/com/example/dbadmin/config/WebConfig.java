@@ -20,7 +20,7 @@ public class WebConfig implements WebMvcConfigurer {
         executor.setMaxPoolSize(8);
         executor.setQueueCapacity(32);
         executor.setThreadNamePrefix("dbadmin-stream-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         return executor;
     }
 

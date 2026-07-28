@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import jakarta.annotation.PostConstruct;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -53,7 +54,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -74,10 +74,11 @@ public class BackupService {
     private final BackupExecutionCoordinator coordinator;
     private final RestoreJobRepository restoreJobs;
     private final NativeToolLocator nativeTools;
+    private final BackgroundTaskControl taskControl;
     private final Object[] taskLocks = taskLocks();
 
     @Autowired
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools) {
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools, BackgroundTaskControl taskControl) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.connections = connections;
@@ -87,14 +88,15 @@ public class BackupService {
         this.coordinator = coordinator;
         this.restoreJobs = restoreJobs;
         this.nativeTools = nativeTools;
+        this.taskControl = taskControl;
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator) {
-        this(repository, historyRepository, connections, audit, properties, dialectRegistry, coordinator, null, new NativeToolLocator(properties));
+        this(repository, historyRepository, connections, audit, properties, dialectRegistry, coordinator, null, new NativeToolLocator(properties), new BackgroundTaskControl(properties));
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
-        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator(), null, new NativeToolLocator(properties));
+        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator(), null, new NativeToolLocator(properties), new BackgroundTaskControl(properties));
     }
 
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
@@ -117,7 +119,9 @@ public class BackupService {
     public BackupTaskPage page(long connectionId, String keyword, String status, Integer page, Integer pageSize) {
         int safePage = Math.max(page == null ? 0 : page, 0);
         int size = Math.min(Math.max(pageSize == null ? 10 : pageSize, 1), 100);
-        List<BackupTask> rows = repository.findPage(connectionId, keyword, status, size + 1, (long) safePage * size);
+        long offset = (long) safePage * size;
+        if (offset > 1_000_000) throw new IllegalArgumentException("备份任务分页偏移过大，请缩小页码。");
+        List<BackupTask> rows = repository.findPage(connectionId, keyword, status, size + 1, offset);
         boolean hasMore = rows.size() > size;
         if (hasMore) rows = rows.subList(0, size);
         return new BackupTaskPage(List.copyOf(rows), safePage, size, hasMore);
@@ -258,16 +262,14 @@ public class BackupService {
     private void cleanupRetention(BackupTask task) {
         if (task.retentionDays() == null && task.retentionCount() == null) return;
         try {
-            List<BackupHistory> successful = historyRepository.findSuccessfulByTaskId(task.id());
             Instant cutoff = task.retentionDays() == null ? null : Instant.now().minus(task.retentionDays(), java.time.temporal.ChronoUnit.DAYS);
-            for (int index = 0; index < successful.size(); index++) {
-                BackupHistory history = successful.get(index);
-                boolean overCount = task.retentionCount() != null && index >= task.retentionCount();
-                boolean overDays = cutoff != null && history.finishedAt() != null && history.finishedAt().isBefore(cutoff);
-                if (!overCount && !overDays) continue;
-                if (restoreJobs != null && restoreJobs.countActiveBySource("HISTORY", history.id()) > 0) continue;
-                deleteHistoryFile(history);
-                historyRepository.delete(history.id());
+            while (true) {
+                List<BackupHistory> candidates = historyRepository.findRetentionCandidates(task.id(), task.retentionCount(), cutoff, 200);
+                for (BackupHistory history : candidates) {
+                    deleteHistoryFile(history);
+                    historyRepository.delete(history.id());
+                }
+                if (candidates.size() < 200) break;
             }
             refreshTaskSummary(task.id());
         } catch (Exception error) {
@@ -308,29 +310,44 @@ public class BackupService {
             }
             DbConnection connection = connections.require(task.connectionId());
             long connectionId = connection == null ? task.connectionId() : connection.id();
+            String operationKey = backupOperationKey(id);
+            if (!taskControl.tryAcquire(connectionId, operationKey)) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。");
+            }
             String sourceDbType = connection == null ? null : connection.dbType();
-            long executionId = historyRepository.insert(new BackupHistory(0, id, connectionId, "QUEUED", "备份任务已进入后台执行队列。",
-                    null, null, Instant.now(), null, fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()),
-                    sourceDbType, null, "QUEUED", 0L, 1L, false));
+            long executionId = 0;
             try {
+                executionId = historyRepository.insert(new BackupHistory(0, id, connectionId, "QUEUED", "备份任务已进入后台执行队列。",
+                        null, null, Instant.now(), null, fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()),
+                        sourceDbType, null, "QUEUED", 0L, 1L, false));
+                long queuedExecutionId = executionId;
                 boolean accepted = coordinator.submit(
                         id,
                         () -> repository.updateStatus(id, "RUNNING", "备份任务已进入后台执行队列。"),
                         () -> {
                             try {
-                                runInternal(id, actor, executionId);
+                                runInternal(id, actor, queuedExecutionId);
                             } catch (Exception ignored) {
                                 // run records the failed history and task status.
+                            } finally {
+                                taskControl.release(connectionId, operationKey);
                             }
                         }
                 );
                 if (!accepted) {
+                    taskControl.release(connectionId, operationKey);
                     throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请勿重复启动。");
                 }
             } catch (RejectedExecutionException e) {
+                taskControl.release(connectionId, operationKey);
                 repository.updateStatus(id, "FAILED", "备份执行队列已满，任务未启动。");
-                historyRepository.updateExecution(executionId, "FAILED", "FAILED", 0, 1L, "备份执行队列已满，任务未启动。", null, null, null, Instant.now());
+                if (executionId > 0) {
+                    historyRepository.updateExecution(executionId, "FAILED", "FAILED", 0, 1L, "备份执行队列已满，任务未启动。", null, null, null, Instant.now());
+                }
                 throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
+            } catch (RuntimeException error) {
+                taskControl.release(connectionId, operationKey);
+                throw error;
             }
             return new BackupRunResponse(repository.findById(task.id()).orElseThrow(), historyRepository.findById(executionId).orElseThrow());
         }
@@ -342,7 +359,9 @@ public class BackupService {
                     .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
             if (!Set.of("QUEUED", "RUNNING").contains(history.status())) return history;
             historyRepository.requestCancel(historyId);
+            taskControl.requestCancel(backupOperationKey(taskId));
             coordinator.cancel(taskId);
+            taskControl.release(history.connectionId(), backupOperationKey(taskId));
             historyRepository.updateExecution(historyId, "CANCELLED", "CANCELLED", value(history.progressCurrent()), history.progressTotal(), "备份已取消。", null, null, null, Instant.now());
             repository.updateStatus(taskId, "CANCELLED", "备份已取消。");
             audit.log(actor, "BACKUP_TASK_CANCEL", String.valueOf(taskId), "history=" + historyId);
@@ -353,7 +372,9 @@ public class BackupService {
     public BackupHistoryPage historyByConnection(long connectionId, Integer page, Integer pageSize) {
         int safePage = Math.max(page == null ? 0 : page, 0);
         int safePageSize = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
-        List<BackupHistory> rows = historyRepository.findPageByConnectionId(connectionId, safePageSize + 1, (long) safePage * safePageSize);
+        long offset = (long) safePage * safePageSize;
+        if (offset > 1_000_000) throw new IllegalArgumentException("备份历史分页偏移过大，请缩小页码。");
+        List<BackupHistory> rows = historyRepository.findPageByConnectionId(connectionId, safePageSize + 1, offset);
         boolean hasMore = rows.size() > safePageSize;
         if (hasMore) rows = rows.subList(0, safePageSize);
         return new BackupHistoryPage(List.copyOf(rows), safePage, safePageSize, hasMore);
@@ -1202,17 +1223,29 @@ public class BackupService {
                 columns.add(md.getColumnLabel(i));
             }
             String columnSql = columns.stream().map(column -> quote(column, quoteString)).reduce((a, b) -> a + ", " + b).orElse("");
+            int batchSize = supportsMultiRowInsert(dbType)
+                    ? Math.min(Math.max(1, properties.getBackup().getSqlInsertBatchSize()), 1_000)
+                    : 1;
             long rows = 0;
+            int batchRows = 0;
             while (rs.next()) {
                 ensureBackupNotInterrupted();
-                writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES (");
+                if (batchRows == 0) writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES\n");
+                else writer.write(",\n");
+                writer.write("  (");
                 for (int i = 1; i <= md.getColumnCount(); i++) {
                     if (i > 1) writer.write(", ");
                     writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1), dbType);
                 }
-                writer.write(");\n");
+                writer.write(")");
                 rows++;
+                batchRows++;
+                if (batchRows >= batchSize) {
+                    writer.write(";\n");
+                    batchRows = 0;
+                }
             }
+            if (batchRows > 0) writer.write(";\n");
             writer.write("-- Rows: " + rows + "\n\n");
             }
         }
@@ -1237,24 +1270,50 @@ public class BackupService {
         }
         if (value instanceof Blob blob) {
             try (InputStream input = blob.getBinaryStream()) {
-                writeBinary(writer, input.readAllBytes(), dbType);
+                writeBinary(writer, input, dbType);
             }
             return;
         }
         if (value instanceof byte[] bytes) {
-            writeBinary(writer, bytes, dbType);
+            try (InputStream input = new ByteArrayInputStream(bytes)) {
+                writeBinary(writer, input, dbType);
+            }
             return;
         }
         writer.write(literal(value, tableName, columnName));
     }
 
-    private void writeBinary(BufferedWriter writer, byte[] bytes, String dbType) throws Exception {
-        String hex = HexFormat.of().formatHex(bytes);
+    private void writeBinary(BufferedWriter writer, InputStream input, String dbType) throws Exception {
         String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        if (normalized.equals("postgresql")) writer.write("decode('" + hex + "', 'hex')");
-        else if (normalized.equals("sqlserver")) writer.write("0x" + hex);
-        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("hextoraw('" + hex + "')");
-        else writer.write("X'" + hex + "'");
+        if (normalized.equals("postgresql")) writer.write("decode('");
+        else if (normalized.equals("sqlserver")) writer.write("0x");
+        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("hextoraw('");
+        else writer.write("X'");
+        byte[] bytes = new byte[8_192];
+        char[] hex = new char[bytes.length * 2];
+        char[] digits = "0123456789abcdef".toCharArray();
+        int read;
+        while ((read = input.read(bytes)) >= 0) {
+            ensureBackupNotInterrupted();
+            for (int index = 0; index < read; index++) {
+                int value = bytes[index] & 0xff;
+                hex[index * 2] = digits[value >>> 4];
+                hex[index * 2 + 1] = digits[value & 0x0f];
+            }
+            writer.write(hex, 0, read * 2);
+        }
+        if (normalized.equals("postgresql")) writer.write("', 'hex')");
+        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("')");
+        else if (!normalized.equals("sqlserver")) writer.write("'");
+    }
+
+    private boolean supportsMultiRowInsert(String dbType) {
+        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+        return !Set.of("oracle", "dm", "dameng", "oceanbase-oracle").contains(normalized);
+    }
+
+    private String backupOperationKey(long taskId) {
+        return "backup:" + taskId;
     }
 
     private void ensureBackupNotInterrupted() throws InterruptedException {

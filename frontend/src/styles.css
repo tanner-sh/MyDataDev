@@ -548,6 +548,11 @@ body {
   justify-content: space-between;
 }
 
+.result-column-selector {
+  min-width: 180px;
+  max-width: min(420px, 40vw);
+}
+
 .result-range-navigation,
 .result-range-label {
   min-width: max-content;

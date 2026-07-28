@@ -1,7 +1,5 @@
-import Editor from '@monaco-editor/react';
 import type { OnMount } from '@monaco-editor/react';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import '../monacoSetup';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography, Upload } from 'antd';
 import { DownloadOutlined, FileTextOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined } from '@ant-design/icons';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
@@ -11,6 +9,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 
 const { Header } = Layout;
 const { Text } = Typography;
+const SqlEditor = lazy(() => import('./SqlEditor'));
 const EDITOR_OPTIONS = {
   minimap: { enabled: false },
   fontSize: 14,
@@ -197,15 +196,17 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
       />
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         <div className="editor" style={{ flexBasis: `${splitLimits.value * 100}%` }}>
-          <Editor
-            height="100%"
-            language="sql"
-            value={draftSql}
-            onMount={onEditorMount}
-            onChange={(value) => updateDraft(value || '')}
-            theme={themeMode === 'dark' ? 'vs-dark' : 'vs'}
-            options={EDITOR_OPTIONS}
-          />
+          <Suspense fallback={<div className="table-viewport-loading">正在加载 SQL 编辑器…</div>}>
+            <SqlEditor
+              height="100%"
+              language="sql"
+              value={draftSql}
+              onMount={onEditorMount}
+              onChange={(value) => updateDraft(value || '')}
+              theme={themeMode === 'dark' ? 'vs-dark' : 'vs'}
+              options={EDITOR_OPTIONS}
+            />
+          </Suspense>
         </div>
         <PaneResizer
           direction="vertical"

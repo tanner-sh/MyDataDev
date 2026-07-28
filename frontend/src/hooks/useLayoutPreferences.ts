@@ -47,11 +47,14 @@ export function useLayoutPreferences(): LayoutPreferencesController {
       return;
     }
 
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
-    } catch {
-      // Storage can be unavailable in private browsing or a restricted iframe.
-    }
+    const timer = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
+      } catch {
+        // Storage can be unavailable in private browsing or a restricted iframe.
+      }
+    }, 250);
+    return () => window.clearTimeout(timer);
   }, [preferences]);
 
   const setThemeMode = useCallback((value: PreferenceUpdate<ThemeMode>) => {

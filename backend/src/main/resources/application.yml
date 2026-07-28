@@ -1,5 +1,9 @@
 server:
   port: 8080
+  compression:
+    enabled: true
+    min-response-size: 2048
+    mime-types: application/json,application/xml,text/html,text/plain,text/css,text/javascript,application/javascript
 
 spring:
   datasource:
@@ -17,7 +21,11 @@ spring:
       enabled: true
   sql:
     init:
-      mode: always
+      mode: never
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
 
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
@@ -28,6 +36,7 @@ app:
   backup:
     directory: ./backups
     timeout-seconds: 7200
+    sql-insert-batch-size: 100
   restore:
     max-upload-bytes: 21474836480
     upload-ttl-hours: 24
@@ -37,6 +46,24 @@ app:
     ready-ttl-hours: 24
     statement-timeout-seconds: 7200
     max-statement-chars: 134217728
+    commit-batch-size: 100
+  background-tasks:
+    cancel-poll-interval-ms: 1000
+    progress-interval-ms: 500
+    max-concurrent-uploads: 2
+    max-per-connection: 1
+    backup-worker-threads: 2
+    sql-file-worker-threads: 2
+    queue-capacity: 20
+  maintenance:
+    sql-history-retention-days: 90
+    audit-retention-days: 180
+    job-retention-days: 90
+    cleanup-batch-size: 500
+  remote-pool:
+    max-pools: 20
+    maximum-pool-size: 3
+    connection-timeout-ms: 10000
   native-tools:
     probe-timeout-seconds: 3
     extra-search-paths: []
@@ -44,3 +71,12 @@ app:
 spring.servlet.multipart:
   max-file-size: 20GB
   max-request-size: 20GB
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  endpoint:
+    health:
+      show-details: when_authorized

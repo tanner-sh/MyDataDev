@@ -72,8 +72,45 @@ public class ExportService {
     }
 
     public void export(long connectionId, String sql, String format, String actor, OutputStream output) throws Exception {
-        PreparedExport prepared = prepare(connectionId, sql, format, actor, null);
-        prepared.writeTo(output);
+        stream(connectionId, sql, format, actor, null, output);
+    }
+
+    public void validate(long connectionId, String sql, String format, String productionConfirmation) {
+        String normalizedFormat = normalizeFormat(format);
+        var statements = splitter.split(sql);
+        if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
+            throw new IllegalArgumentException("导出仅支持单条查询语句，不会执行写入或 DDL。");
+        }
+        DbConnection dbConnection = connections.require(connectionId);
+        executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statements.get(0).sql()), productionConfirmation);
+        if (normalizedFormat.isBlank()) throw new IllegalArgumentException("导出格式不能为空。");
+    }
+
+    public void stream(long connectionId, String sql, String format, String actor,
+                       String productionConfirmation, OutputStream rawOutput) throws Exception {
+        validate(connectionId, sql, format, productionConfirmation);
+        String normalizedFormat = normalizeFormat(format);
+        String statementSql = splitter.split(sql).get(0).sql();
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        long started = System.nanoTime();
+        try (Connection connection = connections.open(connectionId);
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
+             Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
+            dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
+            statement.setMaxRows(EXPORT_MAX_ROWS + 1);
+            try (ResultSet rs = statement.executeQuery(statementSql)) {
+                write(rs, normalizedFormat, new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES));
+            }
+            rawOutput.flush();
+            long elapsed = (System.nanoTime() - started) / 1_000_000;
+            audit.log(actor, "SQL_EXPORT", "connection:" + connectionId, abbreviate(sql));
+            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "SUCCESS", elapsed, null, actor);
+        } catch (Exception error) {
+            long elapsed = (System.nanoTime() - started) / 1_000_000;
+            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "FAILED", elapsed, abbreviate(error.getMessage()), actor);
+            throw error;
+        }
     }
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation) throws Exception {
@@ -325,7 +362,10 @@ public class ExportService {
 
         @Override
         public void close() throws IOException {
-            delegate.close();
+            // The owner controls the underlying response/file stream. JSON
+            // generators may close this wrapper while the servlet still needs
+            // to finish the response and persist the export outcome.
+            delegate.flush();
         }
 
         private void requireCapacity(int additionalBytes) throws IOException {

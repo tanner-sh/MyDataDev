@@ -25,6 +25,8 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
+import java.sql.Types;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -498,7 +500,7 @@ public class SqlService {
             List<Object> row = new ArrayList<>(columnCount);
             for (int index = 1; index <= columnCount; index++) {
                 int remainingText = (int) Math.min(MAX_CELL_TEXT_CHARS, Math.max(0, MAX_RESULT_TEXT_CHARS - textChars));
-                Object value = serializableValue(rs.getObject(index), remainingText);
+                Object value = serializableValue(rs, metadata, index, remainingText);
                 row.add(value);
                 if (value instanceof CharSequence text) textChars += text.length();
             }
@@ -530,7 +532,7 @@ public class SqlService {
             List<Object> row = new ArrayList<>(columnCount);
             for (int index = 1; index <= columnCount; index++) {
                 int remainingText = (int) Math.min(MAX_CELL_TEXT_CHARS, Math.max(0, textBudget - textChars));
-                Object value = serializableValue(rs.getObject(index), remainingText);
+                Object value = serializableValue(rs, metadata, index, remainingText);
                 row.add(value);
                 if (value instanceof CharSequence text) textChars += text.length();
             }
@@ -594,6 +596,33 @@ public class SqlService {
             return truncateText(value.toString(), "", maxTextChars);
         }
         return truncateText(value.toString(), "", maxTextChars);
+    }
+
+    private Object serializableValue(ResultSet rs, ResultSetMetaData metadata, int index, int maxTextChars) throws Exception {
+        int jdbcType = metadata.getColumnType(index);
+        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
+            long length = binaryLength(rs, index);
+            return truncateText("<BINARY " + length + " bytes>", "", maxTextChars);
+        }
+        return serializableValue(rs.getObject(index), maxTextChars);
+    }
+
+    private long binaryLength(ResultSet rs, int index) throws Exception {
+        try {
+            Blob blob = rs.getBlob(index);
+            if (blob != null) return blob.length();
+            if (rs.wasNull()) return 0;
+        } catch (Exception ignored) {
+            // Some drivers expose VARBINARY only through a binary stream.
+        }
+        try (InputStream input = rs.getBinaryStream(index)) {
+            if (input == null) return 0;
+            byte[] buffer = new byte[16 * 1024];
+            long total = 0;
+            int read;
+            while ((read = input.read(buffer)) >= 0) total += read;
+            return total;
+        }
     }
 
     private String truncateText(String prefixSource, String marker, int maxChars) {

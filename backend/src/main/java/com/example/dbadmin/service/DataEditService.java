@@ -127,7 +127,7 @@ public class DataEditService {
                                     MAX_TABLE_CELL_TEXT_CHARS,
                                     Math.max(0, MAX_TABLE_TEXT_CHARS - textChars)
                             );
-                            Object rawValue = rs.getObject(index);
+                            Object rawValue = readDisplayValue(rs, md, index);
                             if (serializedValueWouldTruncate(rawValue, remainingText)) {
                                 truncatedColumns.add(columns.get(index - 1).name());
                             }
@@ -642,6 +642,28 @@ public class DataEditService {
         if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
         if (value instanceof Number || value instanceof Boolean) return value;
         return truncateText(value.toString(), "", maxTextChars);
+    }
+
+    private Object readDisplayValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {
+        int jdbcType = metadata.getColumnType(index);
+        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
+            try {
+                Blob blob = rs.getBlob(index);
+                if (blob != null) return "<BINARY " + blob.length() + " bytes>";
+                if (rs.wasNull()) return null;
+            } catch (Exception ignored) {
+                // Fall through to a streaming length count for drivers without getBlob support.
+            }
+            try (java.io.InputStream input = rs.getBinaryStream(index)) {
+                if (input == null) return null;
+                byte[] buffer = new byte[16 * 1024];
+                long length = 0;
+                int read;
+                while ((read = input.read(buffer)) >= 0) length += read;
+                return "<BINARY " + length + " bytes>";
+            }
+        }
+        return rs.getObject(index);
     }
 
     private boolean serializedValueWouldTruncate(Object value, int maxTextChars) throws Exception {

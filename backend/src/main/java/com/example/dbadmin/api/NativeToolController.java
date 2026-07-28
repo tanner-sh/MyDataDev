@@ -18,7 +18,7 @@ public class NativeToolController {
     }
 
     @GetMapping
-    public NativeToolsResponse list() {
-        return new NativeToolsResponse(Instant.now().toString(), locator.detectAll());
+    public NativeToolsResponse list(@org.springframework.web.bind.annotation.RequestParam(defaultValue = "false") boolean refresh) {
+        return new NativeToolsResponse(Instant.now().toString(), locator.detectAll(refresh));
     }
 }

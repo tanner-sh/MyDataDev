@@ -31,6 +31,11 @@ public class MetadataCacheService {
             .weigher((MetadataPageKey ignored, CachedValue<MetadataObjectPage> page) -> 10 + page.value().objects().size())
             .expireAfterAccess(TTL)
             .build();
+    private final Cache<ObjectCatalogKey, CachedValue<List<DbObject>>> objectCatalogs = Caffeine.newBuilder()
+            .maximumWeight(100_000)
+            .weigher((ObjectCatalogKey ignored, CachedValue<List<DbObject>> value) -> 10 + value.value().size())
+            .expireAfterAccess(TTL)
+            .build();
     private final Cache<ObjectKey, CachedValue<ObjectStructure>> structures = detailCache();
     private final Cache<ObjectKey, CachedValue<ObjectDetail>> details = detailCache();
     private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache();
@@ -54,6 +59,16 @@ public class MetadataCacheService {
     public CachedValue<MetadataObjectPage> putMetadataPage(long connectionId, String schemaName, String keyword, int page, int pageSize, MetadataObjectPage value) {
         CachedValue<MetadataObjectPage> cached = new CachedValue<>(value, Instant.now());
         metadataPages.put(metadataPageKey(connectionId, schemaName, keyword, page, pageSize), cached);
+        return cached;
+    }
+
+    public Optional<CachedValue<List<DbObject>>> objectCatalog(long connectionId, String schemaName) {
+        return Optional.ofNullable(objectCatalogs.getIfPresent(new ObjectCatalogKey(connectionId, exact(schemaName))));
+    }
+
+    public CachedValue<List<DbObject>> putObjectCatalog(long connectionId, String schemaName, List<DbObject> objects) {
+        CachedValue<List<DbObject>> cached = new CachedValue<>(List.copyOf(objects), Instant.now());
+        objectCatalogs.put(new ObjectCatalogKey(connectionId, exact(schemaName)), cached);
         return cached;
     }
 
@@ -100,6 +115,7 @@ public class MetadataCacheService {
     public void evictConnection(long connectionId) {
         schemaCatalogs.invalidate(connectionId);
         metadataPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
+        objectCatalogs.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         structures.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         details.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         relations.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
@@ -112,6 +128,8 @@ public class MetadataCacheService {
         String normalizedObject = exact(objectName);
         metadataPages.asMap().keySet().removeIf(pageKey -> pageKey.connectionId() == connectionId
                 && (normalizedSchema.isBlank() || pageKey.schemaName().equalsIgnoreCase(normalizedSchema)));
+        objectCatalogs.asMap().keySet().removeIf(catalogKey -> catalogKey.connectionId() == connectionId
+                && (normalizedSchema.isBlank() || catalogKey.schemaName().equalsIgnoreCase(normalizedSchema)));
         structures.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
         details.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
         relations.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
@@ -149,7 +167,9 @@ public class MetadataCacheService {
 
     private static <T> Cache<ObjectKey, CachedValue<T>> detailCache() {
         return Caffeine.newBuilder()
-                .maximumSize(5_000)
+                .maximumWeight(50_000)
+                .weigher((ObjectKey ignored, CachedValue<T> value) ->
+                        Math.min(1_000, 1 + String.valueOf(value.value()).length() / 1_024))
                 .expireAfterAccess(TTL)
                 .build();
     }
@@ -170,5 +190,8 @@ public class MetadataCacheService {
     }
 
     private record MetadataPageKey(long connectionId, String schemaName, String keyword, int page, int pageSize) {
+    }
+
+    private record ObjectCatalogKey(long connectionId, String schemaName) {
     }
 }

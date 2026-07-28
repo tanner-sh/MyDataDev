@@ -51,6 +51,7 @@ public class MetadataService {
     private final AuditRepository audit;
     private final MetadataCacheService cache;
     private final ExecutionGuard executionGuard;
+    private final Object[] cacheLoadLocks = cacheLoadLocks();
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
     private static final long MAX_METADATA_OFFSET = 1_000_000;
     private static final int MAX_SEARCH_LENGTH = 200;
@@ -76,8 +77,13 @@ public class MetadataService {
         }
         MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
         if (schemaCatalog == null) {
-            try (Connection connection = connections.open(connectionId)) {
-                schemaCatalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+            synchronized (cacheLoadLock(connectionId)) {
+                schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
+                if (schemaCatalog == null) {
+                    try (Connection connection = connections.open(connectionId)) {
+                        schemaCatalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+                    }
+                }
             }
         }
         String selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
@@ -88,12 +94,17 @@ public class MetadataService {
         boolean cacheHit = cachedPage.isPresent();
         MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = cachedPage.orElse(null);
         if (pageValue == null) {
-            try (Connection connection = connections.open(connectionId)) {
-                MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
-                        connection, dialect, selectedSchema, normalizedKeyword, MatchMode.CONTAINS,
-                        normalizedPage, normalizedPageSize, false
-                );
-                pageValue = cache.putMetadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize, loaded);
+            synchronized (cacheLoadLock(connectionId)) {
+                pageValue = cache.metadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize).orElse(null);
+                if (pageValue == null) {
+                    try (Connection connection = connections.open(connectionId)) {
+                        MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
+                                connectionId, connection, dialect, selectedSchema, normalizedKeyword, MatchMode.CONTAINS,
+                                normalizedPage, normalizedPageSize, false
+                        );
+                        pageValue = cache.putMetadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize, loaded);
+                    }
+                }
             }
         }
         MetadataCacheService.MetadataObjectPage objectPage = pageValue.value();
@@ -127,11 +138,16 @@ public class MetadataService {
         String selectedSchema = selectedSchema(catalog, requestedNamespace);
         int safeLimit = Math.min(Math.max(limit == null ? 100 : limit, 1), 100);
         MetadataCacheService.MetadataObjectPage matches;
-        try (Connection connection = connections.open(connectionId)) {
-            matches = queryObjectPage(
-                    connection, dialect, selectedSchema, searchTerm(prefix), MatchMode.PREFIX,
-                    0, safeLimit, false
-            );
+        var objectCatalog = cache.objectCatalog(connectionId, selectedSchema);
+        if (objectCatalog.isPresent()) {
+            matches = pageFromCatalog(objectCatalog.get().value(), searchTerm(prefix), MatchMode.PREFIX, 0, safeLimit, false);
+        } else {
+            try (Connection connection = connections.open(connectionId)) {
+                matches = queryObjectPage(
+                        connectionId, connection, dialect, selectedSchema, searchTerm(prefix), MatchMode.PREFIX,
+                        0, safeLimit, false
+                );
+            }
         }
         return new CompletionCatalogResponse(
                 dialect.namespaceKind().name(),
@@ -203,7 +219,7 @@ public class MetadataService {
         MetadataCacheService.MetadataObjectPage objectPage;
         try (Connection connection = connections.open(connectionId)) {
             objectPage = queryObjectPage(
-                    connection, dialect, selected, searchTerm(keyword), MatchMode.CONTAINS,
+                    connectionId, connection, dialect, selected, searchTerm(keyword), MatchMode.CONTAINS,
                     normalizedPage, normalizedPageSize, true
             );
         }
@@ -250,6 +266,7 @@ public class MetadataService {
     }
 
     private MetadataCacheService.MetadataObjectPage queryObjectPage(
+            long connectionId,
             Connection connection,
             DatabaseDialect dialect,
             String selectedSchema,
@@ -259,10 +276,15 @@ public class MetadataService {
             int pageSize,
             boolean physicalOnly
     ) throws Exception {
+        var cachedCatalog = cache.objectCatalog(connectionId, selectedSchema);
+        if (cachedCatalog.isPresent()) {
+            return pageFromCatalog(cachedCatalog.get().value(), keyword, matchMode, page, pageSize, physicalOnly);
+        }
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, selectedSchema);
         String schemaPattern = scope.schemaPattern() == null ? null : metadataPattern(meta, scope.schemaPattern(), MatchMode.EXACT);
-        String tablePattern = keyword == null ? "%" : metadataPattern(meta, keyword, matchMode);
+        boolean loadCatalog = keyword == null || keyword.isBlank();
+        String tablePattern = loadCatalog ? "%" : metadataPattern(meta, keyword, matchMode);
         long offset = (long) page * pageSize;
         if (offset > MAX_METADATA_OFFSET) {
             throw new IllegalArgumentException("元数据分页偏移过大，请使用搜索条件缩小范围。");
@@ -270,7 +292,8 @@ public class MetadataService {
         long matched = 0;
         boolean exhausted = true;
         List<DbObject> objects = new ArrayList<>(pageSize + 1);
-        String[] types = physicalOnly ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
+        List<DbObject> catalogObjects = loadCatalog ? new ArrayList<>() : null;
+        String[] types = physicalOnly && !loadCatalog ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
         try (ResultSet rs = meta.getTables(scope.catalog(), schemaPattern, tablePattern, types)) {
             while (rs.next()) {
                 String schema = dialect.resultNamespace(rs);
@@ -283,6 +306,10 @@ public class MetadataService {
                     continue;
                 }
                 if (!matchesName(name, keyword, matchMode)) continue;
+                if (catalogObjects != null) {
+                    catalogObjects.add(new DbObject(schema, name, type, List.of(), List.of()));
+                    continue;
+                }
                 if (physicalOnly && !isPhysicalTable(type)) continue;
                 matched++;
                 if (matched <= offset) continue;
@@ -293,10 +320,33 @@ public class MetadataService {
                 }
             }
         }
+        if (catalogObjects != null) {
+            cache.putObjectCatalog(connectionId, selectedSchema, catalogObjects);
+            return pageFromCatalog(catalogObjects, keyword, matchMode, page, pageSize, physicalOnly);
+        }
         boolean hasMore = objects.size() > pageSize;
         if (hasMore) objects = new ArrayList<>(objects.subList(0, pageSize));
         int total = (int) Math.min(Integer.MAX_VALUE, exhausted ? matched : offset + objects.size() + 1L);
         return new MetadataCacheService.MetadataObjectPage(objects, total, exhausted, hasMore);
+    }
+
+    private MetadataCacheService.MetadataObjectPage pageFromCatalog(
+            List<DbObject> catalog, String keyword, MatchMode matchMode, int page, int pageSize, boolean physicalOnly
+    ) {
+        List<DbObject> matches = catalog.stream()
+                .filter(object -> matchesName(object.name(), keyword, matchMode))
+                .filter(object -> !physicalOnly || isPhysicalTable(object.type()))
+                .toList();
+        long offset = (long) page * pageSize;
+        if (offset > MAX_METADATA_OFFSET) {
+            throw new IllegalArgumentException("元数据分页偏移过大，请使用搜索条件缩小范围。");
+        }
+        if (offset >= matches.size()) {
+            return new MetadataCacheService.MetadataObjectPage(List.of(), matches.size(), true, false);
+        }
+        int from = (int) offset;
+        int to = Math.min(matches.size(), from + pageSize);
+        return new MetadataCacheService.MetadataObjectPage(matches.subList(from, to), matches.size(), true, to < matches.size());
     }
 
     private String metadataPattern(DatabaseMetaData meta, String value, MatchMode mode) throws Exception {
@@ -320,6 +370,16 @@ public class MetadataService {
             case PREFIX -> escaped + "%";
             case CONTAINS -> "%" + escaped + "%";
         };
+    }
+
+    private Object cacheLoadLock(long connectionId) {
+        return cacheLoadLocks[Math.floorMod(Long.hashCode(connectionId), cacheLoadLocks.length)];
+    }
+
+    private static Object[] cacheLoadLocks() {
+        Object[] locks = new Object[64];
+        java.util.Arrays.setAll(locks, ignored -> new Object());
+        return locks;
     }
 
     private boolean matchesName(String name, String keyword, MatchMode mode) {

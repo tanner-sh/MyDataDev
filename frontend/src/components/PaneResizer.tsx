@@ -43,6 +43,8 @@ export function PaneResizer({
 }: PaneResizerProps) {
   const dragRef = useRef<DragState | null>(null);
   const lastValueRef = useRef(value);
+  const pendingValueRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
@@ -51,6 +53,7 @@ export function PaneResizer({
 
   useEffect(() => () => {
     dragRef.current = null;
+    if (animationFrameRef.current !== null) cancelAnimationFrame(animationFrameRef.current);
   }, []);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -88,7 +91,7 @@ export function PaneResizer({
 
     const pixelDelta = pointerCoordinate(event, direction) - drag.startCoordinate;
     const delta = unit === 'ratio' ? pixelDelta / drag.trackSize : pixelDelta;
-    emitChange(normalizeValue(drag.startValue + delta, min, max, unit));
+    scheduleChange(normalizeValue(drag.startValue + delta, min, max, unit));
   }
 
   function handlePointerEnd(event: ReactPointerEvent<HTMLDivElement>) {
@@ -98,6 +101,7 @@ export function PaneResizer({
     }
 
     dragRef.current = null;
+    flushScheduledChange();
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -143,6 +147,27 @@ export function PaneResizer({
     }
     lastValueRef.current = nextValue;
     onChange(nextValue);
+  }
+
+  function scheduleChange(nextValue: number) {
+    pendingValueRef.current = nextValue;
+    if (animationFrameRef.current !== null) return;
+    animationFrameRef.current = requestAnimationFrame(() => {
+      animationFrameRef.current = null;
+      const pending = pendingValueRef.current;
+      pendingValueRef.current = null;
+      if (pending !== null) emitChange(pending);
+    });
+  }
+
+  function flushScheduledChange() {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    const pending = pendingValueRef.current;
+    pendingValueRef.current = null;
+    if (pending !== null) emitChange(pending);
   }
 
   const classes = [
