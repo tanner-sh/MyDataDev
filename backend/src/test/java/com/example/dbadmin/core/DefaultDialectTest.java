@@ -126,4 +126,29 @@ class DefaultDialectTest {
 
         assertThat(dialect.alterTableSql("PUBLIC", "case_values", original, unchanged)).isEmpty();
     }
+
+    @Test
+    void buildsCreateRenameAndSafeDropTableSql() {
+        TableDesignRequest design = new TableDesignRequest(
+                "PUBLIC", "users",
+                List.of(
+                        new ColumnDesign("id", "BIGINT", null, false, null, null, false),
+                        new ColumnDesign("name", "VARCHAR", 80, true, "'guest'", null, false)
+                ),
+                List.of(new IndexDesign("idx_users_name", List.of("name"), false, null, false)),
+                List.of("id"), null
+        );
+
+        assertThat(dialect.createTableSql("PUBLIC", "users", design))
+                .containsExactly(
+                        "CREATE TABLE \"PUBLIC\".\"users\" (\"id\" BIGINT NOT NULL, \"name\" VARCHAR(80) DEFAULT 'guest', PRIMARY KEY (\"id\"))",
+                        "CREATE INDEX \"idx_users_name\" ON \"PUBLIC\".\"users\" (\"name\")"
+                );
+        assertThat(dialect.renameTableSql("PUBLIC", "users", "members"))
+                .isEqualTo("ALTER TABLE \"PUBLIC\".\"users\" RENAME TO \"members\"");
+        assertThat(dialect.dropTableSql("PUBLIC", "members"))
+                .isEqualTo("DROP TABLE \"PUBLIC\".\"members\"")
+                .doesNotContainIgnoringCase("CASCADE")
+                .doesNotContainIgnoringCase("IF EXISTS");
+    }
 }

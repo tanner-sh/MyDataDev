@@ -39,6 +39,14 @@ class MySqlDialectTest {
                 .isInstanceOf(DamengDialect.class);
     }
 
+    @Test
+    void quotesMySqlTableLifecycleStatementsWithBackticks() {
+        assertThat(dialect.renameTableSql("trading", "cash_ledger", "cash_archive"))
+                .isEqualTo("ALTER TABLE `trading`.`cash_ledger` RENAME TO `cash_archive`");
+        assertThat(dialect.dropTableSql("trading", "cash_archive"))
+                .isEqualTo("DROP TABLE `trading`.`cash_archive`");
+    }
+
     private DbConnection connection(String type, String url) {
         return new DbConnection(1L, type, type, url, "user", "", "dev", false, Instant.now(), Instant.now());
     }

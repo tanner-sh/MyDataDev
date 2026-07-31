@@ -120,6 +120,35 @@ public class DefaultDialect implements DatabaseDialect {
         return sql;
     }
 
+    @Override
+    public List<String> createTableSql(String schemaName, String tableName, TableDesignRequest design) {
+        String table = table(schemaName, tableName);
+        List<ColumnDesign> columns = design.columns() == null
+                ? List.of()
+                : design.columns().stream().filter(column -> !column.deleted()).toList();
+        List<String> definitions = columns.stream().map(this::columnDefinition).collect(Collectors.toCollection(ArrayList::new));
+        List<String> primaryKeys = design.primaryKeys() == null
+                ? List.of()
+                : design.primaryKeys().stream().filter(name -> name != null && !name.isBlank()).toList();
+        if (!primaryKeys.isEmpty()) {
+            definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(this::quoteIdentifier).collect(Collectors.joining(", ")) + ")");
+        }
+        List<String> sql = new ArrayList<>();
+        sql.add("CREATE TABLE " + table + " (" + String.join(", ", definitions) + ")");
+        sql.addAll(indexSql(table, List.of(), design.indexes()));
+        return sql;
+    }
+
+    @Override
+    public String renameTableSql(String schemaName, String tableName, String newTableName) {
+        return "ALTER TABLE " + table(schemaName, tableName) + " RENAME TO " + quoteIdentifier(newTableName);
+    }
+
+    @Override
+    public String dropTableSql(String schemaName, String tableName) {
+        return "DROP TABLE " + table(schemaName, tableName);
+    }
+
     private boolean isDropStatement(String sql) {
         return sql != null && sql.stripLeading().toUpperCase(Locale.ROOT).contains(" DROP ")
                 || sql != null && sql.stripLeading().toUpperCase(Locale.ROOT).startsWith("DROP ");

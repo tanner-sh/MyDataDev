@@ -133,6 +133,19 @@ public final class ApiDtos {
     public record TableDesignResponse(List<String> sql, String message) {
     }
 
+    public record TableLifecycleRequest(
+            @NotBlank @Size(max = 20) String operation,
+            @Size(max = 240) String schemaName,
+            @NotBlank @Size(max = 240) String tableName,
+            @Size(max = 240) String newTableName,
+            List<ColumnDesign> columns,
+            List<IndexDesign> indexes,
+            List<String> primaryKeys,
+            String structureVersion,
+            String confirmation
+    ) {
+    }
+
     public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId) {
     }
 

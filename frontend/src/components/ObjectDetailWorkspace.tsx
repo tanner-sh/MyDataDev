@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AutoComplete, Button, Checkbox, Empty, Input, InputNumber, Layout, Modal, Popconfirm, Select, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, KeyOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
-import type { ColumnDesign, DatabaseCapabilities, DbObject, IndexDesign, ObjectDdl, ObjectDetail, ObjectRelation, ObjectRelations, ObjectRowCount, TableDesignRequest, TableDesignResponse, WorkspaceStatus } from '../types';
+import type { DatabaseCapabilities, DbObject, ObjectDdl, ObjectDetail, ObjectRelation, ObjectRelations, ObjectRowCount, TableDesignRequest, TableDesignResponse, WorkspaceStatus } from '../types';
 import { localizeMessage, objectTypeLabel } from '../utils';
+import {
+  designColumns,
+  designIndexes,
+  serializeColumns,
+  serializeIndexes,
+  TableDefinitionEditor,
+  tableDefinitionSignature
+} from './TableDefinitionEditor';
+import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 
 const { Header } = Layout;
@@ -13,9 +23,6 @@ const { Text } = Typography;
 
 type ColumnRow = ObjectDetail['columns'][number] & { key: string };
 type IndexRow = { key: string; name: string; columns: string[]; unique: boolean; primary: boolean };
-type DesignColumnRow = ColumnDesign & { key: string };
-type DesignIndexRow = IndexDesign & { key: string };
-const COLUMN_TYPE_OPTIONS = ['VARCHAR', 'CHAR', 'TEXT', 'INTEGER', 'BIGINT', 'DECIMAL', 'BOOLEAN', 'DATE', 'TIMESTAMP', 'JSON', 'BLOB'].map((value) => ({ value, label: value }));
 
 export interface ObjectDetailWorkspaceProps {
   connectionId?: number;
@@ -29,6 +36,8 @@ export interface ObjectDetailWorkspaceProps {
   onOpenTable: (object: DbObject) => void;
   onReloadDetail: () => void;
   onBackupTable?: (object: DbObject) => void;
+  onRenameTable?: (object: DbObject) => void;
+  onDropTable?: (object: DbObject) => void;
   onDesignDirtyChange?: (dirty: boolean) => void;
 }
 
@@ -44,6 +53,8 @@ export function ObjectDetailWorkspace({
   onOpenTable,
   onReloadDetail,
   onBackupTable,
+  onRenameTable,
+  onDropTable,
   onDesignDirtyChange
 }: ObjectDetailWorkspaceProps) {
   const [activeTabKey, setActiveTabKey] = useState('columns');
@@ -53,9 +64,27 @@ export function ObjectDetailWorkspace({
   const isPhysicalTable = Boolean(detail && detail.type.toUpperCase().includes('TABLE') && !isView);
   const tableBrowseSupported = capabilities?.tableBrowse ?? true;
   const tableDesignSupported = capabilities?.tableDesign ?? true;
+  const tableLifecycleEnabled = isPhysicalTable && tableDesignSupported && !readonlyConnection;
   const detailKey = detail ? `${detail.schemaName || ''}.${detail.name}.${detail.type}` : '';
   const columnRows = useMemo(() => detail?.columns.map((column) => ({ ...column, key: column.name })) || [], [detail]);
   const indexRows = useMemo(() => detail ? aggregateIndexRows(detail) : [], [detail]);
+  const secondaryMenu: MenuProps = {
+    items: [
+      { key: 'refresh', icon: <ReloadOutlined />, label: '刷新对象', disabled: !detail || loading },
+      ...(onBackupTable ? [{ key: 'backup', icon: <CloudDownloadOutlined />, label: '备份此表', disabled: !detail || !isPhysicalTable || loading }] : []),
+      ...(onRenameTable && onDropTable ? [
+        { type: 'divider' as const },
+        { key: 'rename', icon: <EditOutlined />, label: '重命名表', disabled: !tableLifecycleEnabled || loading },
+        { key: 'drop', icon: <DeleteOutlined />, label: '删除表', danger: true, disabled: !tableLifecycleEnabled || loading }
+      ] : [])
+    ],
+    onClick: ({ key }) => {
+      if (key === 'refresh') onReloadDetail();
+      if (key === 'backup' && detail) onBackupTable?.(detail);
+      if (key === 'rename' && detail) onRenameTable?.(detail);
+      if (key === 'drop' && detail) onDropTable?.(detail);
+    }
+  };
 
   useEffect(() => {
     setActiveTabKey('columns');
@@ -81,26 +110,18 @@ export function ObjectDetailWorkspace({
           </Space>
           <Text type="secondary">{detail ? `${detail.columns.length} 个字段 · ${new Set(detail.indexes.map((index) => index.name)).size} 个索引` : '从资源管理器中选择数据库对象'}</Text>
         </div>
-        <Space size={8} wrap>
-          <Button
-            size="small"
-            icon={<ReloadOutlined />}
-            disabled={!detail || loading}
-            loading={loading}
-            onClick={onReloadDetail}
-          >
-            刷新对象
-          </Button>
-          {onBackupTable && (
+        <Space size={8} className="object-toolbar-actions">
+          <Dropdown trigger={['click']} menu={secondaryMenu}>
             <Button
+              className="object-more-actions"
               size="small"
-              icon={<CloudDownloadOutlined />}
-              disabled={!detail || !isPhysicalTable || loading}
-              onClick={() => detail && onBackupTable(detail)}
+              icon={<MoreOutlined />}
+              aria-label="更多对象操作"
+              disabled={!detail}
             >
-              备份此表
+              更多
             </Button>
-          )}
+          </Dropdown>
           <Button
             size="small"
             type="primary"
@@ -465,9 +486,8 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
   const [submitting, setSubmitting] = useState(false);
   const requestIdRef = useRef(0);
   const requestAbortRef = useRef<AbortController | null>(null);
-  const activeColumns = columns.filter((column) => !column.deleted);
   const tableName = fullObjectName(detail);
-  const currentSignature = useMemo(() => designStateSignature(columns, indexes, primaryKeys), [columns, indexes, primaryKeys]);
+  const currentSignature = useMemo(() => tableDefinitionSignature(columns, indexes, primaryKeys), [columns, indexes, primaryKeys]);
   const dirty = baselineSignature !== '' && baselineSignature !== currentSignature;
 
   useEffect(() => {
@@ -480,7 +500,7 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
     setColumns(nextColumns);
     setIndexes(nextIndexes);
     setPrimaryKeys(nextPrimaryKeys);
-    setBaselineSignature(designStateSignature(nextColumns, nextIndexes, nextPrimaryKeys));
+    setBaselineSignature(tableDefinitionSignature(nextColumns, nextIndexes, nextPrimaryKeys));
     setPreview([]);
     setConfirmOpen(false);
     setConfirmation('');
@@ -496,8 +516,6 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
   }, [dirty, onDirtyChange]);
 
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
-
-  const columnOptions = useMemo(() => activeColumns.map((column) => ({ value: column.name, label: column.name })), [activeColumns]);
 
   async function previewDesign() {
     if (!connectionId) return;
@@ -553,30 +571,6 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
     }
   }
 
-  function patchColumn(row: DesignColumnRow, patch: Partial<DesignColumnRow>) {
-    if (patch.name !== undefined && patch.name !== row.name) {
-      const nextName = patch.name;
-      setPrimaryKeys((keys) => keys.map((name) => name === row.name ? nextName : name));
-      setIndexes((rows) => rows.map((index) => ({
-        ...index,
-        columns: index.columns.map((name) => name === row.name ? nextName : name)
-      })));
-    }
-    updateColumn(row.key, patch, setColumns);
-  }
-
-  function toggleColumnDeleted(row: DesignColumnRow) {
-    const deleting = !row.deleted;
-    if (deleting) {
-      setPrimaryKeys((keys) => keys.filter((name) => name !== row.name));
-      setIndexes((rows) => rows.map((index) => {
-        const nextColumns = index.columns.filter((name) => name !== row.name);
-        return { ...index, columns: nextColumns, deleted: index.deleted || nextColumns.length === 0 };
-      }));
-    }
-    updateColumn(row.key, { deleted: deleting }, setColumns);
-  }
-
   function resetDesign() {
     const nextColumns = designColumns(detail);
     const nextIndexes = designIndexes(detail);
@@ -590,65 +584,24 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
 
   return (
     <div className="table-designer">
-      <section className="designer-section designer-column-section">
-        <div className="designer-notices">
-          {readonlyConnection && <Alert type="warning" showIcon title="当前连接为只读连接，不能执行结构变更。" />}
-          {unsupported && <Alert type="info" showIcon title="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
-          {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon title="视图暂不支持表设计器。" />}
-          {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon title={message} />}
-        </div>
-        <div className="designer-toolbar">
-          <Text strong>字段</Text>
-          <Space size={6}>
-            {dirty && <Text type="warning">有未保存修改</Text>}
-            <Button size="small" disabled={disabled || !dirty} onClick={resetDesign}>撤销全部</Button>
-            <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setColumns((rows) => [...rows, newColumnRow(rows.length)])}>新增字段</Button>
-          </Space>
-        </div>
-        <div className="designer-table-viewport">
-            <Table<DesignColumnRow>
-              size="small"
-              className="data-grid object-detail-grid designer-grid designer-column-grid"
-              rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
-              pagination={false}
-              dataSource={columns}
-              scroll={{ x: 900 }}
-              sticky
-              columns={[
-                { title: '字段名', dataIndex: 'name', key: 'name', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { name: event.target.value })} /> },
-                { title: '类型', dataIndex: 'type', key: 'type', width: 150, render: (value, row) => <AutoComplete size="small" className="full-width" disabled={disabled || row.deleted} value={value} options={COLUMN_TYPE_OPTIONS} filterOption={(input, option) => String(option?.value || '').includes(input.toUpperCase())} onChange={(next) => updateColumn(row.key, { type: next.toUpperCase() }, setColumns)} /> },
-                { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => updateColumn(row.key, { size: next || null }, setColumns)} /> },
-                { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新字段'}允许为空`} disabled={disabled || row.deleted} checked={value} onChange={(event) => updateColumn(row.key, { nullable: event.target.checked }, setColumns)} /> },
-                { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateColumn(row.key, { defaultValue: event.target.value }, setColumns)} /> },
-                { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox aria-label={`${row.name || '新字段'}设为主键`} disabled={disabled || row.deleted} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
-                { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => toggleColumnDeleted(row)}>{row.deleted ? '恢复' : '删除'}</Button> }
-              ]}
-            />
-        </div>
-      </section>
-      <section className="designer-section designer-index-section">
-        <div className="designer-toolbar">
-          <Text strong>索引</Text>
-          <Button size="small" icon={<PlusOutlined />} disabled={disabled} onClick={() => setIndexes((rows) => [...rows, newIndexRow(rows.length)])}>新增索引</Button>
-        </div>
-        <div className="designer-table-viewport">
-            <Table<DesignIndexRow>
-              size="small"
-              className="data-grid object-detail-grid designer-grid designer-index-grid"
-              rowClassName={(row) => row.deleted ? 'deleted-row' : ''}
-              pagination={false}
-              dataSource={indexes}
-              scroll={{ x: 720 }}
-              sticky
-              columns={[
-                { title: '索引名', dataIndex: 'name', key: 'name', width: 170, render: (value, row) => <Input size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => updateIndex(row.key, { name: event.target.value }, setIndexes)} /> },
-                { title: '字段', dataIndex: 'columns', key: 'columns', width: 360, render: (value, row) => <Select size="small" mode="multiple" className="full-width" disabled={disabled || row.deleted} value={value} options={columnOptions} onChange={(next) => updateIndex(row.key, { columns: next }, setIndexes)} /> },
-                { title: '唯一', dataIndex: 'unique', key: 'unique', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新索引'}设为唯一索引`} disabled={disabled || row.deleted} checked={value} onChange={(event) => updateIndex(row.key, { unique: event.target.checked }, setIndexes)} /> },
-                { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => setIndexes((rows) => rows.map((item) => item.key === row.key ? { ...item, deleted: !item.deleted } : item))}>{row.deleted ? '恢复' : '删除'}</Button> }
-              ]}
-            />
-        </div>
-      </section>
+      <div className="designer-notices">
+        {readonlyConnection && <Alert type="warning" showIcon title="当前连接为只读连接，不能执行结构变更。" />}
+        {unsupported && <Alert type="info" showIcon title="当前数据库方言尚未通过表设计器契约验证，请使用数据库原生工具执行 DDL。" />}
+        {detail.type.toUpperCase().includes('VIEW') && <Alert type="info" showIcon title="视图暂不支持表设计器。" />}
+        {message && <Alert type={message.includes('失败') || message.includes('不') ? 'error' : 'info'} showIcon title={message} />}
+      </div>
+      <TableDefinitionEditor
+        mode="edit"
+        columns={columns}
+        indexes={indexes}
+        primaryKeys={primaryKeys}
+        disabled={disabled}
+        dirty={dirty}
+        onReset={resetDesign}
+        setColumns={setColumns}
+        setIndexes={setIndexes}
+        setPrimaryKeys={setPrimaryKeys}
+      />
       <div className="designer-actions">
         <Button type="primary" disabled={disabled} loading={submitting} onClick={previewDesign}>预览 DDL</Button>
       </div>
@@ -713,80 +666,13 @@ function sameColumns(left: string[], right: string[]) {
   return left.length === right.length && left.every((column, index) => column === right[index]);
 }
 
-function designColumns(detail: ObjectDetail): DesignColumnRow[] {
-  return detail.columns.map((column) => ({
-    key: column.name,
-    name: column.name,
-    type: column.type,
-    size: column.size,
-    nullable: column.nullable,
-    defaultValue: column.defaultValue || '',
-    originalName: column.name,
-    deleted: false
-  }));
-}
-
-function groupIndexes(indexes: ObjectDetail['indexes']): DesignIndexRow[] {
-  const grouped = new Map<string, DesignIndexRow>();
-  indexes.slice().sort((left, right) => (left.ordinalPosition || 0) - (right.ordinalPosition || 0)).forEach((index) => {
-    const current = grouped.get(index.name);
-    if (current) {
-      current.columns.push(index.columnName);
-    } else {
-      grouped.set(index.name, {
-        key: index.name,
-        name: index.name,
-        originalName: index.name,
-        columns: [index.columnName],
-        unique: index.unique,
-        deleted: false
-      });
-    }
-  });
-  return [...grouped.values()];
-}
-
-function designIndexes(detail: ObjectDetail) {
-  return groupIndexes(detail.indexes).filter((index) => {
-    if (detail.primaryKeyName && index.name === detail.primaryKeyName) return false;
-    // Several drivers report the primary-key backing index under a name that
-    // differs from the constraint name. A unique index with the exact PK
-    // columns must not be offered as an independently deletable index.
-    return detail.primaryKeys.length === 0 || !index.unique || !sameColumns(index.columns, detail.primaryKeys);
-  });
-}
-
-function newColumnRow(index: number): DesignColumnRow {
-  return { key: `new-column-${Date.now()}-${index}`, name: '', type: 'VARCHAR', size: 255, nullable: true, defaultValue: '', deleted: false };
-}
-
-function newIndexRow(index: number): DesignIndexRow {
-  return { key: `new-index-${Date.now()}-${index}`, name: '', columns: [], unique: false, deleted: false };
-}
-
-function updateColumn(key: string, patch: Partial<DesignColumnRow>, setter: React.Dispatch<React.SetStateAction<DesignColumnRow[]>>) {
-  setter((rows) => rows.map((row) => row.key === key ? { ...row, ...patch } : row));
-}
-
-function updateIndex(key: string, patch: Partial<DesignIndexRow>, setter: React.Dispatch<React.SetStateAction<DesignIndexRow[]>>) {
-  setter((rows) => rows.map((row) => row.key === key ? { ...row, ...patch } : row));
-}
-
 function designRequest(detail: ObjectDetail, columns: DesignColumnRow[], indexes: DesignIndexRow[], primaryKeys: string[]): TableDesignRequest {
   return {
     schemaName: detail.schemaName,
     tableName: detail.name,
-    columns: columns.map(({ key: _key, ...column }) => column),
-    indexes: indexes.map(({ key: _key, ...index }) => index),
+    columns: serializeColumns(columns),
+    indexes: serializeIndexes(indexes),
     primaryKeys,
     structureVersion: detail.structureVersion
   };
-}
-
-function designStateSignature(columns: DesignColumnRow[], indexes: DesignIndexRow[], primaryKeys: string[]) {
-  return JSON.stringify({
-    columns: columns.map(({ key: _key, ...column }) => column),
-    indexes: indexes.map(({ key: _key, ...index }) => index),
-    primaryKeys
-  });
 }

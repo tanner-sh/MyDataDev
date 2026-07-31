@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { Button, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { CloseOutlined, ReloadOutlined } from '@ant-design/icons';
+import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { Connection, DbObject, Metadata } from '../types';
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
@@ -31,6 +31,10 @@ export type ResourceExplorerProps = {
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
   onBackupTable: (object: DbObject) => void;
+  tableLifecycleEnabled: boolean;
+  onCreateTable: () => void;
+  onRenameTable: (object: DbObject) => void;
+  onDropTable: (object: DbObject) => void;
 };
 
 export const ResourceExplorer = memo(function ResourceExplorer({
@@ -56,7 +60,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onLoadStructure,
   onOpenDetail,
   onOpenTable,
-  onBackupTable
+  onBackupTable,
+  tableLifecycleEnabled,
+  onCreateTable,
+  onRenameTable,
+  onDropTable
 }: ResourceExplorerProps) {
   return (
     <div className="resource-explorer">
@@ -66,6 +74,18 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <Text type="secondary">数据库对象</Text>
         </div>
         <Space size={2}>
+          <Tooltip title={tableLifecycleEnabled ? '在当前命名空间新建表' : '当前连接不支持表对象管理'}>
+            <Button
+              type="text"
+              size="small"
+              icon={<PlusOutlined />}
+              disabled={!selected || !tableLifecycleEnabled || metadataBlockingLoading}
+              aria-label="新建表"
+              onClick={onCreateTable}
+            >
+              新建表
+            </Button>
+          </Tooltip>
           <Tooltip title="刷新对象缓存">
             <Button type="text" size="small" icon={<ReloadOutlined />} loading={metadataLoading} disabled={!selected}
                     aria-label="刷新对象缓存" onClick={onRefresh}>刷新</Button>
@@ -83,12 +103,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <div className="explorer-connection-title">
             <span className="connection-dot" aria-hidden="true" />
             <Text strong ellipsis>{selected.name}</Text>
-          </div>
-          <Space size={4} wrap>
             <Tag variant="filled" color="blue">{dbTypeLabel(selected.dbType)}</Tag>
             {selected.readonly && <Tag variant="filled" color="orange">只读</Tag>}
-            {metadata?.selectedSchema && <Tag variant="filled">{namespaceLabel} · {metadata.selectedSchema}</Tag>}
-          </Space>
+          </div>
           <Text type="secondary" ellipsis title={selected.jdbcUrl}>{selected.jdbcUrl}</Text>
         </div>
       ) : (
@@ -144,6 +161,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             onOpenDetail={onOpenDetail}
             onOpenTable={onOpenTable}
             onBackupTable={onBackupTable}
+            tableLifecycleEnabled={tableLifecycleEnabled}
+            onRenameTable={onRenameTable}
+            onDropTable={onDropTable}
           />
         )}
         {metadataLoading && !metadataBlockingLoading && (

@@ -16,6 +16,7 @@ import { getSqlFormatTarget } from './sqlFormatTarget';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
+import type { TableLifecycleAction } from './components/TableLifecyclePanel';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 import { useStableEvent } from './hooks/useStableEvent';
 import { useVisiblePolling } from './hooks/useVisiblePolling';
@@ -44,6 +45,7 @@ const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionD
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
+const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
 function resultUnits(tab: SqlTab) {
   return tab.results.reduce((total, statement) => {
@@ -131,6 +133,8 @@ export default function App() {
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
+  const [tableCreateOpen, setTableCreateOpen] = useState(false);
+  const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
   const selectedIdRef = useRef<number | null>(null);
   const metadataRef = useRef<Metadata | null>(null);
@@ -235,7 +239,9 @@ export default function App() {
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
     clearMetadataSearchTimer();
-  }, [selected]);
+    setTableCreateOpen(false);
+    setTableLifecycleAction(undefined);
+  }, [selected?.id]);
 
   useEffect(() => () => clearMetadataSearchTimer(), []);
 
@@ -1408,6 +1414,76 @@ export default function App() {
     }, `查看对象“${object.name}”`);
   }
 
+  function openCreateTable() {
+    if (!selected) {
+      showInfo('请先选择数据库连接');
+      return;
+    }
+    if (selected.readonly || !selected.capabilities?.tableDesign) {
+      showInfo('当前连接不支持表对象管理');
+      return;
+    }
+    setMobileExplorerOpen(false);
+    setTableCreateOpen(true);
+  }
+
+  function openTableLifecycleAction(operation: 'RENAME' | 'DROP', object: DbObject) {
+    if (!selected || selected.readonly || !selected.capabilities?.tableDesign) {
+      showInfo('当前连接不支持表对象管理');
+      return;
+    }
+    if (object.type.toUpperCase().includes('VIEW')) {
+      showInfo('首版仅支持管理物理表');
+      return;
+    }
+    const targetName = `${object.schemaName ? `${object.schemaName}.` : ''}${object.name}`;
+    const begin = () => {
+      setMobileExplorerOpen(false);
+      setTableLifecycleAction({ operation, object });
+    };
+    if (mode === 'table' && activeTable && sameTable(activeTable, object)) {
+      confirmDiscardTableChanges(begin, `${operation === 'DROP' ? '删除' : '重命名'}数据表“${targetName}”`);
+      return;
+    }
+    if (mode === 'object' && activeObjectDetail && sameTable(activeObjectDetail, object) && objectDesignDirtyRef.current) {
+      confirmDiscardObjectDesign(() => {
+        updateObjectDesignDirty(false);
+        setActiveObjectDetail(null);
+        setMode('sql');
+        begin();
+      }, `${operation === 'DROP' ? '删除' : '重命名'}数据表“${targetName}”`);
+      return;
+    }
+    begin();
+  }
+
+  async function tableLifecycleCompleted(operation: 'CREATE' | 'RENAME' | 'DROP', source: DbObject | null, newTableName?: string) {
+    if (!selected) return;
+    const activeTableMatched = Boolean(source && activeTable && sameTable(activeTable, source));
+    const activeObjectMatched = Boolean(source && activeObjectDetail && sameTable(activeObjectDetail, source));
+    if (operation === 'DROP' && activeTableMatched) {
+      discardTableChanges();
+      setMode('sql');
+    }
+    if (operation === 'DROP' && activeObjectMatched) {
+      setActiveObjectDetail(null);
+      updateObjectDesignDirty(false);
+      setMode('sql');
+    }
+    setMetadataQuery((current) => ({ ...current, schema: source?.schemaName || current.schema, keyword: '' }));
+    await loadMetadata(selected, {
+      schema: source?.schemaName || metadataQuery.schema,
+      keyword: '',
+      page: 0,
+      refresh: true
+    });
+    if (operation === 'RENAME' && source && newTableName) {
+      const renamed: DbObject = { ...source, name: newTableName, columns: [], indexes: [] };
+      if (activeTableMatched) await applyOpenTable(renamed);
+      else if (activeObjectMatched) await loadObjectDetail(renamed, { refresh: true });
+    }
+  }
+
   async function loadObjectDetail(object: DbObject, options: { refresh?: boolean } = {}) {
     if (!selected) return;
     objectDetailAbortRef.current?.abort();
@@ -1837,6 +1913,14 @@ export default function App() {
     setSqlFileCandidate(undefined);
   });
   const handleSqlFileMetadataEvent = useStableEvent((connectionId: number) => handleSqlFileMetadataChanged(connectionId));
+  const openCreateTableEvent = useStableEvent(() => openCreateTable());
+  const renameTableEvent = useStableEvent((object: DbObject) => openTableLifecycleAction('RENAME', object));
+  const dropTableEvent = useStableEvent((object: DbObject) => openTableLifecycleAction('DROP', object));
+  const closeCreateTableEvent = useStableEvent(() => setTableCreateOpen(false));
+  const closeTableLifecycleActionEvent = useStableEvent(() => setTableLifecycleAction(undefined));
+  const completeTableLifecycleEvent = useStableEvent((operation: 'CREATE' | 'RENAME' | 'DROP', source: DbObject | null, newTableName?: string) => {
+    void tableLifecycleCompleted(operation, source, newTableName);
+  });
 
   const explorerPanel = (
     <ResourceExplorer
@@ -1863,6 +1947,10 @@ export default function App() {
       onOpenDetail={openExplorerObjectDetail}
       onOpenTable={openExplorerTable}
       onBackupTable={backupExplorerTable}
+      tableLifecycleEnabled={Boolean(selected?.capabilities?.tableDesign && !selected.readonly)}
+      onCreateTable={openCreateTableEvent}
+      onRenameTable={renameTableEvent}
+      onDropTable={dropTableEvent}
     />
   );
 
@@ -1910,8 +1998,11 @@ export default function App() {
             <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载工作区…</div>}>
             {mode === 'sql' && !selected ? (
               <div className="empty-state empty-state-fill">
-                <Typography.Title level={4}>选择数据库连接后加载 SQL 工作台</Typography.Title>
-                <Text type="secondary">编辑器和数据库元数据会在连接确定后按需加载。</Text>
+                <div className="empty-state-content">
+                  <Typography.Title level={4}>选择数据库连接后加载 SQL 工作台</Typography.Title>
+                  <Text type="secondary">编辑器和数据库元数据会在连接确定后按需加载。</Text>
+                  <Button type="primary" onClick={openConnectionsFromHeader}>打开连接管理</Button>
+                </div>
               </div>
             ) : mode === 'sql' ? (
               <SqlWorkspace
@@ -1982,6 +2073,8 @@ export default function App() {
                 onOpenTable={openExplorerTable}
                 onReloadDetail={reloadObjectDetailEvent}
                 onBackupTable={backupCurrentTableEvent}
+                onRenameTable={renameTableEvent}
+                onDropTable={dropTableEvent}
                 onDesignDirtyChange={updateObjectDesignDirty}
               />
             )}
@@ -2095,6 +2188,20 @@ export default function App() {
           />
         </Suspense>
       </Drawer>
+      {(tableCreateOpen || tableLifecycleAction) && (
+        <Suspense fallback={null}>
+          <TableLifecyclePanel
+            createOpen={tableCreateOpen}
+            action={tableLifecycleAction}
+            connection={selected}
+            schemas={metadata?.schemas || []}
+            defaultSchema={metadataQuery.schema || metadata?.selectedSchema || undefined}
+            onCloseCreate={closeCreateTableEvent}
+            onCloseAction={closeTableLifecycleActionEvent}
+            onCompleted={completeTableLifecycleEvent}
+          />
+        </Suspense>
+      )}
       {historyFeatureLoaded && (
         <Suspense fallback={null}>
           <SqlHistoryDrawer
@@ -2119,6 +2226,14 @@ export default function App() {
       )}
     </ConfigProvider>
   );
+}
+
+function sameTable(
+  left: { schemaName?: string; tableName?: string; name?: string },
+  right: { schemaName?: string; tableName?: string; name?: string }
+) {
+  return (left.schemaName || '') === (right.schemaName || '')
+    && (left.tableName || left.name) === (right.tableName || right.name);
 }
 
 function sqlStatusFromTab(tab: SqlTab): WorkspaceStatus {

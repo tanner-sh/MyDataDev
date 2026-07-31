@@ -18,6 +18,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectRowCountResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
+import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import org.springframework.stereotype.Service;
@@ -575,6 +576,133 @@ public class MetadataService {
         if (sql.isEmpty()) {
             return new TableDesignResponse(List.of(), "没有检测到结构变更。");
         }
+        executeDdl(connectionId, sql, () -> cache.evictObject(connectionId, request.schemaName(), request.tableName()));
+        audit.log(actor, "TABLE_DESIGN_EXECUTE", "connection:" + connectionId + " table:" + expected, String.join("\n", sql));
+        return new TableDesignResponse(sql, "已执行 " + sql.size() + " 条 DDL。");
+    }
+
+    public TableDesignResponse executeDesign(long connectionId, TableDesignRequest request, String actor) throws Exception {
+        return executeDesign(connectionId, request, actor, null);
+    }
+
+    public TableDesignResponse previewTableLifecycle(long connectionId, TableLifecycleRequest request) throws Exception {
+        TableLifecyclePlan plan = tableLifecyclePlan(connectionId, request);
+        return new TableDesignResponse(plan.sql(), "已生成 " + plan.sql().size() + " 条 DDL。");
+    }
+
+    public TableDesignResponse executeTableLifecycle(
+            long connectionId,
+            TableLifecycleRequest request,
+            String actor,
+            String productionConfirmation
+    ) throws Exception {
+        DbConnection dbConnection = connections.require(connectionId);
+        executionGuard.requireMutationAllowed(dbConnection, productionConfirmation);
+        TableLifecyclePlan plan = tableLifecyclePlan(connectionId, request);
+        if (!plan.confirmationTarget().equals(request.confirmation())) {
+            throw new IllegalArgumentException("确认文本不匹配，请输入完整表名：" + plan.confirmationTarget());
+        }
+        executeDdl(connectionId, plan.sql(), () -> cache.evictConnection(connectionId));
+        audit.log(
+                actor,
+                "TABLE_" + plan.operation().name(),
+                "connection:" + connectionId + " table:" + plan.confirmationTarget(),
+                String.join("\n", plan.sql())
+        );
+        return new TableDesignResponse(plan.sql(), switch (plan.operation()) {
+            case CREATE -> "表已创建。";
+            case RENAME -> "表已重命名。";
+            case DROP -> "表已删除。";
+        });
+    }
+
+    private TableLifecyclePlan tableLifecyclePlan(long connectionId, TableLifecycleRequest request) throws Exception {
+        TableLifecycleOperation operation = TableLifecycleOperation.parse(request.operation());
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (!dialect.capabilities().tableDesign()) {
+            throw new IllegalStateException("当前数据库类型暂不支持表对象管理。请使用数据库原生工具执行 DDL。");
+        }
+        validateIdentifier(request.tableName(), "表名");
+        if (request.schemaName() != null && !request.schemaName().isBlank()) {
+            validateIdentifier(request.schemaName(), "Schema");
+        }
+
+        if (operation == TableLifecycleOperation.CREATE) {
+            TableDesignRequest design = new TableDesignRequest(
+                    request.schemaName(), request.tableName(), request.columns(), request.indexes(), request.primaryKeys(), null, null
+            );
+            validateCreateDesign(design);
+            try (Connection connection = connections.open(connectionId)) {
+                DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, request.schemaName());
+                DbObject existing = findObjectIfExists(connection.getMetaData(), scope, dialect, request.tableName());
+                if (existing != null) {
+                    throw new ApiProblemException(
+                            org.springframework.http.HttpStatus.CONFLICT,
+                            "TABLE_ALREADY_EXISTS",
+                            "目标表已存在：" + qualifiedName(existing.schemaName(), existing.name())
+                    );
+                }
+            }
+            String target = qualifiedName(request.schemaName(), request.tableName());
+            return new TableLifecyclePlan(operation, request.schemaName(), request.tableName(), null, target,
+                    dialect.createTableSql(request.schemaName(), request.tableName(), design));
+        }
+
+        ObjectDetail original = detail(connectionId, request.schemaName(), request.tableName(), true);
+        if (!isPhysicalTable(original.type())) {
+            throw new IllegalArgumentException("仅支持管理物理表：" + qualifiedName(original.schemaName(), original.name()));
+        }
+        if (request.structureVersion() == null || request.structureVersion().isBlank()
+                || !request.structureVersion().equals(original.structureVersion())) {
+            throw new ApiProblemException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "STALE_TABLE_OBJECT",
+                    "表结构已发生变化，请刷新对象后重试。"
+            );
+        }
+        String source = qualifiedName(original.schemaName(), original.name());
+        if (operation == TableLifecycleOperation.DROP) {
+            return new TableLifecyclePlan(operation, original.schemaName(), original.name(), null, source,
+                    List.of(dialect.dropTableSql(original.schemaName(), original.name())));
+        }
+
+        validateIdentifier(request.newTableName(), "新表名");
+        if (original.name().equalsIgnoreCase(request.newTableName())) {
+            throw new IllegalArgumentException("新表名必须与当前表名不同，首版不支持仅修改大小写。");
+        }
+        try (Connection connection = connections.open(connectionId)) {
+            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, original.schemaName());
+            DbObject existing = findObjectIfExists(connection.getMetaData(), scope, dialect, request.newTableName());
+            if (existing != null) {
+                throw new ApiProblemException(
+                        org.springframework.http.HttpStatus.CONFLICT,
+                        "TABLE_ALREADY_EXISTS",
+                        "目标表已存在：" + qualifiedName(existing.schemaName(), existing.name())
+                );
+            }
+        }
+        return new TableLifecyclePlan(operation, original.schemaName(), original.name(), request.newTableName(), source,
+                List.of(dialect.renameTableSql(original.schemaName(), original.name(), request.newTableName())));
+    }
+
+    private void validateCreateDesign(TableDesignRequest design) {
+        validateDesign(design);
+        for (var column : design.columns()) {
+            if (column.deleted() || column.originalName() != null && !column.originalName().isBlank()) {
+                throw new IllegalArgumentException("新建表字段不能包含删除标记或原字段名。");
+            }
+        }
+        if (design.indexes() != null) {
+            for (var index : design.indexes()) {
+                if (index.deleted() || index.originalName() != null && !index.originalName().isBlank()) {
+                    throw new IllegalArgumentException("新建表索引不能包含删除标记或原索引名。");
+                }
+            }
+        }
+    }
+
+    private void executeDdl(long connectionId, List<String> sql, Runnable evictCache) throws Exception {
         int executed = 0;
         try (Connection connection = connections.open(connectionId); Statement statement = connection.createStatement()) {
             for (String line : sql) {
@@ -598,16 +726,10 @@ public class MetadataService {
             problem.initCause(error);
             throw problem;
         } finally {
-            // DDL auto-commits on several supported databases. A failed batch
-            // can still have changed the object, so cached metadata is unsafe.
-            cache.evictObject(connectionId, request.schemaName(), request.tableName());
+            // DDL may auto-commit before a later statement fails, so all
+            // dependent metadata must be treated as stale on every outcome.
+            evictCache.run();
         }
-        audit.log(actor, "TABLE_DESIGN_EXECUTE", "connection:" + connectionId + " table:" + expected, String.join("\n", sql));
-        return new TableDesignResponse(sql, "已执行 " + sql.size() + " 条 DDL。");
-    }
-
-    public TableDesignResponse executeDesign(long connectionId, TableDesignRequest request, String actor) throws Exception {
-        return executeDesign(connectionId, request, actor, null);
     }
 
     private List<String> designSql(long connectionId, TableDesignRequest request) throws Exception {
@@ -721,6 +843,12 @@ public class MetadataService {
     }
 
     private DbObject findObject(DatabaseMetaData meta, DatabaseDialect.MetadataScope scope, DatabaseDialect dialect, String objectName) throws Exception {
+        DbObject object = findObjectIfExists(meta, scope, dialect, objectName);
+        if (object != null) return object;
+        throw new IllegalArgumentException("未找到数据库对象：" + objectName);
+    }
+
+    private DbObject findObjectIfExists(DatabaseMetaData meta, DatabaseDialect.MetadataScope scope, DatabaseDialect dialect, String objectName) throws Exception {
         String schemaPattern = scope.schemaPattern() == null ? null : metadataPattern(meta, scope.schemaPattern(), MatchMode.EXACT);
         String objectPattern = metadataPattern(meta, objectName, MatchMode.EXACT);
         try (ResultSet rs = meta.getTables(scope.catalog(), schemaPattern, objectPattern, new String[]{"TABLE", "VIEW"})) {
@@ -746,7 +874,7 @@ public class MetadataService {
         }
         if (foldedMatches.size() == 1) return foldedMatches.get(0);
         if (foldedMatches.size() > 1) throw new IllegalArgumentException("对象名称大小写不明确，请使用数据库返回的精确名称：" + objectName);
-        throw new IllegalArgumentException("未找到数据库对象：" + objectName);
+        return null;
     }
 
     private List<String> primaryKeys(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {
@@ -1038,6 +1166,33 @@ public class MetadataService {
     }
 
     private record PageSlice<T>(List<T> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    private record TableLifecyclePlan(
+            TableLifecycleOperation operation,
+            String schemaName,
+            String tableName,
+            String newTableName,
+            String confirmationTarget,
+            List<String> sql
+    ) {
+        private TableLifecyclePlan {
+            sql = List.copyOf(sql);
+        }
+    }
+
+    private enum TableLifecycleOperation {
+        CREATE,
+        RENAME,
+        DROP;
+
+        private static TableLifecycleOperation parse(String value) {
+            try {
+                return valueOf(value == null ? "" : value.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                throw new IllegalArgumentException("不支持的表对象操作：" + value);
+            }
+        }
     }
 
     private enum MatchMode {

@@ -1135,6 +1135,10 @@ body {
   display: none;
 }
 
+.table-definition-editor {
+  min-width: 0;
+}
+
 .designer-table-viewport {
   min-width: 0;
   overflow-x: auto;
@@ -1542,9 +1546,9 @@ body {
 .explorer-connection-summary {
   grid-row: 2;
   margin: 10px 10px 8px;
-  padding: 9px 10px;
+  padding: 8px 10px;
   display: grid;
-  gap: 5px;
+  gap: 4px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-raised);
@@ -1553,6 +1557,16 @@ body {
 
 .explorer-connection-title {
   gap: 7px;
+}
+
+.explorer-connection-title > .ant-typography {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.explorer-connection-title .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
 }
 
 .connection-dot {
@@ -1589,7 +1603,7 @@ body {
   grid-row: 3;
   padding: 0 10px 9px;
   display: grid;
-  grid-template-columns: minmax(82px, .75fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
@@ -2060,7 +2074,7 @@ body {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
-  gap: 8px;
+  gap: 6px;
 }
 
 .sql-toolbar-actions,
@@ -2076,6 +2090,16 @@ body {
   background: var(--border);
 }
 
+.sql-toolbar-button {
+  min-width: 32px;
+  height: 32px;
+  padding-inline: 10px;
+}
+
+.sql-execute-button {
+  min-width: 68px;
+}
+
 .toolbar-title {
   gap: 2px;
 }
@@ -2088,6 +2112,31 @@ body {
 .toolbar-title > .ant-typography:last-child {
   max-width: min(52vw, 700px);
   font-size: 11px;
+}
+
+.empty-state-content {
+  max-width: min(420px, calc(100vw - 32px));
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.empty-state-content .ant-typography {
+  margin: 0;
+}
+
+.empty-state-content .ant-btn {
+  margin-top: 4px;
+}
+
+.object-toolbar-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap !important;
+}
+
+.object-toolbar-actions .ant-btn {
+  min-height: 32px;
 }
 
 .sql-tabs {
@@ -2329,6 +2378,39 @@ body {
   background: var(--surface-subtle);
 }
 
+.table-create-content {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.table-create-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+}
+
+.table-create-heading h5 {
+  margin: 0 0 4px;
+}
+
+.table-lifecycle-field {
+  min-width: 190px;
+  display: grid;
+  gap: 4px;
+}
+
+.table-lifecycle-field .ant-select,
+.table-lifecycle-field .ant-input-affix-wrapper,
+.table-lifecycle-field > .ant-input {
+  width: 100%;
+}
+
 .management-drawer .inspector-section {
   border-radius: 9px;
   box-shadow: var(--shadow-sm);
@@ -2461,12 +2543,20 @@ body {
 
 @media (hover: none), (pointer: coarse) {
   .object-tree-actions {
+    top: 0;
+    height: 30px;
     opacity: 1;
     pointer-events: auto;
   }
 
   .object-tree-object-name {
-    padding-right: 52px;
+    padding-right: 64px;
+  }
+
+  .object-tree-action {
+    width: 30px;
+    min-width: 30px !important;
+    height: 30px !important;
   }
 }
 
@@ -2570,15 +2660,61 @@ body {
     max-width: 100%;
   }
 
+  .table-create-heading {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .table-create-heading > .ant-space {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .table-lifecycle-field {
+    min-width: 0;
+  }
+
   .toolbar-title > .ant-typography:last-child {
     display: none;
   }
 
   .sql-toolbar-actions {
-    gap: 6px !important;
+    gap: 4px !important;
   }
 
+  .sql-toolbar-label,
   .sql-toolbar-divider {
+    display: none;
+  }
+
+  .sql-workspace .sql-toolbar-button {
+    height: 36px !important;
+  }
+
+  .sql-workspace .sql-toolbar-button:not(.sql-execute-button) {
+    width: 36px;
+    min-width: 36px;
+    padding-inline: 0;
+  }
+
+  .object-workspace .toolbar-title {
+    max-width: calc(100% - 138px);
+  }
+
+  .object-toolbar-actions {
+    gap: 4px !important;
+  }
+
+  .object-toolbar-actions .ant-btn {
+    min-height: 36px;
+  }
+
+  .object-more-actions {
+    width: 36px;
+    padding-inline: 0;
+  }
+
+  .object-more-actions > span:last-child {
     display: none;
   }
 

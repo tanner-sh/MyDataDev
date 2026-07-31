@@ -41,6 +41,18 @@ export type ColumnDesign = { name: string; type: string; size?: number | null; n
 export type IndexDesign = { name: string; columns: string[]; unique: boolean; originalName?: string; deleted: boolean };
 export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; structureVersion: string; confirmation?: string };
 export type TableDesignResponse = { sql: string[]; message: string };
+export type TableLifecycleOperation = 'CREATE' | 'RENAME' | 'DROP';
+export type TableLifecycleRequest = {
+  operation: TableLifecycleOperation;
+  schemaName?: string;
+  tableName: string;
+  newTableName?: string;
+  columns?: ColumnDesign[];
+  indexes?: IndexDesign[];
+  primaryKeys?: string[];
+  structureVersion?: string;
+  confirmation?: string;
+};
 export type ObjectStructure = DbObject;
 export type Metadata = {
   schemas: string[];

@@ -59,6 +59,12 @@ public interface DatabaseDialect {
 
     List<String> alterTableSql(String schemaName, String tableName, ObjectDetail original, TableDesignRequest design);
 
+    List<String> createTableSql(String schemaName, String tableName, TableDesignRequest design);
+
+    String renameTableSql(String schemaName, String tableName, String newTableName);
+
+    String dropTableSql(String schemaName, String tableName);
+
     default String quoteIdentifier(String identifier) {
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }

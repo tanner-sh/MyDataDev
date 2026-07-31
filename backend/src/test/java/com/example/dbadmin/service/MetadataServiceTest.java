@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
+import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
 import com.example.dbadmin.dto.ApiDtos.ColumnDesign;
 import com.example.dbadmin.dto.ApiDtos.IndexDesign;
 import com.example.dbadmin.model.DbConnection;
@@ -26,6 +27,9 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 
 class MetadataServiceTest {
     @Test
@@ -387,14 +391,108 @@ class MetadataServiceTest {
                 .doesNotContain("NAME");
     }
 
+    @Test
+    void createsRenamesAndDropsTableThroughLifecycleApi() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        AuditRepository audit = mock(AuditRepository.class);
+        MetadataService service = service(url, "dev", false, audit);
+        TableLifecycleRequest create = new TableLifecycleRequest(
+                "CREATE",
+                "PUBLIC",
+                "APP_USER",
+                null,
+                List.of(
+                        new ColumnDesign("ID", "BIGINT", null, false, null, null, false),
+                        new ColumnDesign("NAME", "VARCHAR", 80, false, null, null, false)
+                ),
+                List.of(new IndexDesign("IDX_APP_USER_NAME", List.of("NAME"), false, null, false)),
+                List.of("ID"),
+                null,
+                "PUBLIC.APP_USER"
+        );
+
+        assertThat(service.previewTableLifecycle(1L, create).sql())
+                .first().asString().contains("CREATE TABLE", "APP_USER", "PRIMARY KEY");
+        service.executeTableLifecycle(1L, create, "admin", null);
+        ObjectDetail created = service.detail(1L, "PUBLIC", "APP_USER", true);
+        assertThat(created.columns()).extracting("name").containsExactly("ID", "NAME");
+        assertThat(created.indexes()).extracting("name").contains("IDX_APP_USER_NAME");
+        verify(audit).log(eq("admin"), eq("TABLE_CREATE"), contains("PUBLIC.APP_USER"), contains("CREATE TABLE"));
+
+        TableLifecycleRequest rename = new TableLifecycleRequest(
+                "RENAME", "PUBLIC", "APP_USER", "APP_MEMBER", null, null, null,
+                created.structureVersion(), "PUBLIC.APP_USER"
+        );
+        assertThat(service.previewTableLifecycle(1L, rename).sql()).singleElement().asString().contains("RENAME TO");
+        service.executeTableLifecycle(1L, rename, "admin", null);
+        ObjectDetail renamed = service.detail(1L, "PUBLIC", "APP_MEMBER", true);
+        assertThat(renamed.columns()).extracting("name").contains("ID", "NAME");
+        assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_USER", true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未找到");
+        verify(audit).log(eq("admin"), eq("TABLE_RENAME"), contains("PUBLIC.APP_USER"), contains("RENAME TO"));
+
+        TableLifecycleRequest drop = new TableLifecycleRequest(
+                "DROP", "PUBLIC", "APP_MEMBER", null, null, null, null,
+                renamed.structureVersion(), "PUBLIC.APP_MEMBER"
+        );
+        assertThat(service.previewTableLifecycle(1L, drop).sql()).containsExactly("DROP TABLE \"PUBLIC\".\"APP_MEMBER\"");
+        service.executeTableLifecycle(1L, drop, "admin", null);
+        assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_MEMBER", true))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未找到");
+        verify(audit).log(eq("admin"), eq("TABLE_DROP"), contains("PUBLIC.APP_MEMBER"), contains("DROP TABLE"));
+    }
+
+    @Test
+    void rejectsDuplicateCreateStaleDropAndWrongConfirmation() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+        TableLifecycleRequest duplicate = new TableLifecycleRequest(
+                "CREATE", "PUBLIC", "USERS", null,
+                List.of(new ColumnDesign("ID", "BIGINT", null, false, null, null, false)),
+                List.of(), List.of("ID"), null, "PUBLIC.USERS"
+        );
+        assertThatThrownBy(() -> service.previewTableLifecycle(1L, duplicate))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        problem -> assertThat(problem.code()).isEqualTo("TABLE_ALREADY_EXISTS"));
+
+        ObjectDetail original = service.detail(1L, "PUBLIC", "USERS", true);
+        TableLifecycleRequest wrongConfirmation = new TableLifecycleRequest(
+                "DROP", "PUBLIC", "USERS", null, null, null, null,
+                original.structureVersion(), "USERS"
+        );
+        assertThatThrownBy(() -> service.executeTableLifecycle(1L, wrongConfirmation, "admin", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("确认文本不匹配");
+
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("ALTER TABLE users ADD COLUMN external_value VARCHAR(20)");
+        }
+        TableLifecycleRequest stale = new TableLifecycleRequest(
+                "DROP", "PUBLIC", "USERS", null, null, null, null,
+                original.structureVersion(), "PUBLIC.USERS"
+        );
+        assertThatThrownBy(() -> service.previewTableLifecycle(1L, stale))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        problem -> assertThat(problem.code()).isEqualTo("STALE_TABLE_OBJECT"));
+    }
+
     private MetadataService service(String url) throws Exception {
+        return service(url, "dev", false, mock(AuditRepository.class));
+    }
+
+    private MetadataService service(String url, String environment, boolean readonly, AuditRepository audit) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
-        when(connections.require(anyLong())).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        when(connections.require(anyLong())).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", environment, readonly, Instant.now(), Instant.now()));
         return new MetadataService(
                 connections,
                 new DialectRegistry(),
-                mock(AuditRepository.class),
+                audit,
                 new MetadataCacheService(),
                 new ExecutionGuard()
         );

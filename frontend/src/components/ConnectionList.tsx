@@ -1,5 +1,6 @@
-import { Alert, Button, Card, Empty, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
-import { CopyOutlined, DeleteOutlined, EditOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Dropdown, Empty, Popconfirm, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
 
@@ -59,15 +60,14 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
                     <Button size="small" type="primary" icon={<SwapOutlined />} aria-label={`切换使用 ${connection.name}`} onClick={() => onSwitch(connection)} />
                   </Tooltip>
                 )}
-                <Tooltip title="测试连接">
-                  <Button size="small" icon={<ThunderboltOutlined />} aria-label={`测试连接 ${connection.name}`} loading={testingConnectionId === connection.id} onClick={() => onTest(connection)} />
-                </Tooltip>
-                <Tooltip title="编辑连接">
-                  <Button size="small" icon={<EditOutlined />} aria-label={`编辑连接 ${connection.name}`} onClick={() => onEdit(connection)} />
-                </Tooltip>
-                <Tooltip title="复制连接">
-                  <Button size="small" icon={<CopyOutlined />} aria-label={`复制连接 ${connection.name}`} onClick={() => onDuplicate(connection)} />
-                </Tooltip>
+                <Dropdown
+                  trigger={['click']}
+                  menu={connectionMenu(connection, testingConnectionId === connection.id, onTest, onEdit, onDuplicate)}
+                >
+                  <Tooltip title="更多连接操作">
+                    <Button size="small" icon={<MoreOutlined />} aria-label={`${connection.name} 更多连接操作`} />
+                  </Tooltip>
+                </Dropdown>
                 <Popconfirm
                   title="删除连接"
                   description="确定删除该连接吗？当前未提交的数据变更会丢失；有关联备份任务的连接会被后端拒绝删除。"
@@ -85,6 +85,27 @@ export function ConnectionList({ connections, selectedId, connectionsLoading, co
           </div>
         ))}
       </div>
-    </Space>
-  );
+    </Space>
+  );
+}
+
+function connectionMenu(
+  connection: Connection,
+  testing: boolean,
+  onTest: (connection: Connection) => void,
+  onEdit: (connection: Connection) => void,
+  onDuplicate: (connection: Connection) => void
+): MenuProps {
+  return {
+    items: [
+      { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing },
+      { key: 'edit', icon: <EditOutlined />, label: '编辑连接' },
+      { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接' }
+    ],
+    onClick: ({ key }) => {
+      if (key === 'test') onTest(connection);
+      if (key === 'edit') onEdit(connection);
+      if (key === 'duplicate') onDuplicate(connection);
+    }
+  };
 }

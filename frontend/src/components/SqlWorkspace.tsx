@@ -1,7 +1,8 @@
 import type { OnMount } from '@monaco-editor/react';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography, Upload } from 'antd';
-import { DownloadOutlined, FileTextOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
+import { DownloadOutlined, FileTextOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined } from '@ant-design/icons';
+import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
@@ -54,6 +55,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const draftRef = useRef(activeTab.sql);
+  const sqlFileInputRef = useRef<HTMLInputElement>(null);
   const onSqlChangeRef = useRef(onSqlChange);
   const onResultPageChangeRef = useRef(onResultPageChange);
   const { elementRef: splitRef, height: splitHeight } = useVisibleElementHeight();
@@ -106,6 +108,50 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
     };
   }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, selected?.id]);
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
+  const moreMenu: MenuProps = {
+    items: [
+      { key: 'sql-file', icon: <FileTextOutlined />, label: '执行本地 SQL 文件', disabled: !selected },
+      { key: 'sql-file-tasks', icon: <ProfileOutlined />, label: '查看 SQL 文件任务' },
+      { type: 'divider' },
+      {
+        key: 'export',
+        icon: <DownloadOutlined />,
+        label: '导出查询结果',
+        disabled: !selected || loading,
+        children: [
+          { key: 'export:csv', label: '导出 CSV' },
+          { key: 'export:json', label: '导出 JSON' },
+          { key: 'export:sql', label: '导出 SQL' },
+          { key: 'export:xml', label: '导出 XML' }
+        ]
+      },
+      {
+        key: 'explain',
+        icon: <FundProjectionScreenOutlined />,
+        label: '查看执行计划',
+        disabled: !selected || loading || !selected.capabilities?.explain
+      }
+    ],
+    onClick: ({ key }) => {
+      if (key === 'sql-file') {
+        sqlFileInputRef.current?.click();
+        return;
+      }
+      if (key === 'sql-file-tasks') {
+        onOpenSqlFileTasks();
+        return;
+      }
+      if (key === 'explain') {
+        commitDraft();
+        onExplain();
+        return;
+      }
+      if (key.startsWith('export:')) {
+        commitDraft();
+        onExport(key.slice('export:'.length) as ExportFormat);
+      }
+    }
+  };
 
   return (
     <div className={`workspace sql-workspace${selected?.readonly ? ' is-readonly' : ''}`}>
@@ -117,64 +163,49 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
         <div className="sql-toolbar-actions">
           <Space size={4} className="sql-toolbar-group">
             <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
-              <Button size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(); }} />
+              <Button className="sql-toolbar-button" size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(); }}>
+                <span className="sql-toolbar-label">格式化</span>
+              </Button>
             </Tooltip>
             <Tooltip title="SQL 历史">
-              <Button size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected} onClick={onOpenHistory} />
+              <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected} onClick={onOpenHistory}>
+                <span className="sql-toolbar-label">历史</span>
+              </Button>
             </Tooltip>
+            <Dropdown trigger={['click']} menu={moreMenu}>
+              <Button className="sql-toolbar-button" size="small" icon={<MoreOutlined />} aria-label="更多 SQL 操作">
+                <span className="sql-toolbar-label">更多</span>
+              </Button>
+            </Dropdown>
           </Space>
-          <span className="sql-toolbar-divider" aria-hidden="true" />
-          <Space size={4} className="sql-toolbar-group">
-            <Tooltip title="选择本地 SQL 文件并后台执行">
-              <span>
-                <Upload accept=".sql" showUploadList={false} disabled={!selected} beforeUpload={(file) => { onSqlFileSelect(file as unknown as File); return false; }}>
-                  <Button size="small" icon={<FileTextOutlined />} aria-label="执行本地 SQL 文件" disabled={!selected} />
-                </Upload>
-              </span>
-            </Tooltip>
-            <Tooltip title="查看 SQL 文件任务">
-              <Button size="small" icon={<ProfileOutlined />} aria-label="查看 SQL 文件任务" onClick={onOpenSqlFileTasks} />
-            </Tooltip>
-          </Space>
-          <span className="sql-toolbar-divider" aria-hidden="true" />
-          <Space size={4} className="sql-toolbar-group">
-            <Tooltip title="导出当前或选中查询">
-              <span>
-                <Dropdown
-                  trigger={['click']}
-                  menu={{
-                    items: [
-                      { key: 'csv', label: '导出 CSV' },
-                      { key: 'json', label: '导出 JSON' },
-                      { key: 'sql', label: '导出 SQL' },
-                      { key: 'xml', label: '导出 XML' }
-                    ],
-                    onClick: ({ key }) => {
-                      commitDraft();
-                      onExport(key as ExportFormat);
-                    }
-                  }}
-                >
-                  <Button size="small" icon={<DownloadOutlined />} aria-label="导出查询" disabled={!selected || loading} />
-                </Dropdown>
-              </span>
-            </Tooltip>
-            <Tooltip title="查看当前或选中 SQL 的执行计划">
-              <span><Button size="small" icon={<FundProjectionScreenOutlined />} aria-label="查看 SQL 执行计划" disabled={!selected || loading || !selected.capabilities?.explain} onClick={() => { commitDraft(); onExplain(); }} /></span>
-            </Tooltip>
-          </Space>
-          <span className="sql-toolbar-divider" aria-hidden="true" />
           <Space size={4} className="sql-toolbar-group sql-toolbar-execution-group">
             <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
               {loading && cancellable ? (
-                <Button size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel} />
+                <Button className="sql-toolbar-button sql-execute-button" size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel}>
+                  <span className="sql-toolbar-label">取消</span>
+                </Button>
               ) : loading ? (
-                <Button size="small" type="primary" aria-label="SQL 处理中" loading disabled />
+                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" aria-label="SQL 处理中" loading disabled>
+                  <span className="sql-toolbar-label">处理中</span>
+                </Button>
               ) : (
-                <Button size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(); }} />
+                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(); }}>
+                  <span className="sql-toolbar-label">执行</span>
+                </Button>
               )}
             </Tooltip>
           </Space>
+          <input
+            ref={sqlFileInputRef}
+            type="file"
+            accept=".sql"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) onSqlFileSelect(file);
+              event.currentTarget.value = '';
+            }}
+          />
         </div>
       </Header>
       {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon title="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}

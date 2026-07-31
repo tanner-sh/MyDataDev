@@ -2,6 +2,8 @@ import {
   CaretDownOutlined,
   CaretRightOutlined,
   CloudDownloadOutlined,
+  DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
   FolderOpenOutlined,
   FolderOutlined,
@@ -39,6 +41,9 @@ export type ObjectTreeProps = {
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
   onBackupTable?: (object: DbObject) => void;
+  tableLifecycleEnabled?: boolean;
+  onRenameTable?: (object: DbObject) => void;
+  onDropTable?: (object: DbObject) => void;
 };
 
 type AggregatedIndex = { name: string; columns: string[]; unique: boolean };
@@ -110,7 +115,10 @@ export const ObjectTree = memo(function ObjectTree({
   onLoadStructure,
   onOpenDetail,
   onOpenTable,
-  onBackupTable
+  onBackupTable,
+  tableLifecycleEnabled = false,
+  onRenameTable,
+  onDropTable
 }: ObjectTreeProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const groups = useMemo(() => groupDatabaseObjects(objects), [objects]);
@@ -217,7 +225,12 @@ export const ObjectTree = memo(function ObjectTree({
     return [
       { key: 'detail', icon: <InfoCircleOutlined />, label: '查看对象详情' },
       { key: 'structure', icon: <UnorderedListOutlined />, label: expanded ? '收起字段和索引' : '展开字段和索引' },
-      ...(!isView && onBackupTable ? [{ key: 'backup', icon: <CloudDownloadOutlined />, label: '备份此表' }] : [])
+      ...(!isView && onBackupTable ? [{ key: 'backup', icon: <CloudDownloadOutlined />, label: '备份此表' }] : []),
+      ...(!isView && onRenameTable && onDropTable ? [
+        { type: 'divider' as const },
+        { key: 'rename', icon: <EditOutlined />, label: '重命名表', disabled: !tableLifecycleEnabled },
+        { key: 'drop', icon: <DeleteOutlined />, label: '删除表', danger: true, disabled: !tableLifecycleEnabled }
+      ] : [])
     ];
   }
 
@@ -261,7 +274,7 @@ export const ObjectTree = memo(function ObjectTree({
           </button>
           <span className="object-tree-actions">
             {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
-            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); } }}>
+            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); if (key === 'rename') onRenameTable?.(row.object); if (key === 'drop') onDropTable?.(row.object); } }}>
               <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
             </Dropdown>
           </span>

@@ -10,6 +10,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
+import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
 import com.example.dbadmin.service.MetadataService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -109,5 +110,23 @@ public class MetadataController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         return service.executeDesign(connectionId, request, actor, productionConfirmation);
+    }
+
+    @PostMapping("/{connectionId}/tables/lifecycle/preview")
+    public TableDesignResponse previewTableLifecycle(
+            @PathVariable long connectionId,
+            @Valid @RequestBody TableLifecycleRequest request
+    ) throws Exception {
+        return service.previewTableLifecycle(connectionId, request);
+    }
+
+    @PostMapping("/{connectionId}/tables/lifecycle/execute")
+    public TableDesignResponse executeTableLifecycle(
+            @PathVariable long connectionId,
+            @Valid @RequestBody TableLifecycleRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return service.executeTableLifecycle(connectionId, request, actor, productionConfirmation);
     }
 }

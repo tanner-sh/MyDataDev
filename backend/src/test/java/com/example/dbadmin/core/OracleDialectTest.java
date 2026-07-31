@@ -82,4 +82,18 @@ class OracleDialectTest {
                 .contains("ALTER TABLE \"APP\".\"USERS\" ADD (\"DISPLAY_NAME\" VARCHAR2(80))")
                 .noneMatch(sql -> sql.contains(" ADD COLUMN "));
     }
+
+    @Test
+    void createsAndRenamesOracleTablesWithOracleTypes() {
+        TableDesignRequest design = new TableDesignRequest(
+                "APP", "USERS",
+                List.of(new ColumnDesign("ID", "NUMBER", null, false, null, null, false)),
+                List.of(), List.of("ID"), null
+        );
+
+        assertThat(dialect.createTableSql("APP", "USERS", design))
+                .containsExactly("CREATE TABLE \"APP\".\"USERS\" (\"ID\" NUMBER NOT NULL, PRIMARY KEY (\"ID\"))");
+        assertThat(dialect.renameTableSql("APP", "USERS", "MEMBERS"))
+                .isEqualTo("ALTER TABLE \"APP\".\"USERS\" RENAME TO \"MEMBERS\"");
+    }
 }
