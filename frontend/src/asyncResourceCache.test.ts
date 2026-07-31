@@ -26,4 +26,17 @@ describe('AsyncResourceCache', () => {
     await expect(pending).resolves.toBe(1);
     expect(cache.has('a')).toBe(false);
   });
+
+  it('can inspect a value without promoting it in the eviction order', () => {
+    const cache = new AsyncResourceCache<string, number>({ maxEntries: 2 });
+    cache.set('a', 1);
+    cache.set('b', 2);
+
+    expect(cache.peek('a')).toBe(1);
+    cache.set('c', 3);
+
+    expect(cache.has('a')).toBe(false);
+    expect(cache.has('b')).toBe(true);
+    expect(cache.has('c')).toBe(true);
+  });
 });

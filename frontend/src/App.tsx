@@ -131,12 +131,11 @@ export default function App() {
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
+  const [structureCacheRevision, setStructureCacheRevision] = useState(0);
   const selectedIdRef = useRef<number | null>(null);
   const metadataRef = useRef<Metadata | null>(null);
   const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: 300 }));
-  const completionStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
-  const structureCacheRef = useRef<Map<string, DbObject>>(new Map());
-  const structureRequestsRef = useRef<Map<string, Promise<DbObject | null>>>(new Map());
+  const objectStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
   const metadataRequestSeqRef = useRef(0);
   const structureRequestSeqRef = useRef(0);
   const objectDetailRequestSeqRef = useRef(0);
@@ -164,7 +163,13 @@ export default function App() {
     setObjectDesignDirty(dirty);
   }, []);
 
-  const objects = useMemo(() => metadata?.objects || [], [metadata]);
+  const objects = useMemo(() => {
+    if (!metadata || !selected) return metadata?.objects || [];
+    return metadata.objects.map((object) => withLoadedObjectStructure(
+      object,
+      objectStructureCacheRef.current.peek(objectCacheKey(selected.id, object))
+    ));
+  }, [metadata, selected, structureCacheRevision]);
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
@@ -533,7 +538,7 @@ export default function App() {
           setMetadata(null);
           setMetadataQuery({ schema: '', keyword: '' });
           setMetadataAppliedKeyword('');
-          structureCacheRef.current.clear();
+          clearObjectStructureCache();
           setStructureLoadingKey(null);
           setActiveObjectDetail(null);
           clearTableWorkspace();
@@ -559,10 +564,8 @@ export default function App() {
     setMetadata(null);
     setMetadataQuery({ schema: '', keyword: '' });
     setMetadataAppliedKeyword('');
-    structureCacheRef.current.clear();
-    structureRequestsRef.current.clear();
+    clearObjectStructureCache();
     completionCatalogCacheRef.current.clear();
-    completionStructureCacheRef.current.clear();
     setStructureLoadingKey(null);
     setActiveObjectDetail(null);
     updateObjectDesignDirty(false);
@@ -698,10 +701,8 @@ export default function App() {
     try {
       if (options.refresh) {
         structureRequestSeqRef.current += 1;
-        structureCacheRef.current.clear();
-        structureRequestsRef.current.clear();
+        clearObjectStructureCache();
         completionCatalogCacheRef.current.clear();
-        completionStructureCacheRef.current.clear();
         setStructureLoadingKey(null);
       }
       const schema = options.schema ?? metadataQuery.schema;
@@ -715,20 +716,13 @@ export default function App() {
       if (keyword.trim()) params.set('keyword', keyword.trim());
       const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`, { signal: controller.signal });
       if (requestId !== metadataRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
-      const hydratedData = {
-        ...data,
-        objects: data.objects.map((object) => {
-          const cachedStructure = cachedStructureValue(objectCacheKey(conn.id, object));
-          return withLoadedObjectStructure(object, cachedStructure);
-        })
-      };
       setMetadataQuery((current) => ({ ...current, schema: data.selectedSchema || '' }));
       setMetadataAppliedKeyword(keyword);
       setMetadata((current) => {
         if (!options.append || !current) {
-          return hydratedData;
+          return data;
         }
-        return { ...hydratedData, objects: [...current.objects, ...hydratedData.objects] };
+        return { ...data, objects: [...current.objects, ...data.objects] };
       });
       const loadedCount = (options.append ? (metadata?.objects.length || 0) : 0) + data.objects.length;
       const cacheText = data.cacheHit ? '来自缓存' : '已刷新缓存';
@@ -803,83 +797,45 @@ export default function App() {
     return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
   }
 
-  function cachedStructureValue(cacheKey: string) {
-    const value = structureCacheRef.current.get(cacheKey);
-    if (value) {
-      structureCacheRef.current.delete(cacheKey);
-      structureCacheRef.current.set(cacheKey, value);
-    }
-    return value;
+  function clearObjectStructureCache() {
+    objectStructureCacheRef.current.clear();
+    setStructureCacheRevision((current) => current + 1);
   }
 
-  function cacheStructureValue(cacheKey: string, value: DbObject) {
-    structureCacheRef.current.delete(cacheKey);
-    structureCacheRef.current.set(cacheKey, value);
-    while (structureCacheRef.current.size > MAX_STRUCTURE_CACHE_ENTRIES) {
-      const oldest = structureCacheRef.current.keys().next().value;
-      if (oldest === undefined) break;
-      structureCacheRef.current.delete(oldest);
-    }
+  function loadCachedObjectStructure(connectionId: number, object: DbObject) {
+    const cacheKey = objectCacheKey(connectionId, object);
+    const generation = structureRequestSeqRef.current;
+    return objectStructureCacheRef.current.load(cacheKey, async () => {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
+      const nextObject: DbObject = { ...object, ...structure };
+      if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) {
+        setStructureCacheRevision((current) => current + 1);
+      }
+      return nextObject;
+    });
   }
 
   async function loadObjectStructure(object: DbObject) {
     const connectionId = selectedIdRef.current;
     if (!connectionId) return null;
     const cacheKey = objectCacheKey(connectionId, object);
-    const cached = cachedStructureValue(cacheKey);
-    if (cached) {
-      mergeObjectStructure(cached);
-      return cached;
-    }
-    const inFlight = structureRequestsRef.current.get(cacheKey);
-    if (inFlight) return inFlight;
+    const cached = objectStructureCacheRef.current.get(cacheKey);
+    if (cached) return cached;
 
     const loadingKey = `${object.schemaName || ''}.${object.name}`;
     const generation = structureRequestSeqRef.current;
-    let request!: Promise<DbObject | null>;
-    request = (async () => {
-      setStructureLoadingKey(loadingKey);
-      try {
-        const params = new URLSearchParams({ objectName: object.name });
-        if (object.schemaName) params.set('schemaName', object.schemaName);
-        const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
-        if (selectedIdRef.current !== connectionId || structureRequestSeqRef.current !== generation) return null;
-        const nextObject: DbObject = {
-          schemaName: structure.schemaName,
-          name: structure.name,
-          type: structure.type,
-          columns: structure.columns,
-          indexes: structure.indexes
-        };
-        cacheStructureValue(cacheKey, nextObject);
-        mergeObjectStructure(nextObject);
-        return nextObject;
-      } catch (e) {
-        if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) showError(localizeMessage((e as Error).message));
-        return null;
-      } finally {
-        if (structureRequestsRef.current.get(cacheKey) === request) {
-          structureRequestsRef.current.delete(cacheKey);
-          setStructureLoadingKey((current) => current === loadingKey ? null : current);
-        }
-      }
-    })();
-    structureRequestsRef.current.set(cacheKey, request);
-    return request;
-  }
-
-  function mergeObjectStructure(structure: DbObject) {
-    setMetadata((current) => {
-      if (!current) return current;
-      return {
-        ...current,
-        objects: current.objects.map((object) => matchesSameObject(object, structure) ? { ...object, ...structure } : object)
-      };
-    });
-  }
-
-  function matchesSameObject(left: Pick<DbObject, 'schemaName' | 'name'>, right: Pick<DbObject, 'schemaName' | 'name'>) {
-    return (left.schemaName || '') === (right.schemaName || '') && left.name === right.name;
+    setStructureLoadingKey(loadingKey);
+    try {
+      const structure = await loadCachedObjectStructure(connectionId, object);
+      return selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation ? structure : null;
+    } catch (e) {
+      if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) showError(localizeMessage((e as Error).message));
+      return null;
+    } finally {
+      setStructureLoadingKey((current) => current === loadingKey ? null : current);
+    }
   }
 
   async function execute(path = '/sql/execute', productionConfirmation?: string) {
@@ -1278,10 +1234,6 @@ export default function App() {
     return `${connectionId}:${encodeURIComponent(schemaName || '')}`;
   }
 
-  function completionObjectKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
-    return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
-  }
-
   function loadCompletionCatalog(connectionId: number, schemaName?: string, prefix = '') {
     const normalizedPrefix = prefix.trim().toLowerCase();
     const key = `${completionCatalogKey(connectionId, schemaName)}:${normalizedPrefix}`;
@@ -1296,13 +1248,7 @@ export default function App() {
   }
 
   function loadCompletionStructure(connectionId: number, object: DbObject) {
-    const key = completionObjectKey(connectionId, object);
-    return completionStructureCacheRef.current.load(key, async () => {
-      const params = new URLSearchParams({ objectName: object.name });
-      if (object.schemaName) params.set('schemaName', object.schemaName);
-      const structure = await api<ObjectStructure>(`/metadata/${connectionId}/objects/structure?${params.toString()}`);
-      return { ...object, ...structure };
-    });
+    return loadCachedObjectStructure(connectionId, object);
   }
 
   async function sqlCompletionItems(

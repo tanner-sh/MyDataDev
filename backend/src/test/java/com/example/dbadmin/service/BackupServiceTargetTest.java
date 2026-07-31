@@ -18,7 +18,6 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.List;
@@ -26,6 +25,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class BackupServiceTargetTest {
     @TempDir
@@ -58,9 +60,18 @@ class BackupServiceTargetTest {
         DbConnection model = new DbConnection(
                 1, "target", "h2", targetUrl, "sa", null, "dev", false, Instant.now(), Instant.now()
         );
-        service = new BackupService(
-                taskRepository, historyRepository, new TestConnectionService(model, targetUrl), auditRepository,
-                properties, new DialectRegistry()
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(targetUrl, "sa", ""));
+        when(connections.require(anyLong())).thenReturn(model);
+        when(connections.password(anyLong())).thenReturn("");
+        service = BackupServiceTestFixture.create(
+                taskRepository,
+                historyRepository,
+                connections,
+                auditRepository,
+                properties,
+                new DialectRegistry(),
+                mock(BackupExecutionCoordinator.class)
         );
     }
 
@@ -149,29 +160,4 @@ class BackupServiceTargetTest {
         );
     }
 
-    private static class TestConnectionService extends ConnectionService {
-        private final DbConnection model;
-        private final String url;
-
-        TestConnectionService(DbConnection model, String url) {
-            super(null, null, null, null, null);
-            this.model = model;
-            this.url = url;
-        }
-
-        @Override
-        public Connection open(long id) throws Exception {
-            return DriverManager.getConnection(url, "sa", "");
-        }
-
-        @Override
-        public DbConnection require(long id) {
-            return model;
-        }
-
-        @Override
-        public String password(long id) {
-            return "";
-        }
-    }
 }

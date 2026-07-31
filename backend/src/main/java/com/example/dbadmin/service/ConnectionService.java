@@ -42,14 +42,6 @@ public class ConnectionService {
         this.restoreJobs = restoreJobs;
     }
 
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry) {
-        this(repository, crypto, audit, backupTasks, metadataCache, dataSources, dialectRegistry, null);
-    }
-
-    protected ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache) {
-        this(repository, crypto, audit, backupTasks, metadataCache, new RemoteDataSourceRegistry(), new DialectRegistry(), null);
-    }
-
     public List<ConnectionResponse> list() {
         return repository.findAll().stream().map(this::toResponse).toList();
     }
@@ -66,7 +58,7 @@ public class ConnectionService {
         if (backupTasks.countRunningByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的备份任务，请等待备份完成后再修改连接。");
         }
-        if (restoreJobs != null && restoreJobs.countActiveByConnectionId(id) > 0) {
+        if (restoreJobs.countActiveByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再修改连接。");
         }
         String secret = reusesStoredPassword(request.password())
@@ -85,7 +77,7 @@ public class ConnectionService {
         if (refs > 0) {
             throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
         }
-        if (restoreJobs != null && restoreJobs.countActiveByConnectionId(id) > 0) {
+        if (restoreJobs.countActiveByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
         }
         repository.delete(id);

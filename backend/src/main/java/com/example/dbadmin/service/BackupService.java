@@ -91,18 +91,6 @@ public class BackupService {
         this.taskControl = taskControl;
     }
 
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator) {
-        this(repository, historyRepository, connections, audit, properties, dialectRegistry, coordinator, null, new NativeToolLocator(properties), new BackgroundTaskControl(properties));
-    }
-
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry) {
-        this(repository, historyRepository, connections, audit, properties, dialectRegistry, new BackupExecutionCoordinator(), null, new NativeToolLocator(properties), new BackgroundTaskControl(properties));
-    }
-
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties) {
-        this(repository, historyRepository, connections, audit, properties, new DialectRegistry());
-    }
-
     @PostConstruct
     public void recoverInterruptedTasks() {
         repository.failStaleRunningTasks();
@@ -186,7 +174,7 @@ public class BackupService {
     public void delete(long id, boolean deleteFile, String actor) throws Exception {
         synchronized (taskLock(id)) {
             requireNotRunning(id);
-            if (restoreJobs != null && restoreJobs.countActiveByBackupTaskId(id) > 0) {
+            if (restoreJobs.countActiveByBackupTaskId(id) > 0) {
                 throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_IN_USE_BY_RESTORE", "该备份任务的历史文件正在用于恢复，暂不能删除。");
             }
             BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
@@ -396,11 +384,6 @@ public class BackupService {
         return path;
     }
 
-    public List<BackupHistory> history(long taskId) {
-        repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
-        return historyRepository.findByTaskId(taskId);
-    }
-
     public BackupHistoryPage history(long taskId, Integer page, Integer pageSize) {
         repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
         int safePage = Math.max(page == null ? 0 : page, 0);
@@ -434,7 +417,7 @@ public class BackupService {
             BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
             BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
                     .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
-            if (restoreJobs != null && restoreJobs.countActiveBySource("HISTORY", historyId) > 0) {
+            if (restoreJobs.countActiveBySource("HISTORY", historyId) > 0) {
                 throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_IN_USE_BY_RESTORE", "该备份文件正在用于恢复，暂不能删除。");
             }
             if (deleteFile) {

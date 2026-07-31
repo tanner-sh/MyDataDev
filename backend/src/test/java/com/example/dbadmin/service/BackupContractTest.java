@@ -3,12 +3,16 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
 import com.example.dbadmin.model.BackupTask;
+import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.BackupHistoryRepository;
+import com.example.dbadmin.repo.BackupTaskRepository;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
 
 class BackupContractTest {
     @Test
@@ -26,7 +30,13 @@ class BackupContractTest {
 
     @Test
     void previewsThreeRunsInSchedulerTimeZone() {
-        BackupService service = new BackupService(null, null, null, null, new AppProperties());
+        BackupService service = BackupServiceTestFixture.create(
+                mock(BackupTaskRepository.class),
+                mock(BackupHistoryRepository.class),
+                mock(ConnectionService.class),
+                mock(AuditRepository.class),
+                new AppProperties()
+        );
 
         CronPreviewResponse preview = service.previewSchedule("0 30 2 * * *");
 

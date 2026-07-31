@@ -48,6 +48,17 @@ export class AsyncResourceCache<Key, Value> {
     return this.validEntry(key)?.value;
   }
 
+  /** Reads a cached value without changing its least-recently-used position. */
+  peek(key: Key): Value | undefined {
+    const entry = this.values.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt !== undefined && entry.expiresAt <= this.now()) {
+      this.values.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
   set(key: Key, value: Value): Value {
     this.keyVersions.set(key, (this.keyVersions.get(key) ?? 0) + 1);
     this.inFlight.delete(key);

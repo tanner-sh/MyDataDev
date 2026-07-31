@@ -53,7 +53,7 @@ class BackupServiceQueueTest {
         BackupExecutionCoordinator coordinator = mock(BackupExecutionCoordinator.class);
         BackupTask task = new BackupTask(1, "backup", 1, "DATABASE", null, null, null, false, null, null, null, null, null);
         when(repository.findById(1L)).thenReturn(Optional.of(task));
-        BackupService service = new BackupService(
+        BackupService service = BackupServiceTestFixture.create(
                 repository,
                 mock(BackupHistoryRepository.class),
                 mock(ConnectionService.class),

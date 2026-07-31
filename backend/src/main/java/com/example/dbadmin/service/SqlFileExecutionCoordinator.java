@@ -21,10 +21,6 @@ public class SqlFileExecutionCoordinator {
     private final Map<Long, Future<?>> futures = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
 
-    public SqlFileExecutionCoordinator() {
-        this(2, 20, null);
-    }
-
     @Autowired
     public SqlFileExecutionCoordinator(AppProperties properties, ObjectProvider<MeterRegistry> meterRegistry) {
         this(properties.getBackgroundTasks().getSqlFileWorkerThreads(),

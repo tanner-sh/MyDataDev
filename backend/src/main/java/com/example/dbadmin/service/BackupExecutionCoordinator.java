@@ -23,10 +23,6 @@ public class BackupExecutionCoordinator {
     private final java.util.Map<Long, Future<?>> futures = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
 
-    public BackupExecutionCoordinator() {
-        this(2, 20, null);
-    }
-
     @Autowired
     public BackupExecutionCoordinator(AppProperties properties, ObjectProvider<MeterRegistry> meterRegistry) {
         this(properties.getBackgroundTasks().getBackupWorkerThreads(),

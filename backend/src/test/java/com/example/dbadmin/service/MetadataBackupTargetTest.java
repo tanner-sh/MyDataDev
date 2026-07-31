@@ -3,24 +3,27 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.repo.AuditRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
-import java.sql.Connection;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class MetadataBackupTargetTest {
     private JdbcTemplate jdbc;
     private MetadataService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         String url = "jdbc:h2:mem:metadata-backup-target-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         jdbc = new JdbcTemplate(new DriverManagerDataSource(url, "sa", ""));
         jdbc.execute("CREATE TABLE beta(id INT)");
@@ -29,8 +32,15 @@ class MetadataBackupTargetTest {
         DbConnection model = new DbConnection(
                 1, "target", "h2", url, "sa", null, "dev", false, Instant.now(), Instant.now()
         );
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(anyLong())).thenReturn(model);
         service = new MetadataService(
-                new TestConnectionService(model, url), new DialectRegistry(), null, new MetadataCacheService()
+                connections,
+                new DialectRegistry(),
+                mock(AuditRepository.class),
+                new MetadataCacheService(),
+                new ExecutionGuard()
         );
     }
 
@@ -71,24 +81,4 @@ class MetadataBackupTargetTest {
         assertThat(second.items()).isNotEmpty();
     }
 
-    private static class TestConnectionService extends ConnectionService {
-        private final DbConnection model;
-        private final String url;
-
-        TestConnectionService(DbConnection model, String url) {
-            super(null, null, null, null, null);
-            this.model = model;
-            this.url = url;
-        }
-
-        @Override
-        public Connection open(long id) throws Exception {
-            return DriverManager.getConnection(url, "sa", "");
-        }
-
-        @Override
-        public DbConnection require(long id) {
-            return model;
-        }
-    }
 }

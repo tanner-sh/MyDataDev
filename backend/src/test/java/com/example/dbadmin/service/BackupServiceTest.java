@@ -500,7 +500,13 @@ class BackupServiceTest {
         when(connections.password(anyLong())).thenReturn("secret");
         AppProperties properties = new AppProperties();
         properties.getBackup().setDirectory(tempDir.toString());
-        return new BackupService(repository, historyRepository, connections, mock(AuditRepository.class), properties);
+        return BackupServiceTestFixture.create(
+                repository,
+                historyRepository,
+                connections,
+                mock(AuditRepository.class),
+                properties
+        );
     }
 
     private BackupTask task(String scope, String schema, String table) {

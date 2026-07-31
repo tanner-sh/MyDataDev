@@ -391,6 +391,12 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(anyLong())).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        return new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService());
+        return new MetadataService(
+                connections,
+                new DialectRegistry(),
+                mock(AuditRepository.class),
+                new MetadataCacheService(),
+                new ExecutionGuard()
+        );
     }
 }

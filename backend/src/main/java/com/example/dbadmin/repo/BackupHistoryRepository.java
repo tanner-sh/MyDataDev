@@ -42,10 +42,6 @@ public class BackupHistoryRepository {
         this.jdbc = jdbc;
     }
 
-    public List<BackupHistory> findByTaskId(long taskId) {
-        return jdbc.query("SELECT * FROM backup_history WHERE task_id = ? ORDER BY finished_at DESC, id DESC", mapper, taskId);
-    }
-
     public List<BackupHistory> findPageByTaskId(long taskId, int limit, long offset) {
         return jdbc.query(
                 "SELECT * FROM backup_history WHERE task_id = ? ORDER BY finished_at DESC, id DESC LIMIT ? OFFSET ?",

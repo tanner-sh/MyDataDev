@@ -65,10 +65,6 @@ public class MetadataService {
         this.executionGuard = executionGuard;
     }
 
-    public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit, MetadataCacheService cache) {
-        this(connections, dialectRegistry, audit, cache, new ExecutionGuard());
-    }
-
     public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
@@ -416,10 +412,6 @@ public class MetadataService {
             cache.putStructure(connectionId, object.schemaName(), object.name(), structure);
             return structure;
         }
-    }
-
-    public List<String> primaryOrUniqueColumns(long connectionId, String schema, String table) throws Exception {
-        return rowIdentity(connectionId, schema, table).columns();
     }
 
     public RowIdentity rowIdentity(long connectionId, String schema, String table) throws Exception {
