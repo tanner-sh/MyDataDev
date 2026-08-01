@@ -1,12 +1,21 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Collapse, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { CaretRightOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
-import type { Connection, DbObject, Metadata } from '../types';
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { CloseOutlined, CodeOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import {
+  explorerObjectCountLabel,
+  explorerObjectKindLabel,
+  explorerObjectKinds,
+  normalizeExplorerObjectKind,
+  schemaObjectCapabilities
+} from '../schemaObjectModel';
+import type { ExplorerObjectCount, ExplorerObjectKind } from '../schemaObjectModel';
+import type { Connection, DbObject, Metadata, SchemaObjectKind } from '../types';
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
-import { SchemaObjectManager } from './SchemaObjectManager';
+import type { SchemaObjectListSummary } from './SchemaObjectManager';
 
 const { Text } = Typography;
+const SchemaObjectManager = lazy(() => import('./SchemaObjectManager').then((module) => ({ default: module.SchemaObjectManager })));
 
 export type ResourceExplorerProps = {
   compactLayout: boolean;
@@ -24,9 +33,9 @@ export type ResourceExplorerProps = {
   onRefresh: () => void;
   onClose: () => void;
   onOpenConnections: () => void;
-  onSchemaChange: (schema: string) => void;
-  onKeywordChange: (keyword: string) => void;
-  onSearch: (keyword: string) => void;
+  onSchemaChange: (schema: string, kind: ExplorerObjectKind) => void;
+  onKeywordChange: (keyword: string, kind: ExplorerObjectKind) => void;
+  onSearch: (keyword: string, kind: ExplorerObjectKind) => void;
   onLoadMore: () => void;
   onLoadStructure: (object: DbObject) => Promise<DbObject | null>;
   onOpenDetail: (object: DbObject) => void;
@@ -67,33 +76,97 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onRenameTable,
   onDropTable
 }: ResourceExplorerProps) {
+  const [activeKind, setActiveKind] = useState<ExplorerObjectKind>('TABLE');
   const [schemaObjectRefreshToken, setSchemaObjectRefreshToken] = useState(0);
-  const [tableExpanded, setTableExpanded] = useState(true);
-  const tableExpandedBeforeSearchRef = useRef(true);
-  const searchExpansionActiveRef = useRef(false);
-  const managesViews = Boolean(selected?.capabilities.schemaObjects?.some((capability) => capability.kind === 'VIEW'));
+  const [schemaObjectLoadMoreToken, setSchemaObjectLoadMoreToken] = useState(0);
+  const [schemaCreateKind, setSchemaCreateKind] = useState<SchemaObjectKind>();
+  const [schemaCounts, setSchemaCounts] = useState<Partial<Record<SchemaObjectKind, SchemaObjectListSummary>>>({});
+  const schemaCapabilities = useMemo(() => schemaObjectCapabilities(selected?.capabilities), [selected?.capabilities]);
+  const supportedKinds = useMemo(() => explorerObjectKinds(selected?.capabilities), [selected?.capabilities]);
+  const managesViews = schemaCapabilities.some((capability) => capability.kind === 'VIEW');
   const tableObjects = useMemo(
     () => managesViews ? objects.filter((object) => !object.type.toUpperCase().includes('VIEW')) : objects,
     [managesViews, objects]
   );
-  const tableGroupLabel = managesViews ? '表' : '表与视图';
-
-  function refreshAllObjects() {
-    setSchemaObjectRefreshToken((current) => current + 1);
-    onRefresh();
-  }
+  const activeSchemaKind = activeKind === 'TABLE' ? undefined : activeKind;
+  const activeCapability = activeSchemaKind
+    ? schemaCapabilities.find((capability) => capability.kind === activeSchemaKind)
+    : undefined;
+  const activeLabel = explorerObjectKindLabel(activeKind, managesViews);
+  const tableCount: ExplorerObjectCount = { loaded: tableObjects.length, hasMore: metadata?.hasMore };
+  const activeCount = activeKind === 'TABLE' ? tableCount : schemaCounts[activeKind];
+  const activeLoading = activeKind === 'TABLE' ? metadataLoading : Boolean(activeCount?.loading);
+  const canCreate = activeKind === 'TABLE'
+    ? tableLifecycleEnabled
+    : Boolean(!selected?.readonly && activeCapability?.operations.includes('CREATE'));
 
   useEffect(() => {
-    const searching = Boolean(metadataAppliedKeyword.trim());
-    if (searching && !searchExpansionActiveRef.current) {
-      tableExpandedBeforeSearchRef.current = tableExpanded;
-      searchExpansionActiveRef.current = true;
-      setTableExpanded(true);
-    } else if (!searching && searchExpansionActiveRef.current) {
-      searchExpansionActiveRef.current = false;
-      setTableExpanded(tableExpandedBeforeSearchRef.current);
+    setSchemaCounts({});
+    setSchemaCreateKind(undefined);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!supportedKinds.includes(activeKind)) {
+      setActiveKind('TABLE');
+      onSearch('', 'TABLE');
     }
-  }, [metadataAppliedKeyword, tableExpanded]);
+  }, [activeKind, onSearch, supportedKinds]);
+
+  const handleSummaryChange = useCallback((kind: SchemaObjectKind, summary?: SchemaObjectListSummary) => {
+    setSchemaCounts((current) => current[kind] === summary ? current : { ...current, [kind]: summary });
+  }, []);
+
+  function changeObjectKind(kind: ExplorerObjectKind) {
+    const nextKind = normalizeExplorerObjectKind(kind, selected?.capabilities);
+    if (nextKind === activeKind) return;
+    setActiveKind(nextKind);
+    setSchemaCreateKind(undefined);
+    onSearch('', nextKind);
+  }
+
+  function refreshCurrentKind() {
+    if (activeKind === 'TABLE') {
+      onRefresh();
+    } else {
+      setSchemaObjectRefreshToken((current) => current + 1);
+    }
+  }
+
+  function createCurrentKind() {
+    if (activeKind === 'TABLE') {
+      onCreateTable();
+    } else {
+      setSchemaCreateKind(activeKind);
+    }
+  }
+
+  function kindIcon(kind: ExplorerObjectKind) {
+    return kind === 'TABLE' ? <TableOutlined /> : <CodeOutlined />;
+  }
+
+  const kindOptions = supportedKinds.map((kind) => {
+    const count = kind === 'TABLE' ? tableCount : schemaCounts[kind];
+    return {
+      value: kind,
+      label: (
+        <span className="object-kind-option">
+          <span className="object-kind-option-main">{kindIcon(kind)}<span>{explorerObjectKindLabel(kind, managesViews)}</span></span>
+          <span className="object-kind-count">{explorerObjectCountLabel(count)}</span>
+        </span>
+      )
+    };
+  });
+
+  const footerStatus = activeLoading && !activeCount?.loaded
+    ? `正在加载${activeLabel}…`
+    : activeCount
+    ? `已加载 ${activeCount.loaded}${activeCount.total != null ? ` / ${activeCount.total}` : activeCount.hasMore ? '+' : ''} 个${activeLabel}对象`
+    : `尚未加载${activeLabel}`;
+  const cacheStatus = activeCount?.cachedAt
+    ? ` · ${activeCount.cacheHit ? '缓存数据' : '刚刚刷新'} · ${new Date(activeCount.cachedAt).toLocaleTimeString()}`
+    : activeKind === 'TABLE' && metadata?.cachedAt
+      ? ` · ${metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · ${new Date(metadata.cachedAt).toLocaleTimeString()}`
+      : '';
 
   return (
     <div className="resource-explorer">
@@ -103,9 +176,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <Text type="secondary">数据库对象</Text>
         </div>
         <Space size={2}>
-          <Tooltip title="刷新对象缓存">
-            <Button type="text" size="small" icon={<ReloadOutlined />} loading={metadataLoading} disabled={!selected}
-                    aria-label="刷新对象缓存" onClick={refreshAllObjects}>刷新</Button>
+          <Tooltip title={`刷新${activeLabel}`}>
+            <Button type="text" size="small" icon={<ReloadOutlined />} loading={activeLoading} disabled={!selected}
+                    aria-label={`刷新${activeLabel}`} onClick={refreshCurrentKind}>刷新</Button>
           </Tooltip>
           {compactLayout && (
             <Tooltip title="关闭资源管理器">
@@ -116,15 +189,14 @@ export const ResourceExplorer = memo(function ResourceExplorer({
       </div>
 
       {selected ? (
-        <div className="explorer-connection-summary">
-          <div className="explorer-connection-title">
+        <Tooltip title={selected.jdbcUrl} placement="right">
+          <div className="explorer-connection-summary">
             <span className="connection-dot" aria-hidden="true" />
             <Text strong ellipsis>{selected.name}</Text>
             <Tag variant="filled" color="blue">{dbTypeLabel(selected.dbType)}</Tag>
             {selected.readonly && <Tag variant="filled" color="orange">只读</Tag>}
           </div>
-          <Text type="secondary" ellipsis title={selected.jdbcUrl}>{selected.jdbcUrl}</Text>
-        </div>
+        </Tooltip>
       ) : (
         <button className="explorer-empty-connection" onClick={onOpenConnections}>尚未选择连接，打开连接管理</button>
       )}
@@ -142,83 +214,81 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             value: schema,
             label: schema === metadata?.currentSchema ? `${schema}（当前）` : schema
           }))}
-          onChange={(schema) => onSchemaChange(schema || '')}
+          onChange={(schema) => onSchemaChange(schema || '', activeKind)}
         />
+        <div className="object-type-toolbar">
+          <Select<ExplorerObjectKind>
+            size="small"
+            className="object-kind-select"
+            aria-label="选择数据库对象类型"
+            value={activeKind}
+            options={kindOptions}
+            onChange={changeObjectKind}
+          />
+          {canCreate && (
+            <Tooltip title={`新建${activeLabel}`}>
+              <Button type="text" size="small" icon={<PlusOutlined />} aria-label={`新建${activeLabel}`}
+                      disabled={metadataBlockingLoading} onClick={createCurrentKind} />
+            </Tooltip>
+          )}
+        </div>
         <Input.Search
           size="small"
           allowClear
-          loading={metadataLoading && !metadataBlockingLoading}
-          placeholder="搜索数据库对象"
+          loading={activeLoading && !metadataBlockingLoading}
+          placeholder={`搜索${activeLabel}`}
           disabled={!selected || metadataBlockingLoading}
           value={metadataQuery.keyword}
-          onChange={(event) => onKeywordChange(event.target.value)}
-          onSearch={onSearch}
+          onChange={(event) => onKeywordChange(event.target.value, activeKind)}
+          onSearch={(keyword) => onSearch(keyword, activeKind)}
         />
       </div>
 
       {connectionsError && <div className="explorer-error" role="alert">{connectionsError}</div>}
-      <div className="object-navigation-scroll" aria-busy={metadataLoading}>
-        <Collapse
-          className="database-object-groups table-object-group"
-          size="small"
-          ghost
-          activeKey={tableExpanded ? ['TABLE'] : []}
-          expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
-          onChange={(keys) => setTableExpanded((Array.isArray(keys) ? keys : [keys]).includes('TABLE'))}
-          items={[{
-            key: 'TABLE',
-            label: <Space size={6}><TableOutlined /><span>{tableGroupLabel}</span><span className="object-tree-count">{tableObjects.length}</span></Space>,
-            extra: tableLifecycleEnabled ? (
-              <Tooltip title="在当前命名空间新建表">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<PlusOutlined />}
-                  aria-label="新建表"
-                  disabled={metadataBlockingLoading}
-                  onClick={(event) => { event.stopPropagation(); onCreateTable(); }}
-                />
-              </Tooltip>
-            ) : undefined,
-            children: metadataBlockingLoading ? (
-              <div className="explorer-loading" role="status">
-                <Spin size="small" />
-                <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
-              </div>
-            ) : (
-              <ObjectTree
-                key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
-                embedded
-                showTypeGroups={false}
-                objects={tableObjects}
-                activeObject={activeObject}
-                keyword={metadataAppliedKeyword}
-                emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
-                structureLoadingKey={structureLoadingKey}
-                hasMore={metadata?.hasMore}
-                loadingMore={metadataLoading && !metadataBlockingLoading}
-                onLoadMore={onLoadMore}
-                onLoadStructure={onLoadStructure}
-                onOpenDetail={onOpenDetail}
-                onOpenTable={onOpenTable}
-                onBackupTable={onBackupTable}
-                tableLifecycleEnabled={tableLifecycleEnabled}
-                onRenameTable={onRenameTable}
-                onDropTable={onDropTable}
-              />
-            )
-          }]}
-        />
-        {selected && !metadataBlockingLoading && (
-          <SchemaObjectManager
-            connection={selected}
-            schemaName={metadataQuery.schema || metadata?.selectedSchema}
+      <div className="object-navigation-scroll" aria-busy={activeLoading}>
+        {activeKind === 'TABLE' && (metadataBlockingLoading ? (
+          <div className="explorer-loading" role="status">
+            <Spin size="small" />
+            <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
+          </div>
+        ) : (
+          <ObjectTree
+            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
+            showTypeGroups={false}
+            objects={tableObjects}
+            activeObject={activeObject}
             keyword={metadataAppliedKeyword}
-            refreshToken={schemaObjectRefreshToken}
-            onOpenViewData={onOpenTable}
+            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
+            structureLoadingKey={structureLoadingKey}
+            hasMore={metadata?.hasMore}
+            loadingMore={metadataLoading && !metadataBlockingLoading}
+            onLoadMore={onLoadMore}
+            onLoadStructure={onLoadStructure}
+            onOpenDetail={onOpenDetail}
+            onOpenTable={onOpenTable}
+            onBackupTable={onBackupTable}
+            tableLifecycleEnabled={tableLifecycleEnabled}
+            onRenameTable={onRenameTable}
+            onDropTable={onDropTable}
           />
+        ))}
+        {selected && activeSchemaKind && (
+          <Suspense fallback={<div className="schema-object-group-status"><Spin size="small" /> 正在加载{activeLabel}…</div>}>
+            <SchemaObjectManager
+              connection={selected}
+              schemaName={metadataQuery.schema || metadata?.selectedSchema}
+              keyword={metadataAppliedKeyword}
+              activeKind={activeSchemaKind}
+              createKind={schemaCreateKind}
+              refreshToken={schemaObjectRefreshToken}
+              loadMoreToken={schemaObjectLoadMoreToken}
+              onCloseCreate={() => setSchemaCreateKind(undefined)}
+              onSummaryChange={handleSummaryChange}
+              onOpenViewData={onOpenTable}
+            />
+          </Suspense>
         )}
-        {metadataLoading && !metadataBlockingLoading && (
+        {activeKind === 'TABLE' && metadataLoading && !metadataBlockingLoading && (
           <div className="explorer-tree-loading-indicator" role="status">
             <Spin size="small" />
             <span>正在更新对象…</span>
@@ -226,13 +296,12 @@ export const ResourceExplorer = memo(function ResourceExplorer({
         )}
       </div>
       <div className="explorer-footer">
-        {metadata?.cachedAt && (
-          <span className="metadata-cache-status">
-            已加载 {tableObjects.length} 个表对象 · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
-          </span>
-        )}
-        {metadata?.hasMore && (
-          <Button size="small" block disabled={metadataLoading} onClick={onLoadMore}>加载更多对象</Button>
+        <span className="metadata-cache-status">{footerStatus}{cacheStatus}</span>
+        {activeCount?.hasMore && (
+          <Button size="small" block disabled={activeLoading} onClick={() => {
+            if (activeKind === 'TABLE') onLoadMore();
+            else setSchemaObjectLoadMoreToken((current) => current + 1);
+          }}>加载更多{activeLabel}</Button>
         )}
       </div>
     </div>

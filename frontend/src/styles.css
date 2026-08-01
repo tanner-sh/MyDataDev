@@ -1552,14 +1552,27 @@ body {
 
 .explorer-connection-summary {
   grid-row: 2;
-  margin: 10px 10px 8px;
-  padding: 8px 10px;
-  display: grid;
-  gap: 4px;
+  min-width: 0;
+  min-height: 36px;
+  margin: 8px 10px 7px;
+  padding: 6px 9px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-raised);
   box-shadow: var(--shadow-sm);
+}
+
+.explorer-connection-summary > .ant-typography {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.explorer-connection-summary .ant-tag {
+  flex: 0 0 auto;
+  margin-inline-end: 0;
 }
 
 .explorer-connection-title {
@@ -1614,6 +1627,54 @@ body {
   gap: 6px;
 }
 
+.object-type-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.object-kind-select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.object-kind-option,
+.object-kind-option-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.object-kind-option {
+  width: 100%;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.object-kind-option-main {
+  gap: 7px;
+  overflow: hidden;
+}
+
+.object-kind-option-main > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-kind-count {
+  min-width: 20px;
+  padding: 0 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--primary-soft);
+  font-size: 10px;
+  line-height: 20px;
+  text-align: center;
+}
+
 .explorer-error {
   grid-row: 4;
   margin: 0 10px 8px;
@@ -1632,17 +1693,9 @@ body {
   min-width: 0;
   min-height: 0;
   padding: 0 4px 8px 6px;
-  overflow: auto;
-}
-
-.database-object-groups > .ant-collapse-item > .ant-collapse-header {
-  min-height: 34px;
-  padding: 5px 7px !important;
-  align-items: center !important;
-}
-
-.database-object-groups > .ant-collapse-item > .ant-collapse-content > .ant-collapse-content-box {
-  padding: 0 2px 6px 14px !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .explorer-tree-loading-indicator {
@@ -1666,10 +1719,10 @@ body {
 
 .object-tree-viewport {
   width: 100%;
-  height: auto;
+  height: 100%;
   min-height: 0;
   flex: 1 1 auto;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .object-tree.object-tree-static {
@@ -1678,13 +1731,13 @@ body {
   overflow: visible;
 }
 
-.schema-object-manager .ant-collapse-header {
-  padding: 5px 8px !important;
-  align-items: center !important;
-}
-
-.schema-object-manager .ant-collapse-content-box {
-  padding: 0 5px 6px 20px !important;
+.schema-object-manager {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
 }
 
 .schema-object-group-status {
@@ -1700,7 +1753,8 @@ body {
 .schema-object-list-item {
   width: 100%;
   min-width: 0;
-  padding: 5px 4px;
+  min-height: 32px;
+  padding: 5px 8px;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr) 16px;
   align-items: center;
@@ -1714,6 +1768,25 @@ body {
 
 .schema-object-list-item:hover {
   background: var(--primary-soft);
+}
+
+.schema-object-list-item.is-selected {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.schema-object-list-item:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.schema-object-list {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .schema-object-list-copy {

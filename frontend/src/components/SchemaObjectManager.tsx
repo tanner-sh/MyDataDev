@@ -1,7 +1,6 @@
 import Editor from '@monaco-editor/react';
 import {
   ApiOutlined,
-  CaretRightOutlined,
   CodeOutlined,
   DeleteOutlined,
   EyeOutlined,
@@ -9,14 +8,12 @@ import {
   MoreOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
-  PlusOutlined,
   ReloadOutlined,
   ThunderboltOutlined
 } from '@ant-design/icons';
 import {
   Alert,
   Button,
-  Collapse,
   Descriptions,
   Drawer,
   Dropdown,
@@ -29,11 +26,10 @@ import {
   Table,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
   message as antdMessage
 } from 'antd';
-import type { CollapseProps, MenuProps, TableColumnsType } from 'antd';
+import type { MenuProps, TableColumnsType } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
@@ -43,6 +39,7 @@ import {
   schemaObjectDisplayStatus,
   schemaObjectKindLabel
 } from '../schemaObjectModel';
+import type { ExplorerObjectCount } from '../schemaObjectModel';
 import type {
   Connection,
   DbObject,
@@ -65,7 +62,17 @@ import { TypedConfirmationFields } from './TypedConfirmationFields';
 
 const { Text, Title } = Typography;
 
-type GroupState = { items: SchemaObjectSummary[]; page: number; total: number; hasMore: boolean; loading: boolean; error?: string };
+type GroupState = {
+  items: SchemaObjectSummary[];
+  page: number;
+  total: number;
+  hasMore: boolean;
+  loading: boolean;
+  cachedAt?: string;
+  cacheHit?: boolean;
+  error?: string;
+};
+export type SchemaObjectListSummary = ExplorerObjectCount & { error?: string };
 type WorkspaceState = { object?: SchemaObjectSummary; creation?: SchemaObjectTemplate };
 type PendingLifecycle = { operation: SchemaObjectLifecycleOperation; request: SchemaObjectLifecycleRequest; sql: string[]; confirmationTarget: string };
 
@@ -73,58 +80,82 @@ export function SchemaObjectManager({
   connection,
   schemaName,
   keyword,
+  activeKind,
+  createKind,
   refreshToken,
+  loadMoreToken,
+  onCloseCreate,
+  onSummaryChange,
   onOpenViewData
 }: {
   connection: Connection;
   schemaName?: string;
   keyword?: string;
+  activeKind: SchemaObjectKind;
+  createKind?: SchemaObjectKind;
   refreshToken: number;
+  loadMoreToken: number;
+  onCloseCreate: () => void;
+  onSummaryChange: (kind: SchemaObjectKind, summary?: SchemaObjectListSummary) => void;
   onOpenViewData: (object: DbObject) => void;
 }) {
   const capabilities = useMemo(() => schemaObjectCapabilities(connection.capabilities), [connection.capabilities]);
   const [groups, setGroups] = useState<Partial<Record<SchemaObjectKind, GroupState>>>({});
-  const [expandedKinds, setExpandedKinds] = useState<SchemaObjectKind[]>([]);
   const [workspace, setWorkspace] = useState<WorkspaceState>();
-  const [createKind, setCreateKind] = useState<SchemaObjectKind>();
   const [createName, setCreateName] = useState('');
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [messageApi, messageContextHolder] = antdMessage.useMessage();
-  const requestScope = `${connection.id}:${schemaName || ''}:${keyword || ''}:${refreshToken}`;
+  const requestScope = `${connection.id}:${schemaName || ''}:${keyword || ''}`;
   const workspaceScope = `${connection.id}:${schemaName || ''}`;
   const requestScopeRef = useRef(requestScope);
-  const expandedBeforeSearchRef = useRef<SchemaObjectKind[] | null>(null);
-  const capabilityKinds = capabilities.map((capability) => capability.kind).join('|');
+  const refreshTokenRef = useRef(refreshToken);
+  const loadMoreTokenRef = useRef(loadMoreToken);
+  const activeCapability = capabilities.find((capability) => capability.kind === activeKind);
 
   useEffect(() => {
     requestScopeRef.current = requestScope;
     setGroups({});
-    expandedKinds.forEach((kind) => void loadGroup(kind, 0, false, true));
-    // The list of expanded groups is intentionally not a dependency: changing
-    // it already calls loadGroup from the Collapse handler.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestScope]);
 
   useEffect(() => {
+    if (refreshTokenRef.current === refreshToken) return;
+    refreshTokenRef.current = refreshToken;
+    if (activeKind) void loadGroup(activeKind, 0, false, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
+
+  useEffect(() => {
     setWorkspace(undefined);
-    setCreateKind(undefined);
     setCreateName('');
   }, [workspaceScope]);
 
   useEffect(() => {
-    const searching = Boolean(keyword?.trim());
-    const kinds = capabilities.map((capability) => capability.kind);
-    if (searching) {
-      if (!expandedBeforeSearchRef.current) expandedBeforeSearchRef.current = expandedKinds;
-      setExpandedKinds(kinds);
-      kinds.forEach((kind) => void loadGroup(kind));
-    } else if (expandedBeforeSearchRef.current) {
-      setExpandedKinds(expandedBeforeSearchRef.current);
-      expandedBeforeSearchRef.current = null;
-    }
-    // Loading is coordinated by the request scope and the expansion handler.
+    if (activeKind && activeCapability && !groups[activeKind]) void loadGroup(activeKind);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keyword, capabilityKinds]);
+  }, [activeKind, activeCapability, groups]);
+
+  useEffect(() => {
+    if (loadMoreTokenRef.current === loadMoreToken) return;
+    loadMoreTokenRef.current = loadMoreToken;
+    if (!activeKind) return;
+    const group = groups[activeKind];
+    if (group?.hasMore && !group.loading) void loadGroup(activeKind, group.page + 1, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadMoreToken]);
+
+  useEffect(() => {
+    if (!activeKind) return;
+    const group = groups[activeKind];
+    onSummaryChange(activeKind, group ? {
+      loaded: group.items.length,
+      total: group.loading && group.items.length === 0 ? undefined : group.total,
+      hasMore: group.hasMore,
+      loading: group.loading,
+      cachedAt: group.cachedAt,
+      cacheHit: group.cacheHit,
+      error: group.error
+    } : undefined);
+  }, [activeKind, groups, onSummaryChange]);
 
   if (capabilities.length === 0) return null;
 
@@ -148,7 +179,9 @@ export function SchemaObjectManager({
           page: response.page,
           total: response.total,
           hasMore: response.hasMore,
-          loading: false
+          loading: false,
+          cachedAt: response.cachedAt,
+          cacheHit: response.cacheHit
         }
       }));
     } catch (error) {
@@ -164,15 +197,6 @@ export function SchemaObjectManager({
     }
   }
 
-  function handleExpanded(keys: string | string[]) {
-    const next = (Array.isArray(keys) ? keys : [keys]) as SchemaObjectKind[];
-    const added = next.filter((kind) => !expandedKinds.includes(kind));
-    setExpandedKinds(next);
-    added.forEach((kind) => {
-      if (!groups[kind]) void loadGroup(kind);
-    });
-  }
-
   async function generateTemplate() {
     if (!createKind || !createName.trim()) return;
     const params = new URLSearchParams({ kind: createKind, objectName: createName.trim() });
@@ -180,7 +204,7 @@ export function SchemaObjectManager({
     setCreatingTemplate(true);
     try {
       const template = await api<SchemaObjectTemplate>(`/metadata/${connection.id}/schema-objects/template?${params.toString()}`);
-      setCreateKind(undefined);
+      onCloseCreate();
       setCreateName('');
       setWorkspace({ creation: template });
     } catch (error) {
@@ -190,45 +214,18 @@ export function SchemaObjectManager({
     }
   }
 
-  const collapseItems: CollapseProps['items'] = capabilities.map((capability) => {
-    const group = groups[capability.kind];
-    return {
-      key: capability.kind,
-      label: <Space size={6}><SchemaObjectIcon kind={capability.kind} /><span>{schemaObjectKindLabel(capability.kind)}</span>{group && <span className="object-tree-count">{group.total}</span>}</Space>,
-      extra: !connection.readonly && capability.operations.includes('CREATE') ? (
-        <Tooltip title={`新建${schemaObjectKindLabel(capability.kind)}`}>
-          <Button
-            type="text"
-            size="small"
-            icon={<PlusOutlined />}
-            aria-label={`新建${schemaObjectKindLabel(capability.kind)}`}
-            onClick={(event) => { event.stopPropagation(); setCreateKind(capability.kind); }}
-          />
-        </Tooltip>
-      ) : undefined,
-      children: (
+  return (
+    <section className="schema-object-manager" aria-label="数据库对象管理">
+      {messageContextHolder}
+      {activeCapability && (
         <SchemaObjectGroup
-          capability={capability}
-          state={group}
-          onRetry={() => void loadGroup(capability.kind, 0, false, true)}
-          onLoadMore={() => void loadGroup(capability.kind, (group?.page || 0) + 1, true)}
+          capability={activeCapability}
+          state={groups[activeCapability.kind]}
+          activeObjectKey={workspace?.object?.objectKey}
+          onRetry={() => void loadGroup(activeCapability.kind, 0, false, true)}
           onOpen={(object) => setWorkspace({ object })}
         />
-      )
-    };
-  });
-
-  return (
-    <section className="schema-object-manager database-object-groups" aria-label="数据库对象管理">
-      {messageContextHolder}
-      <Collapse
-        size="small"
-        ghost
-        activeKey={expandedKinds}
-        items={collapseItems}
-        expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
-        onChange={handleExpanded}
-      />
+      )}
 
       <Modal
         title={createKind ? `新建${schemaObjectKindLabel(createKind)}` : '新建对象'}
@@ -237,7 +234,7 @@ export function SchemaObjectManager({
         confirmLoading={creatingTemplate}
         okButtonProps={{ disabled: !createName.trim() }}
         onOk={() => void generateTemplate()}
-        onCancel={() => { setCreateKind(undefined); setCreateName(''); }}
+        onCancel={() => { onCloseCreate(); setCreateName(''); }}
       >
         <Text type="secondary">模板会使用当前 {schemaName || '默认命名空间'}，创建前仍可编辑完整源码。</Text>
         <Input autoFocus className="schema-object-create-name" value={createName} placeholder="输入对象名" onChange={(event) => setCreateName(event.target.value)} onPressEnter={() => void generateTemplate()} />
@@ -257,21 +254,20 @@ export function SchemaObjectManager({
   );
 }
 
-function SchemaObjectGroup({ capability, state, onRetry, onLoadMore, onOpen }: {
+function SchemaObjectGroup({ capability, state, activeObjectKey, onRetry, onOpen }: {
   capability: SchemaObjectCapability;
   state?: GroupState;
+  activeObjectKey?: string;
   onRetry: () => void;
-  onLoadMore: () => void;
   onOpen: (object: SchemaObjectSummary) => void;
 }) {
   if (!state || state.loading && state.items.length === 0) return <div className="schema-object-group-status"><Spin size="small" /> 正在加载…</div>;
   if (state.error) return <Alert type="error" showIcon message={state.error} action={<Button size="small" onClick={onRetry}>重试</Button>} />;
   if (state.items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${schemaObjectKindLabel(capability.kind)}`} />;
   return (
-    <>
       <div className="schema-object-list" role="list">
         {state.items.map((object) => (
-          <button className="schema-object-list-item" type="button" role="listitem" key={object.objectKey} onClick={() => onOpen(object)}>
+          <button className={`schema-object-list-item${activeObjectKey === object.objectKey ? ' is-selected' : ''}`} type="button" role="listitem" key={object.objectKey} onClick={() => onOpen(object)}>
             <span className="schema-object-list-icon"><SchemaObjectIcon kind={object.kind} /></span>
             <span className="schema-object-list-copy">
               <span className="schema-object-list-name" title={object.displayName}>{object.displayName}</span>
@@ -280,9 +276,8 @@ function SchemaObjectGroup({ capability, state, onRetry, onLoadMore, onOpen }: {
             <MoreOutlined />
           </button>
         ))}
+        {state.loading && <div className="schema-object-group-status"><Spin size="small" /> 正在加载更多…</div>}
       </div>
-      {state.hasMore && <Button size="small" block loading={state.loading} onClick={onLoadMore}>加载更多</Button>}
-    </>
   );
 }
 

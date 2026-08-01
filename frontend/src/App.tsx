@@ -10,6 +10,7 @@ import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory,
 import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
+import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
@@ -725,7 +726,7 @@ export default function App() {
     });
   }
 
-  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean; background?: boolean } = {}) {
+  async function loadMetadata(conn = selected, options: { schema?: string; keyword?: string; page?: number; append?: boolean; refresh?: boolean; background?: boolean; applyKeyword?: boolean } = {}) {
     if (!conn) return;
     metadataAbortRef.current?.abort();
     const controller = new AbortController();
@@ -752,7 +753,7 @@ export default function App() {
       const data = await api<Metadata>(`/metadata/${conn.id}?${params.toString()}`, { signal: controller.signal });
       if (requestId !== metadataRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
       setMetadataQuery((current) => ({ ...current, schema: data.selectedSchema || '' }));
-      setMetadataAppliedKeyword(keyword);
+      if (options.applyKeyword !== false) setMetadataAppliedKeyword(keyword);
       setMetadata((current) => {
         if (!options.append || !current) {
           return data;
@@ -791,20 +792,21 @@ export default function App() {
     metadataSearchTimerRef.current = null;
   }
 
-  function runMetadataSearch(keyword: string) {
+  function runMetadataSearch(keyword: string, kind: ExplorerObjectKind = 'TABLE') {
     clearMetadataSearchTimer();
     setMetadataQuery((current) => ({ ...current, keyword }));
-    if (selected) void loadMetadata(selected, { keyword, page: 0, background: true });
+    setMetadataAppliedKeyword(keyword);
+    if (kind === 'TABLE' && selected) void loadMetadata(selected, { keyword, page: 0, background: true });
   }
 
-  function queueMetadataSearch(keyword: string) {
+  function queueMetadataSearch(keyword: string, kind: ExplorerObjectKind = 'TABLE') {
     setMetadataQuery((current) => ({ ...current, keyword }));
     clearMetadataSearchTimer();
     if (!keyword.trim()) {
-      runMetadataSearch('');
+      runMetadataSearch('', kind);
       return;
     }
-    metadataSearchTimerRef.current = window.setTimeout(() => runMetadataSearch(keyword), 300);
+    metadataSearchTimerRef.current = window.setTimeout(() => runMetadataSearch(keyword, kind), 300);
   }
 
   function requestRefreshDatabaseObjects() {
@@ -1971,13 +1973,18 @@ export default function App() {
   const refreshExplorer = useStableEvent(() => requestRefreshDatabaseObjects());
   const closeMobileExplorer = useStableEvent(() => setMobileExplorerOpen(false));
   const openConnectionsFromExplorer = useStableEvent(() => setActiveDrawer('connections'));
-  const changeExplorerSchema = useStableEvent((schema: string) => {
+  const changeExplorerSchema = useStableEvent((schema: string, kind: ExplorerObjectKind) => {
     clearMetadataSearchTimer();
     setMetadataQuery((current) => ({ ...current, schema }));
-    void loadMetadata(selected, { schema, page: 0 });
+    void loadMetadata(selected, {
+      schema,
+      keyword: kind === 'TABLE' ? metadataQuery.keyword : '',
+      page: 0,
+      applyKeyword: kind === 'TABLE'
+    });
   });
-  const changeExplorerKeyword = useStableEvent((keyword: string) => queueMetadataSearch(keyword));
-  const searchExplorer = useStableEvent((keyword: string) => runMetadataSearch(keyword));
+  const changeExplorerKeyword = useStableEvent((keyword: string, kind: ExplorerObjectKind) => queueMetadataSearch(keyword, kind));
+  const searchExplorer = useStableEvent((keyword: string, kind: ExplorerObjectKind) => runMetadataSearch(keyword, kind));
   const loadMoreExplorerObjects = useStableEvent(() => {
     if (metadata?.hasMore && !metadataLoading) void loadMetadata(selected, { page: metadata.page + 1, append: true, background: true });
   });
