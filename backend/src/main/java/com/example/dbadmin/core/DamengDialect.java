@@ -10,7 +10,7 @@ import java.util.Locale;
 public class DamengDialect extends DefaultDialect {
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, true, false, List.of());
+        return new DatabaseCapabilities(true, true, true, false, List.of(), List.of(), SchemaObjectCapabilities.oracleFamily());
     }
 
     @Override

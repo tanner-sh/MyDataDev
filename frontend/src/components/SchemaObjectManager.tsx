@@ -1,0 +1,605 @@
+import Editor from '@monaco-editor/react';
+import {
+  ApiOutlined,
+  CaretRightOutlined,
+  CodeOutlined,
+  DeleteOutlined,
+  EyeOutlined,
+  FunctionOutlined,
+  MoreOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  ThunderboltOutlined
+} from '@ant-design/icons';
+import {
+  Alert,
+  Button,
+  Collapse,
+  Descriptions,
+  Drawer,
+  Dropdown,
+  Empty,
+  Input,
+  Modal,
+  Space,
+  Spin,
+  Switch,
+  Table,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  message
+} from 'antd';
+import type { CollapseProps, MenuProps, TableColumnsType } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { api } from '../api';
+import {
+  schemaObjectCapabilities,
+  schemaObjectConfirmationTarget,
+  schemaObjectDisplayStatus,
+  schemaObjectKindLabel
+} from '../schemaObjectModel';
+import type {
+  Connection,
+  DbObject,
+  RoutineArgumentInput,
+  RoutineInvokeResponse,
+  SchemaObjectCapability,
+  SchemaObjectDetail,
+  SchemaObjectKind,
+  SchemaObjectLifecycleOperation,
+  SchemaObjectLifecycleRequest,
+  SchemaObjectLifecycleResponse,
+  SchemaObjectPage,
+  SchemaObjectParameter,
+  SchemaObjectSummary,
+  SchemaObjectTemplate
+} from '../types';
+import { ResultGrid } from './ResultGrid';
+import { SqlPreview } from './SqlPreview';
+
+const { Text, Title } = Typography;
+
+type GroupState = { items: SchemaObjectSummary[]; page: number; total: number; hasMore: boolean; loading: boolean; error?: string };
+type WorkspaceState = { object?: SchemaObjectSummary; creation?: SchemaObjectTemplate };
+type PendingLifecycle = { operation: SchemaObjectLifecycleOperation; request: SchemaObjectLifecycleRequest; sql: string[]; confirmationTarget: string };
+
+export function SchemaObjectManager({
+  connection,
+  schemaName,
+  keyword,
+  refreshToken,
+  onOpenViewData
+}: {
+  connection: Connection;
+  schemaName?: string;
+  keyword?: string;
+  refreshToken: number;
+  onOpenViewData: (object: DbObject) => void;
+}) {
+  const capabilities = useMemo(() => schemaObjectCapabilities(connection.capabilities), [connection.capabilities]);
+  const [groups, setGroups] = useState<Partial<Record<SchemaObjectKind, GroupState>>>({});
+  const [expandedKinds, setExpandedKinds] = useState<SchemaObjectKind[]>([]);
+  const [workspace, setWorkspace] = useState<WorkspaceState>();
+  const [createKind, setCreateKind] = useState<SchemaObjectKind>();
+  const [createName, setCreateName] = useState('');
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const requestScope = `${connection.id}:${schemaName || ''}:${keyword || ''}:${refreshToken}`;
+  const workspaceScope = `${connection.id}:${schemaName || ''}`;
+  const requestScopeRef = useRef(requestScope);
+
+  useEffect(() => {
+    requestScopeRef.current = requestScope;
+    setGroups({});
+    expandedKinds.forEach((kind) => void loadGroup(kind, 0, false, true));
+    // The list of expanded groups is intentionally not a dependency: changing
+    // it already calls loadGroup from the Collapse handler.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestScope]);
+
+  useEffect(() => {
+    setWorkspace(undefined);
+    setCreateKind(undefined);
+    setCreateName('');
+  }, [workspaceScope]);
+
+  if (capabilities.length === 0) return null;
+
+  async function loadGroup(kind: SchemaObjectKind, page = 0, append = false, refresh = false) {
+    const scope = requestScopeRef.current;
+    setGroups((current) => ({
+      ...current,
+      [kind]: { ...(current[kind] || { items: [], page: 0, total: 0, hasMore: false }), loading: true, error: undefined }
+    }));
+    const params = new URLSearchParams({ kind, page: String(page), pageSize: '100' });
+    if (schemaName) params.set('schemaName', schemaName);
+    if (keyword?.trim()) params.set('keyword', keyword.trim());
+    if (refresh) params.set('refresh', 'true');
+    try {
+      const response = await api<SchemaObjectPage>(`/metadata/${connection.id}/schema-objects?${params.toString()}`);
+      if (requestScopeRef.current !== scope) return;
+      setGroups((current) => ({
+        ...current,
+        [kind]: {
+          items: append ? [...(current[kind]?.items || []), ...response.items] : response.items,
+          page: response.page,
+          total: response.total,
+          hasMore: response.hasMore,
+          loading: false
+        }
+      }));
+    } catch (error) {
+      if (requestScopeRef.current !== scope) return;
+      setGroups((current) => ({
+        ...current,
+        [kind]: {
+          ...(current[kind] || { items: [], page: 0, total: 0, hasMore: false }),
+          loading: false,
+          error: error instanceof Error ? error.message : '对象加载失败'
+        }
+      }));
+    }
+  }
+
+  function handleExpanded(keys: string | string[]) {
+    const next = (Array.isArray(keys) ? keys : [keys]) as SchemaObjectKind[];
+    const added = next.filter((kind) => !expandedKinds.includes(kind));
+    setExpandedKinds(next);
+    added.forEach((kind) => {
+      if (!groups[kind]) void loadGroup(kind);
+    });
+  }
+
+  async function generateTemplate() {
+    if (!createKind || !createName.trim()) return;
+    const params = new URLSearchParams({ kind: createKind, objectName: createName.trim() });
+    if (schemaName) params.set('schemaName', schemaName);
+    setCreatingTemplate(true);
+    try {
+      const template = await api<SchemaObjectTemplate>(`/metadata/${connection.id}/schema-objects/template?${params.toString()}`);
+      setCreateKind(undefined);
+      setCreateName('');
+      setWorkspace({ creation: template });
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '创建模板生成失败');
+    } finally {
+      setCreatingTemplate(false);
+    }
+  }
+
+  const createItems: MenuProps['items'] = capabilities
+    .filter((capability) => capability.operations.includes('CREATE'))
+    .map((capability) => ({ key: capability.kind, label: `新建${schemaObjectKindLabel(capability.kind)}` }));
+
+  const collapseItems: CollapseProps['items'] = capabilities.map((capability) => {
+    const group = groups[capability.kind];
+    return {
+      key: capability.kind,
+      label: <Space size={6}><SchemaObjectIcon kind={capability.kind} /><span>{schemaObjectKindLabel(capability.kind)}</span>{group && <span className="object-tree-count">{group.total}</span>}</Space>,
+      children: (
+        <SchemaObjectGroup
+          capability={capability}
+          state={group}
+          onRetry={() => void loadGroup(capability.kind, 0, false, true)}
+          onLoadMore={() => void loadGroup(capability.kind, (group?.page || 0) + 1, true)}
+          onOpen={(object) => setWorkspace({ object })}
+        />
+      )
+    };
+  });
+
+  return (
+    <section className="schema-object-manager" aria-label="数据库对象管理">
+      <div className="schema-object-manager-header">
+        <Text strong>对象管理</Text>
+        <Space size={2}>
+          {!connection.readonly && createItems.length > 0 && (
+            <Dropdown menu={{ items: createItems, onClick: ({ key }) => setCreateKind(key as SchemaObjectKind) }}>
+              <Button type="text" size="small" icon={<PlusOutlined />}>新建</Button>
+            </Dropdown>
+          )}
+          <Tooltip title="刷新已展开的对象组">
+            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => expandedKinds.forEach((kind) => void loadGroup(kind, 0, false, true))} />
+          </Tooltip>
+        </Space>
+      </div>
+      <Collapse
+        size="small"
+        ghost
+        activeKey={expandedKinds}
+        items={collapseItems}
+        expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
+        onChange={handleExpanded}
+      />
+
+      <Modal
+        title={createKind ? `新建${schemaObjectKindLabel(createKind)}` : '新建对象'}
+        open={Boolean(createKind)}
+        okText="生成源码模板"
+        confirmLoading={creatingTemplate}
+        okButtonProps={{ disabled: !createName.trim() }}
+        onOk={() => void generateTemplate()}
+        onCancel={() => { setCreateKind(undefined); setCreateName(''); }}
+      >
+        <Text type="secondary">模板会使用当前 {schemaName || '默认命名空间'}，创建前仍可编辑完整源码。</Text>
+        <Input autoFocus className="schema-object-create-name" value={createName} placeholder="输入对象名" onChange={(event) => setCreateName(event.target.value)} onPressEnter={() => void generateTemplate()} />
+      </Modal>
+
+      <SchemaObjectWorkspace
+        connection={connection}
+        state={workspace}
+        onClose={() => setWorkspace(undefined)}
+        onChanged={(kind, close) => {
+          void loadGroup(kind, 0, false, true);
+          if (close) setWorkspace(undefined);
+        }}
+        onOpenViewData={onOpenViewData}
+      />
+    </section>
+  );
+}
+
+function SchemaObjectGroup({ capability, state, onRetry, onLoadMore, onOpen }: {
+  capability: SchemaObjectCapability;
+  state?: GroupState;
+  onRetry: () => void;
+  onLoadMore: () => void;
+  onOpen: (object: SchemaObjectSummary) => void;
+}) {
+  if (!state || state.loading && state.items.length === 0) return <div className="schema-object-group-status"><Spin size="small" /> 正在加载…</div>;
+  if (state.error) return <Alert type="error" showIcon message={state.error} action={<Button size="small" onClick={onRetry}>重试</Button>} />;
+  if (state.items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${schemaObjectKindLabel(capability.kind)}`} />;
+  return (
+    <>
+      <div className="schema-object-list" role="list">
+        {state.items.map((object) => (
+          <button className="schema-object-list-item" type="button" role="listitem" key={object.objectKey} onClick={() => onOpen(object)}>
+            <span className="schema-object-list-icon"><SchemaObjectIcon kind={object.kind} /></span>
+            <span className="schema-object-list-copy">
+              <span className="schema-object-list-name" title={object.displayName}>{object.displayName}</span>
+              {object.status && <span className="schema-object-list-status">{schemaObjectDisplayStatus(object.status)}</span>}
+            </span>
+            <MoreOutlined />
+          </button>
+        ))}
+      </div>
+      {state.hasMore && <Button size="small" block loading={state.loading} onClick={onLoadMore}>加载更多</Button>}
+    </>
+  );
+}
+
+function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenViewData }: {
+  connection: Connection;
+  state?: WorkspaceState;
+  onClose: () => void;
+  onChanged: (kind: SchemaObjectKind, close: boolean) => void;
+  onOpenViewData: (object: DbObject) => void;
+}) {
+  const [detail, setDetail] = useState<SchemaObjectDetail>();
+  const [source, setSource] = useState('');
+  const [initialSource, setInitialSource] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('overview');
+  const [pending, setPending] = useState<PendingLifecycle>();
+  const [confirmation, setConfirmation] = useState('');
+  const [productionConfirmation, setProductionConfirmation] = useState('');
+  const [executing, setExecuting] = useState(false);
+  const [invokeOpen, setInvokeOpen] = useState(false);
+  const [invokeInputs, setInvokeInputs] = useState<Record<number, RoutineArgumentInput>>({});
+  const [invokeResult, setInvokeResult] = useState<RoutineInvokeResponse>();
+  const [invoking, setInvoking] = useState(false);
+  const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
+  const objectKey = state?.object?.objectKey;
+
+  useEffect(() => {
+    setDetail(undefined);
+    setInvokeResult(undefined);
+    setActiveTab(state?.creation ? 'source' : 'overview');
+    if (state?.creation) {
+      setSource(state.creation.source);
+      setInitialSource(state.creation.source);
+      return;
+    }
+    if (objectKey) void loadDetail(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectKey, state?.creation?.objectName]);
+
+  if (!state) return null;
+  const creation = state.creation;
+  const object = detail?.object || state.object;
+  const kind = creation?.kind || object?.kind;
+  const dirty = source !== initialSource;
+  const operations = new Set(detail?.operations || []);
+  const production = connection.environment === 'prod';
+
+  async function loadDetail(refresh: boolean) {
+    if (!objectKey) return;
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ objectKey });
+      if (refresh) params.set('refresh', 'true');
+      const loaded = await api<SchemaObjectDetail>(`/metadata/${connection.id}/schema-objects/detail?${params.toString()}`);
+      setDetail(loaded);
+      setSource(loaded.source || '');
+      setInitialSource(loaded.source || '');
+      setInvokeInputs(Object.fromEntries(loaded.parameters
+        .filter((parameter) => parameter.mode === 'IN' || parameter.mode === 'INOUT')
+        .map((parameter) => [parameter.position, { position: parameter.position, name: parameter.name, value: '', nullValue: false }])));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '对象详情加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function lifecycleRequest(operation: SchemaObjectLifecycleOperation): SchemaObjectLifecycleRequest {
+    if (creation) {
+      return { operation, kind: creation.kind, schemaName: creation.schemaName, objectName: creation.objectName, source };
+    }
+    if (!detail) throw new Error('对象详情尚未加载');
+    return {
+      operation,
+      kind: detail.object.kind,
+      schemaName: detail.object.schemaName,
+      objectName: detail.object.name,
+      objectKey: detail.object.objectKey,
+      source: operation === 'REPLACE' ? source : undefined,
+      structureVersion: detail.structureVersion
+    };
+  }
+
+  async function previewLifecycle(operation: SchemaObjectLifecycleOperation) {
+    if (!kind) return;
+    setExecuting(true);
+    try {
+      const request = lifecycleRequest(operation);
+      const preview = await api<SchemaObjectLifecycleResponse>(`/metadata/${connection.id}/schema-objects/lifecycle/preview`, {
+        method: 'POST', body: JSON.stringify(request)
+      });
+      const confirmationTarget = creation
+        ? (creation.schemaName ? `${creation.schemaName}.${creation.objectName}` : creation.objectName)
+        : schemaObjectConfirmationTarget(detail!.object);
+      setPending({ operation, request, sql: preview.sql, confirmationTarget });
+      setConfirmation('');
+      setProductionConfirmation('');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : 'SQL 预览失败');
+    } finally {
+      setExecuting(false);
+    }
+  }
+
+  async function executeLifecycle() {
+    if (!pending || !kind) return;
+    setExecuting(true);
+    try {
+      const response = await api<SchemaObjectLifecycleResponse>(`/metadata/${connection.id}/schema-objects/lifecycle/execute`, {
+        method: 'POST',
+        headers: production ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+        body: JSON.stringify({ ...pending.request, confirmation })
+      });
+      message.success(response.message);
+      setPending(undefined);
+      setConfirmation('');
+      setProductionConfirmation('');
+      const close = pending.operation === 'CREATE' || pending.operation === 'DROP';
+      onChanged(kind, close);
+      if (!close) await loadDetail(true);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '对象操作失败');
+    } finally {
+      setExecuting(false);
+    }
+  }
+
+  async function invokeRoutine() {
+    if (!detail) return;
+    setInvoking(true);
+    try {
+      const result = await api<RoutineInvokeResponse>(`/metadata/${connection.id}/schema-objects/invoke`, {
+        method: 'POST',
+        headers: production ? { 'X-Production-Confirmation': invokeProductionConfirmation } : undefined,
+        body: JSON.stringify({
+          objectKey: detail.object.objectKey,
+          structureVersion: detail.structureVersion,
+          arguments: Object.values(invokeInputs)
+        })
+      });
+      setInvokeResult(result);
+      setInvokeOpen(false);
+      setActiveTab('results');
+      message.success(`调用完成，耗时 ${result.elapsedMs}ms`);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '例程调用失败');
+    } finally {
+      setInvoking(false);
+    }
+  }
+
+  function closeWorkspace() {
+    if (!dirty) {
+      onClose();
+      return;
+    }
+    Modal.confirm({ title: '放弃未保存的源码修改？', content: '关闭后当前修改将丢失。', okText: '放弃修改', okButtonProps: { danger: true }, onOk: onClose });
+  }
+
+  const menuItems: NonNullable<MenuProps['items']> = detail ? [
+    operations.has('REFRESH') ? { key: 'REFRESH', icon: <ReloadOutlined />, label: '刷新物化视图' } : null,
+    operations.has('ENABLE') ? { key: 'ENABLE', icon: <PlayCircleOutlined />, label: '启用触发器' } : null,
+    operations.has('DISABLE') ? { key: 'DISABLE', icon: <PauseCircleOutlined />, label: '禁用触发器' } : null,
+    operations.has('DROP') ? { type: 'divider' as const } : null,
+    operations.has('DROP') ? { key: 'DROP', icon: <DeleteOutlined />, label: '删除对象', danger: true } : null
+  ].filter(Boolean) as NonNullable<MenuProps['items']> : [];
+
+  const tabs = [
+    !creation && { key: 'overview', label: '概览', children: detail ? <ObjectOverview detail={detail} /> : <Spin /> },
+    { key: 'source', label: '源码', children: (
+      <div className="schema-object-source-panel">
+        {!creation && detail && !detail.sourceAvailable && <Alert type="warning" showIcon message="无法读取对象源码" description={detail.sourceUnavailableReason} />}
+        <Editor
+          height="52vh"
+          language="sql"
+          value={source}
+          theme={document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs'}
+          options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, readOnly: !creation && (!detail?.sourceAvailable || !operations.has('REPLACE')) }}
+          onChange={(value) => setSource(value || '')}
+        />
+      </div>
+    ) },
+    !creation && { key: 'parameters', label: `参数 ${detail?.parameters.length || 0}`, children: detail ? <ParameterTable parameters={detail.parameters} /> : null },
+    !creation && { key: 'dependencies', label: `依赖 ${detail?.dependencies.length || 0}`, children: detail ? <DependencyPanel detail={detail} /> : null },
+    invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} /> }
+  ].filter(Boolean) as { key: string; label: string; children: ReactNode }[];
+
+  return (
+    <>
+      <Drawer
+        open
+        size="large"
+        title={<Space><SchemaObjectIcon kind={kind!} /><span>{creation ? `新建${schemaObjectKindLabel(kind!)}` : object?.displayName}</span>{object?.status && <Tag>{schemaObjectDisplayStatus(object.status)}</Tag>}</Space>}
+        extra={(
+          <Space>
+            {!creation && object?.kind === 'VIEW' && <Button icon={<EyeOutlined />} onClick={() => { onClose(); onOpenViewData({ schemaName: object.schemaName, name: object.name, type: 'VIEW', columns: [], indexes: [] }); }}>查看数据</Button>}
+            {!creation && operations.has('INVOKE') && !connection.readonly && <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setInvokeOpen(true)}>调用</Button>}
+            {creation && !connection.readonly && <Button type="primary" icon={<PlayCircleOutlined />} loading={executing} onClick={() => void previewLifecycle('CREATE')}>预览并创建</Button>}
+            {!creation && operations.has('REPLACE') && detail?.sourceAvailable && !connection.readonly && <Button type="primary" icon={<CodeOutlined />} disabled={!dirty} loading={executing} onClick={() => void previewLifecycle('REPLACE')}>预览并保存</Button>}
+            {!creation && <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadDetail(true)}>刷新</Button>}
+            {!creation && menuItems.length > 0 && !connection.readonly && <Dropdown menu={{ items: menuItems, onClick: ({ key }) => void previewLifecycle(key as SchemaObjectLifecycleOperation) }}><Button icon={<MoreOutlined />} /></Dropdown>}
+          </Space>
+        )}
+        onClose={closeWorkspace}
+      >
+        {loading && !detail && !creation ? <div className="schema-object-workspace-loading"><Spin /> 正在加载对象详情…</div> : <Tabs activeKey={activeTab} items={tabs} onChange={setActiveTab} />}
+      </Drawer>
+
+      <Modal
+        title={`${pending ? lifecycleLabel(pending.operation) : '对象操作'}确认`}
+        open={Boolean(pending)}
+        width={720}
+        okText="确认执行"
+        okButtonProps={{
+          danger: pending?.operation === 'DROP' || pending?.operation === 'DISABLE',
+          disabled: !pending || confirmation !== pending.confirmationTarget || production && productionConfirmation !== connection.name
+        }}
+        confirmLoading={executing}
+        onOk={() => void executeLifecycle()}
+        onCancel={() => setPending(undefined)}
+      >
+        {pending && <>
+          <Alert type="warning" showIcon message="请核对最终 SQL" description="对象定义会作为单条原生语句执行；删除操作不会自动添加 CASCADE。" />
+          <SqlPreview sql={pending.sql} />
+          <Text>输入完整对象名 <Text code>{pending.confirmationTarget}</Text></Text>
+          <Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
+          {production && <>
+            <Text>生产连接还需输入连接名 <Text code>{connection.name}</Text></Text>
+            <Input value={productionConfirmation} onChange={(event) => setProductionConfirmation(event.target.value)} />
+          </>}
+        </>}
+      </Modal>
+
+      <Modal
+        title={`调用 ${detail?.object.displayName || ''}`}
+        open={invokeOpen}
+        width={640}
+        okText="执行调用"
+        confirmLoading={invoking}
+        okButtonProps={{ disabled: production && invokeProductionConfirmation !== connection.name }}
+        onOk={() => void invokeRoutine()}
+        onCancel={() => setInvokeOpen(false)}
+      >
+        <Alert type="warning" showIcon message="例程可能包含写入或结构变更" description="调用参数值不会写入审计或 SQL 历史。" />
+        <div className="routine-argument-list">
+          {detail?.parameters.filter((parameter) => parameter.mode !== 'RETURN').map((parameter) => {
+            const input = invokeInputs[parameter.position];
+            const acceptsInput = parameter.mode === 'IN' || parameter.mode === 'INOUT';
+            return (
+              <div className="routine-argument-row" key={`${parameter.position}:${parameter.name}`}>
+                <div><Text strong>{parameter.name || `参数 ${parameter.position}`}</Text> <Tag>{parameter.mode}</Tag><Text type="secondary">{parameter.typeName}</Text></div>
+                {acceptsInput ? <Space.Compact block>
+                  <Input disabled={input?.nullValue} value={input?.value || ''} placeholder="输入参数值" onChange={(event) => setInvokeInputs((current) => ({ ...current, [parameter.position]: { ...current[parameter.position], position: parameter.position, name: parameter.name, value: event.target.value, nullValue: false } }))} />
+                  <span className="routine-null-toggle"><Switch checked={input?.nullValue} onChange={(checked) => setInvokeInputs((current) => ({ ...current, [parameter.position]: { ...current[parameter.position], position: parameter.position, name: parameter.name, value: current[parameter.position]?.value || '', nullValue: checked } }))} /> NULL</span>
+                </Space.Compact> : <Text type="secondary">输出参数，无需填写</Text>}
+              </div>
+            );
+          })}
+          {detail?.parameters.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该例程没有参数" />}
+        </div>
+        {production && <>
+          <Text>生产连接调用需输入连接名 <Text code>{connection.name}</Text></Text>
+          <Input value={invokeProductionConfirmation} onChange={(event) => setInvokeProductionConfirmation(event.target.value)} />
+        </>}
+      </Modal>
+    </>
+  );
+}
+
+function ObjectOverview({ detail }: { detail: SchemaObjectDetail }) {
+  return (
+    <Descriptions bordered size="small" column={1}>
+      <Descriptions.Item label="对象名">{schemaObjectConfirmationTarget(detail.object)}</Descriptions.Item>
+      <Descriptions.Item label="类型">{schemaObjectKindLabel(detail.object.kind)}</Descriptions.Item>
+      <Descriptions.Item label="子类型">{detail.object.subtype || '—'}</Descriptions.Item>
+      <Descriptions.Item label="状态">{schemaObjectDisplayStatus(detail.object.status) || '—'}</Descriptions.Item>
+      <Descriptions.Item label="可用操作"><Space wrap>{detail.operations.map((operation) => <Tag key={operation}>{operation}</Tag>)}</Space></Descriptions.Item>
+      <Descriptions.Item label="版本"><Text copyable code>{detail.structureVersion}</Text></Descriptions.Item>
+    </Descriptions>
+  );
+}
+
+function ParameterTable({ parameters }: { parameters: SchemaObjectParameter[] }) {
+  const columns: TableColumnsType<SchemaObjectParameter> = [
+    { title: '位置', dataIndex: 'position', width: 70 },
+    { title: '名称', dataIndex: 'name', render: (value) => value || '—' },
+    { title: '模式', dataIndex: 'mode', width: 90, render: (value) => <Tag>{value}</Tag> },
+    { title: '类型', dataIndex: 'typeName' },
+    { title: '可空', dataIndex: 'nullable', width: 70, render: (value) => value ? '是' : '否' }
+  ];
+  return <Table size="small" rowKey={(row) => `${row.position}:${row.name}`} columns={columns} dataSource={parameters} pagination={false} locale={{ emptyText: '该对象没有参数' }} />;
+}
+
+function DependencyPanel({ detail }: { detail: SchemaObjectDetail }) {
+  if (!detail.dependenciesAvailable) return <Alert type="info" showIcon message="依赖信息不可用" description={detail.dependenciesUnavailableReason} />;
+  if (detail.dependencies.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现可靠的对象依赖" />;
+  return <div className="schema-object-dependency-list">{detail.dependencies.map((item, index) => <div className="schema-object-dependency-item" key={`${item.schemaName}:${item.name}:${index}`}><Space><Tag>{item.kind}</Tag><Text>{item.schemaName ? `${item.schemaName}.` : ''}{item.name}</Text><Text type="secondary">{item.direction}</Text></Space></div>)}</div>;
+}
+
+function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
+  return (
+    <div className="routine-results">
+      <Alert type={response.truncated ? 'warning' : 'success'} showIcon message={`调用成功 · ${response.elapsedMs}ms${response.truncated ? ' · 结果已截断' : ''}`} />
+      {(response.returnValue !== undefined || response.outParameters.length > 0) && (
+        <Descriptions bordered size="small" column={1}>
+          {response.returnValue !== undefined && <Descriptions.Item label="返回值"><Text code>{renderValue(response.returnValue)}</Text></Descriptions.Item>}
+          {response.outParameters.map((parameter, index) => <Descriptions.Item key={`${parameter.name}:${index}`} label={`${parameter.name || `OUT ${index + 1}`} · ${parameter.typeName || ''}`}><Text code>{renderValue(parameter.value)}</Text></Descriptions.Item>)}
+        </Descriptions>
+      )}
+      {response.results.map((item, index) => item.kind === 'RESULT_SET'
+        ? <div className="routine-result-set" key={index}><Title level={5}>结果集 {index + 1}</Title><ResultGrid result={item.result || null} pagingEnabled={false} /></div>
+        : <Alert key={index} type="info" message={`更新计数：${item.updateCount ?? 0}`} />)}
+      {response.results.length === 0 && response.returnValue === undefined && response.outParameters.length === 0 && <Empty description="调用没有返回结果" />}
+    </div>
+  );
+}
+
+function SchemaObjectIcon({ kind }: { kind: SchemaObjectKind }) {
+  if (kind === 'VIEW' || kind === 'MATERIALIZED_VIEW') return <EyeOutlined />;
+  if (kind === 'FUNCTION') return <FunctionOutlined />;
+  if (kind === 'PROCEDURE') return <ApiOutlined />;
+  if (kind === 'TRIGGER') return <ThunderboltOutlined />;
+  return <CodeOutlined />;
+}
+
+function lifecycleLabel(operation: SchemaObjectLifecycleOperation) {
+  return ({ CREATE: '创建', REPLACE: '保存', DROP: '删除', REFRESH: '刷新', ENABLE: '启用', DISABLE: '禁用' } as const)[operation];
+}
+
+function renderValue(value: unknown) {
+  if (value == null) return 'NULL';
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}

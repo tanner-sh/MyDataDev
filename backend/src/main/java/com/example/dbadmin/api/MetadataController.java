@@ -11,7 +11,15 @@ import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
 import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
+import com.example.dbadmin.dto.ApiDtos.RoutineInvokeRequest;
+import com.example.dbadmin.dto.ApiDtos.RoutineInvokeResponse;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleRequest;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleResponse;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectPage;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectTemplateResponse;
 import com.example.dbadmin.service.MetadataService;
+import com.example.dbadmin.service.SchemaObjectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,9 +27,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/metadata")
 public class MetadataController {
     private final MetadataService service;
+    private final SchemaObjectService schemaObjects;
 
-    public MetadataController(MetadataService service) {
+    public MetadataController(MetadataService service, SchemaObjectService schemaObjects) {
         this.service = service;
+        this.schemaObjects = schemaObjects;
     }
 
     @GetMapping("/{connectionId}")
@@ -128,5 +138,65 @@ public class MetadataController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         return service.executeTableLifecycle(connectionId, request, actor, productionConfirmation);
+    }
+
+    @GetMapping("/{connectionId}/schema-objects")
+    public SchemaObjectPage schemaObjects(
+            @PathVariable long connectionId,
+            @RequestParam(required = false) String schemaName,
+            @RequestParam String kind,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(defaultValue = "false") boolean refresh
+    ) throws Exception {
+        return schemaObjects.list(connectionId, schemaName, kind, keyword, page, pageSize, refresh);
+    }
+
+    @GetMapping("/{connectionId}/schema-objects/detail")
+    public SchemaObjectDetail schemaObjectDetail(
+            @PathVariable long connectionId,
+            @RequestParam String objectKey,
+            @RequestParam(defaultValue = "false") boolean refresh
+    ) throws Exception {
+        return schemaObjects.detail(connectionId, objectKey, refresh);
+    }
+
+    @GetMapping("/{connectionId}/schema-objects/template")
+    public SchemaObjectTemplateResponse schemaObjectTemplate(
+            @PathVariable long connectionId,
+            @RequestParam String kind,
+            @RequestParam(required = false) String schemaName,
+            @RequestParam String objectName
+    ) {
+        return schemaObjects.template(connectionId, kind, schemaName, objectName);
+    }
+
+    @PostMapping("/{connectionId}/schema-objects/lifecycle/preview")
+    public SchemaObjectLifecycleResponse previewSchemaObjectLifecycle(
+            @PathVariable long connectionId,
+            @Valid @RequestBody SchemaObjectLifecycleRequest request
+    ) throws Exception {
+        return schemaObjects.preview(connectionId, request);
+    }
+
+    @PostMapping("/{connectionId}/schema-objects/lifecycle/execute")
+    public SchemaObjectLifecycleResponse executeSchemaObjectLifecycle(
+            @PathVariable long connectionId,
+            @Valid @RequestBody SchemaObjectLifecycleRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return schemaObjects.execute(connectionId, request, actor, productionConfirmation);
+    }
+
+    @PostMapping("/{connectionId}/schema-objects/invoke")
+    public RoutineInvokeResponse invokeSchemaObject(
+            @PathVariable long connectionId,
+            @Valid @RequestBody RoutineInvokeRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return schemaObjects.invoke(connectionId, request, actor, productionConfirmation);
     }
 }

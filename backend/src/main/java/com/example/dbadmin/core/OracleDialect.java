@@ -22,7 +22,7 @@ public class OracleDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, true, true, List.of("ORACLE_EXP"));
+        return new DatabaseCapabilities(true, true, true, true, List.of("ORACLE_EXP"), List.of("ORACLE_IMP"), SchemaObjectCapabilities.oracleFamily());
     }
 
     @Override

@@ -16,7 +16,62 @@ export type DatabaseCapabilities = {
   explain: boolean;
   nativeBackupMethods: string[];
   nativeRestoreMethods?: string[];
+  schemaObjects?: SchemaObjectCapability[];
 };
+
+export type SchemaObjectKind = 'VIEW' | 'MATERIALIZED_VIEW' | 'SEQUENCE' | 'TRIGGER' | 'PROCEDURE' | 'FUNCTION';
+export type SchemaObjectOperation = 'LIST' | 'DETAIL' | 'SOURCE' | 'CREATE' | 'REPLACE' | 'DROP' | 'INVOKE' | 'REFRESH' | 'ENABLE' | 'DISABLE' | 'DEPENDENCIES';
+export type SchemaObjectCapability = { kind: SchemaObjectKind; operations: SchemaObjectOperation[] };
+export type SchemaObjectSummary = {
+  objectKey: string;
+  schemaName?: string;
+  name: string;
+  displayName: string;
+  kind: SchemaObjectKind;
+  subtype?: string;
+  status?: string;
+};
+export type SchemaObjectPage = {
+  items: SchemaObjectSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  hasMore: boolean;
+  cachedAt?: string;
+  cacheHit?: boolean;
+};
+export type SchemaObjectParameter = { position: number; name?: string; mode: 'IN' | 'OUT' | 'INOUT' | 'RETURN'; typeName?: string; jdbcType?: number; nullable: boolean };
+export type SchemaObjectDependency = { schemaName?: string; name: string; kind: string; direction: string };
+export type SchemaObjectDetail = {
+  object: SchemaObjectSummary;
+  source?: string;
+  sourceAvailable: boolean;
+  sourceUnavailableReason?: string;
+  parameters: SchemaObjectParameter[];
+  dependencies: SchemaObjectDependency[];
+  dependenciesAvailable: boolean;
+  dependenciesUnavailableReason?: string;
+  structureVersion: string;
+  operations: SchemaObjectOperation[];
+  properties: Record<string, unknown>;
+};
+export type SchemaObjectLifecycleOperation = 'CREATE' | 'REPLACE' | 'DROP' | 'REFRESH' | 'ENABLE' | 'DISABLE';
+export type SchemaObjectLifecycleRequest = {
+  operation: SchemaObjectLifecycleOperation;
+  kind: SchemaObjectKind;
+  schemaName?: string;
+  objectName: string;
+  objectKey?: string;
+  source?: string;
+  structureVersion?: string;
+  confirmation?: string;
+};
+export type SchemaObjectLifecycleResponse = { sql: string[]; message: string };
+export type SchemaObjectTemplate = { kind: SchemaObjectKind; schemaName?: string; objectName: string; source: string };
+export type RoutineArgumentInput = { position: number; name?: string; value?: string; nullValue: boolean };
+export type RoutineOutParameter = { name?: string; typeName?: string; value: unknown };
+export type RoutineResultItem = { kind: 'RESULT_SET' | 'UPDATE_COUNT'; result?: SqlResult; updateCount?: number };
+export type RoutineInvokeResponse = { status: string; elapsedMs: number; returnValue?: unknown; outParameters: RoutineOutParameter[]; results: RoutineResultItem[]; truncated: boolean };
 
 export type DbObject = {
   schemaName?: string;

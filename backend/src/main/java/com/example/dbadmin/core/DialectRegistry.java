@@ -11,6 +11,7 @@ public class DialectRegistry {
             new OceanBaseMySqlDialect(),
             new OceanBaseOracleDialect(),
             new OracleDialect(),
+            new MariaDbDialect(),
             new MySqlDialect(),
             new DamengDialect(),
             new PostgreSqlDialect(),

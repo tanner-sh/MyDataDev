@@ -1,5 +1,7 @@
 package com.example.dbadmin.dto;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -41,15 +43,26 @@ public final class ApiDtos {
             boolean tableDesign,
             boolean explain,
             List<String> nativeBackupMethods,
-            List<String> nativeRestoreMethods
+            List<String> nativeRestoreMethods,
+            List<SchemaObjectCapability> schemaObjects
     ) {
+        public DatabaseCapabilities(boolean tableBrowse, boolean tableEdit, boolean tableDesign, boolean explain, List<String> nativeBackupMethods, List<String> nativeRestoreMethods) {
+            this(tableBrowse, tableEdit, tableDesign, explain, nativeBackupMethods, nativeRestoreMethods, List.of());
+        }
+
         public DatabaseCapabilities(boolean tableBrowse, boolean tableEdit, boolean tableDesign, boolean explain, List<String> nativeBackupMethods) {
             this(tableBrowse, tableEdit, tableDesign, explain, nativeBackupMethods,
                     nativeBackupMethods == null ? List.of() : nativeBackupMethods.stream().map(method -> switch (method) {
                         case "MYSQLDUMP" -> "MYSQL";
                         case "ORACLE_EXP" -> "ORACLE_IMP";
                         default -> method;
-                    }).toList());
+                    }).toList(), List.of());
+        }
+    }
+
+    public record SchemaObjectCapability(String kind, List<String> operations) {
+        public SchemaObjectCapability {
+            operations = operations == null ? List.of() : List.copyOf(operations);
         }
     }
 
@@ -104,6 +117,100 @@ public final class ApiDtos {
     }
 
     public record ObjectRelations(List<ObjectRelation> importedKeys, List<ObjectRelation> exportedKeys) {
+    }
+
+    public record SchemaObjectSummary(
+            String objectKey,
+            String schemaName,
+            String name,
+            String displayName,
+            String kind,
+            String subtype,
+            String status
+    ) {
+    }
+
+    public record SchemaObjectPage(
+            List<SchemaObjectSummary> items,
+            int total,
+            int page,
+            int pageSize,
+            boolean hasMore,
+            String cachedAt,
+            boolean cacheHit
+    ) {
+    }
+
+    public record SchemaObjectParameter(
+            int position,
+            String name,
+            String mode,
+            String typeName,
+            Integer jdbcType,
+            boolean nullable
+    ) {
+    }
+
+    public record SchemaObjectDependency(String schemaName, String name, String kind, String direction) {
+    }
+
+    public record SchemaObjectDetail(
+            SchemaObjectSummary object,
+            String source,
+            boolean sourceAvailable,
+            String sourceUnavailableReason,
+            List<SchemaObjectParameter> parameters,
+            List<SchemaObjectDependency> dependencies,
+            boolean dependenciesAvailable,
+            String dependenciesUnavailableReason,
+            String structureVersion,
+            List<String> operations,
+            Map<String, Object> properties
+    ) {
+    }
+
+    public record SchemaObjectTemplateResponse(String kind, String schemaName, String objectName, String source) {
+    }
+
+    public record SchemaObjectLifecycleRequest(
+            @NotBlank @Size(max = 20) String operation,
+            @NotBlank @Size(max = 40) String kind,
+            @Size(max = 240) String schemaName,
+            @NotBlank @Size(max = 240) String objectName,
+            @Size(max = 4_000) String objectKey,
+            @Size(max = 2_000_000) String source,
+            @Size(max = 200) String structureVersion,
+            @Size(max = 520) String confirmation
+    ) {
+    }
+
+    public record SchemaObjectLifecycleResponse(List<String> sql, String message) {
+    }
+
+    public record RoutineArgumentInput(@Min(0) int position, @Size(max = 240) String name, @Size(max = 1_000_000) String value, boolean nullValue) {
+    }
+
+    public record RoutineInvokeRequest(
+            @NotBlank @Size(max = 4_000) String objectKey,
+            @NotBlank @Size(max = 200) String structureVersion,
+            @Size(max = 256) List<@Valid RoutineArgumentInput> arguments
+    ) {
+    }
+
+    public record RoutineOutParameter(String name, String typeName, Object value) {
+    }
+
+    public record RoutineResultItem(String kind, SqlResult result, Integer updateCount) {
+    }
+
+    public record RoutineInvokeResponse(
+            String status,
+            long elapsedMs,
+            Object returnValue,
+            List<RoutineOutParameter> outParameters,
+            List<RoutineResultItem> results,
+            boolean truncated
+    ) {
     }
 
     public record ObjectRelation(String constraintName, String pkSchemaName, String pkTableName, String pkColumnName, String fkSchemaName, String fkTableName, String fkColumnName) {

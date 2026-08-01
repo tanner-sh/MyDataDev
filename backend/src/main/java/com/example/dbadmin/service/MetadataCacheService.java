@@ -5,6 +5,8 @@ import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.ObjectDdlResponse;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectSummary;
 import com.example.dbadmin.service.MetadataService.RowIdentity;
 import org.springframework.stereotype.Service;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -41,6 +43,17 @@ public class MetadataCacheService {
     private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache();
     private final Cache<ObjectKey, CachedValue<ObjectDdlResponse>> ddls = detailCache();
     private final Cache<ObjectKey, CachedValue<RowIdentity>> rowIdentities = detailCache();
+    private final Cache<SchemaObjectCatalogKey, CachedValue<List<SchemaObjectSummary>>> schemaObjectCatalogs = Caffeine.newBuilder()
+            .maximumWeight(100_000)
+            .weigher((SchemaObjectCatalogKey ignored, CachedValue<List<SchemaObjectSummary>> value) -> 10 + value.value().size())
+            .expireAfterAccess(TTL)
+            .build();
+    private final Cache<SchemaObjectDetailKey, CachedValue<SchemaObjectDetail>> schemaObjectDetails = Caffeine.newBuilder()
+            .maximumWeight(50_000)
+            .weigher((SchemaObjectDetailKey ignored, CachedValue<SchemaObjectDetail> value) ->
+                    Math.min(2_000, 1 + String.valueOf(value.value()).length() / 1_024))
+            .expireAfterAccess(TTL)
+            .build();
 
     public Optional<SchemaCatalogSnapshot> schemaCatalog(long connectionId) {
         return Optional.ofNullable(schemaCatalogs.getIfPresent(connectionId));
@@ -112,6 +125,26 @@ public class MetadataCacheService {
         rowIdentities.put(key(connectionId, schemaName, objectName), new CachedValue<>(value, Instant.now()));
     }
 
+    public Optional<CachedValue<List<SchemaObjectSummary>>> schemaObjectCatalog(long connectionId, String schemaName, String kind) {
+        return Optional.ofNullable(schemaObjectCatalogs.getIfPresent(new SchemaObjectCatalogKey(connectionId, exact(schemaName), kind)));
+    }
+
+    public CachedValue<List<SchemaObjectSummary>> putSchemaObjectCatalog(long connectionId, String schemaName, String kind, List<SchemaObjectSummary> objects) {
+        CachedValue<List<SchemaObjectSummary>> value = new CachedValue<>(List.copyOf(objects), Instant.now());
+        schemaObjectCatalogs.put(new SchemaObjectCatalogKey(connectionId, exact(schemaName), kind), value);
+        return value;
+    }
+
+    public Optional<CachedValue<SchemaObjectDetail>> schemaObjectDetail(long connectionId, String objectKey) {
+        return Optional.ofNullable(schemaObjectDetails.getIfPresent(new SchemaObjectDetailKey(connectionId, objectKey)));
+    }
+
+    public CachedValue<SchemaObjectDetail> putSchemaObjectDetail(long connectionId, String objectKey, SchemaObjectDetail detail) {
+        CachedValue<SchemaObjectDetail> value = new CachedValue<>(detail, Instant.now());
+        schemaObjectDetails.put(new SchemaObjectDetailKey(connectionId, objectKey), value);
+        return value;
+    }
+
     public void evictConnection(long connectionId) {
         schemaCatalogs.invalidate(connectionId);
         metadataPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
@@ -121,6 +154,8 @@ public class MetadataCacheService {
         relations.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         ddls.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         rowIdentities.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
+        schemaObjectCatalogs.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
+        schemaObjectDetails.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
     }
 
     public void evictObject(long connectionId, String schemaName, String objectName) {
@@ -193,5 +228,11 @@ public class MetadataCacheService {
     }
 
     private record ObjectCatalogKey(long connectionId, String schemaName) {
+    }
+
+    private record SchemaObjectCatalogKey(long connectionId, String schemaName, String kind) {
+    }
+
+    private record SchemaObjectDetailKey(long connectionId, String objectKey) {
     }
 }

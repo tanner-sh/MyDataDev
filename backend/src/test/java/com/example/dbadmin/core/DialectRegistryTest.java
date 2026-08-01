@@ -16,7 +16,7 @@ class DialectRegistryTest {
         Map<String, Class<? extends DatabaseDialect>> expected = Map.ofEntries(
                 Map.entry("h2", H2Dialect.class),
                 Map.entry("mysql", MySqlDialect.class),
-                Map.entry("mariadb", MySqlDialect.class),
+                Map.entry("mariadb", MariaDbDialect.class),
                 Map.entry("postgresql", PostgreSqlDialect.class),
                 Map.entry("oracle", OracleDialect.class),
                 Map.entry("dm", DamengDialect.class),
@@ -51,6 +51,27 @@ class DialectRegistryTest {
         assertThat(dialect.capabilities().tableEdit()).isFalse();
         assertThat(dialect.capabilities().tableDesign()).isFalse();
         assertThat(dialect.capabilities().explain()).isFalse();
+        assertThat(dialect.capabilities().schemaObjects()).isEmpty();
+    }
+
+    @Test
+    void exposesTruthfulSchemaObjectCapabilities() {
+        DatabaseDialect mysql = registry.dialectFor(connection("mysql"));
+        DatabaseDialect maria = registry.dialectFor(connection("mariadb"));
+        DatabaseDialect sqlite = registry.dialectFor(connection("sqlite"));
+
+        assertThat(mysql.capabilities().schemaObjects()).extracting("kind")
+                .containsExactly("VIEW", "TRIGGER", "PROCEDURE", "FUNCTION");
+        assertThat(maria.capabilities().schemaObjects()).extracting("kind")
+                .containsExactly("VIEW", "SEQUENCE", "TRIGGER", "PROCEDURE", "FUNCTION");
+        assertThat(sqlite.capabilities().schemaObjects()).extracting("kind")
+                .containsExactly("VIEW", "TRIGGER");
+        assertThat(mysql.capabilities().schemaObjects().stream()
+                .filter(capability -> capability.kind().equals("PROCEDURE"))
+                .findFirst().orElseThrow().operations()).doesNotContain("REPLACE");
+        assertThat(maria.capabilities().schemaObjects().stream()
+                .filter(capability -> capability.kind().equals("PROCEDURE"))
+                .findFirst().orElseThrow().operations()).contains("REPLACE", "INVOKE");
     }
 
     private DbConnection connection(String dbType) {

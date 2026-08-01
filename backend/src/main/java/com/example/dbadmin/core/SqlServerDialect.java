@@ -15,7 +15,7 @@ public class SqlServerDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, false, false, List.of());
+        return new DatabaseCapabilities(true, true, false, false, List.of(), List.of(), SchemaObjectCapabilities.sqlServer());
     }
 
     @Override

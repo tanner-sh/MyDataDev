@@ -16,7 +16,7 @@ public class MySqlDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"));
+        return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mysql());
     }
 
     @Override
@@ -31,10 +31,7 @@ public class MySqlDialect extends DefaultDialect {
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
         String url = jdbcUrl == null ? "" : jdbcUrl.toLowerCase(Locale.ROOT);
-        return type.equals("mysql")
-                || type.equals("mariadb")
-                || url.startsWith("jdbc:mysql:")
-                || url.startsWith("jdbc:mariadb:");
+        return type.equals("mysql") || (!type.equals("mariadb") && url.startsWith("jdbc:mysql:"));
     }
 
     @Override

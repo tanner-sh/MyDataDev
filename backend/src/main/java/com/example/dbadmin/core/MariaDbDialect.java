@@ -5,16 +5,16 @@ import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 import java.util.List;
 import java.util.Locale;
 
-public class ClickHouseDialect extends DefaultDialect {
+public class MariaDbDialect extends MySqlDialect {
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
         String url = jdbcUrl == null ? "" : jdbcUrl.toLowerCase(Locale.ROOT);
-        return type.equals("clickhouse") || url.startsWith("jdbc:clickhouse:");
+        return type.equals("mariadb") || url.startsWith("jdbc:mariadb:");
     }
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, false, false, true, List.of(), List.of(), SchemaObjectCapabilities.clickHouse());
+        return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mariaDb());
     }
 }

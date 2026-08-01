@@ -1,9 +1,10 @@
-import { memo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Button, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { Connection, DbObject, Metadata } from '../types';
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
+import { SchemaObjectManager } from './SchemaObjectManager';
 
 const { Text } = Typography;
 
@@ -66,6 +67,18 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onRenameTable,
   onDropTable
 }: ResourceExplorerProps) {
+  const [schemaObjectRefreshToken, setSchemaObjectRefreshToken] = useState(0);
+  const managesViews = Boolean(selected?.capabilities.schemaObjects?.some((capability) => capability.kind === 'VIEW'));
+  const tableObjects = useMemo(
+    () => managesViews ? objects.filter((object) => !object.type.toUpperCase().includes('VIEW')) : objects,
+    [managesViews, objects]
+  );
+
+  function refreshAllObjects() {
+    setSchemaObjectRefreshToken((current) => current + 1);
+    onRefresh();
+  }
+
   return (
     <div className="resource-explorer">
       <div className="explorer-header">
@@ -88,7 +101,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           </Tooltip>
           <Tooltip title="刷新对象缓存">
             <Button type="text" size="small" icon={<ReloadOutlined />} loading={metadataLoading} disabled={!selected}
-                    aria-label="刷新对象缓存" onClick={onRefresh}>刷新</Button>
+                    aria-label="刷新对象缓存" onClick={refreshAllObjects}>刷新</Button>
           </Tooltip>
           {compactLayout && (
             <Tooltip title="关闭资源管理器">
@@ -131,7 +144,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           size="small"
           allowClear
           loading={metadataLoading && !metadataBlockingLoading}
-          placeholder="搜索表或视图"
+          placeholder="搜索数据库对象"
           disabled={!selected || metadataBlockingLoading}
           value={metadataQuery.keyword}
           onChange={(event) => onKeywordChange(event.target.value)}
@@ -149,10 +162,10 @@ export const ResourceExplorer = memo(function ResourceExplorer({
         ) : (
           <ObjectTree
             key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
-            objects={objects}
+            objects={tableObjects}
             activeObject={activeObject}
             keyword={metadataAppliedKeyword}
-            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表或视图' : `当前${namespaceLabel}暂无数据库对象`}
+            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
             structureLoadingKey={structureLoadingKey}
             hasMore={metadata?.hasMore}
             loadingMore={metadataLoading && !metadataBlockingLoading}
@@ -164,6 +177,15 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             tableLifecycleEnabled={tableLifecycleEnabled}
             onRenameTable={onRenameTable}
             onDropTable={onDropTable}
+          />
+        )}
+        {selected && !metadataBlockingLoading && (
+          <SchemaObjectManager
+            connection={selected}
+            schemaName={metadataQuery.schema || metadata?.selectedSchema}
+            keyword={metadataAppliedKeyword}
+            refreshToken={schemaObjectRefreshToken}
+            onOpenViewData={onOpenTable}
           />
         )}
         {metadataLoading && !metadataBlockingLoading && (

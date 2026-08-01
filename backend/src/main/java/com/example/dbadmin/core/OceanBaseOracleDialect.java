@@ -7,7 +7,7 @@ import java.util.List;
 public class OceanBaseOracleDialect extends OracleDialect {
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, true, true, List.of());
+        return new DatabaseCapabilities(true, true, true, true, List.of(), List.of(), SchemaObjectCapabilities.oracleFamily());
     }
 
     @Override

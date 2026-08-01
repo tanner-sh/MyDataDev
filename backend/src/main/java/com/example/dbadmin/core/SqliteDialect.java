@@ -19,7 +19,7 @@ public class SqliteDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, false, true, List.of());
+        return new DatabaseCapabilities(true, true, false, true, List.of(), List.of(), SchemaObjectCapabilities.sqlite());
     }
 
     @Override
