@@ -149,45 +149,49 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             onChange={(keys) => setVisibleColumnKeys(keys.length > 0 ? keys : [result.columns[0].key])}
           />
         )}
-        {result.page ? (
-          <>
-            <Text type="secondary">
-              {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`} · {result.elapsedMs}ms
-              {result.page.effectivePageSize < result.page.requestedPageSize ? ` · 服务端单批上限 ${result.page.effectivePageSize}` : ''}
-            </Text>
-            <Space size={4} className="result-range-navigation">
-              <Tooltip title="第一批"><span><Button size="small" icon={<VerticalLeftOutlined />} disabled={pagingLoading || !pagingEnabled || result.page.offset === 0} onClick={() => onPageChange?.(firstSqlPage(result.page!))} /></span></Tooltip>
-              <Tooltip title="上一批"><span><Button size="small" icon={<LeftOutlined />} disabled={pagingLoading || !pagingEnabled || !(result.page.previousOffsets?.length)} onClick={() => {
-                const navigation = previousSqlPage(result.page!);
-                if (navigation) onPageChange?.(navigation);
-              }} /></span></Tooltip>
-              <Text className="result-range-label">{sqlResultRangeLabel(result.page, rowCount)}</Text>
-              <Tooltip title="下一批"><span><Button size="small" icon={<RightOutlined />} disabled={pagingLoading || !pagingEnabled || !result.page.hasMore} onClick={() => {
-                const navigation = nextSqlPage(result.page!, rowCount);
-                if (navigation) onPageChange?.(navigation);
-              }} /></span></Tooltip>
-            </Space>
-            <Space.Compact size="small">
-              <Button size="small" disabled>单页行数</Button>
-              <InputNumber
-                size="small"
-                min={1}
-                step={100}
-                value={pageSizeDraft}
-                disabled={pagingLoading || !pagingEnabled}
-                aria-label="SQL 结果单页行数"
-                onChange={(value) => setPageSizeDraft(value || 500)}
-                onPressEnter={(event) => event.currentTarget.blur()}
-                onBlur={() => {
-                  const nextSize = Math.max(1, Math.round(pageSizeDraft || 500));
-                  if (nextSize !== result.page?.requestedPageSize) onPageChange?.(resizedSqlPage(nextSize));
-                }}
-              />
-            </Space.Compact>
-          </>
-        ) : (
-          <Text type="secondary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`} · {result.elapsedMs}ms（当前结果不支持翻页）</Text>
-        )}
+        <div className="result-pagination-main">
+          {result.page ? (
+            <>
+              <Text type="secondary" className="grid-pagination-summary">
+                {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`} · {result.elapsedMs}ms
+                {result.page.effectivePageSize < result.page.requestedPageSize ? ` · 服务端单批上限 ${result.page.effectivePageSize}` : ''}
+              </Text>
+              <div className="result-pagination-actions">
+                <Space size={4} className="result-range-navigation">
+                  <Tooltip title="第一批"><span><Button size="small" icon={<VerticalLeftOutlined />} disabled={pagingLoading || !pagingEnabled || result.page.offset === 0} onClick={() => onPageChange?.(firstSqlPage(result.page!))} /></span></Tooltip>
+                  <Tooltip title="上一批"><span><Button size="small" icon={<LeftOutlined />} disabled={pagingLoading || !pagingEnabled || !(result.page.previousOffsets?.length)} onClick={() => {
+                    const navigation = previousSqlPage(result.page!);
+                    if (navigation) onPageChange?.(navigation);
+                  }} /></span></Tooltip>
+                  <Text className="result-range-label">{sqlResultRangeLabel(result.page, rowCount)}</Text>
+                  <Tooltip title="下一批"><span><Button size="small" icon={<RightOutlined />} disabled={pagingLoading || !pagingEnabled || !result.page.hasMore} onClick={() => {
+                    const navigation = nextSqlPage(result.page!, rowCount);
+                    if (navigation) onPageChange?.(navigation);
+                  }} /></span></Tooltip>
+                </Space>
+                <Space.Compact size="small" className="result-page-size-control">
+                  <Button size="small" className="result-page-size-label" disabled>单页行数</Button>
+                  <InputNumber
+                    size="small"
+                    min={1}
+                    step={100}
+                    value={pageSizeDraft}
+                    disabled={pagingLoading || !pagingEnabled}
+                    aria-label="SQL 结果单页行数"
+                    onChange={(value) => setPageSizeDraft(value || 500)}
+                    onPressEnter={(event) => event.currentTarget.blur()}
+                    onBlur={() => {
+                      const nextSize = Math.max(1, Math.round(pageSizeDraft || 500));
+                      if (nextSize !== result.page?.requestedPageSize) onPageChange?.(resizedSqlPage(nextSize));
+                    }}
+                  />
+                </Space.Compact>
+              </div>
+            </>
+          ) : (
+            <Text type="secondary" className="grid-pagination-summary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`} · {result.elapsedMs}ms（当前结果不支持翻页）</Text>
+          )}
+        </div>
       </div>
     </div>
   );

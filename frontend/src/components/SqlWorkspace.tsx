@@ -1,5 +1,5 @@
 import type { OnMount } from '@monaco-editor/react';
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, FileTextOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -7,10 +7,10 @@ import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, S
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
+import { SqlEditorSurface } from './SqlEditorSurface';
 
 const { Header } = Layout;
 const { Text } = Typography;
-const SqlEditor = lazy(() => import('./SqlEditor'));
 const EDITOR_OPTIONS = {
   minimap: { enabled: false },
   fontSize: 14,
@@ -45,11 +45,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
   onTabDuplicate: (tabId: string, liveSql?: string) => void;
   onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
   onEditorMount: OnMount;
-  onFormat: () => void;
-  onExplain: () => void;
-  onExecute: () => void;
+  onFormat: (liveSql?: string) => void;
+  onExplain: (liveSql?: string) => void;
+  onExecute: (liveSql?: string) => void;
   onCancel: () => void;
-  onExport: (format: ExportFormat) => void;
+  onExport: (format: ExportFormat, liveSql?: string) => void;
   onOpenHistory: () => void;
   onSqlFileSelect: (file: File) => void;
   onOpenSqlFileTasks: () => void;
@@ -79,7 +79,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
   useEffect(() => {
     draftRef.current = activeTab.sql;
     setDraftSql(activeTab.sql);
-  }, [activeTabId]);
+  }, [activeTab.sql, activeTabId]);
 
   useEffect(() => () => {
     if (draftCommitTimerRef.current != null) window.clearTimeout(draftCommitTimerRef.current);
@@ -160,7 +160,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
       }
       if (key === 'explain') {
         commitDraft();
-        onExplain();
+        onExplain(draftRef.current);
         return;
       }
       if (key === 'rename-tab') {
@@ -174,7 +174,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
       }
       if (key.startsWith('export:')) {
         commitDraft();
-        onExport(key.slice('export:'.length) as ExportFormat);
+        onExport(key.slice('export:'.length) as ExportFormat, draftRef.current);
       }
     }
   };
@@ -189,7 +189,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
         <div className="sql-toolbar-actions">
           <Space size={4} className="sql-toolbar-group">
             <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
-              <Button className="sql-toolbar-button" size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(); }}>
+              <Button className="sql-toolbar-button" size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(draftRef.current); }}>
                 <span className="sql-toolbar-label">格式化</span>
               </Button>
             </Tooltip>
@@ -215,7 +215,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
                   <span className="sql-toolbar-label">处理中</span>
                 </Button>
               ) : (
-                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(); }}>
+                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
                   <span className="sql-toolbar-label">执行</span>
                 </Button>
               )}
@@ -264,17 +264,17 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
       />
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         <div className="editor" style={{ flexBasis: `${splitLimits.value * 100}%` }}>
-          <Suspense fallback={<div className="table-viewport-loading">正在加载 SQL 编辑器…</div>}>
-            <SqlEditor
-              height="100%"
-              language="sql"
-              value={draftSql}
-              onMount={onEditorMount}
-              onChange={(value) => updateDraft(value || '')}
-              theme={themeMode === 'dark' ? 'vs-dark' : 'vs'}
-              options={EDITOR_OPTIONS}
-            />
-          </Suspense>
+          <SqlEditorSurface
+            connectionSelected={Boolean(selected)}
+            value={draftSql}
+            themeMode={themeMode}
+            options={EDITOR_OPTIONS}
+            executeDisabled={!selected || loading}
+            onMount={onEditorMount}
+            onChange={updateDraft}
+            onFormat={() => { commitDraft(); onFormat(draftRef.current); }}
+            onExecute={() => { commitDraft(); onExecute(draftRef.current); }}
+          />
         </div>
         <PaneResizer
           direction="vertical"

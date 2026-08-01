@@ -875,13 +875,13 @@ export default function App() {
     }
   }
 
-  async function execute(path = '/sql/execute', productionConfirmation?: string) {
+  async function execute(path = '/sql/execute', productionConfirmation?: string, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
       showInfo('请先选择一个数据库连接');
       return;
     }
-    const target = sqlExecutionTarget();
+    const target = sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
       return;
@@ -1020,11 +1020,11 @@ export default function App() {
     }
   }
 
-  async function formatSql() {
+  async function formatSql(liveSql?: string) {
     const editor = editorRef.current;
     const model = editor?.getModel();
     const modelVersion = model?.getVersionId();
-    const currentSql = model?.getValue() ?? activeSqlTab.sql;
+    const currentSql = model?.getValue() ?? liveSql ?? activeSqlTab.sql;
     const selection = editor?.getSelection();
     const cursor = model && editor
       ? model.getOffsetAt(editor.getPosition() || { lineNumber: 1, column: 1 })
@@ -1112,13 +1112,13 @@ export default function App() {
     }
   }
 
-  async function exportSql(format: ExportFormat) {
+  async function exportSql(format: ExportFormat, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
       showInfo('请先选择一个数据库连接');
       return;
     }
-    const target = sqlExecutionTarget();
+    const target = sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要导出的 SQL', statusKind: 'info' });
       return;
@@ -1302,7 +1302,7 @@ export default function App() {
     setActiveSqlTabId(duplicate.id);
   }
 
-  function sqlExecutionTarget() {
+  function sqlExecutionTarget(liveSql?: string) {
     const editor = editorRef.current;
     const selection = editor?.getSelection();
     const model = editor?.getModel();
@@ -1322,7 +1322,7 @@ export default function App() {
     // re-rendering Monaco on every keystroke. Always read the live model here:
     // React state may still contain the last committed draft when a toolbar
     // action or Ctrl/Cmd+Enter is triggered.
-    return { sql: model?.getValue() ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
+    return { sql: model?.getValue() ?? liveSql ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
   }
 
   function selectSqlFile(file: File) {
@@ -2022,11 +2022,11 @@ export default function App() {
     updateSqlTab(tabId, { sql });
   });
   const mountSqlEditorEvent = useStableEvent<Parameters<OnMount>, ReturnType<OnMount>>((...args) => handleEditorMount(...args));
-  const formatSqlEvent = useStableEvent(() => formatSql());
-  const explainSqlEvent = useStableEvent(() => execute('/sql/explain'));
-  const executeSqlEvent = useStableEvent(() => execute());
+  const formatSqlEvent = useStableEvent((liveSql?: string) => formatSql(liveSql));
+  const explainSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/explain', undefined, liveSql));
+  const executeSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/execute', undefined, liveSql));
   const cancelSqlEvent = useStableEvent(() => cancelSqlExecution());
-  const exportSqlEvent = useStableEvent((format: ExportFormat) => exportSql(format));
+  const exportSqlEvent = useStableEvent((format: ExportFormat, liveSql?: string) => exportSql(format, liveSql));
   const openSqlHistoryEvent = useStableEvent(() => openSqlHistory());
   const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
   const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());

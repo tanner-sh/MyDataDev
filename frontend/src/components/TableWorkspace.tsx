@@ -170,8 +170,8 @@ export const TableWorkspace = memo(function TableWorkspace({
         <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} onEdit={onEdit} onDelete={onDelete} />
       </div>
       <div className="grid-pagination table-pagination">
-        <Text type="secondary">第 {page + 1} 页 · 本页 {tableRows.length} 行</Text>
-        <Space size={8} wrap={false}>
+        <Text type="secondary" className="grid-pagination-summary">第 {page + 1} 页 · 本页 {tableRows.length} 行</Text>
+        <Space size={8} wrap={false} className="table-pagination-actions">
           <Text type="secondary">每页</Text>
           <Select
             size="small"
