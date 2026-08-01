@@ -17,6 +17,7 @@ import {
 } from './TableDefinitionEditor';
 import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
+import { TypedConfirmationFields } from './TypedConfirmationFields';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -617,14 +618,11 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
         onOk={executeDesign}
         onCancel={() => { if (!submitting) setConfirmOpen(false); }}
       >
-        <Alert type="warning" showIcon title={`请输入完整表名 ${tableName} 后执行。DDL 可能不可回滚。`} />
-        <Input className="design-confirm-input" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={tableName} />
-        {productionConfirmationText && (
-          <>
-            <Alert type="error" showIcon title={`生产连接保护：还需输入连接名 ${productionConfirmationText}。`} />
-            <Input className="design-confirm-input" value={productionConfirmation} onChange={(event) => setProductionConfirmation(event.target.value)} placeholder={productionConfirmationText} />
-          </>
-        )}
+        <Alert type="warning" showIcon title="请核对最终 DDL" description="结构变更可能不可回滚。" />
+        <TypedConfirmationFields
+          target={{ expected: tableName, value: confirmation, ariaLabel: '表结构变更确认文本', onChange: setConfirmation }}
+          production={productionConfirmationText ? { expected: productionConfirmationText, value: productionConfirmation, ariaLabel: '表结构变更生产确认', onChange: setProductionConfirmation } : undefined}
+        />
         <pre className="design-preview">{preview.length === 0 ? '没有待执行 DDL。' : preview.join('\n')}</pre>
       </Modal>
     </div>

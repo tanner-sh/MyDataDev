@@ -30,6 +30,8 @@ import type { DbObject } from '../types';
 
 export type ObjectTreeProps = {
   objects: DbObject[];
+  embedded?: boolean;
+  showTypeGroups?: boolean;
   activeObject?: Pick<DbObject, 'schemaName' | 'name'> | null;
   keyword?: string;
   emptyDescription?: string;
@@ -48,12 +50,12 @@ export type ObjectTreeProps = {
 
 type AggregatedIndex = { name: string; columns: string[]; unique: boolean };
 type FlatRow =
-  | { id: string; kind: 'group'; level: 0; key: Key; label: string; count: number; expanded: boolean }
-  | { id: string; kind: 'object'; level: 1; key: Key; object: DbObject; expanded: boolean; selected: boolean }
-  | { id: string; kind: 'structure-group'; level: 2; key: Key; object: DbObject; structureKind: 'columns' | 'indexes'; label: string; count: number; expanded: boolean }
-  | { id: string; kind: 'column'; level: 3; object: DbObject; name: string; meta: string }
-  | { id: string; kind: 'index'; level: 3; object: DbObject; name: string; meta: string }
-  | { id: string; kind: 'message'; level: 2; object: DbObject; message: 'loading' | 'error' | 'empty' };
+  | { id: string; kind: 'group'; level: number; key: Key; label: string; count: number; expanded: boolean }
+  | { id: string; kind: 'object'; level: number; key: Key; object: DbObject; expanded: boolean; selected: boolean }
+  | { id: string; kind: 'structure-group'; level: number; key: Key; object: DbObject; structureKind: 'columns' | 'indexes'; label: string; count: number; expanded: boolean }
+  | { id: string; kind: 'column'; level: number; object: DbObject; name: string; meta: string }
+  | { id: string; kind: 'index'; level: number; object: DbObject; name: string; meta: string }
+  | { id: string; kind: 'message'; level: number; object: DbObject; message: 'loading' | 'error' | 'empty' };
 
 const ROW_HEIGHT = 30;
 const OVERSCAN = 10;
@@ -105,6 +107,8 @@ function TreeIcon({ children }: { children?: ReactNode }) {
 
 export const ObjectTree = memo(function ObjectTree({
   objects,
+  embedded = false,
+  showTypeGroups = true,
   activeObject,
   keyword,
   emptyDescription = '当前 Schema 暂无数据库对象',
@@ -160,14 +164,15 @@ export const ObjectTree = memo(function ObjectTree({
     return matched ? databaseObjectNodeKey(matched) : null;
   }, [activeObject, objects]);
 
-  const rows = useMemo(() => flattenRows(groups, groupKeys, expandedKeys, selectedObjectKey, structureLoadingKey, structureLoadingKeys, structureErrors), [
+  const rows = useMemo(() => flattenRows(groups, groupKeys, expandedKeys, selectedObjectKey, structureLoadingKey, structureLoadingKeys, structureErrors, showTypeGroups), [
     expandedKeys,
     groupKeys,
     groups,
     selectedObjectKey,
     structureErrors,
     structureLoadingKey,
-    structureLoadingKeys
+    structureLoadingKeys,
+    showTypeGroups
   ]);
 
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
@@ -235,6 +240,15 @@ export const ObjectTree = memo(function ObjectTree({
   }
 
   if (objects.length === 0) return <Empty className="object-tree-empty" image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyDescription} />;
+
+  if (embedded) {
+    return (
+      <div className="object-tree object-tree-static" role="tree" aria-label="数据库对象">
+        {rows.map((row) => <div key={row.id}>{renderRow(row)}</div>)}
+        {loadingMore && <div className="object-tree-load-more"><Spin size="small" /> 正在加载更多对象…</div>}
+      </div>
+    );
+  }
 
   return (
     <div ref={viewportRef} className="object-tree-viewport object-tree object-tree-virtual" role="tree" aria-label="数据库对象" onScroll={handleScroll}>
@@ -314,26 +328,30 @@ function flattenRows(
   selectedObjectKey: string | null,
   structureLoadingKey: string | null | undefined,
   structureLoadingKeys: Set<string>,
-  structureErrors: Set<string>
+  structureErrors: Set<string>,
+  showTypeGroups: boolean
 ) {
   const rows: FlatRow[] = [];
   groups.forEach((group, groupIndex) => {
     const groupKey = groupKeys[groupIndex];
-    const groupExpanded = expandedKeys.includes(groupKey);
-    rows.push({ id: String(groupKey), kind: 'group', level: 0, key: groupKey, label: group.label, count: group.objects.length, expanded: groupExpanded });
+    const groupExpanded = !showTypeGroups || expandedKeys.includes(groupKey);
+    if (showTypeGroups) rows.push({ id: String(groupKey), kind: 'group', level: 0, key: groupKey, label: group.label, count: group.objects.length, expanded: groupExpanded });
     if (!groupExpanded) return;
+    const objectLevel = showTypeGroups ? 1 : 0;
     group.objects.forEach((object) => {
       const objectKey = databaseObjectNodeKey(object);
       const objectExpanded = expandedKeys.includes(objectKey);
-      rows.push({ id: objectKey, kind: 'object', level: 1, key: objectKey, object, expanded: objectExpanded, selected: selectedObjectKey === objectKey });
+      rows.push({ id: objectKey, kind: 'object', level: objectLevel, key: objectKey, object, expanded: objectExpanded, selected: selectedObjectKey === objectKey });
       if (!objectExpanded) return;
+      const structureLevel = objectLevel + 1;
+      const leafLevel = structureLevel + 1;
       const identity = objectStructureKey(object);
       if (structureLoadingKey === identity || structureLoadingKeys.has(identity)) {
-        rows.push({ id: `${objectKey}:loading`, kind: 'message', level: 2, object, message: 'loading' });
+        rows.push({ id: `${objectKey}:loading`, kind: 'message', level: structureLevel, object, message: 'loading' });
         return;
       }
       if (structureErrors.has(identity)) {
-        rows.push({ id: `${objectKey}:error`, kind: 'message', level: 2, object, message: 'error' });
+        rows.push({ id: `${objectKey}:error`, kind: 'message', level: structureLevel, object, message: 'error' });
         return;
       }
       let hasStructure = false;
@@ -341,18 +359,18 @@ function flattenRows(
         hasStructure = true;
         const key = `${objectKey}:columns`;
         const expanded = expandedKeys.includes(key);
-        rows.push({ id: key, kind: 'structure-group', level: 2, key, object, structureKind: 'columns', label: '字段', count: object.columns.length, expanded });
-        if (expanded) object.columns.slice().sort((left, right) => (left.ordinalPosition ?? Number.MAX_SAFE_INTEGER) - (right.ordinalPosition ?? Number.MAX_SAFE_INTEGER)).forEach((column) => rows.push({ id: `${objectKey}:column:${encodeURIComponent(column.name)}`, kind: 'column', level: 3, object, name: column.name, meta: column.type }));
+        rows.push({ id: key, kind: 'structure-group', level: structureLevel, key, object, structureKind: 'columns', label: '字段', count: object.columns.length, expanded });
+        if (expanded) object.columns.slice().sort((left, right) => (left.ordinalPosition ?? Number.MAX_SAFE_INTEGER) - (right.ordinalPosition ?? Number.MAX_SAFE_INTEGER)).forEach((column) => rows.push({ id: `${objectKey}:column:${encodeURIComponent(column.name)}`, kind: 'column', level: leafLevel, object, name: column.name, meta: column.type }));
       }
       const indexes = aggregateIndexes(object);
       if (indexes.length > 0) {
         hasStructure = true;
         const key = `${objectKey}:indexes`;
         const expanded = expandedKeys.includes(key);
-        rows.push({ id: key, kind: 'structure-group', level: 2, key, object, structureKind: 'indexes', label: '索引', count: indexes.length, expanded });
-        if (expanded) indexes.forEach((index) => rows.push({ id: `${objectKey}:index:${encodeURIComponent(index.name)}`, kind: 'index', level: 3, object, name: index.name, meta: `${index.unique ? '唯一 · ' : ''}${index.columns.join(', ')}` }));
+        rows.push({ id: key, kind: 'structure-group', level: structureLevel, key, object, structureKind: 'indexes', label: '索引', count: indexes.length, expanded });
+        if (expanded) indexes.forEach((index) => rows.push({ id: `${objectKey}:index:${encodeURIComponent(index.name)}`, kind: 'index', level: leafLevel, object, name: index.name, meta: `${index.unique ? '唯一 · ' : ''}${index.columns.join(', ')}` }));
       }
-      if (!hasStructure) rows.push({ id: `${objectKey}:empty`, kind: 'message', level: 2, object, message: 'empty' });
+      if (!hasStructure) rows.push({ id: `${objectKey}:empty`, kind: 'message', level: structureLevel, object, message: 'empty' });
     });
   });
   return rows;

@@ -1,6 +1,6 @@
-import { memo, useMemo, useState } from 'react';
-import { Button, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { CloseOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Button, Collapse, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { CaretRightOutlined, CloseOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import type { Connection, DbObject, Metadata } from '../types';
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
@@ -68,16 +68,32 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onDropTable
 }: ResourceExplorerProps) {
   const [schemaObjectRefreshToken, setSchemaObjectRefreshToken] = useState(0);
+  const [tableExpanded, setTableExpanded] = useState(true);
+  const tableExpandedBeforeSearchRef = useRef(true);
+  const searchExpansionActiveRef = useRef(false);
   const managesViews = Boolean(selected?.capabilities.schemaObjects?.some((capability) => capability.kind === 'VIEW'));
   const tableObjects = useMemo(
     () => managesViews ? objects.filter((object) => !object.type.toUpperCase().includes('VIEW')) : objects,
     [managesViews, objects]
   );
+  const tableGroupLabel = managesViews ? '表' : '表与视图';
 
   function refreshAllObjects() {
     setSchemaObjectRefreshToken((current) => current + 1);
     onRefresh();
   }
+
+  useEffect(() => {
+    const searching = Boolean(metadataAppliedKeyword.trim());
+    if (searching && !searchExpansionActiveRef.current) {
+      tableExpandedBeforeSearchRef.current = tableExpanded;
+      searchExpansionActiveRef.current = true;
+      setTableExpanded(true);
+    } else if (!searching && searchExpansionActiveRef.current) {
+      searchExpansionActiveRef.current = false;
+      setTableExpanded(tableExpandedBeforeSearchRef.current);
+    }
+  }, [metadataAppliedKeyword, tableExpanded]);
 
   return (
     <div className="resource-explorer">
@@ -87,18 +103,6 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <Text type="secondary">数据库对象</Text>
         </div>
         <Space size={2}>
-          <Tooltip title={tableLifecycleEnabled ? '在当前命名空间新建表' : '当前连接不支持表对象管理'}>
-            <Button
-              type="text"
-              size="small"
-              icon={<PlusOutlined />}
-              disabled={!selected || !tableLifecycleEnabled || metadataBlockingLoading}
-              aria-label="新建表"
-              onClick={onCreateTable}
-            >
-              新建表
-            </Button>
-          </Tooltip>
           <Tooltip title="刷新对象缓存">
             <Button type="text" size="small" icon={<ReloadOutlined />} loading={metadataLoading} disabled={!selected}
                     aria-label="刷新对象缓存" onClick={refreshAllObjects}>刷新</Button>
@@ -153,32 +157,58 @@ export const ResourceExplorer = memo(function ResourceExplorer({
       </div>
 
       {connectionsError && <div className="explorer-error" role="alert">{connectionsError}</div>}
-      <div className="object-tree-scroll" aria-busy={metadataLoading}>
-        {metadataBlockingLoading ? (
-          <div className="explorer-loading" role="status">
-            <Spin size="small" />
-            <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
-          </div>
-        ) : (
-          <ObjectTree
-            key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
-            objects={tableObjects}
-            activeObject={activeObject}
-            keyword={metadataAppliedKeyword}
-            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
-            structureLoadingKey={structureLoadingKey}
-            hasMore={metadata?.hasMore}
-            loadingMore={metadataLoading && !metadataBlockingLoading}
-            onLoadMore={onLoadMore}
-            onLoadStructure={onLoadStructure}
-            onOpenDetail={onOpenDetail}
-            onOpenTable={onOpenTable}
-            onBackupTable={onBackupTable}
-            tableLifecycleEnabled={tableLifecycleEnabled}
-            onRenameTable={onRenameTable}
-            onDropTable={onDropTable}
-          />
-        )}
+      <div className="object-navigation-scroll" aria-busy={metadataLoading}>
+        <Collapse
+          className="database-object-groups table-object-group"
+          size="small"
+          ghost
+          activeKey={tableExpanded ? ['TABLE'] : []}
+          expandIcon={({ isActive }) => <CaretRightOutlined rotate={isActive ? 90 : 0} />}
+          onChange={(keys) => setTableExpanded((Array.isArray(keys) ? keys : [keys]).includes('TABLE'))}
+          items={[{
+            key: 'TABLE',
+            label: <Space size={6}><TableOutlined /><span>{tableGroupLabel}</span><span className="object-tree-count">{tableObjects.length}</span></Space>,
+            extra: tableLifecycleEnabled ? (
+              <Tooltip title="在当前命名空间新建表">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  aria-label="新建表"
+                  disabled={metadataBlockingLoading}
+                  onClick={(event) => { event.stopPropagation(); onCreateTable(); }}
+                />
+              </Tooltip>
+            ) : undefined,
+            children: metadataBlockingLoading ? (
+              <div className="explorer-loading" role="status">
+                <Spin size="small" />
+                <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
+              </div>
+            ) : (
+              <ObjectTree
+                key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
+                embedded
+                showTypeGroups={false}
+                objects={tableObjects}
+                activeObject={activeObject}
+                keyword={metadataAppliedKeyword}
+                emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
+                structureLoadingKey={structureLoadingKey}
+                hasMore={metadata?.hasMore}
+                loadingMore={metadataLoading && !metadataBlockingLoading}
+                onLoadMore={onLoadMore}
+                onLoadStructure={onLoadStructure}
+                onOpenDetail={onOpenDetail}
+                onOpenTable={onOpenTable}
+                onBackupTable={onBackupTable}
+                tableLifecycleEnabled={tableLifecycleEnabled}
+                onRenameTable={onRenameTable}
+                onDropTable={onDropTable}
+              />
+            )
+          }]}
+        />
         {selected && !metadataBlockingLoading && (
           <SchemaObjectManager
             connection={selected}
@@ -198,7 +228,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
       <div className="explorer-footer">
         {metadata?.cachedAt && (
           <span className="metadata-cache-status">
-            已展示 {objects.length}/{metadata.totalObjectsExact === false ? `至少 ${metadata.totalObjects}` : metadata.totalObjects} · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
+            已加载 {tableObjects.length} 个表对象 · {metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · {new Date(metadata.cachedAt).toLocaleTimeString()}
           </span>
         )}
         {metadata?.hasMore && (

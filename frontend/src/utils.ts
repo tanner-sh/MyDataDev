@@ -4,7 +4,7 @@ import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from './constants';
 import type { BackupTask, LegacyBackupScope, RowChange, SqlTab, TableRow } from './types';
 
 export function createSqlTab(index: number): SqlTab {
-  return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', results: [], message: '' };
+  return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', dirty: false, results: [], message: '' };
 }
 
 export function sleep(ms: number) {

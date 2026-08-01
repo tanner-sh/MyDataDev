@@ -24,8 +24,9 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
-  selected: Connection | null;
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
+  selected: Connection | null;
+  sessionConnectionId: number | null;
   tabs: SqlTab[];
   activeTabId: string;
   activeTab: SqlTab;
@@ -39,8 +40,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
   onEditorSplitRatioChange: (value: number) => void;
   onTabChange: (tabId: string) => void;
   onTabAdd: () => void;
-  onTabClose: (tabId: string) => void;
-  onSqlChange: (sql: string) => void;
+  onTabClose: (tabId: string, liveSql?: string) => void;
+  onTabRename: (tabId: string) => void;
+  onTabDuplicate: (tabId: string, liveSql?: string) => void;
+  onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
   onEditorMount: OnMount;
   onFormat: () => void;
   onExplain: () => void;
@@ -55,6 +58,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const draftRef = useRef(activeTab.sql);
+  const draftCommitTimerRef = useRef<number | null>(null);
   const sqlFileInputRef = useRef<HTMLInputElement>(null);
   const onSqlChangeRef = useRef(onSqlChange);
   const onResultPageChangeRef = useRef(onResultPageChange);
@@ -75,19 +79,29 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
   useEffect(() => {
     draftRef.current = activeTab.sql;
     setDraftSql(activeTab.sql);
-  }, [activeTabId, activeTab.sql]);
+  }, [activeTabId]);
 
   useEffect(() => () => {
-    onSqlChangeRef.current(draftRef.current);
-  }, [activeTabId]);
+    if (draftCommitTimerRef.current != null) window.clearTimeout(draftCommitTimerRef.current);
+    onSqlChangeRef.current(sessionConnectionId, activeTabId, draftRef.current);
+  }, [activeTabId, sessionConnectionId]);
 
   function updateDraft(value: string) {
     draftRef.current = value;
     setDraftSql(value);
+    if (draftCommitTimerRef.current != null) window.clearTimeout(draftCommitTimerRef.current);
+    draftCommitTimerRef.current = window.setTimeout(() => {
+      draftCommitTimerRef.current = null;
+      onSqlChangeRef.current(sessionConnectionId, activeTabId, draftRef.current);
+    }, 300);
   }
 
   function commitDraft() {
-    onSqlChangeRef.current(draftRef.current);
+    if (draftCommitTimerRef.current != null) {
+      window.clearTimeout(draftCommitTimerRef.current);
+      draftCommitTimerRef.current = null;
+    }
+    onSqlChangeRef.current(sessionConnectionId, activeTabId, draftRef.current);
   }
 
   const activeResultKey = activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined);
@@ -130,7 +144,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
         icon: <FundProjectionScreenOutlined />,
         label: '查看执行计划',
         disabled: !selected || loading || !selected.capabilities?.explain
-      }
+      },
+      { type: 'divider' },
+      { key: 'rename-tab', label: '重命名当前标签' },
+      { key: 'duplicate-tab', label: '复制当前标签' }
     ],
     onClick: ({ key }) => {
       if (key === 'sql-file') {
@@ -144,6 +161,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
       if (key === 'explain') {
         commitDraft();
         onExplain();
+        return;
+      }
+      if (key === 'rename-tab') {
+        onTabRename(activeTabId);
+        return;
+      }
+      if (key === 'duplicate-tab') {
+        commitDraft();
+        onTabDuplicate(activeTabId, draftRef.current);
         return;
       }
       if (key.startsWith('export:')) {
@@ -218,12 +244,23 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, tabs, activeT
           if (action === 'add') {
             commitDraft();
             onTabAdd();
-          } else {
-            onTabClose(String(targetKey));
-          }
+          } else {
+            const tabId = String(targetKey);
+            if (tabId === activeTabId) commitDraft();
+            onTabClose(tabId, tabId === activeTabId ? draftRef.current : undefined);
+          }
         }}
         hideAdd={false}
-        items={tabs.map((tab) => ({ key: tab.id, label: tab.title, closable: tabs.length > 1 }))}
+        items={tabs.map((tab) => ({
+          key: tab.id,
+          label: (
+            <span onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onTabRename(tab.id); }}>
+              {tab.dirty && <span aria-label="包含会话草稿">● </span>}
+              {tab.title}
+            </span>
+          ),
+          closable: tabs.length > 1
+        }))}
       />
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         <div className="editor" style={{ flexBasis: `${splitLimits.value * 100}%` }}>

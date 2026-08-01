@@ -13,9 +13,11 @@ import { withLoadedObjectStructure } from './objectTreeModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
+import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
+import { TypedConfirmationFields } from './components/TypedConfirmationFields';
 import type { TableLifecycleAction } from './components/TableLifecyclePanel';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 import { useStableEvent } from './hooks/useStableEvent';
@@ -93,8 +95,9 @@ export default function App() {
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
   const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
-  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', results: [], message: '' }]);
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }]);
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
+  const [sqlSessionRevision, setSqlSessionRevision] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({ kind: 'idle', text: '就绪' });
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
@@ -159,6 +162,9 @@ export default function App() {
   const objectDetailAbortRef = useRef<AbortController | null>(null);
   const sqlExecutionIdRef = useRef<string | null>(null);
   const sqlBusyRef = useRef(false);
+  const sqlTabsRef = useRef(sqlTabs);
+  const activeSqlTabIdRef = useRef(activeSqlTabId);
+  const sqlSessionConnectionIdRef = useRef<number | null>(null);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
@@ -186,6 +192,8 @@ export default function App() {
   }, [activeObjectDetail, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
   const pendingChanges = useMemo(() => buildChanges(tableRows, tableData?.keyColumns || []), [tableRows, tableData]);
   const activeSqlTab = useMemo(() => sqlTabs.find((tab) => tab.id === activeSqlTabId) || sqlTabs[0], [activeSqlTabId, sqlTabs]);
+  sqlTabsRef.current = sqlTabs;
+  activeSqlTabIdRef.current = activeSqlTabId;
   const connectionFormDirty = isConnectionEditorDirty(connectionEditor);
   const antThemeConfig = useMemo(() => ({
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
@@ -210,6 +218,25 @@ export default function App() {
     document.documentElement.dataset.theme = layoutPreferences.themeMode;
     document.documentElement.style.colorScheme = layoutPreferences.themeMode;
   }, [layoutPreferences.themeMode]);
+
+  useEffect(() => {
+    const nextConnectionId = selected?.id ?? null;
+    activateSqlSession(nextConnectionId, false);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    const connectionId = selected?.id ?? null;
+    const timer = window.setTimeout(() => {
+      writeSqlSession(connectionId, sqlTabs, activeSqlTabId);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [activeSqlTabId, selected?.id, sqlTabs]);
+
+  useEffect(() => {
+    const persist = () => persistCurrentSqlSession(sqlSessionConnectionIdRef.current);
+    window.addEventListener('pagehide', persist);
+    return () => window.removeEventListener('pagehide', persist);
+  }, []);
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -310,10 +337,10 @@ export default function App() {
       modalApi.confirm({
         title: `确认在生产连接上${action}`,
         content: (
-          <Space orientation="vertical" className="full-width">
-            <Text>请输入连接名 <Text code>{selected.name}</Text> 以确认本次生产库操作。</Text>
-            <Input autoFocus placeholder={selected.name} onChange={(event) => { input = event.target.value; }} />
-          </Space>
+          <TypedConfirmationFields
+            autoFocus="production"
+            production={{ expected: selected.name, ariaLabel: '输入生产连接名确认操作', onChange: (value) => { input = value; } }}
+          />
         ),
         okText: '确认执行',
         cancelText: '取消',
@@ -539,6 +566,7 @@ export default function App() {
           applyConnectionSelection(nextConnection);
         } else {
           invalidateConnectionRequests();
+          activateSqlSession(null, true);
           setSelected(null);
           writeSelectedConnectionId(null);
           setMetadata(null);
@@ -565,6 +593,7 @@ export default function App() {
   function applyConnectionSelection(connection: Connection) {
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
+    activateSqlSession(connection.id, true);
     setSelected(connection);
     writeSelectedConnectionId(connection.id);
     setMetadata(null);
@@ -1136,10 +1165,46 @@ export default function App() {
   }
 
   function updateActiveSqlTab(patch: Partial<SqlTab>) {
+    updateSqlTab(activeSqlTab.id, patch);
+  }
+
+  function updateSqlTab(targetId: string, patch: Partial<SqlTab>) {
     setSqlTabs((tabs) => enforceResultBudget(
-      tabs.map((tab) => tab.id === activeSqlTab.id ? { ...tab, ...patch } : tab),
-      activeSqlTab.id
+      tabs.map((tab) => {
+        if (tab.id !== targetId) return tab;
+        const sqlChanged = patch.sql !== undefined && patch.sql !== tab.sql;
+        return { ...tab, ...patch, dirty: patch.dirty ?? (sqlChanged ? true : tab.dirty) };
+      }),
+      targetId
     ));
+  }
+
+  function persistCurrentSqlSession(connectionId: number | null) {
+    const liveSql = editorRef.current?.getValue();
+    const tabs = sqlTabsRef.current.map((tab) => tab.id === activeSqlTabIdRef.current && liveSql !== undefined && liveSql !== tab.sql
+      ? { ...tab, sql: liveSql, dirty: true }
+      : tab);
+    writeSqlSession(connectionId, tabs, activeSqlTabIdRef.current);
+  }
+
+  function activateSqlSession(nextConnectionId: number | null, captureLiveEditor: boolean) {
+    const previousConnectionId = sqlSessionConnectionIdRef.current;
+    if (previousConnectionId === nextConnectionId) return;
+    if (captureLiveEditor) {
+      persistCurrentSqlSession(previousConnectionId);
+    } else {
+      writeSqlSession(previousConnectionId, sqlTabsRef.current, activeSqlTabIdRef.current);
+    }
+    const restored = readSqlSession(nextConnectionId);
+    const nextTabs = restored?.tabs || [{ id: `query-${Date.now()}-1`, title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }];
+    const nextActiveTabId = restored?.activeTabId || nextTabs[0].id;
+    sqlSessionConnectionIdRef.current = nextConnectionId;
+    sqlTabSeqRef.current = Math.max(1, nextTabs.length);
+    sqlTabsRef.current = nextTabs;
+    activeSqlTabIdRef.current = nextActiveTabId;
+    setSqlTabs(nextTabs);
+    setActiveSqlTabId(nextActiveTabId);
+    setSqlSessionRevision((current) => current + 1);
   }
 
   function addSqlTab() {
@@ -1154,9 +1219,32 @@ export default function App() {
     setActiveSqlTabId(tab.id);
   }
 
-  function closeSqlTab(targetId: string) {
-    setSqlTabs((tabs) => {
-      if (tabs.length === 1) {
+  function closeSqlTab(targetId: string, liveSql?: string) {
+    const current = sqlTabs.find((tab) => tab.id === targetId);
+    if (!current || sqlTabs.length === 1) return;
+    const target = liveSql !== undefined && liveSql !== current.sql
+      ? { ...current, sql: liveSql, dirty: true }
+      : current;
+    if (target !== current) {
+      setSqlTabs((tabs) => tabs.map((tab) => tab.id === targetId ? target : tab));
+    }
+    if (!target.dirty) {
+      removeSqlTab(targetId);
+      return;
+    }
+    modalApi.confirm({
+      title: `关闭“${target.title}”？`,
+      content: '该标签包含修改过的 SQL，关闭后当前会话内的草稿将被删除。',
+      okText: '关闭标签',
+      cancelText: '继续编辑',
+      okButtonProps: { danger: true },
+      onOk: () => removeSqlTab(targetId)
+    });
+  }
+
+  function removeSqlTab(targetId: string) {
+    setSqlTabs((tabs) => {
+      if (tabs.length === 1) {
         return tabs;
       }
       const targetIndex = tabs.findIndex((tab) => tab.id === targetId);
@@ -1165,9 +1253,52 @@ export default function App() {
         const nextActive = nextTabs[Math.max(0, targetIndex - 1)] || nextTabs[0];
         setActiveSqlTabId(nextActive.id);
       }
-      return nextTabs;
-    });
-  }
+      return nextTabs;
+    });
+  }
+
+  function renameSqlTab(targetId: string) {
+    const target = sqlTabs.find((tab) => tab.id === targetId);
+    if (!target) return;
+    let title = target.title;
+    modalApi.confirm({
+      title: '重命名 SQL 标签',
+      content: <Input autoFocus defaultValue={target.title} maxLength={80} aria-label="SQL 标签名称" onChange={(event) => { title = event.target.value; }} />,
+      okText: '保存名称',
+      cancelText: '取消',
+      onOk: () => {
+        const normalized = title.trim();
+        if (!normalized) {
+          toastApi.error('标签名称不能为空');
+          return Promise.reject(new Error('标签名称不能为空'));
+        }
+        setSqlTabs((tabs) => tabs.map((tab) => tab.id === targetId ? { ...tab, title: normalized } : tab));
+      }
+    });
+  }
+
+  function duplicateSqlTab(targetId: string, liveSql?: string) {
+    if (sqlTabs.length >= MAX_SQL_TABS) {
+      toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
+      return;
+    }
+    const source = sqlTabs.find((tab) => tab.id === targetId);
+    if (!source) return;
+    const nextIndex = sqlTabSeqRef.current + 1;
+    sqlTabSeqRef.current = nextIndex;
+    const duplicate = {
+      ...createSqlTab(nextIndex),
+      title: `${source.title} 副本`.slice(0, 80),
+      sql: liveSql ?? source.sql,
+      dirty: true
+    };
+    if (liveSql !== undefined && liveSql !== source.sql) {
+      setSqlTabs((tabs) => [...tabs.map((tab) => tab.id === targetId ? { ...tab, sql: liveSql, dirty: true } : tab), duplicate]);
+    } else {
+      setSqlTabs((tabs) => [...tabs, duplicate]);
+    }
+    setActiveSqlTabId(duplicate.id);
+  }
 
   function sqlExecutionTarget() {
     const editor = editorRef.current;
@@ -1876,8 +2007,13 @@ export default function App() {
   const downloadBackupHistoryEvent = useStableEvent((taskId: number, historyId: number) => downloadBackupHistory(taskId, historyId));
   const toggleThemeFromHeader = useStableEvent(() => layoutPreferences.setThemeMode((current) => current === 'light' ? 'dark' : 'light'));
   const addSqlTabEvent = useStableEvent(() => addSqlTab());
-  const closeSqlTabEvent = useStableEvent((tabId: string) => closeSqlTab(tabId));
-  const changeSqlEvent = useStableEvent((sql: string) => updateActiveSqlTab({ sql }));
+  const closeSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => closeSqlTab(tabId, liveSql));
+  const renameSqlTabEvent = useStableEvent((tabId: string) => renameSqlTab(tabId));
+  const duplicateSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => duplicateSqlTab(tabId, liveSql));
+  const changeSqlEvent = useStableEvent((connectionId: number | null, tabId: string, sql: string) => {
+    if (sqlSessionConnectionIdRef.current !== connectionId) return;
+    updateSqlTab(tabId, { sql });
+  });
   const mountSqlEditorEvent = useStableEvent<Parameters<OnMount>, ReturnType<OnMount>>((...args) => handleEditorMount(...args));
   const formatSqlEvent = useStableEvent(() => formatSql());
   const explainSqlEvent = useStableEvent(() => execute('/sql/explain'));
@@ -1905,6 +2041,7 @@ export default function App() {
   const reloadObjectDetailEvent = useStableEvent(() => requestRefreshDatabaseObjects());
   const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
   const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory) => {
+    editorRef.current?.setValue(historyItem.sql);
     updateActiveSqlTab({ sql: historyItem.sql });
     setHistoryOpen(false);
   });
@@ -2006,7 +2143,9 @@ export default function App() {
               </div>
             ) : mode === 'sql' ? (
               <SqlWorkspace
+                key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 selected={selected}
+                sessionConnectionId={selected?.id ?? null}
                 tabs={sqlTabs}
                 activeTabId={activeSqlTab.id}
                 activeTab={activeSqlTab}
@@ -2021,6 +2160,8 @@ export default function App() {
                 onTabChange={setActiveSqlTabId}
                 onTabAdd={addSqlTabEvent}
                 onTabClose={closeSqlTabEvent}
+                onTabRename={renameSqlTabEvent}
+                onTabDuplicate={duplicateSqlTabEvent}
                 onSqlChange={changeSqlEvent}
                 onEditorMount={mountSqlEditorEvent}
                 onFormat={formatSqlEvent}

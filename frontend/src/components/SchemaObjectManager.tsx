@@ -31,7 +31,7 @@ import {
   Tag,
   Tooltip,
   Typography,
-  message
+  message as antdMessage
 } from 'antd';
 import type { CollapseProps, MenuProps, TableColumnsType } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -61,6 +61,7 @@ import type {
 } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { SqlPreview } from './SqlPreview';
+import { TypedConfirmationFields } from './TypedConfirmationFields';
 
 const { Text, Title } = Typography;
 
@@ -88,9 +89,12 @@ export function SchemaObjectManager({
   const [createKind, setCreateKind] = useState<SchemaObjectKind>();
   const [createName, setCreateName] = useState('');
   const [creatingTemplate, setCreatingTemplate] = useState(false);
+  const [messageApi, messageContextHolder] = antdMessage.useMessage();
   const requestScope = `${connection.id}:${schemaName || ''}:${keyword || ''}:${refreshToken}`;
   const workspaceScope = `${connection.id}:${schemaName || ''}`;
   const requestScopeRef = useRef(requestScope);
+  const expandedBeforeSearchRef = useRef<SchemaObjectKind[] | null>(null);
+  const capabilityKinds = capabilities.map((capability) => capability.kind).join('|');
 
   useEffect(() => {
     requestScopeRef.current = requestScope;
@@ -106,6 +110,21 @@ export function SchemaObjectManager({
     setCreateKind(undefined);
     setCreateName('');
   }, [workspaceScope]);
+
+  useEffect(() => {
+    const searching = Boolean(keyword?.trim());
+    const kinds = capabilities.map((capability) => capability.kind);
+    if (searching) {
+      if (!expandedBeforeSearchRef.current) expandedBeforeSearchRef.current = expandedKinds;
+      setExpandedKinds(kinds);
+      kinds.forEach((kind) => void loadGroup(kind));
+    } else if (expandedBeforeSearchRef.current) {
+      setExpandedKinds(expandedBeforeSearchRef.current);
+      expandedBeforeSearchRef.current = null;
+    }
+    // Loading is coordinated by the request scope and the expansion handler.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keyword, capabilityKinds]);
 
   if (capabilities.length === 0) return null;
 
@@ -165,21 +184,28 @@ export function SchemaObjectManager({
       setCreateName('');
       setWorkspace({ creation: template });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '创建模板生成失败');
+      messageApi.error(error instanceof Error ? error.message : '创建模板生成失败');
     } finally {
       setCreatingTemplate(false);
     }
   }
-
-  const createItems: MenuProps['items'] = capabilities
-    .filter((capability) => capability.operations.includes('CREATE'))
-    .map((capability) => ({ key: capability.kind, label: `新建${schemaObjectKindLabel(capability.kind)}` }));
 
   const collapseItems: CollapseProps['items'] = capabilities.map((capability) => {
     const group = groups[capability.kind];
     return {
       key: capability.kind,
       label: <Space size={6}><SchemaObjectIcon kind={capability.kind} /><span>{schemaObjectKindLabel(capability.kind)}</span>{group && <span className="object-tree-count">{group.total}</span>}</Space>,
+      extra: !connection.readonly && capability.operations.includes('CREATE') ? (
+        <Tooltip title={`新建${schemaObjectKindLabel(capability.kind)}`}>
+          <Button
+            type="text"
+            size="small"
+            icon={<PlusOutlined />}
+            aria-label={`新建${schemaObjectKindLabel(capability.kind)}`}
+            onClick={(event) => { event.stopPropagation(); setCreateKind(capability.kind); }}
+          />
+        </Tooltip>
+      ) : undefined,
       children: (
         <SchemaObjectGroup
           capability={capability}
@@ -193,20 +219,8 @@ export function SchemaObjectManager({
   });
 
   return (
-    <section className="schema-object-manager" aria-label="数据库对象管理">
-      <div className="schema-object-manager-header">
-        <Text strong>对象管理</Text>
-        <Space size={2}>
-          {!connection.readonly && createItems.length > 0 && (
-            <Dropdown menu={{ items: createItems, onClick: ({ key }) => setCreateKind(key as SchemaObjectKind) }}>
-              <Button type="text" size="small" icon={<PlusOutlined />}>新建</Button>
-            </Dropdown>
-          )}
-          <Tooltip title="刷新已展开的对象组">
-            <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => expandedKinds.forEach((kind) => void loadGroup(kind, 0, false, true))} />
-          </Tooltip>
-        </Space>
-      </div>
+    <section className="schema-object-manager database-object-groups" aria-label="数据库对象管理">
+      {messageContextHolder}
       <Collapse
         size="small"
         ghost
@@ -293,6 +307,8 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   const [invokeResult, setInvokeResult] = useState<RoutineInvokeResponse>();
   const [invoking, setInvoking] = useState(false);
   const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
+  const [messageApi, messageContextHolder] = antdMessage.useMessage();
+  const [modalApi, modalContextHolder] = Modal.useModal();
   const objectKey = state?.object?.objectKey;
 
   useEffect(() => {
@@ -330,7 +346,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         .filter((parameter) => parameter.mode === 'IN' || parameter.mode === 'INOUT')
         .map((parameter) => [parameter.position, { position: parameter.position, name: parameter.name, value: '', nullValue: false }])));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '对象详情加载失败');
+      messageApi.error(error instanceof Error ? error.message : '对象详情加载失败');
     } finally {
       setLoading(false);
     }
@@ -367,7 +383,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       setConfirmation('');
       setProductionConfirmation('');
     } catch (error) {
-      message.error(error instanceof Error ? error.message : 'SQL 预览失败');
+      messageApi.error(error instanceof Error ? error.message : 'SQL 预览失败');
     } finally {
       setExecuting(false);
     }
@@ -382,7 +398,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         headers: production ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
         body: JSON.stringify({ ...pending.request, confirmation })
       });
-      message.success(response.message);
+      messageApi.success(response.message);
       setPending(undefined);
       setConfirmation('');
       setProductionConfirmation('');
@@ -390,7 +406,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       onChanged(kind, close);
       if (!close) await loadDetail(true);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '对象操作失败');
+      messageApi.error(error instanceof Error ? error.message : '对象操作失败');
     } finally {
       setExecuting(false);
     }
@@ -412,9 +428,9 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       setInvokeResult(result);
       setInvokeOpen(false);
       setActiveTab('results');
-      message.success(`调用完成，耗时 ${result.elapsedMs}ms`);
+      messageApi.success(`调用完成，耗时 ${result.elapsedMs}ms`);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '例程调用失败');
+      messageApi.error(error instanceof Error ? error.message : '例程调用失败');
     } finally {
       setInvoking(false);
     }
@@ -425,7 +441,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       onClose();
       return;
     }
-    Modal.confirm({ title: '放弃未保存的源码修改？', content: '关闭后当前修改将丢失。', okText: '放弃修改', okButtonProps: { danger: true }, onOk: onClose });
+    modalApi.confirm({ title: '放弃未保存的源码修改？', content: '关闭后当前修改将丢失。', okText: '放弃修改', cancelText: '继续编辑', okButtonProps: { danger: true }, onOk: onClose });
   }
 
   const menuItems: NonNullable<MenuProps['items']> = detail ? [
@@ -458,6 +474,8 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
 
   return (
     <>
+      {messageContextHolder}
+      {modalContextHolder}
       <Drawer
         open
         size="large"
@@ -493,12 +511,10 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         {pending && <>
           <Alert type="warning" showIcon message="请核对最终 SQL" description="对象定义会作为单条原生语句执行；删除操作不会自动添加 CASCADE。" />
           <SqlPreview sql={pending.sql} />
-          <Text>输入完整对象名 <Text code>{pending.confirmationTarget}</Text></Text>
-          <Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} />
-          {production && <>
-            <Text>生产连接还需输入连接名 <Text code>{connection.name}</Text></Text>
-            <Input value={productionConfirmation} onChange={(event) => setProductionConfirmation(event.target.value)} />
-          </>}
+          <TypedConfirmationFields
+            target={{ expected: pending.confirmationTarget, value: confirmation, ariaLabel: '输入完整对象名确认', onChange: setConfirmation }}
+            production={production ? { expected: connection.name, value: productionConfirmation, ariaLabel: '输入生产连接名确认', onChange: setProductionConfirmation } : undefined}
+          />
         </>}
       </Modal>
 
@@ -529,10 +545,10 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
           })}
           {detail?.parameters.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该例程没有参数" />}
         </div>
-        {production && <>
-          <Text>生产连接调用需输入连接名 <Text code>{connection.name}</Text></Text>
-          <Input value={invokeProductionConfirmation} onChange={(event) => setInvokeProductionConfirmation(event.target.value)} />
-        </>}
+        {production && <TypedConfirmationFields
+          autoFocus="none"
+          production={{ expected: connection.name, value: invokeProductionConfirmation, ariaLabel: '输入生产连接名确认调用', onChange: setInvokeProductionConfirmation }}
+        />}
       </Modal>
     </>
   );

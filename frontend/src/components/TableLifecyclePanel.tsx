@@ -11,6 +11,7 @@ import {
   tableDefinitionSignature
 } from './TableDefinitionEditor';
 import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
+import { TypedConfirmationFields } from './TypedConfirmationFields';
 
 const { Text, Title } = Typography;
 
@@ -294,14 +295,11 @@ export function TableLifecyclePanel({
         onOk={executeCreate}
         onCancel={() => { if (!createSubmitting) setCreateConfirmOpen(false); }}
       >
-        <Alert type="warning" showIcon title={`请输入完整表名 ${createTarget} 后执行。DDL 可能不可回滚。`} />
-        <Input aria-label="创建表确认文本" className="design-confirm-input" value={createConfirmation} onChange={(event) => setCreateConfirmation(event.target.value)} placeholder={createTarget} />
-        {productionConfirmationText && (
-          <>
-            <Alert type="error" showIcon title={`生产连接保护：还需输入连接名 ${productionConfirmationText}。`} />
-            <Input aria-label="创建表生产确认" className="design-confirm-input" value={createProductionConfirmation} onChange={(event) => setCreateProductionConfirmation(event.target.value)} placeholder={productionConfirmationText} />
-          </>
-        )}
+        <Alert type="warning" showIcon title="请核对最终 DDL" description="结构变更可能不可回滚。" />
+        <TypedConfirmationFields
+          target={{ expected: createTarget, value: createConfirmation, ariaLabel: '创建表确认文本', onChange: setCreateConfirmation }}
+          production={productionConfirmationText ? { expected: productionConfirmationText, value: createProductionConfirmation, ariaLabel: '创建表生产确认', onChange: setCreateProductionConfirmation } : undefined}
+        />
         <pre className="design-preview">{createPreview.join('\n')}</pre>
       </Modal>
 
@@ -334,14 +332,11 @@ export function TableLifecyclePanel({
             {actionMessage && <Alert type={actionPreview.length > 0 ? 'info' : 'error'} showIcon title={actionMessage} />}
             {actionPreview.length > 0 && (
               <>
-                <Alert type="warning" showIcon title={`请输入完整表名 ${actionSource} 后执行。DDL 可能不可回滚。`} />
-                <Input aria-label="表操作确认文本" className="design-confirm-input" value={actionConfirmation} onChange={(event) => setActionConfirmation(event.target.value)} placeholder={actionSource} />
-                {productionConfirmationText && (
-                  <>
-                    <Alert type="error" showIcon title={`生产连接保护：还需输入连接名 ${productionConfirmationText}。`} />
-                    <Input aria-label="表操作生产确认" className="design-confirm-input" value={actionProductionConfirmation} onChange={(event) => setActionProductionConfirmation(event.target.value)} placeholder={productionConfirmationText} />
-                  </>
-                )}
+                <Alert type="warning" showIcon title="请核对最终 DDL" description="结构变更可能不可回滚。" />
+                <TypedConfirmationFields
+                  target={{ expected: actionSource, value: actionConfirmation, ariaLabel: '表操作确认文本', onChange: setActionConfirmation }}
+                  production={productionConfirmationText ? { expected: productionConfirmationText, value: actionProductionConfirmation, ariaLabel: '表操作生产确认', onChange: setActionProductionConfirmation } : undefined}
+                />
                 <pre className="design-preview">{actionPreview.join('\n')}</pre>
               </>
             )}
