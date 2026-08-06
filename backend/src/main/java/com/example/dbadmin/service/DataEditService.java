@@ -209,23 +209,36 @@ public class DataEditService {
 
                     try (PreparedStatement statement = connection.prepareStatement(sql)) {
                         statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
-                        for (PreparedOperation operation : batch) {
-                            bind(statement, operation.parameters());
-                            statement.addBatch();
-                        }
-                        int[] counts = statement.executeBatch();
-                        for (int i = 0; i < counts.length; i++) {
-                            int count = counts[i];
-                            if (count == Statement.SUCCESS_NO_INFO) continue;
-                            if ((type.equals("UPDATE") || type.equals("DELETE")) && count != 1) {
-                                throw new IllegalStateException(count == 0
-                                        ? "数据已被其他操作修改或删除，本次提交已回滚。"
-                                        : "行定位条件影响了多行数据，本次提交已回滚。");
+                        if (type.equals("INSERT")) {
+                            for (PreparedOperation operation : batch) {
+                                bind(statement, operation.parameters());
+                                statement.addBatch();
                             }
-                            if (type.equals("INSERT") && count != 1) {
-                                throw new IllegalStateException("新增数据影响行数异常，本次提交已回滚。");
+                            int[] counts = statement.executeBatch();
+                            if (counts.length != batch.size()) {
+                                throw new IllegalStateException("新增数据批处理结果数量异常，本次提交已回滚。");
                             }
-                            affected += count;
+                            for (int count : counts) {
+                                if (count != 1 && count != Statement.SUCCESS_NO_INFO) {
+                                    throw new IllegalStateException("新增数据影响行数异常，本次提交已回滚。");
+                                }
+                                // A successful INSERT batch item always represents one requested row,
+                                // even when the driver cannot report its exact update count.
+                                affected++;
+                            }
+                        } else {
+                            // UPDATE/DELETE must remain individually observable so optimistic
+                            // predicates cannot be bypassed by JDBC SUCCESS_NO_INFO batch results.
+                            for (PreparedOperation operation : batch) {
+                                bind(statement, operation.parameters());
+                                int count = statement.executeUpdate();
+                                if (count != 1) {
+                                    throw new IllegalStateException(count == 0
+                                            ? "数据已被其他操作修改或删除，本次提交已回滚。"
+                                            : "行定位条件影响了多行数据，本次提交已回滚。");
+                                }
+                                affected += count;
+                            }
                         }
                     }
                     index = end;

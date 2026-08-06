@@ -19,7 +19,7 @@ import {
 } from 'antd';
 import { CloudUploadOutlined, PauseCircleOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
-import { api } from '../api';
+import { api, uploadBinary } from '../api';
 import { DB_TYPE_OPTIONS } from '../constants';
 import type {
   ActiveOperations,
@@ -39,6 +39,7 @@ import { formatFileSize, formatHistoryTime } from '../utils';
 import { nativeToolForRestore, requestedToolPath } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
+import { buildRestoreUploadPath } from '../restoreUpload';
 
 const { Text, Title } = Typography;
 
@@ -149,10 +150,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
     if (!file) return toast.warning('请先选择恢复文件');
     setUploading(true);
     try {
-      const body = new FormData();
-      body.append('file', file);
-      const params = new URLSearchParams({ fileFormat: format, sourceDbType });
-      const uploaded = await api<RestoreUpload>(`/restores/uploads?${params}`, { method: 'POST', body });
+      const uploaded = await uploadBinary<RestoreUpload>(buildRestoreUploadPath(file.name, format, sourceDbType), file, () => {});
       setSource({ kind: 'UPLOAD', id: uploaded.id });
       setPreflight(null);
       toast.success(`文件已上传，校验值 ${uploaded.checksumSha256.slice(0, 12)}…`);

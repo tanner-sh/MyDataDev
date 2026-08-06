@@ -49,7 +49,7 @@ export function uploadBinary<T>(path: string, file: File, onProgress: (percent: 
         reject(new ApiError(typeof payload.message === 'string' ? payload.message : request.statusText, request.status, payload));
       }
     };
-    request.onerror = () => reject(new ApiError('SQL 文件上传失败，请检查网络连接', request.status || 0));
+    request.onerror = () => reject(new ApiError('文件上传失败，请检查网络连接', request.status || 0));
     request.onabort = () => reject(new DOMException('SQL 文件上传已取消', 'AbortError'));
     if (signal) {
       if (signal.aborted) request.abort();

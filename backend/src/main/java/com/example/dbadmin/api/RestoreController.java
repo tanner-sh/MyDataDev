@@ -39,7 +39,7 @@ public class RestoreController {
                                 @RequestParam String filename,
                                 @RequestParam String fileFormat,
                                 @RequestParam(required = false) String sourceDbType) throws Exception {
-        return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType);
+        return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType, request.getContentLengthLong());
     }
 
     @PostMapping("/preflight")

@@ -181,6 +181,40 @@ class MetadataServiceTest {
     }
 
     @Test
+    void explicitInvalidationReloadsSchemaAndObjectCatalogFromTheSharedCache() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+        MetadataService service = service(url);
+        service.inspect(1L, null, null, 0, 200, false);
+
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE SCHEMA archive");
+            connection.createStatement().execute("CREATE TABLE archive.events(id BIGINT PRIMARY KEY)");
+        }
+        service.invalidateConnection(1L);
+        MetadataResponse refreshed = service.inspect(1L, "ARCHIVE", null, 0, 200, false);
+
+        assertThat(refreshed.schemas()).contains("ARCHIVE");
+        assertThat(refreshed.objects()).extracting("name").containsExactly("EVENTS");
+    }
+
+    @Test
+    void rowCountRemainsExactForTheUserRequestedCountOperation() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE events(id INT PRIMARY KEY)");
+            connection.createStatement().execute("INSERT INTO events VALUES (1), (2), (3)");
+        }
+
+        var count = service(url).rowCount(1L, "PUBLIC", "EVENTS");
+
+        assertThat(count.value()).isEqualTo(3L);
+        assertThat(count.exact()).isTrue();
+    }
+
+    @Test
     void loadsObjectStructureOnDemand() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

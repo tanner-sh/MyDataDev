@@ -109,14 +109,25 @@ public class RestoreService {
     public RestoreUpload upload(MultipartFile file, String fileFormat, String sourceDbType) throws Exception {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要恢复的文件。");
         if (file.getSize() > properties.getRestore().getMaxUploadBytes()) throw new IllegalArgumentException("上传文件超过允许大小。");
-        return uploadStream(file.getInputStream(), file.getOriginalFilename(), fileFormat, sourceDbType);
+        return uploadStream(file.getInputStream(), file.getOriginalFilename(), fileFormat, sourceDbType, file.getSize());
     }
 
     public RestoreUpload uploadStream(InputStream input, String originalFilename, String fileFormat, String sourceDbType) throws Exception {
+        return uploadStream(input, originalFilename, fileFormat, sourceDbType, -1);
+    }
+
+    public RestoreUpload uploadStream(InputStream input, String originalFilename, String fileFormat, String sourceDbType, long declaredSize) throws Exception {
         if (input == null) throw new IllegalArgumentException("请选择要恢复的文件。");
+        if (declaredSize > properties.getRestore().getMaxUploadBytes()) throw new IllegalArgumentException("上传文件超过允许大小。");
         String format = normalizeFormat(fileFormat, originalFilename);
         Path root = restoreRoot().resolve("uploads");
         Files.createDirectories(root);
+        if (declaredSize > 0) {
+            FileStore store = Files.getFileStore(root);
+            if (store.getUsableSpace() < declaredSize + 100L * 1024 * 1024) {
+                throw new IllegalStateException("服务器恢复文件目录剩余空间不足。");
+            }
+        }
         String extension = extension(originalFilename);
         Path target = root.resolve("upload-" + UUID.randomUUID() + extension).normalize();
         if (!target.startsWith(root.toAbsolutePath().normalize())) throw new IllegalArgumentException("上传文件名不安全。");

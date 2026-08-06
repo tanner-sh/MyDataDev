@@ -293,6 +293,25 @@ class BackupServiceTest {
     }
 
     @Test
+    void writesPostgreSqlBooleanValuesAsBooleanLiterals() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE flags(id INT PRIMARY KEY, enabled BOOLEAN)");
+            connection.createStatement().execute("INSERT INTO flags VALUES (1, TRUE), (2, FALSE)");
+        }
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(task("TABLE", "PUBLIC", "FLAGS")));
+
+        service(url, "postgresql", repository).run(1L, "admin");
+
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), anyString(), path.capture(), anyLong());
+        String sql = Files.readString(Path.of(path.getValue()));
+        assertThat(sql).contains("TRUE").contains("FALSE");
+        assertThat(sql).doesNotContain("VALUES (1, 1)").doesNotContain("VALUES (2, 0)");
+    }
+
+    @Test
     void writesSingleTableBackup() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

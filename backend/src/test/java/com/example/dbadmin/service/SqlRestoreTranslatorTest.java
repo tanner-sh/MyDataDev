@@ -59,6 +59,18 @@ class SqlRestoreTranslatorTest {
     }
 
     @Test
+    void rewritesNamespaceWithoutParsingCompatibleInsertStatements() throws Exception {
+        String original = "INSERT IGNORE INTO sales.orders(id, note) VALUES (1, 'keep formatting')";
+        Path file = sql(original + ";");
+        List<String> translated = new ArrayList<>();
+
+        translator.translate(file, "mysql", "mariadb", Map.of("sales", "archive"), "SAFE",
+                (index, statement, data) -> translated.add(statement));
+
+        assertThat(translated).containsExactly(original.replace("sales.orders", "archive.orders"));
+    }
+
+    @Test
     void rejectsDestructiveOrUnrelatedStatements() throws Exception {
         Path file = sql("DROP TABLE users;");
 

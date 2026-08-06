@@ -69,11 +69,12 @@ public class SqlRestoreTranslator {
 
             // Fast path for INSERT when no type mapping needed
             Matcher m = INSERT_HEAD.matcher(sql);
-            if (m.find() && !needsTypeMapping && namespaceMapping.isEmpty()) {
+            boolean insert = m.find();
+            if (insert && !needsTypeMapping && namespaceMapping.isEmpty()) {
                 consumer.accept(index[0], sql, true);
                 return;
             }
-            if (m.find() && !needsTypeMapping) {
+            if (insert && !needsTypeMapping) {
                 String tableName = m.group(1);
                 String mappedTable = mapTableName(tableName, namespaceMapping, target);
                 if (mappedTable.equals(tableName)) {

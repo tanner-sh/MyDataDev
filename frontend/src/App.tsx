@@ -1743,9 +1743,24 @@ export default function App() {
       const text = await file.text();
       const worker = new Worker(new URL('./workers/importWorker.ts', import.meta.url), { type: 'module' });
       const result: ImportResult = await new Promise((resolve, reject) => {
-        worker.onmessage = (e) => {
+        const cleanup = () => {
+          worker.onmessage = null;
+          worker.onerror = null;
+          worker.onmessageerror = null;
           worker.terminate();
-          e.data.success ? resolve(e.data.result) : reject(new Error(e.data.error));
+        };
+        worker.onmessage = (e) => {
+          cleanup();
+          e.data.success ? resolve(e.data.result) : reject(new Error(e.data.error || '导入文件解析失败'));
+        };
+        worker.onerror = (event) => {
+          event.preventDefault();
+          cleanup();
+          reject(new Error(event.message || '导入解析服务加载失败'));
+        };
+        worker.onmessageerror = () => {
+          cleanup();
+          reject(new Error('导入解析结果无法读取'));
         };
         worker.postMessage({
           text,

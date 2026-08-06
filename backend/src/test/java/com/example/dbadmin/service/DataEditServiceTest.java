@@ -120,6 +120,26 @@ class DataEditServiceTest {
     }
 
     @Test
+    void reportsEverySuccessfulBatchedInsertAsAffected() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE cash_ledger(id INT PRIMARY KEY, amount INT)");
+        }
+
+        var response = service(url).commit(new DataPreviewRequest(
+                1L,
+                null,
+                "cash_ledger",
+                List.of(
+                        new RowChange("INSERT", null, Map.of("id", 1, "amount", 10), null, null),
+                        new RowChange("INSERT", null, Map.of("id", 2, "amount", 20), null, null)
+                )
+        ), "admin");
+
+        assertThat(response.affectedRows()).isEqualTo(2);
+    }
+
+    @Test
     void preservesBigIntRowIdentityOutsideJavaScriptSafeIntegerRange() throws Exception {
         String url = databaseUrl();
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

@@ -1272,7 +1272,7 @@ public class BackupService {
             return;
         }
         if (value instanceof Boolean bool) {
-            writer.write(bool ? "1" : "0");
+            writer.write(booleanLiteral(bool, dbType));
             return;
         }
         if (value instanceof java.sql.Date date) {
@@ -1431,7 +1431,7 @@ public class BackupService {
             return value.toString();
         }
         if (value instanceof Boolean bool) {
-            return bool ? "1" : "0";
+            return bool ? "TRUE" : "FALSE";
         }
         if (value instanceof java.sql.Date date) {
             return quoteLiteral(date.toString());
@@ -1481,6 +1481,11 @@ public class BackupService {
         }
         result.append('\'');
         return result.toString();
+    }
+
+    private String booleanLiteral(boolean value, String dbType) {
+        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+        return normalized.equals("postgresql") ? (value ? "TRUE" : "FALSE") : (value ? "1" : "0");
     }
 
     private void writeQuotedLiteral(BufferedWriter writer, CharSequence value) throws Exception {

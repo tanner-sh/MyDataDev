@@ -28,22 +28,6 @@ public class PostgreSqlDialect extends DefaultDialect {
     }
 
     @Override
-    public java.util.Optional<Long> approximateRowCount(Connection connection, String schemaName, String tableName) throws java.sql.SQLException {
-        String sql = "SELECT n_live_tup FROM pg_stat_user_tables WHERE schemaname = ? AND relname = ?";
-        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, schemaName == null || schemaName.isBlank() ? "public" : schemaName);
-            statement.setString(2, tableName);
-            try (java.sql.ResultSet rs = statement.executeQuery()) {
-                if (rs.next()) {
-                    long rows = rs.getLong(1);
-                    return rs.wasNull() ? java.util.Optional.empty() : java.util.Optional.of(rows);
-                }
-                return java.util.Optional.empty();
-            }
-        }
-    }
-
-    @Override
     protected List<String> primaryKeySql(String table, ObjectDetail original, List<String> requestedPrimaryKeys) {
         List<String> requested = requestedPrimaryKeys == null
                 ? List.of()

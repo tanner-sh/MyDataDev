@@ -51,7 +51,7 @@ app:
     max-upload-bytes: 21474836480
     ready-ttl-hours: 24
     statement-timeout-seconds: 7200
-    max-statement-chars: 4194304
+    max-statement-chars: 134217728
     commit-batch-size: 100
   background-tasks:
     cancel-poll-interval-ms: 1000
