@@ -18,6 +18,8 @@ const EDITOR_OPTIONS = {
   padding: { top: 12, bottom: 12 },
   smoothScrolling: true,
   scrollBeyondLastLine: false,
+  quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
+  suggestOnTriggerCharacters: true,
   automaticLayout: true
 } as const;
 const MIN_EDITOR_HEIGHT = 120;

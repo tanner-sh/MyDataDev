@@ -26,6 +26,7 @@ const assets = assetUrls.map((assetUrl) => {
 const gzipBytes = assets.reduce((total, asset) => total + asset.gzipBytes, 0);
 const manifest = JSON.parse(readFileSync(resolve(distDirectory, '.vite/manifest.json'), 'utf8'));
 const sqlWorkspaceEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlWorkspace.tsx');
+const sqlEditorEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlEditor.tsx');
 const workspaceFiles = new Set(assetUrls.map((assetUrl) => assetUrl.slice(1)));
 if (sqlWorkspaceEntry) collectManifestFiles(sqlWorkspaceEntry[0], workspaceFiles);
 const workspaceAssets = [...workspaceFiles]
@@ -48,6 +49,14 @@ if (gzipBytes > MAX_INITIAL_GZIP_BYTES) {
 }
 if (!sqlWorkspaceEntry) {
   failures.push('构建清单中未找到 SQL 工作台入口，无法执行完整依赖预算');
+}
+if (!sqlEditorEntry) {
+  failures.push('构建清单中未找到 SQL 编辑器入口，无法检查自动补全能力');
+} else {
+  const sqlEditorBundle = readFileSync(resolve(distDirectory, sqlEditorEntry[1].file), 'utf8');
+  if (!sqlEditorBundle.includes('editor.contrib.suggestController') || !sqlEditorBundle.includes('editor.action.triggerSuggest')) {
+    failures.push('SQL 编辑器产物缺少 Monaco SuggestController，自动补全弹窗将不可用');
+  }
 }
 if (workspaceGzipBytes > MAX_SQL_WORKSPACE_GZIP_BYTES) {
   failures.push(`SQL 工作台完整依赖 gzip ${formatBytes(workspaceGzipBytes)} 超过限制 ${formatBytes(MAX_SQL_WORKSPACE_GZIP_BYTES)}`);
