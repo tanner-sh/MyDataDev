@@ -144,6 +144,14 @@ public class RemoteDataSourceRegistry {
         // network attempt so one unreachable database cannot block every pool.
         config.setInitializationFailTimeout(-1);
         config.setPoolName("dbadmin-" + poolName + "-" + Integer.toUnsignedString(System.identityHashCode(config)));
+
+        // Enable batch rewrite for MySQL/MariaDB
+        String lowerUrl = jdbcUrl.toLowerCase();
+        if (lowerUrl.startsWith("jdbc:mysql:") || lowerUrl.startsWith("jdbc:mariadb:")) {
+            String separator = jdbcUrl.contains("?") ? "&" : "?";
+            config.setJdbcUrl(jdbcUrl + separator + "rewriteBatchedStatements=true");
+        }
+
         if (meterRegistry != null) config.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(meterRegistry));
         return new HikariDataSource(config);
     }

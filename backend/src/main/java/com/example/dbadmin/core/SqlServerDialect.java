@@ -29,4 +29,21 @@ public class SqlServerDialect extends DefaultDialect {
     public String quoteIdentifier(String identifier) {
         return "[" + identifier.replace("]", "]]" ) + "]";
     }
+
+    @Override
+    public java.util.Optional<Long> approximateRowCount(java.sql.Connection connection, String schemaName, String tableName) throws java.sql.SQLException {
+        String sql = "SELECT SUM(p.rows) FROM sys.partitions p INNER JOIN sys.objects o ON p.object_id = o.object_id " +
+                     "INNER JOIN sys.schemas s ON o.schema_id = s.schema_id WHERE p.index_id IN (0, 1) AND s.name = ? AND o.name = ?";
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, schemaName == null || schemaName.isBlank() ? "dbo" : schemaName);
+            statement.setString(2, tableName);
+            try (java.sql.ResultSet rs = statement.executeQuery()) {
+                if (rs.next()) {
+                    long rows = rs.getLong(1);
+                    return rs.wasNull() ? java.util.Optional.empty() : java.util.Optional.of(rows);
+                }
+                return java.util.Optional.empty();
+            }
+        }
+    }
 }

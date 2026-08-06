@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -89,9 +89,9 @@ function enforceResultBudget(tabs: SqlTab[], protectedTabId: string) {
   });
 }
 
-export default function App() {
-  const [connections, setConnections] = useState<Connection[]>([]);
-  const [selected, setSelected] = useState<Connection | null>(null);
+export default function App() {
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [selected, setSelected] = useState<Connection | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
@@ -111,9 +111,9 @@ export default function App() {
   const [sqlPagingResultKey, setSqlPagingResultKey] = useState<string | null>(null);
   const [sqlCancellable, setSqlCancellable] = useState(false);
   const [sqlCancelling, setSqlCancelling] = useState(false);
-  const [connectionsLoading, setConnectionsLoading] = useState(false);
-  const [connectionsError, setConnectionsError] = useState('');
-  const [connectionsReady, setConnectionsReady] = useState(false);
+  const [connectionsLoading, setConnectionsLoading] = useState(false);
+  const [connectionsError, setConnectionsError] = useState('');
+  const [connectionsReady, setConnectionsReady] = useState(false);
   const [testingConnectionId, setTestingConnectionId] = useState<number | null>(null);
   const [backups, setBackups] = useState<BackupTask[]>([]);
   const [backupTaskPage, setBackupTaskPage] = useState(0);
@@ -126,8 +126,8 @@ export default function App() {
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
   const [tablePage, setTablePage] = useState(0);
   const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
-  const [previewSql, setPreviewSql] = useState<string[]>([]);
-  const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
+  const [previewSql, setPreviewSql] = useState<string[]>([]);
+  const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyFeatureLoaded, setHistoryFeatureLoaded] = useState(false);
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
@@ -173,7 +173,7 @@ export default function App() {
     objectDesignDirtyRef.current = dirty;
     setObjectDesignDirty(dirty);
   }, []);
-
+
   const objects = useMemo(() => {
     if (!metadata || !selected) return metadata?.objects || [];
     return metadata.objects.map((object) => withLoadedObjectStructure(
@@ -200,7 +200,7 @@ export default function App() {
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     token: { colorPrimary: '#2f74e8', borderRadius: 7, controlHeight: 34, fontSize: 13 }
   }), [layoutPreferences.themeMode]);
-
+
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
@@ -263,7 +263,7 @@ export default function App() {
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [objectDesignDirty, pendingChanges.length]);
-
+
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;
     clearMetadataSearchTimer();
@@ -359,15 +359,15 @@ export default function App() {
   }
 
   async function refreshConnections(options: RefreshConnectionsOptions = {}) {
-    const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
-    setConnectionsLoading(true);
-    setConnectionsError('');
-    for (let attempt = 0; attempt < delays.length; attempt++) {
-      if (delays[attempt] > 0) {
-        setConnectionsError('后端服务可能还在启动，正在重试...');
-        await sleep(delays[attempt]);
-      }
-      try {
+    const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
+    setConnectionsLoading(true);
+    setConnectionsError('');
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt] > 0) {
+        setConnectionsError('后端服务可能还在启动，正在重试...');
+        await sleep(delays[attempt]);
+      }
+      try {
         const rows = await api<Connection[]>('/connections');
         setConnections(rows);
         setSelected((current: Connection | null) => {
@@ -379,21 +379,21 @@ export default function App() {
           writeSelectedConnectionId(target?.id);
           return target;
         });
-        setConnectionsError('');
-        setConnectionsReady(true);
-        setConnectionsLoading(false);
-        return;
-      } catch (e) {
-        if (attempt === delays.length - 1) {
-          setConnectionsError(`连接后端失败，请确认服务已启动：${localizeMessage((e as Error).message)}`);
-          setConnectionsReady(true);
-          setConnectionsLoading(false);
-          return;
-        }
-      }
-    }
-  }
-
+        setConnectionsError('');
+        setConnectionsReady(true);
+        setConnectionsLoading(false);
+        return;
+      } catch (e) {
+        if (attempt === delays.length - 1) {
+          setConnectionsError(`连接后端失败，请确认服务已启动：${localizeMessage((e as Error).message)}`);
+          setConnectionsReady(true);
+          setConnectionsLoading(false);
+          return;
+        }
+      }
+    }
+  }
+
   async function refreshBackups(conn = selected, pageNumber = backupTaskPage) {
     if (!conn) {
       setBackups([]);
@@ -445,11 +445,11 @@ export default function App() {
   }
 
   async function refreshSqlHistory(conn = selected) {
-    if (!conn) {
-      setSqlHistory([]);
-      return;
-    }
-    const rows = await api<SqlHistory[]>(`/sql/history?connectionId=${conn.id}&limit=50`);
+    if (!conn) {
+      setSqlHistory([]);
+      return;
+    }
+    const rows = await api<SqlHistory[]>(`/sql/history?connectionId=${conn.id}&limit=50`);
     setSqlHistory(rows);
   }
 
@@ -460,7 +460,7 @@ export default function App() {
       toastApi.warning('SQL 已处理，但历史记录刷新失败，可稍后重新打开历史。');
     }
   }
-
+
   async function saveConnection() {
     const editor = connectionEditor;
     if (editor.mode === 'closed') return;
@@ -514,15 +514,15 @@ export default function App() {
     try {
       if (editor.mode === 'edit') {
         await api<{ ok: boolean; message: string }>(`/connections/${editor.connectionId}/test`, {
-          method: 'POST',
-          body: JSON.stringify(target)
-        });
-      } else {
-        await api<{ ok: boolean; message: string }>('/connections/test', {
-          method: 'POST',
-          body: JSON.stringify({ jdbcUrl: target.jdbcUrl, username: target.username, password: target.password })
-        });
-      }
+          method: 'POST',
+          body: JSON.stringify(target)
+        });
+      } else {
+        await api<{ ok: boolean; message: string }>('/connections/test', {
+          method: 'POST',
+          body: JSON.stringify({ jdbcUrl: target.jdbcUrl, username: target.username, password: target.password })
+        });
+      }
       showSuccess(`连接测试成功：${target.name || target.jdbcUrl}`);
     } catch (e) {
       showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
@@ -530,19 +530,19 @@ export default function App() {
       setConnectionActionLoading(false);
     }
   }
-
-  async function testSavedConnection(connection: Connection) {
-    setTestingConnectionId(connection.id);
-    try {
-      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
+
+  async function testSavedConnection(connection: Connection) {
+    setTestingConnectionId(connection.id);
+    try {
+      await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
       showSuccess(`连接测试成功：${connection.name}`);
     } catch (e) {
       showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
-    } finally {
-      setTestingConnectionId(null);
-    }
-  }
-
+    } finally {
+      setTestingConnectionId(null);
+    }
+  }
+
   function deleteConnection(connection: Connection) {
     const performDelete = () => void performDeleteConnection(connection);
     if (selected?.id !== connection.id) {
@@ -590,7 +590,7 @@ export default function App() {
       setConnectionActionLoading(false);
     }
   }
-
+
   function applyConnectionSelection(connection: Connection) {
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
@@ -874,7 +874,7 @@ export default function App() {
       setStructureLoadingKey((current) => current === loadingKey ? null : current);
     }
   }
-
+
   async function execute(path = '/sql/execute', productionConfirmation?: string, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
@@ -884,7 +884,7 @@ export default function App() {
     const target = sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
-      return;
+      return;
     }
     if (path === '/sql/explain' && !selected.capabilities?.explain) {
       showInfo('当前数据库类型暂不支持执行计划');
@@ -1019,7 +1019,7 @@ export default function App() {
       sqlBusyRef.current = false;
     }
   }
-
+
   async function formatSql(liveSql?: string) {
     const editor = editorRef.current;
     const model = editor?.getModel();
@@ -1110,8 +1110,8 @@ export default function App() {
       updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
       toastApi.error(errorMessage);
     }
-  }
-
+  }
+
   async function exportSql(format: ExportFormat, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
@@ -1134,20 +1134,20 @@ export default function App() {
       setSqlLoading(true);
       setSqlCancellable(false);
       try {
-      const response = await fetch(`${API}/sql/export`, {
-        method: 'POST',
+      const response = await fetch(`${API}/sql/export`, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-User': 'admin',
           ...(productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : {})
         },
-        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format })
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || response.statusText);
-      }
-      const blob = await response.blob();
+        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ message: response.statusText }));
+        throw new Error(err.message || response.statusText);
+      }
+      const blob = await response.blob();
       downloadBlob(blob, `query-result-${timestamp()}.${format}`);
       const rowLimit = response.headers.get('x-export-row-limit') || '10000';
       const truncated = response.headers.get('x-export-truncated') === 'true';
@@ -1163,9 +1163,9 @@ export default function App() {
       }
     } finally {
       sqlBusyRef.current = false;
-    }
-  }
-
+    }
+  }
+
   function updateActiveSqlTab(patch: Partial<SqlTab>) {
     updateSqlTab(activeSqlTab.id, patch);
   }
@@ -1215,12 +1215,12 @@ export default function App() {
       return;
     }
     const nextIndex = sqlTabSeqRef.current + 1;
-    sqlTabSeqRef.current = nextIndex;
-    const tab = createSqlTab(nextIndex);
-    setSqlTabs((tabs) => [...tabs, tab]);
-    setActiveSqlTabId(tab.id);
-  }
-
+    sqlTabSeqRef.current = nextIndex;
+    const tab = createSqlTab(nextIndex);
+    setSqlTabs((tabs) => [...tabs, tab]);
+    setActiveSqlTabId(tab.id);
+  }
+
   function closeSqlTab(targetId: string, liveSql?: string) {
     const current = sqlTabs.find((tab) => tab.id === targetId);
     if (!current || sqlTabs.length === 1) return;
@@ -1247,14 +1247,14 @@ export default function App() {
   function removeSqlTab(targetId: string) {
     setSqlTabs((tabs) => {
       if (tabs.length === 1) {
-        return tabs;
-      }
-      const targetIndex = tabs.findIndex((tab) => tab.id === targetId);
-      const nextTabs = tabs.filter((tab) => tab.id !== targetId);
-      if (targetId === activeSqlTabId) {
-        const nextActive = nextTabs[Math.max(0, targetIndex - 1)] || nextTabs[0];
-        setActiveSqlTabId(nextActive.id);
-      }
+        return tabs;
+      }
+      const targetIndex = tabs.findIndex((tab) => tab.id === targetId);
+      const nextTabs = tabs.filter((tab) => tab.id !== targetId);
+      if (targetId === activeSqlTabId) {
+        const nextActive = nextTabs[Math.max(0, targetIndex - 1)] || nextTabs[0];
+        setActiveSqlTabId(nextActive.id);
+      }
       return nextTabs;
     });
   }
@@ -1301,7 +1301,7 @@ export default function App() {
     }
     setActiveSqlTabId(duplicate.id);
   }
-
+
   function sqlExecutionTarget(liveSql?: string) {
     const editor = editorRef.current;
     const selection = editor?.getSelection();
@@ -1363,7 +1363,7 @@ export default function App() {
     editor.revealPositionInCenter(start);
     editor.focus();
   }
-
+
   useEffect(() => {
     executeRef.current = () => execute();
     formatRef.current = () => formatSql();
@@ -1643,7 +1643,7 @@ export default function App() {
       if (objectDetailAbortRef.current === controller) objectDetailAbortRef.current = null;
     }
   }
-
+
   async function loadTable(table = activeTable, options: { page?: number; pageSize?: number; reset?: boolean } = {}) {
     if (!selected || !table) return;
     tableAbortRef.current?.abort();
@@ -1662,10 +1662,10 @@ export default function App() {
       return;
     }
     setTableLoading(true);
-    try {
-      const params = new URLSearchParams({
+    try {
+      const params = new URLSearchParams({
         connectionId: String(connectionId),
-        tableName: table.tableName,
+        tableName: table.tableName,
         pageSize: String(requestedPageSize)
       });
       if (table.schemaName) params.set('schemaName', table.schemaName);
@@ -1690,7 +1690,7 @@ export default function App() {
       if (tableAbortRef.current === controller) tableAbortRef.current = null;
     }
   }
-
+
   const editCell = useCallback((rowId: string, column: string, value: unknown) => {
     setTableRows((rows) => rows.map((row) => {
       if (row.id !== rowId) return row;
@@ -1721,7 +1721,7 @@ export default function App() {
           jdbcUrl: preset ? preset.url : current.form.jdbcUrl
         }));
   }
-
+
   function addRow() {
     if (!tableData) return;
     if (pendingChanges.length >= MAX_TABLE_CHANGES) {
@@ -1740,8 +1740,20 @@ export default function App() {
     setTableLoading(true);
     try {
       if (file.size > 10 * 1024 * 1024) throw new Error('导入文件不能超过 10 MB，请拆分后重试。');
-      const { parseImportFile } = await import('./importers');
-      const result = parseImportFile(await file.text(), file.name, activeTable.tableName, tableData.columns.map((column) => column.name));
+      const text = await file.text();
+      const worker = new Worker(new URL('./workers/importWorker.ts', import.meta.url), { type: 'module' });
+      const result: ImportResult = await new Promise((resolve, reject) => {
+        worker.onmessage = (e) => {
+          worker.terminate();
+          e.data.success ? resolve(e.data.result) : reject(new Error(e.data.error));
+        };
+        worker.postMessage({
+          text,
+          filename: file.name,
+          tableName: activeTable.tableName,
+          columns: tableData.columns.map((column) => column.name)
+        });
+      });
       if (result.rows.length + pendingChanges.length > MAX_TABLE_CHANGES) {
         throw new Error(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更；请先提交现有修改，或拆分导入文件。`);
       }
@@ -1770,15 +1782,15 @@ export default function App() {
   }, []);
 
   async function previewChanges() {
-    if (!selected || !activeTable) return;
+    if (!selected || !activeTable) return;
     if (!pendingChanges.length) {
       showInfo('没有待提交的变更');
       return;
     }
     setTableLoading(true);
-    try {
-      const data = await api<{ sql: string[] }>('/data/preview', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
-      setPreviewSql(data.sql);
+    try {
+      const data = await api<{ sql: string[] }>('/data/preview', { method: 'POST', body: JSON.stringify(dataChangePayload()) });
+      setPreviewSql(data.sql);
       showSuccess(`已生成 ${data.sql.length} 条变更语句`);
     } catch (e) {
       showError(localizeMessage((e as Error).message));
@@ -1786,9 +1798,9 @@ export default function App() {
       setTableLoading(false);
     }
   }
-
+
   async function commitChanges() {
-    if (!selected || !activeTable) return;
+    if (!selected || !activeTable) return;
     if (!pendingChanges.length) {
       showInfo('没有待提交的变更');
       return;
@@ -1802,7 +1814,7 @@ export default function App() {
         headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
         body: JSON.stringify(dataChangePayload())
       });
-      setPreviewSql(data.sql);
+      setPreviewSql(data.sql);
       showSuccess(`已提交，影响 ${data.affectedRows} 行`);
       await loadTable(activeTable, { page: tablePage });
     } catch (e) {
@@ -1811,14 +1823,14 @@ export default function App() {
       setTableLoading(false);
     }
   }
-
+
   function dataChangePayload() {
-    return {
-      connectionId: selected?.id,
-      schemaName: activeTable?.schemaName,
-      tableName: activeTable?.tableName,
-      changes: pendingChanges
-    };
+    return {
+      connectionId: selected?.id,
+      schemaName: activeTable?.schemaName,
+      tableName: activeTable?.tableName,
+      changes: pendingChanges
+    };
   }
 
   function openBackupTaskEditor(target = currentBackupTable) {

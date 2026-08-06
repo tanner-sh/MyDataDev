@@ -304,30 +304,52 @@ public class SqlFileExecutionService {
                 try (Statement statement = connection.createStatement()) {
                     runningStatements.put(id, statement);
                     dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
+                    int[] batched = {0};
                     SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
                             properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
                         ensureNotCancelled(id);
                         current[0] = index;
                         try {
-                            boolean result = statement.execute(sql);
-                            while (true) {
-                                if (result) {
-                                    try (ResultSet rows = statement.getResultSet()) {
-                                        while (rows.next()) {
-                                            queryRows[0]++;
-                                            if ((queryRows[0] & 4095) == 0) ensureNotCancelled(id);
-                                        }
-                                    }
-                                } else if (statement.getUpdateCount() == -1) {
-                                    break;
+                            SqlFileStatementReader.Kind kind = SqlFileStatementReader.classifySql(sql);
+                            if (kind == SqlFileStatementReader.Kind.MUTATION && batched[0] < commitBatchSize) {
+                                statement.addBatch(sql);
+                                batched[0]++;
+                                pending[0]++;
+                                if (batched[0] >= commitBatchSize) {
+                                    statement.executeBatch();
+                                    batched[0] = 0;
+                                    connection.commit();
+                                    success[0] += pending[0];
+                                    pending[0] = 0;
                                 }
-                                result = statement.getMoreResults();
-                            }
-                            pending[0]++;
-                            if (pending[0] >= commitBatchSize) {
-                                connection.commit();
-                                success[0] += pending[0];
-                                pending[0] = 0;
+                            } else {
+                                if (batched[0] > 0) {
+                                    statement.executeBatch();
+                                    batched[0] = 0;
+                                    connection.commit();
+                                    success[0] += pending[0];
+                                    pending[0] = 0;
+                                }
+                                boolean result = statement.execute(sql);
+                                while (true) {
+                                    if (result) {
+                                        try (ResultSet rows = statement.getResultSet()) {
+                                            while (rows.next()) {
+                                                queryRows[0]++;
+                                                if ((queryRows[0] & 4095) == 0) ensureNotCancelled(id);
+                                            }
+                                        }
+                                    } else if (statement.getUpdateCount() == -1) {
+                                        break;
+                                    }
+                                    result = statement.getMoreResults();
+                                }
+                                pending[0]++;
+                                if (pending[0] >= commitBatchSize) {
+                                    connection.commit();
+                                    success[0] += pending[0];
+                                    pending[0] = 0;
+                                }
                             }
                             if (progressDue(lastProgressNanos)) {
                                 long executed = success[0] + pending[0];
@@ -341,6 +363,10 @@ public class SqlFileExecutionService {
                             throw new StatementFailure(index, sql, error);
                         }
                     }, ignored -> ensureNotCancelled(id));
+                    if (batched[0] > 0) {
+                        statement.executeBatch();
+                        batched[0] = 0;
+                    }
                     connection.commit();
                     success[0] += pending[0];
                     pending[0] = 0;

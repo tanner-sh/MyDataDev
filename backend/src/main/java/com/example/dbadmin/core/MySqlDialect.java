@@ -66,6 +66,22 @@ public class MySqlDialect extends DefaultDialect {
     }
 
     @Override
+    public Optional<Long> approximateRowCount(Connection connection, String schemaName, String tableName) throws java.sql.SQLException {
+        String sql = "SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, schemaName);
+            statement.setString(2, tableName);
+            try (ResultSet rs = statement.executeQuery()) {
+                if (rs.next()) {
+                    long rows = rs.getLong(1);
+                    return rs.wasNull() ? Optional.empty() : Optional.of(rows);
+                }
+                return Optional.empty();
+            }
+        }
+    }
+
+    @Override
     protected List<String> alterColumnSql(String table, String columnName, ColumnInfo original, ColumnDesign column) {
         boolean changed = !sameType(original, column)
                 || original.nullable() != column.nullable()

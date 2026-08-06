@@ -322,6 +322,7 @@ export function parseSqlTableReferences(tokensOrSql: SqlToken[] | string): SqlTa
     .filter(isSignificantToken);
   const references: SqlTableReference[] = [];
   const seen = new Set<string>();
+  let depth = 0;
 
   const addReference = (parsed: ParsedTable | undefined) => {
     if (!parsed) return;
@@ -332,14 +333,18 @@ export function parseSqlTableReferences(tokensOrSql: SqlToken[] | string): SqlTa
   };
 
   for (let index = 0; index < tokens.length; index += 1) {
-    const sourceKeyword = tableSourceKeyword(tokens[index]);
+    const token = tokens[index];
+    if (token.text === '(') depth += 1;
+    if (token.text === ')') depth = Math.max(0, depth - 1);
+
+    const sourceKeyword = tableSourceKeyword(token);
     if (!sourceKeyword) continue;
 
     const parsed = parseTableAt(tokens, index + 1, sourceKeyword);
     addReference(parsed);
 
     if (sourceKeyword !== 'FROM') continue;
-    const baseDepth = depthBefore(tokens, index);
+    const baseDepth = depth;
     let nestedDepth = baseDepth;
     let scanIndex = parsed?.nextIndex ?? index + 1;
 

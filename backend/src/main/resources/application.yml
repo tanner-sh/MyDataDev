@@ -12,10 +12,11 @@ spring:
     password:
     driver-class-name: org.h2.Driver
     hikari:
-      connection-timeout: 5000
+      connection-timeout: 10000
       initialization-fail-timeout: 5000
-      maximum-pool-size: 5
+      maximum-pool-size: 15
       minimum-idle: 1
+      leak-detection-threshold: 60000
   h2:
     console:
       enabled: true
@@ -26,6 +27,11 @@ spring:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 0
+  task:
+    scheduling:
+      pool:
+        size: 4
+      thread-name-prefix: dbadmin-sched-
 
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
@@ -45,7 +51,7 @@ app:
     max-upload-bytes: 21474836480
     ready-ttl-hours: 24
     statement-timeout-seconds: 7200
-    max-statement-chars: 134217728
+    max-statement-chars: 4194304
     commit-batch-size: 100
   background-tasks:
     cancel-poll-interval-ms: 1000
@@ -61,7 +67,7 @@ app:
     job-retention-days: 90
     cleanup-batch-size: 500
   remote-pool:
-    max-pools: 20
+    max-pools: 50
     maximum-pool-size: 3
     connection-timeout-ms: 10000
   native-tools:

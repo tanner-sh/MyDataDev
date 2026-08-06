@@ -53,9 +53,13 @@ import java.util.UUID;
 import java.util.HexFormat;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class RestoreService {
+    private static final Logger log = LoggerFactory.getLogger(RestoreService.class);
     private final RestoreUploadRepository uploads;
     private final RestoreJobRepository jobs;
     private final BackupHistoryRepository histories;
@@ -105,16 +109,15 @@ public class RestoreService {
     public RestoreUpload upload(MultipartFile file, String fileFormat, String sourceDbType) throws Exception {
         if (file == null || file.isEmpty()) throw new IllegalArgumentException("请选择要恢复的文件。");
         if (file.getSize() > properties.getRestore().getMaxUploadBytes()) throw new IllegalArgumentException("上传文件超过允许大小。");
-        String format = normalizeFormat(fileFormat, file.getOriginalFilename());
+        return uploadStream(file.getInputStream(), file.getOriginalFilename(), fileFormat, sourceDbType);
+    }
+
+    public RestoreUpload uploadStream(InputStream input, String originalFilename, String fileFormat, String sourceDbType) throws Exception {
+        if (input == null) throw new IllegalArgumentException("请选择要恢复的文件。");
+        String format = normalizeFormat(fileFormat, originalFilename);
         Path root = restoreRoot().resolve("uploads");
         Files.createDirectories(root);
-        if (file.getSize() > 0) {
-            FileStore store = Files.getFileStore(root);
-            if (store.getUsableSpace() < file.getSize() + 100L * 1024 * 1024) {
-                throw new IllegalStateException("服务器恢复文件目录剩余空间不足。");
-            }
-        }
-        String extension = extension(file.getOriginalFilename());
+        String extension = extension(originalFilename);
         Path target = root.resolve("upload-" + UUID.randomUUID() + extension).normalize();
         if (!target.startsWith(root.toAbsolutePath().normalize())) throw new IllegalArgumentException("上传文件名不安全。");
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -122,8 +125,7 @@ public class RestoreService {
         if (!uploadGuard.tryAcquire()) {
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "UPLOAD_BUSY", "当前大文件上传数量已达上限，请稍后重试。");
         }
-        try (InputStream input = file.getInputStream();
-             var output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
+        try (var output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
             byte[] buffer = new byte[128 * 1024];
             int read;
             while ((read = input.read(buffer)) >= 0) {
@@ -146,7 +148,7 @@ public class RestoreService {
             throw new IllegalArgumentException("请选择要恢复的文件。");
         }
         Instant expires = Instant.now().plus(Math.max(1, properties.getRestore().getUploadTtlHours()), ChronoUnit.HOURS);
-        RestoreUpload draft = new RestoreUpload(0, safeName(file.getOriginalFilename()), target.toAbsolutePath().toString(), size,
+        RestoreUpload draft = new RestoreUpload(0, safeName(originalFilename), target.toAbsolutePath().toString(), size,
                 HexFormat.of().formatHex(digest.digest()), format, blankToNull(sourceDbType), Instant.now(), expires);
         long id = uploads.insert(draft);
         return uploads.findById(id).orElseThrow();
@@ -412,10 +414,35 @@ public class RestoreService {
     private void executeNative(long jobId, ProcessBuilder builder) throws Exception {
         Process process = builder.start();
         runningProcesses.put(jobId, process);
-        int exit = process.waitFor();
-        runningProcesses.remove(jobId);
-        ensureNotCancelled(jobId);
-        if (exit != 0) throw new IllegalStateException("原生恢复失败，退出码 " + exit + "。");
+        try {
+            long timeoutSeconds = Math.max(1, properties.getBackup().getTimeoutSeconds());
+            boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+            if (!finished) {
+                terminateProcess(process);
+                throw new IllegalStateException("原生恢复执行超时（" + timeoutSeconds + " 秒）。");
+            }
+            ensureNotCancelled(jobId);
+            int exit = process.exitValue();
+            if (exit != 0) throw new IllegalStateException("原生恢复失败，退出码 " + exit + "。");
+        } finally {
+            runningProcesses.remove(jobId);
+            terminateProcess(process);
+        }
+    }
+
+    private void terminateProcess(Process process) {
+        if (process == null || !process.isAlive()) return;
+        process.descendants().forEach(handle -> {
+            if (handle.isAlive()) handle.destroyForcibly();
+        });
+        process.destroyForcibly();
+        try {
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                log.warn("Native restore process did not exit after forcible termination pid={}", process.pid());
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void validateTargetConflicts(DbConnection target, List<String> sourceTables, Map<String, String> mappings,

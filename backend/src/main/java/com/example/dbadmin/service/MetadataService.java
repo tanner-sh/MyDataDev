@@ -21,6 +21,8 @@ import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
 import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.LoadingCache;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -28,6 +30,7 @@ import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.Duration;
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -52,7 +55,7 @@ public class MetadataService {
     private final AuditRepository audit;
     private final MetadataCacheService cache;
     private final ExecutionGuard executionGuard;
-    private final Object[] cacheLoadLocks = cacheLoadLocks();
+    private final LoadingCache<Long, MetadataCacheService.SchemaCatalogSnapshot> schemaCatalogCache;
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
     private static final long MAX_METADATA_OFFSET = 1_000_000;
     private static final int MAX_SEARCH_LENGTH = 200;
@@ -64,6 +67,22 @@ public class MetadataService {
         this.audit = audit;
         this.cache = cache;
         this.executionGuard = executionGuard;
+        this.schemaCatalogCache = Caffeine.newBuilder()
+                .expireAfterWrite(Duration.ofMinutes(15))
+                .maximumSize(100)
+                .build(this::doLoadSchemaCatalog);
+    }
+
+    private MetadataCacheService.SchemaCatalogSnapshot doLoadSchemaCatalog(Long connectionId) {
+        try {
+            DbConnection dbConnection = connections.require(connectionId);
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            try (Connection connection = connections.open(connectionId)) {
+                return loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load schema catalog for connection " + connectionId, e);
+        }
     }
 
     public MetadataResponse inspect(long connectionId, String schemaFilter, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
@@ -71,39 +90,26 @@ public class MetadataService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
             cache.evictConnection(connectionId);
+            schemaCatalogCache.invalidate(connectionId);
         }
-        MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
-        if (schemaCatalog == null) {
-            synchronized (cacheLoadLock(connectionId)) {
-                schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
-                if (schemaCatalog == null) {
-                    try (Connection connection = connections.open(connectionId)) {
-                        schemaCatalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
-                    }
-                }
-            }
-        }
+        MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = schemaCatalogCache.get(connectionId);
         String selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
         int normalizedPage = Math.max(page == null ? 0 : page, 0);
         int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
         String normalizedKeyword = searchTerm(keyword);
         var cachedPage = cache.metadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize);
         boolean cacheHit = cachedPage.isPresent();
-        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = cachedPage.orElse(null);
-        if (pageValue == null) {
-            synchronized (cacheLoadLock(connectionId)) {
-                pageValue = cache.metadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize).orElse(null);
-                if (pageValue == null) {
-                    try (Connection connection = connections.open(connectionId)) {
-                        MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
-                                connectionId, connection, dialect, selectedSchema, normalizedKeyword, MatchMode.CONTAINS,
-                                normalizedPage, normalizedPageSize, false
-                        );
-                        pageValue = cache.putMetadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize, loaded);
-                    }
-                }
+        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = cachedPage.orElseGet(() -> {
+            try (Connection connection = connections.open(connectionId)) {
+                MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
+                        connectionId, connection, dialect, selectedSchema, normalizedKeyword, MatchMode.CONTAINS,
+                        normalizedPage, normalizedPageSize, false
+                );
+                return cache.putMetadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize, loaded);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to load metadata page", e);
             }
-        }
+        });
         MetadataCacheService.MetadataObjectPage objectPage = pageValue.value();
         return new MetadataResponse(
                 schemaCatalog.schemas(),
@@ -291,6 +297,7 @@ public class MetadataService {
         List<DbObject> objects = new ArrayList<>(pageSize + 1);
         List<DbObject> catalogObjects = loadCatalog ? new ArrayList<>() : null;
         String[] types = physicalOnly && !loadCatalog ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
+        int maxCatalogObjects = 20_000;
         try (ResultSet rs = meta.getTables(scope.catalog(), schemaPattern, tablePattern, types)) {
             while (rs.next()) {
                 String schema = dialect.resultNamespace(rs);
@@ -305,6 +312,9 @@ public class MetadataService {
                 if (!matchesName(name, keyword, matchMode)) continue;
                 if (catalogObjects != null) {
                     catalogObjects.add(new DbObject(schema, name, type, List.of(), List.of()));
+                    if (catalogObjects.size() >= maxCatalogObjects) {
+                        throw new IllegalStateException("对象数量超过 " + maxCatalogObjects + "，请使用搜索关键字过滤。");
+                    }
                     continue;
                 }
                 if (physicalOnly && !isPhysicalTable(type)) continue;
@@ -367,16 +377,6 @@ public class MetadataService {
             case PREFIX -> escaped + "%";
             case CONTAINS -> "%" + escaped + "%";
         };
-    }
-
-    private Object cacheLoadLock(long connectionId) {
-        return cacheLoadLocks[Math.floorMod(Long.hashCode(connectionId), cacheLoadLocks.length)];
-    }
-
-    private static Object[] cacheLoadLocks() {
-        Object[] locks = new Object[64];
-        java.util.Arrays.setAll(locks, ignored -> new Object());
-        return locks;
     }
 
     private boolean matchesName(String name, String keyword, MatchMode mode) {
@@ -523,13 +523,18 @@ public class MetadataService {
         long started = System.nanoTime();
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-        try (Connection connection = connections.open(connectionId);
-             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
-             Statement statement = connection.createStatement()) {
-            dialect.configureReadStatement(connection, statement, 1, 15);
-            try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM " + dialect.qualifiedName(schemaName, objectName))) {
-                Long value = rs.next() ? rs.getLong(1) : null;
-                return new ObjectRowCountResponse(value, true, (System.nanoTime() - started) / 1_000_000);
+        try (Connection connection = connections.open(connectionId)) {
+            var approximate = dialect.approximateRowCount(connection, schemaName, objectName);
+            if (approximate.isPresent()) {
+                return new ObjectRowCountResponse(approximate.get(), false, (System.nanoTime() - started) / 1_000_000);
+            }
+            try (ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
+                 Statement statement = connection.createStatement()) {
+                dialect.configureReadStatement(connection, statement, 1, 15);
+                try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM " + dialect.qualifiedName(schemaName, objectName))) {
+                    Long value = rs.next() ? rs.getLong(1) : null;
+                    return new ObjectRowCountResponse(value, true, (System.nanoTime() - started) / 1_000_000);
+                }
             }
         }
     }

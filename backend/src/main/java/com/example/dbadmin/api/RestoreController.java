@@ -9,8 +9,10 @@ import com.example.dbadmin.model.RestoreJob;
 import com.example.dbadmin.model.RestoreUpload;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.service.RestoreService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,9 +21,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/restores")
@@ -34,11 +34,12 @@ public class RestoreController {
         this.histories = histories;
     }
 
-    @PostMapping(value = "/uploads", consumes = "multipart/form-data")
-    public RestoreUpload upload(@RequestPart("file") MultipartFile file,
+    @PostMapping(value = "/uploads", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public RestoreUpload upload(HttpServletRequest request,
+                                @RequestParam String filename,
                                 @RequestParam String fileFormat,
                                 @RequestParam(required = false) String sourceDbType) throws Exception {
-        return service.upload(file, fileFormat, sourceDbType);
+        return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType);
     }
 
     @PostMapping("/preflight")

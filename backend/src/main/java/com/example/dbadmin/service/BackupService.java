@@ -1235,6 +1235,10 @@ public class BackupService {
     }
 
     private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName, String dbType) throws Exception {
+        if (value == null) {
+            writer.write("NULL");
+            return;
+        }
         if (value instanceof Clob clob) {
             writer.write('\'');
             try (Reader reader = clob.getCharacterStream()) {
@@ -1263,7 +1267,35 @@ public class BackupService {
             }
             return;
         }
-        writer.write(literal(value, tableName, columnName));
+        if (value instanceof Number) {
+            writer.write(value.toString());
+            return;
+        }
+        if (value instanceof Boolean bool) {
+            writer.write(bool ? "1" : "0");
+            return;
+        }
+        if (value instanceof java.sql.Date date) {
+            writeQuotedLiteral(writer, date.toString());
+            return;
+        }
+        if (value instanceof java.sql.Time time) {
+            writeQuotedLiteral(writer, time.toString());
+            return;
+        }
+        if (value instanceof java.sql.Timestamp timestamp) {
+            writeQuotedLiteral(writer, timestamp.toLocalDateTime().toString().replace('T', ' '));
+            return;
+        }
+        if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof ZonedDateTime || value instanceof Instant) {
+            writeQuotedLiteral(writer, value.toString());
+            return;
+        }
+        if (value instanceof CharSequence text) {
+            writeQuotedLiteral(writer, text);
+            return;
+        }
+        writeQuotedLiteral(writer, value.toString());
     }
 
     private void writeBinary(BufferedWriter writer, InputStream input, String dbType) throws Exception {
@@ -1398,14 +1430,14 @@ public class BackupService {
         if (value instanceof Number) {
             return value.toString();
         }
-        if (value instanceof Boolean) {
-            return Boolean.TRUE.equals(value) ? "TRUE" : "FALSE";
+        if (value instanceof Boolean bool) {
+            return bool ? "1" : "0";
         }
         if (value instanceof java.sql.Date date) {
-            return quoteLiteral(date.toLocalDate().toString());
+            return quoteLiteral(date.toString());
         }
         if (value instanceof java.sql.Time time) {
-            return quoteLiteral(time.toLocalTime().toString());
+            return quoteLiteral(time.toString());
         }
         if (value instanceof java.sql.Timestamp timestamp) {
             return quoteLiteral(timestamp.toLocalDateTime().toString().replace('T', ' '));
@@ -1437,7 +1469,28 @@ public class BackupService {
     }
 
     private String quoteLiteral(String value) {
-        return "'" + value.replace("'", "''") + "'";
+        if (value.length() <= 1024) {
+            return "'" + value.replace("'", "''") + "'";
+        }
+        StringBuilder result = new StringBuilder(value.length() + value.length() / 100 + 2);
+        result.append('\'');
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch == '\'') result.append("''");
+            else result.append(ch);
+        }
+        result.append('\'');
+        return result.toString();
+    }
+
+    private void writeQuotedLiteral(BufferedWriter writer, CharSequence value) throws Exception {
+        writer.write('\'');
+        for (int i = 0; i < value.length(); i++) {
+            char ch = value.charAt(i);
+            if (ch == '\'') writer.write("''");
+            else writer.write(ch);
+        }
+        writer.write('\'');
     }
 
     private String sqlCommentValue(String value) {

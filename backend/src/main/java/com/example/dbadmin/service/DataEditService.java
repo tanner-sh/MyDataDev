@@ -26,6 +26,7 @@ import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -196,21 +197,38 @@ public class DataEditService {
             connection.setAutoCommit(false);
             int affected = 0;
             try {
-                for (PreparedOperation operation : operations) {
-                    try (PreparedStatement statement = connection.prepareStatement(operation.sql())) {
-                        statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
-                        bind(statement, operation.parameters());
-                        int count = statement.executeUpdate();
-                        if ((operation.type().equals("UPDATE") || operation.type().equals("DELETE")) && count != 1) {
-                            throw new IllegalStateException(count == 0
-                                    ? "数据已被其他操作修改或删除，本次提交已回滚。"
-                                    : "行定位条件影响了多行数据，本次提交已回滚。");
-                        }
-                        if (operation.type().equals("INSERT") && count != 1) {
-                            throw new IllegalStateException("新增数据影响行数异常，本次提交已回滚。");
-                        }
-                        affected += count;
+                int index = 0;
+                while (index < operations.size()) {
+                    String sql = operations.get(index).sql();
+                    String type = operations.get(index).type();
+                    int end = index;
+                    while (end < operations.size() && operations.get(end).sql().equals(sql)) {
+                        end++;
                     }
+                    List<PreparedOperation> batch = operations.subList(index, end);
+
+                    try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                        statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
+                        for (PreparedOperation operation : batch) {
+                            bind(statement, operation.parameters());
+                            statement.addBatch();
+                        }
+                        int[] counts = statement.executeBatch();
+                        for (int i = 0; i < counts.length; i++) {
+                            int count = counts[i];
+                            if (count == Statement.SUCCESS_NO_INFO) continue;
+                            if ((type.equals("UPDATE") || type.equals("DELETE")) && count != 1) {
+                                throw new IllegalStateException(count == 0
+                                        ? "数据已被其他操作修改或删除，本次提交已回滚。"
+                                        : "行定位条件影响了多行数据，本次提交已回滚。");
+                            }
+                            if (type.equals("INSERT") && count != 1) {
+                                throw new IllegalStateException("新增数据影响行数异常，本次提交已回滚。");
+                            }
+                            affected += count;
+                        }
+                    }
+                    index = end;
                 }
                 connection.commit();
             } catch (Exception e) {
@@ -659,8 +677,11 @@ public class DataEditService {
                 byte[] buffer = new byte[16 * 1024];
                 long length = 0;
                 int read;
-                while ((read = input.read(buffer)) >= 0) length += read;
-                return "<BINARY " + length + " bytes>";
+                long maxProbe = 1L << 20; // 1 MB
+                while (length <= maxProbe && (read = input.read(buffer)) >= 0) {
+                    length += read;
+                }
+                return length > maxProbe ? "<BINARY > 1 MB>" : "<BINARY " + length + " bytes>";
             }
         }
         return rs.getObject(index);

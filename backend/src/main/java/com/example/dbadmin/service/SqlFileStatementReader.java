@@ -120,6 +120,7 @@ final class SqlFileStatementReader {
         private boolean bracket;
         private boolean blockComment;
         private boolean oracleBlock;
+        private boolean statementStarted;
         private long index;
 
         private Parser(String dbType, int maxStatementChars, StatementConsumer consumer) {
@@ -134,13 +135,14 @@ final class SqlFileStatementReader {
         private void acceptLine(String line) throws Exception {
             String trimmed = line.trim();
             if (cleanState()) {
-                if (mysql && statement.toString().isBlank() && trimmed.toUpperCase(Locale.ROOT).startsWith("DELIMITER ")) {
+                if (mysql && !statementStarted && trimmed.toUpperCase(Locale.ROOT).startsWith("DELIMITER ")) {
                     String next = trimmed.substring("DELIMITER".length()).trim();
                     if (next.isBlank() || next.length() > 16 || next.chars().anyMatch(Character::isWhitespace)) {
                         throw new IllegalArgumentException("MySQL DELIMITER 指令不合法。");
                     }
                     delimiter = next;
                     statement.setLength(0);
+                    statementStarted = false;
                     return;
                 }
                 if (sqlServer && trimmed.equalsIgnoreCase("GO")) {
@@ -157,7 +159,7 @@ final class SqlFileStatementReader {
                 }
             }
 
-            if (oracle && statement.toString().isBlank()) oracleBlock = isOracleBlockStart(trimmed);
+            if (oracle && !statementStarted) oracleBlock = isOracleBlockStart(trimmed);
             boolean lineComment = false;
             for (int cursor = 0; cursor < line.length(); cursor++) {
                 char current = line.charAt(cursor);
@@ -271,12 +273,14 @@ final class SqlFileStatementReader {
         private void emit() throws Exception {
             String sql = statement.toString().trim();
             statement.setLength(0);
+            statementStarted = false;
             if (sql.isBlank() || sql.replaceAll("(?s)/\\*.*?\\*/|--.*?(?:\\R|$)", "").isBlank()) return;
             consumer.accept(++index, sql);
         }
 
         private void append(char value) {
             statement.append(value);
+            if (!statementStarted && !Character.isWhitespace(value)) statementStarted = true;
             if (statement.length() > maxStatementChars) {
                 throw new IllegalArgumentException("单条 SQL 超过允许大小（" + maxStatementChars + " 字符）。");
             }
@@ -310,6 +314,21 @@ final class SqlFileStatementReader {
             int read = super.read(value, offset, length); if (read > 0) count += read; return read;
         }
         private long count() { return count; }
+    }
+
+    enum Kind { QUERY, MUTATION, DDL }
+
+    static Kind classifySql(String sql) {
+        String normalized = sql.trim().toUpperCase(Locale.ROOT);
+        if (normalized.startsWith("SELECT") || normalized.startsWith("WITH") || normalized.startsWith("SHOW")
+                || normalized.startsWith("DESCRIBE") || normalized.startsWith("DESC") || normalized.startsWith("EXPLAIN")) {
+            return Kind.QUERY;
+        }
+        if (normalized.startsWith("INSERT") || normalized.startsWith("UPDATE") || normalized.startsWith("DELETE")
+                || normalized.startsWith("REPLACE") || normalized.startsWith("MERGE")) {
+            return Kind.MUTATION;
+        }
+        return Kind.DDL;
     }
 
     @FunctionalInterface interface StatementConsumer { void accept(long index, String sql) throws Exception; }

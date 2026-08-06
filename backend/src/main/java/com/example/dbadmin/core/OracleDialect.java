@@ -78,21 +78,39 @@ public class OracleDialect extends DefaultDialect {
     @Override
     public Optional<String> nativeDdl(Connection connection, String schemaName, String objectName, String objectType) throws Exception {
         String ddlType = objectType != null && objectType.toUpperCase(Locale.ROOT).contains("VIEW") ? "VIEW" : "TABLE";
-        StringBuilder sql = new StringBuilder("SELECT DBMS_METADATA.GET_DDL('")
-                .append(ddlType)
-                .append("', '")
-                .append(objectName.replace("'", "''"))
-                .append("'");
-        if (schemaName != null && !schemaName.isBlank()) {
-            sql.append(", '").append(schemaName.replace("'", "''")).append("'");
-        }
-        sql.append(") FROM DUAL");
-        try (Statement statement = connection.createStatement(); ResultSet rs = statement.executeQuery(sql.toString())) {
-            if (rs.next()) {
-                return Optional.ofNullable(rs.getString(1));
+        String schema = schemaName == null || schemaName.isBlank() ? currentSchema(connection) : schemaName;
+        String sql = "SELECT DBMS_METADATA.GET_DDL('" + ddlType + "', ?, ?) FROM DUAL";
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, objectName);
+            statement.setString(2, schema);
+            try (ResultSet rs = statement.executeQuery()) {
+                return rs.next() ? Optional.ofNullable(rs.getString(1)) : Optional.empty();
             }
         }
-        return Optional.empty();
+    }
+
+    @Override
+    public Optional<Long> approximateRowCount(Connection connection, String schemaName, String tableName) throws java.sql.SQLException {
+        String schema;
+        try {
+            schema = schemaName == null || schemaName.isBlank() ? currentSchema(connection) : schemaName;
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+        String sql = "SELECT NUM_ROWS FROM ALL_TABLES WHERE OWNER = ? AND TABLE_NAME = ?";
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, schema);
+            statement.setString(2, tableName);
+            try (ResultSet rs = statement.executeQuery()) {
+                if (rs.next()) {
+                    long rows = rs.getLong(1);
+                    return rs.wasNull() ? Optional.empty() : Optional.of(rows);
+                }
+                return Optional.empty();
+            }
+        } catch (Exception e) {
+            return Optional.empty();
+        }
     }
 
     @Override

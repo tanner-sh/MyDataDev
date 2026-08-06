@@ -19,9 +19,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class SqlRestoreTranslator {
+    private static final Pattern INSERT_HEAD = Pattern.compile("(?is)^\\s*INSERT\\s+(?:IGNORE\\s+)?INTO\\s+([^\\s(]+)");
     public Analysis analyze(Path path, String sourceDbType, String targetDbType, Map<String, String> namespaceMapping) {
         DbType source = dbType(sourceDbType);
         DbType target = dbType(targetDbType);
@@ -59,9 +62,30 @@ public class SqlRestoreTranslator {
                           String conflictMode, TranslatedStatementConsumer consumer) throws Exception {
         DbType source = dbType(sourceDbType);
         DbType target = dbType(targetDbType);
+        boolean needsTypeMapping = requiresTypeMapping(source, target);
         long[] index = {0};
         SqlStatementStream.read(path, sql -> {
             index[0]++;
+
+            // Fast path for INSERT when no type mapping needed
+            Matcher m = INSERT_HEAD.matcher(sql);
+            if (m.find() && !needsTypeMapping && namespaceMapping.isEmpty()) {
+                consumer.accept(index[0], sql, true);
+                return;
+            }
+            if (m.find() && !needsTypeMapping) {
+                String tableName = m.group(1);
+                String mappedTable = mapTableName(tableName, namespaceMapping, target);
+                if (mappedTable.equals(tableName)) {
+                    consumer.accept(index[0], sql, true);
+                } else {
+                    String rewritten = sql.substring(0, m.start(1)) + mappedTable + sql.substring(m.end(1));
+                    consumer.accept(index[0], rewritten, true);
+                }
+                return;
+            }
+
+            // Full AST parse for DDL or when type mapping required
             SQLStatement statement = parseAllowed(sql, source);
             boolean ddl = !(statement instanceof SQLInsertStatement);
             if ("APPEND".equalsIgnoreCase(conflictMode) && ddl) return;
@@ -100,6 +124,27 @@ public class SqlRestoreTranslator {
         String mapped = sourceNamespace == null ? null : mappings == null ? sourceNamespace : mappings.getOrDefault(sourceNamespace, sourceNamespace);
         if (target == DbType.sqlite) mapped = null;
         table.setSchema(mapped);
+    }
+
+    private String mapTableName(String tableName, Map<String, String> mappings, DbType target) {
+        int dotIndex = tableName.indexOf('.');
+        if (dotIndex < 0) return tableName;
+        String namespace = tableName.substring(0, dotIndex);
+        String name = tableName.substring(dotIndex + 1);
+        String mapped = mappings.getOrDefault(namespace, namespace);
+        if (target == DbType.sqlite) return name;
+        return mapped + "." + name;
+    }
+
+    private boolean requiresTypeMapping(DbType source, DbType target) {
+        if (source == target) return false;
+        Set<DbType> sqliteLike = Set.of(DbType.sqlite);
+        Set<DbType> mysqlLike = Set.of(DbType.mysql, DbType.mariadb, DbType.oceanbase);
+        Set<DbType> postgresLike = Set.of(DbType.postgresql);
+        Set<DbType> oracleLike = Set.of(DbType.oracle, DbType.dm, DbType.oceanbase_oracle);
+        if (mysqlLike.contains(source) && mysqlLike.contains(target)) return false;
+        if (oracleLike.contains(source) && oracleLike.contains(target)) return false;
+        return true;
     }
 
     private void mapTypes(SQLStatement statement, DbType target) {

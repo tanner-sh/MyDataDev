@@ -112,6 +112,10 @@ public interface DatabaseDialect {
         configureReadStatement(connection, statement, fetchSize, timeoutSeconds);
     }
 
+    default Optional<Long> approximateRowCount(Connection connection, String schemaName, String tableName) throws SQLException {
+        return Optional.empty();
+    }
+
     default String literal(Object value) {
         if (value == null) {
             return "NULL";
