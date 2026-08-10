@@ -144,9 +144,6 @@ public class SqlService {
             throw new IllegalArgumentException("MCP 只允许执行单条只读查询");
         }
         DbConnection dbConnection = connections.require(connectionId);
-        if (!dbConnection.readonly()) {
-            throw new IllegalArgumentException("MCP 查询只能使用只读连接");
-        }
         int maxRows = limits.normalizeRows(requestedMaxRows);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
@@ -385,9 +382,6 @@ public class SqlService {
         long started = System.nanoTime();
         String executionSql = singleStatement(sql, "MCP 执行计划");
         DbConnection dbConnection = connections.require(connectionId);
-        if (!dbConnection.readonly()) {
-            throw new IllegalArgumentException("MCP 执行计划只能使用只读连接");
-        }
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (!dialect.capabilities().explain()) {
             throw new IllegalStateException("当前数据库类型不支持执行计划");

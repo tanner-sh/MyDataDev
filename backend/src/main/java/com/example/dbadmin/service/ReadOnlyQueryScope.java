@@ -4,9 +4,8 @@ import java.sql.Connection;
 import java.sql.SQLException;
 
 /**
- * Adds a rollback-only JDBC transaction around queries executed through a
- * connection configured as read-only. This supplements (rather than replaces)
- * database-side read-only credentials.
+ * Adds a rollback-only JDBC transaction and read-only hint around machine
+ * queries. This supplements (rather than replaces) database-side permissions.
  */
 final class ReadOnlyQueryScope implements AutoCloseable {
     private final Connection connection;

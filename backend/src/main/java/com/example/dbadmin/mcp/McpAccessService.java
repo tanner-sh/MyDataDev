@@ -20,7 +20,7 @@ public class McpAccessService {
     public List<ConnectionResponse> authorizedConnections() {
         McpAgentPrincipal principal = principal();
         return connections.list().stream()
-                .filter(connection -> allowed(principal, connection.id(), connection.environment(), connection.readonly()))
+                .filter(connection -> allowed(principal, connection.id(), connection.environment()))
                 .toList();
     }
 
@@ -35,7 +35,7 @@ public class McpAccessService {
         } catch (RuntimeException ignored) {
             throw unavailable();
         }
-        if (!allowed(principal, connection.id(), connection.environment(), connection.readonly())) {
+        if (!allowed(principal, connection.id(), connection.environment())) {
             throw unavailable();
         }
         return connection;
@@ -53,8 +53,8 @@ public class McpAccessService {
         return principal().actor();
     }
 
-    private boolean allowed(McpAgentPrincipal principal, long connectionId, String environment, boolean readonly) {
-        if (!principal.connectionIds().contains(connectionId) || !readonly) return false;
+    private boolean allowed(McpAgentPrincipal principal, long connectionId, String environment) {
+        if (!principal.connectionIds().contains(connectionId)) return false;
         return !"prod".equalsIgnoreCase(environment) || principal.allowProduction();
     }
 

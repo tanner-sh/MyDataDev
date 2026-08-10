@@ -145,11 +145,7 @@ public class McpConfigurationService {
     }
 
     public McpConfigResponse updateStatus(boolean enabled, String actor) {
-        McpRuntimeConfig before = snapshot();
-        if (enabled && !hasEffectiveAgent(before)) {
-            throw new IllegalStateException("至少需要一个已启用且拥有只读连接的 MCP Agent 才能开启服务");
-        }
-        Settings old = before.settings();
+        Settings old = snapshot().settings();
         Settings updated = new Settings(
                 enabled, old.defaultQueryRows(), old.maxQueryRows(), old.maxResultCells(), old.maxResultTextChars(),
                 old.maxCellTextChars(), old.maxSqlChars(), old.queryTimeoutSeconds(), old.metadataPageSize(),
@@ -177,9 +173,6 @@ public class McpConfigurationService {
     public McpAgentResponse updateAgent(long id, McpAgentUpdateRequest request, String actor) {
         Agent existing = requireAgent(id);
         Set<Long> connectionIds = validateConnections(request.connectionIds(), request.allowProduction());
-        if (snapshot().settings().enabled() && !request.enabled() && !hasOtherEffectiveAgent(id)) {
-            throw new IllegalStateException("请先关闭 MCP 服务，再停用最后一个 Agent");
-        }
         transactions.executeWithoutResult(ignored -> repository.updateAgent(id, request.enabled(), request.allowProduction(), connectionIds));
         reload();
         audit.log(actor, "MCP_AGENT_UPDATE", "mcp-agent:" + existing.agentId(),
@@ -199,9 +192,6 @@ public class McpConfigurationService {
 
     public String deleteAgent(long id, String actor) {
         Agent existing = requireAgent(id);
-        if (snapshot().settings().enabled() && !hasOtherEffectiveAgent(id)) {
-            throw new IllegalStateException("请先关闭 MCP 服务，再删除最后一个 Agent");
-        }
         transactions.executeWithoutResult(ignored -> repository.deleteAgent(id));
         reload();
         audit.log(actor, "MCP_AGENT_DELETE", "mcp-agent:" + existing.agentId(), "deleted=true");
@@ -220,39 +210,17 @@ public class McpConfigurationService {
 
     private Set<Long> validateConnections(List<Long> requested, boolean allowProduction) {
         Set<Long> ids = new LinkedHashSet<>(requested == null ? List.of() : requested);
-        if (ids.isEmpty()) throw new IllegalArgumentException("MCP Agent 至少需要授权一个只读连接");
+        if (ids.isEmpty()) throw new IllegalArgumentException("MCP Agent 至少需要授权一个连接");
         Map<Long, ConnectionResponse> available = connections.list().stream()
                 .collect(java.util.stream.Collectors.toMap(ConnectionResponse::id, connection -> connection));
         for (Long id : ids) {
             ConnectionResponse connection = id == null ? null : available.get(id);
-            if (connection == null || !connection.readonly()) throw new IllegalArgumentException("连接不存在或未设置为只读：" + id);
+            if (connection == null) throw new IllegalArgumentException("连接不存在：" + id);
             if ("prod".equalsIgnoreCase(connection.environment()) && !allowProduction) {
                 throw new IllegalArgumentException("授权生产连接必须开启生产环境访问权限");
             }
         }
         return ids;
-    }
-
-    private boolean hasEffectiveAgent(McpRuntimeConfig config) {
-        Map<Long, ConnectionResponse> available = connections.list().stream()
-                .collect(java.util.stream.Collectors.toMap(ConnectionResponse::id, connection -> connection));
-        return config.agents().values().stream().anyMatch(agent -> agent.enabled() && agent.connectionIds().stream().anyMatch(id -> {
-            ConnectionResponse connection = available.get(id);
-            return connection != null && connection.readonly()
-                    && (!"prod".equalsIgnoreCase(connection.environment()) || agent.allowProduction());
-        }));
-    }
-
-    private boolean hasOtherEffectiveAgent(long excludedId) {
-        Map<Long, ConnectionResponse> available = connections.list().stream()
-                .collect(java.util.stream.Collectors.toMap(ConnectionResponse::id, connection -> connection));
-        return snapshot().agents().values().stream()
-                .filter(agent -> agent.id() != excludedId && agent.enabled())
-                .anyMatch(agent -> agent.connectionIds().stream().anyMatch(id -> {
-                    ConnectionResponse connection = available.get(id);
-                    return connection != null && connection.readonly()
-                            && (!"prod".equalsIgnoreCase(connection.environment()) || agent.allowProduction());
-                }));
     }
 
     private Agent requireAgent(long id) {

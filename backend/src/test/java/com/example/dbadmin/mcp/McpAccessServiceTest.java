@@ -28,7 +28,7 @@ class McpAccessServiceTest {
     }
 
     @Test
-    void exposesOnlyAllowlistedReadonlyNonProductionConnectionsByDefault() {
+    void exposesAllowlistedReadonlyAndWritableNonProductionConnectionsByDefault() {
         authenticate(new McpAgentPrincipal("agent", Set.of(1L, 2L, 3L), false));
         when(connections.list()).thenReturn(List.of(
                 response(1L, "dev-read", "dev", true),
@@ -37,13 +37,13 @@ class McpAccessServiceTest {
                 response(4L, "not-allowlisted", "dev", true)
         ));
 
-        assertThat(access.authorizedConnections()).extracting(ConnectionResponse::id).containsExactly(1L);
+        assertThat(access.authorizedConnections()).extracting(ConnectionResponse::id).containsExactly(1L, 2L);
     }
 
     @Test
-    void permitsExplicitlyAuthorizedProductionReadonlyConnection() {
+    void permitsExplicitlyAuthorizedProductionConnectionRegardlessOfReadonlyFlag() {
         authenticate(new McpAgentPrincipal("agent", Set.of(3L), true));
-        DbConnection production = model(3L, "prod-read", "prod", true);
+        DbConnection production = model(3L, "prod-write", "prod", false);
         when(connections.require(3L)).thenReturn(production);
 
         assertThat(access.requireConnection(3L)).isSameAs(production);
@@ -51,12 +51,13 @@ class McpAccessServiceTest {
     }
 
     @Test
-    void hidesMissingWritableAndUnauthorizedConnectionsBehindSameError() {
+    void permitsWritableConnectionAndHidesMissingAndUnauthorizedConnectionsBehindSameError() {
         authenticate(new McpAgentPrincipal("agent", Set.of(1L, 2L), false));
-        when(connections.require(1L)).thenReturn(model(1L, "write", "dev", false));
+        DbConnection writable = model(1L, "write", "dev", false);
+        when(connections.require(1L)).thenReturn(writable);
         when(connections.require(2L)).thenThrow(new IllegalArgumentException("not found"));
 
-        assertThatThrownBy(() -> access.requireConnection(1L)).hasMessage("连接不可用或当前 MCP agent 未获授权");
+        assertThat(access.requireConnection(1L)).isSameAs(writable);
         assertThatThrownBy(() -> access.requireConnection(2L)).hasMessage("连接不可用或当前 MCP agent 未获授权");
         assertThatThrownBy(() -> access.requireConnection(9L)).hasMessage("连接不可用或当前 MCP agent 未获授权");
     }

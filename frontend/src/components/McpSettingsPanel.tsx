@@ -49,10 +49,7 @@ export function McpSettingsPanel() {
   const [messageApi, messageContext] = message.useMessage();
 
   const endpoint = useMemo(() => resolveMcpEndpoint(config?.endpointPath || '/mcp'), [config?.endpointPath]);
-  const readonlyConnections = useMemo(
-    () => (config?.connections || []).filter((connection) => connection.readonly),
-    [config?.connections]
-  );
+  const availableConnections = config?.connections || [];
   const connectionById = useMemo(
     () => new Map((config?.connections || []).map((connection) => [connection.id, connection])),
     [config?.connections]
@@ -213,7 +210,7 @@ export function McpSettingsPanel() {
     return new Promise<boolean>((resolve) => {
       modal.confirm({
         title: '确认授权生产数据库',
-        content: '该 Agent 将能够读取所选生产连接。请确认连接使用数据库侧只读账号。',
+        content: '该 Agent 将能够查询所选生产连接。请确认该 Agent 确实需要这些生产数据访问权限。',
         okText: '确认授权',
         okButtonProps: { danger: true },
         onOk: () => resolve(true),
@@ -297,6 +294,14 @@ export function McpSettingsPanel() {
             />
           </Space>
         </div>
+        {config?.enabled && config.agents.length === 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message="MCP 已开启，但尚未创建 Agent；创建 Agent 并保存 API Key 后才能接入。"
+            className="mcp-section-alert"
+          />
+        )}
         <Descriptions size="small" column={1} bordered>
           <Descriptions.Item label="MCP URL">
             <Space>
@@ -313,9 +318,9 @@ export function McpSettingsPanel() {
         extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateAgent}>新建 Agent</Button>}
       >
         <Alert
-          type="warning"
+          type="info"
           showIcon
-          message="MCP 仅允许访问已授权且标记为只读的连接；数据库账号本身仍必须具备数据库侧只读权限。"
+          message="MCP 可查询 Agent 白名单内的任意连接，但只发布查询和元数据工具；DML、DDL、多语句及其他非查询 SQL 仍会被后端拒绝。"
           className="mcp-section-alert"
         />
         <Table<McpAgent>
@@ -370,13 +375,13 @@ export function McpSettingsPanel() {
           >
             <Input disabled={Boolean(editingAgent)} placeholder="例如 analytics-agent" />
           </Form.Item>
-          <Form.Item name="connectionIds" label="只读连接白名单" rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个只读连接' }]}>
+          <Form.Item name="connectionIds" label="连接白名单" rules={[{ required: true, type: 'array', min: 1, message: '至少选择一个连接' }]}>
             <Select
               mode="multiple"
               optionFilterProp="label"
-              options={readonlyConnections.map((connection) => ({
+              options={availableConnections.map((connection) => ({
                 value: connection.id,
-                label: `${connection.name} · ${connection.environment}${connection.environment === 'prod' ? ' · 生产' : ''}`
+                label: `${connection.name} · ${connection.environment} · ${connection.readonly ? '只读' : '可写'}${connection.environment === 'prod' ? ' · 生产' : ''}`
               }))}
               placeholder="选择允许 Agent 访问的连接"
             />

@@ -93,7 +93,7 @@ npm run build
 
 ## MCP Server
 
-MCP Server 默认关闭。后端启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。每个 AI agent 使用独立 API Key，并且只能访问同时满足“Agent 连接白名单”和“连接已标记为只读”的数据库。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
+MCP Server 在新配置中默认开启。后端启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。每个 AI agent 使用独立 API Key，可以查询白名单内的任意已配置连接；生产连接仍需额外授权。MCP 目前只发布查询、元数据浏览和执行计划能力，不提供写入工具。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
 
 ## 备份说明
 

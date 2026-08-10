@@ -43,19 +43,20 @@ class SqlServiceReadOnlyTest {
     }
 
     @Test
-    void rejectsMutationsMultipleStatementsAndWritableConnectionsBeforeExecution() throws Exception {
+    void queriesWritableConnectionsButStillRejectsMutationsAndMultipleStatements() throws Exception {
         String url = database();
-        SqlService readonly = service(url, true);
+        SqlService writable = service(url, false);
 
-        assertThatThrownBy(() -> readonly.executeReadOnly(1L, "update users set name='changed'", null, 2, "mcp:test", LIMITS))
+        assertThatThrownBy(() -> writable.executeReadOnly(1L, "update users set name='changed'", null, 2, "mcp:test", LIMITS))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("只允许");
-        assertThatThrownBy(() -> readonly.executeReadOnly(1L, "select 1; delete from users", null, 2, "mcp:test", LIMITS))
+        assertThatThrownBy(() -> writable.executeReadOnly(1L, "select 1; delete from users", null, 2, "mcp:test", LIMITS))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("一条 SQL");
-        assertThatThrownBy(() -> service(url, false).executeReadOnly(1L, "select * from users", null, 2, "mcp:test", LIMITS))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("只读连接");
+
+        var query = writable.executeReadOnly(1L, "select id, name from users order by id", null, 2, "mcp:test", LIMITS);
+        assertThat(query.rows()).hasSize(2);
+        assertThat(writable.explainReadOnly(1L, "select * from users", null, "mcp:test", LIMITS).rows()).isNotEmpty();
 
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             var rs = connection.createStatement().executeQuery("select name from users where id=1");

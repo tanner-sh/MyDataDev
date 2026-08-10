@@ -1,23 +1,23 @@
 # MCP Server 使用说明
 
-MyDataDev 后端内置一个只读 MCP Server，使用 Streamable HTTP 协议向其他 AI agent 提供数据库发现和查询能力。端点默认为：
+MyDataDev 后端内置一个查询型 MCP Server，使用 Streamable HTTP 协议向其他 AI agent 提供数据库发现和查询能力。端点默认为：
 
 ```text
 http://<backend-host>:8080/mcp
 ```
 
-MCP 默认关闭，不影响现有 Web 和 REST API。后端启动后，管理员可完全通过 Web 配置和热启停 MCP，不需要额外执行生成密钥或 MCP 启动命令。启用 MCP 只会保护 `/mcp`；现有 `/api` 的网络访问控制方式保持不变。
+MCP 在新配置中默认开启，不影响现有 Web 和 REST API；升级时会尊重 H2 中已经保存的开关状态。管理员可完全通过 Web 配置和热启停 MCP，不需要额外执行生成密钥或 MCP 启动命令。启用 MCP 只会保护 `/mcp`；现有 `/api` 的网络访问控制方式保持不变。
 
 ## 通过 Web 开启
 
 1. 正常启动 MyDataDev 后端和前端。
-2. 在连接管理中，将准备提供给 AI agent 的连接标记为“只读”。连接本身也必须使用数据库侧只读账户。
+2. 在连接管理中确认需要提供给 AI agent 的数据库连接已经配置完成。
 3. 点击页面右上角的 **MCP**，进入 **MCP Server 设置**。
-4. 点击 **新建 Agent**，填写 Agent ID，选择允许访问的只读连接；生产连接需要额外确认生产权限。
+4. 点击 **新建 Agent**，填写 Agent ID，选择允许查询的连接；生产连接需要额外确认生产权限。
 5. 系统会自动生成高熵 API Key。立即复制完整凭据或客户端 JSON；关闭弹窗后无法找回，只能轮换 Key。
-6. 打开 MCP Server 开关。所有修改都会即时生效，无需重启后端。
+6. 如此前主动关闭过 MCP Server，可重新打开开关。所有修改都会即时生效，无需重启后端。
 
-系统会阻止在没有有效 Agent 和只读连接授权时开启 MCP，也会阻止在运行中停用或删除最后一个有效 Agent。
+MCP 可以在没有 Agent 时保持开启，但此时没有任何有效 API Key，请求会返回 401。创建、停用和删除 Agent 不需要切换服务状态。
 
 ## 安全模型
 
@@ -25,12 +25,11 @@ MCP 默认关闭，不影响现有 Web 和 REST API。后端启动后，管理�
 
 1. 请求携带有效的 agent API Key。
 2. 目标连接 ID 位于该 agent 的 `connection-ids` 白名单中。
-3. MyDataDev 中的连接已设置 `readonly: true`。
-4. 生产连接还要求该 agent 设置 `allow-production: true`。
+3. 生产连接还要求该 agent 设置 `allow-production: true`。
 
 SQL 工具只接受分类为查询的单条语句，会拒绝 DML、DDL、存储过程调用、锁、会话修改、多语句和已知的有副作用查询。执行时还会设置 JDBC 只读提示、关闭自动提交并在结束时回滚。
 
-这些应用层检查不能替代数据库权限。提供给 MCP 的连接必须使用数据库侧只读账户；不要让仅靠 MyDataDev `readonly` 标记的高权限账户进入 agent 白名单。
+连接的 `readonly` 标记不再限制 MCP 查询资格；白名单中的只读和可写连接都可以被查询。应用层检查不能替代数据库权限，因此对生产库和其他高风险数据库仍建议使用数据库侧只读账户。
 
 API Key 会出现在每次请求的 `Authorization` 请求头中。跨主机部署时应通过反向代理提供 HTTPS，不要在不可信明文网络上传输 Key。`/mcp` 不应直接暴露到公网。
 
@@ -98,7 +97,7 @@ app:
 
 | 工具 | 能力 |
 | --- | --- |
-| `db_list_connections` | 列出当前 agent 可见的只读连接，不返回 JDBC URL、用户名或密码 |
+| `db_list_connections` | 列出当前 agent 白名单内的连接，不返回 JDBC URL、用户名或密码 |
 | `db_list_namespaces` | 分页列出 Catalog 或 Schema |
 | `db_search_objects` | 分页搜索表和视图 |
 | `db_describe_object` | 查看列、主键、索引和外键关系 |

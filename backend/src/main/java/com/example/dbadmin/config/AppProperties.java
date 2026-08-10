@@ -229,7 +229,7 @@ public class AppProperties {
     }
 
     public static class Mcp {
-        private boolean enabled;
+        private boolean enabled = true;
         private List<String> allowedOrigins = new ArrayList<>();
         private int defaultQueryRows = 100;
         private int maxQueryRows = 500;

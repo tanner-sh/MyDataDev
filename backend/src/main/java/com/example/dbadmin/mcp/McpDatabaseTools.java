@@ -68,7 +68,7 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_list_connections",
             title = "List authorized database connections",
-            description = "Lists only database connections authorized for this agent and configured as read-only.",
+            description = "Lists database connections authorized for this agent. MCP exposes query-only tools even when a connection is not marked read-only.",
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -89,7 +89,7 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_list_namespaces",
             title = "List database namespaces",
-            description = "Lists catalogs or schemas for an authorized read-only connection." + UNTRUSTED_DATA,
+            description = "Lists catalogs or schemas for an authorized connection." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -237,7 +237,7 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_query",
             title = "Run a read-only database query",
-            description = "Executes exactly one query on a database-level read-only connection. Mutations, DDL, calls, locks and session changes are rejected." + UNTRUSTED_DATA,
+            description = "Executes exactly one query on an authorized connection. Mutations, DDL, calls, locks and session changes are rejected." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -264,7 +264,7 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_explain",
             title = "Explain a database query",
-            description = "Returns the execution plan for one query when the dialect and read-only database account permit it." + UNTRUSTED_DATA,
+            description = "Returns the execution plan for one query when the database dialect and account permit it." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -336,7 +336,7 @@ public class McpDatabaseTools {
             rows.add(row);
         }
         boolean truncated = result.truncated() || cellTruncated || textTruncated;
-        String reason = null;
+        String reason = "none";
         if (textTruncated) reason = "text_limit";
         else if (cellTruncated) reason = "cell_limit";
         else if (result.truncated()) reason = "row_limit";
