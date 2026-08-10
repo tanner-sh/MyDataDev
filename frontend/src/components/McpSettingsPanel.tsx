@@ -12,6 +12,7 @@ import {
   Space,
   Switch,
   Table,
+  Tabs,
   Tag,
   Typography,
   message
@@ -21,13 +22,17 @@ import {
   DeleteOutlined,
   KeyOutlined,
   PlusOutlined,
+  ReadOutlined,
   ReloadOutlined,
-  SaveOutlined
+  SaveOutlined,
+  SettingOutlined
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { API } from '../constants';
 import type { McpAgent, McpConfig, McpCredential, McpLimits } from '../types';
+import { McpClientGuideTabs } from './McpClientGuideTabs';
+import { McpHelpPanel } from './McpHelpPanel';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -43,6 +48,7 @@ export function McpSettingsPanel() {
   const [editingAgent, setEditingAgent] = useState<McpAgent>();
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [credential, setCredential] = useState<McpCredential>();
+  const [activeSection, setActiveSection] = useState<'settings' | 'help'>('settings');
   const [configForm] = Form.useForm<ConfigForm>();
   const [agentForm] = Form.useForm<AgentForm>();
   const [modal, modalContext] = Modal.useModal();
@@ -271,10 +277,21 @@ export function McpSettingsPanel() {
   ];
 
   return (
-    <div className="mcp-settings-panel">
+    <div className="mcp-settings-shell">
       {messageContext}
       {modalContext}
-      <Card loading={loading} className="mcp-status-card">
+      <Tabs
+        className="mcp-main-tabs"
+        activeKey={activeSection}
+        destroyOnHidden={false}
+        onChange={(key) => setActiveSection(key as 'settings' | 'help')}
+        items={[
+          {
+            key: 'settings',
+            label: <Space size={6}><SettingOutlined />服务配置</Space>,
+            children: (
+              <div className="mcp-settings-panel">
+                <Card loading={loading} className="mcp-status-card">
         <div className="mcp-status-row">
           <div>
             <Space align="center">
@@ -298,7 +315,7 @@ export function McpSettingsPanel() {
           <Alert
             type="warning"
             showIcon
-            message="MCP 已开启，但尚未创建 Agent；创建 Agent 并保存 API Key 后才能接入。"
+            title="MCP 已开启，但尚未创建 Agent；创建 Agent 并保存 API Key 后才能接入。"
             className="mcp-section-alert"
           />
         )}
@@ -311,16 +328,16 @@ export function McpSettingsPanel() {
           </Descriptions.Item>
           <Descriptions.Item label="认证格式"><Text code>Authorization: Bearer agent-id.secret</Text></Descriptions.Item>
         </Descriptions>
-      </Card>
+                </Card>
 
-      <Card
-        title="Agent 与连接授权"
-        extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateAgent}>新建 Agent</Button>}
-      >
+                <Card
+                  title="Agent 与连接授权"
+                  extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateAgent}>新建 Agent</Button>}
+                >
         <Alert
           type="info"
           showIcon
-          message="MCP 可查询 Agent 白名单内的任意连接，但只发布查询和元数据工具；DML、DDL、多语句及其他非查询 SQL 仍会被后端拒绝。"
+          title="MCP 可查询 Agent 白名单内的任意连接，但只发布查询和元数据工具；DML、DDL、多语句及其他非查询 SQL 仍会被后端拒绝。"
           className="mcp-section-alert"
         />
         <Table<McpAgent>
@@ -332,9 +349,9 @@ export function McpSettingsPanel() {
           scroll={{ x: 800 }}
           locale={{ emptyText: '尚未创建 Agent' }}
         />
-      </Card>
+                </Card>
 
-      <Card title="Origin 与资源限制">
+                <Card title="Origin 与资源限制">
         <Form<ConfigForm> form={configForm} layout="vertical" onFinish={(values) => void saveConfig(values)}>
           <Form.Item
             name="allowedOrigins"
@@ -353,7 +370,25 @@ export function McpSettingsPanel() {
           />
           <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving}>保存并即时生效</Button>
         </Form>
-      </Card>
+                </Card>
+              </div>
+            )
+          },
+          {
+            key: 'help',
+            label: <Space size={6}><ReadOutlined />接入帮助</Space>,
+            children: (
+              <McpHelpPanel
+                endpoint={endpoint}
+                enabled={config?.enabled ?? false}
+                agents={config?.agents || []}
+                onOpenConfig={() => setActiveSection('settings')}
+                onCopy={copyText}
+              />
+            )
+          }
+        ]}
+      />
 
       <Modal
         title={editingAgent ? `编辑 Agent：${editingAgent.agentId}` : '新建 MCP Agent'}
@@ -404,20 +439,20 @@ export function McpSettingsPanel() {
       <Modal
         title="请立即保存 Agent API Key"
         open={Boolean(credential)}
+        width={920}
+        className="mcp-credential-modal"
         closable={false}
-        maskClosable={false}
+        mask={{ closable: false }}
         keyboard={false}
         footer={<Button type="primary" onClick={() => setCredential(undefined)}>我已安全保存</Button>}
       >
         {credential && (
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Alert type="warning" showIcon message="完整凭据只显示这一次。关闭后无法找回，只能重新轮换 Key。" />
+            <Alert type="warning" showIcon title="完整凭据只显示这一次。关闭后无法找回，只能重新轮换 Key。" />
             <Input.TextArea value={credential.credential} readOnly autoSize={{ minRows: 2, maxRows: 4 }} />
-            <Space wrap>
-              <Button icon={<CopyOutlined />} onClick={() => void copyText(credential.credential, '完整凭据')}>复制完整凭据</Button>
-              <Button icon={<CopyOutlined />} onClick={() => void copyText(clientConfig(endpoint, credential.credential), '客户端配置')}>复制客户端 JSON</Button>
-            </Space>
-            <Input.TextArea value={clientConfig(endpoint, credential.credential)} readOnly autoSize={{ minRows: 8, maxRows: 12 }} />
+            <Button icon={<CopyOutlined />} onClick={() => void copyText(credential.credential, '完整凭据')}>复制完整凭据</Button>
+            <Title level={5}>选择 AI Agent 并复制配置</Title>
+            <McpClientGuideTabs endpoint={endpoint} credential={credential.credential} compact onCopy={copyText} />
           </Space>
         )}
       </Modal>
@@ -457,16 +492,4 @@ function resolveMcpEndpoint(endpointPath: string) {
   apiUrl.search = '';
   apiUrl.hash = '';
   return apiUrl.toString().replace(/\/$/, '');
-}
-
-function clientConfig(endpoint: string, credential: string) {
-  return JSON.stringify({
-    mcpServers: {
-      mydatadev: {
-        type: 'streamable-http',
-        url: endpoint,
-        headers: { Authorization: `Bearer ${credential}` }
-      }
-    }
-  }, null, 2);
 }

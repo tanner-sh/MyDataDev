@@ -2581,9 +2581,27 @@ body {
   max-width: 340px;
 }
 
-.mcp-settings-panel {
+.mcp-settings-shell,
+.mcp-main-tabs {
+  min-width: 0;
+}
+
+.mcp-main-tabs > .ant-tabs-nav {
+  margin: 0 0 14px;
+}
+
+.mcp-main-tabs > .ant-tabs-body-holder {
+  overflow-x: hidden;
+}
+
+.mcp-settings-panel,
+.mcp-help-panel {
   display: grid;
   gap: 16px;
+}
+
+.mcp-help-panel {
+  min-width: 0;
 }
 
 .mcp-status-row {
@@ -2608,6 +2626,99 @@ body {
   gap: 0 16px;
 }
 
+.mcp-client-tabs,
+.mcp-client-guide,
+.mcp-snippet-list {
+  min-width: 0;
+}
+
+.mcp-client-tabs > .ant-tabs-nav {
+  margin-bottom: 14px;
+}
+
+.mcp-client-guide {
+  display: grid;
+  gap: 14px;
+}
+
+.mcp-help-list {
+  margin: 0;
+  padding-left: 22px;
+  color: var(--text-secondary);
+}
+
+.mcp-help-list li + li {
+  margin-top: 6px;
+}
+
+.mcp-snippet-list {
+  display: grid;
+  gap: 12px;
+}
+
+.mcp-code-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+
+.mcp-code-card-header {
+  min-height: 38px;
+  padding: 6px 8px 6px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface);
+}
+
+.mcp-code-card pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--text);
+  font: 12px/1.6 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.mcp-client-verify {
+  padding-top: 2px;
+}
+
+.mcp-client-verify h5,
+.mcp-credential-modal h5 {
+  margin: 0 0 8px;
+}
+
+.mcp-credential-reminder {
+  margin: 0 !important;
+}
+
+.mcp-help-security-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.mcp-help-security-grid h5 {
+  margin: 0 0 8px;
+}
+
+.mcp-tool-table {
+  margin-top: 4px;
+}
+
+.mcp-credential-modal .ant-modal-body {
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+}
+
 @media (max-width: 720px) {
   .mcp-status-row {
     flex-direction: column;
@@ -2615,6 +2726,14 @@ body {
 
   .mcp-limit-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mcp-help-security-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-code-card-header {
+    align-items: flex-start;
   }
 }
 

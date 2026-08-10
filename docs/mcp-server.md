@@ -19,6 +19,17 @@ MCP 在新配置中默认开启，不影响现有 Web 和 REST API；升级时�
 
 MCP 可以在没有 Agent 时保持开启，但此时没有任何有效 API Key，请求会返回 401。创建、停用和删除 Agent 不需要切换服务状态。
 
+## Web 内置接入帮助
+
+MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接入帮助会使用当前部署的实际 MCP URL，提供：
+
+- 当前服务状态、可用 Agent 数量和五步接入流程。
+- Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI 和通用 Streamable HTTP 配置。
+- macOS zsh、Linux bash 与 Windows PowerShell 的密钥环境变量示例。
+- 安全边界、可用工具清单和 401、503、网络、授权等常见问题处理。
+
+普通帮助页只显示 `<AGENT_API_KEY>` 等占位值。创建 Agent 或轮换 Key 后的一次性弹窗会使用刚生成的真实凭据输出各客户端配置；关闭弹窗后仍然无法找回完整 Key。
+
 ## 安全模型
 
 一次 MCP 数据库访问必须同时通过以下检查：
@@ -73,7 +84,7 @@ app:
 
 ## 客户端配置
 
-创建或轮换 Agent 后，Web 会生成可直接复制的配置。不同 MCP 客户端的字段名称略有区别，核心配置如下：
+创建或轮换 Agent 后，Web 会生成可直接复制的多客户端配置。不同 MCP 客户端的字段名称略有区别，通用配置如下：
 
 ```json
 {
@@ -88,6 +99,18 @@ app:
   }
 }
 ```
+
+| 客户端 | 推荐接入方式 | 说明 |
+| --- | --- | --- |
+| Codex CLI | `codex mcp add --url ... --bearer-token-env-var ...` | 从环境变量读取 Bearer Token，不把 Key 写进 `config.toml` |
+| Claude Code | HTTP MCP 命令或 `.mcp.json` | 支持在 URL 和 Header 中展开环境变量 |
+| Claude Desktop | `mcp-remote` 本地 stdio 桥接 | 当前私网静态 Bearer 方案不适合 Claude 云端自定义连接器；桥接需要 Node.js 18+ |
+| Cursor | `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` | 桌面进程必须能够读取配置中引用的环境变量 |
+| Gemini CLI | `gemini mcp add --transport http` 或 `settings.json` | 支持 HTTP Header 和用户/项目级配置 |
+
+Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通常要求公网可达并使用 OAuth。MyDataDev 默认面向私有网络并采用 Agent Bearer Key，因此 Web 帮助使用 `mcp-remote` 把 Desktop 的本地 stdio 请求桥接到 `/mcp`；HTTP 私网地址需要显式允许，跨主机仍应优先使用 HTTPS。
+
+不要把含真实 Key 的 JSON、终端命令或环境文件提交到 Git。使用环境变量时，必须确保实际启动 AI Agent 的终端或桌面进程能够继承该变量。
 
 本地开发时 Vite 会同时代理 `/api` 和 `/mcp`。生产环境若让前端与后端共用域名，反向代理也应同时转发这两个路径；若前端使用跨域的 `VITE_API_BASE_URL`，Web 会按该后端地址生成 MCP URL。
 
