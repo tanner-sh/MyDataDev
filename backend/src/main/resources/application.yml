@@ -38,6 +38,7 @@ app:
   sql:
     max-rows: 10000
     max-page-offset: 1000000
+    max-statements: 500
     timeout-seconds: 60
   backup:
     directory: ./backups

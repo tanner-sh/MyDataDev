@@ -136,7 +136,10 @@ public class SqlService {
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
         List<StatementSegment> statements = scriptSplitter.split(sql);
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
-        if (statements.size() > 50) throw new IllegalArgumentException("一次最多执行 50 条 SQL");
+        int maxStatements = Math.max(1, properties.getSql().getMaxStatements());
+        if (statements.size() > maxStatements) {
+            throw new IllegalArgumentException("一次最多执行 " + maxStatements + " 条 SQL；更大的脚本请使用“执行本地 SQL 文件”。");
+        }
 
         if (requestedPageSize != null && statements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
             long started = System.nanoTime();

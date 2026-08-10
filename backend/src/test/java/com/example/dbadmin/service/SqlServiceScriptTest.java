@@ -229,6 +229,33 @@ class SqlServiceScriptTest {
     }
 
     @Test
+    void allowsMoreThanFiftyStatementsByDefault() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        SqlScriptResponse response = service.executeScript(1L, selectScript(51), 10, "admin");
+
+        assertThat(new AppProperties().getSql().getMaxStatements()).isEqualTo(500);
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        assertThat(response.executedCount()).isEqualTo(51);
+        assertThat(response.results()).hasSize(51);
+    }
+
+    @Test
+    void enforcesConfiguredStatementLimitAndRecommendsFileExecution() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        AppProperties properties = new AppProperties();
+        properties.getSql().setMaxStatements(2);
+        SqlService service = service(url, mock(SqlHistoryRepository.class), mock(MetadataService.class), properties);
+
+        assertThat(service.executeScript(1L, selectScript(2), 10, "admin").executedCount()).isEqualTo(2);
+        assertThatThrownBy(() -> service.executeScript(1L, selectScript(3), 10, "admin"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("一次最多执行 2 条 SQL")
+                .hasMessageContaining("执行本地 SQL 文件");
+    }
+
+    @Test
     void keepsExplicitlyPagedSelectAsOneShotResult() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         SqlService service = service(url, mock(SqlHistoryRepository.class));
@@ -271,6 +298,13 @@ class SqlServiceScriptTest {
     }
 
     private SqlService service(String url, SqlHistoryRepository history, MetadataService metadata) throws Exception {
+        AppProperties properties = new AppProperties();
+        properties.getSql().setMaxRows(1000);
+        properties.getSql().setTimeoutSeconds(10);
+        return service(url, history, metadata, properties);
+    }
+
+    private SqlService service(String url, SqlHistoryRepository history, MetadataService metadata, AppProperties properties) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.open(anyLong(), anyString())).thenAnswer(invocation -> {
@@ -281,9 +315,6 @@ class SqlServiceScriptTest {
         when(connections.require(anyLong())).thenReturn(new DbConnection(
                 1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
-        AppProperties properties = new AppProperties();
-        properties.getSql().setMaxRows(1000);
-        properties.getSql().setTimeoutSeconds(10);
         return new SqlService(
                 connections,
                 properties,
@@ -296,5 +327,11 @@ class SqlServiceScriptTest {
                 new ExecutionGuard(),
                 new SqlExecutionRegistry()
         );
+    }
+
+    private String selectScript(int statements) {
+        return java.util.stream.IntStream.rangeClosed(1, statements)
+                .mapToObj(index -> "select " + index + " as val")
+                .collect(java.util.stream.Collectors.joining(";"));
     }
 }

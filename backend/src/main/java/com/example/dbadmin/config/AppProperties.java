@@ -60,6 +60,7 @@ public class AppProperties {
     public static class Sql {
         private int maxRows = 1000;
         private int maxPageOffset = 1_000_000;
+        private int maxStatements = 500;
         private int timeoutSeconds = 60;
 
         public int getMaxRows() {
@@ -76,6 +77,14 @@ public class AppProperties {
 
         public void setMaxPageOffset(int maxPageOffset) {
             this.maxPageOffset = maxPageOffset;
+        }
+
+        public int getMaxStatements() {
+            return maxStatements;
+        }
+
+        public void setMaxStatements(int maxStatements) {
+            this.maxStatements = maxStatements;
         }
 
         public int getTimeoutSeconds() {
