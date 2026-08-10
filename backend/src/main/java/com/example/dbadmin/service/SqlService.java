@@ -125,6 +125,59 @@ public class SqlService {
         }
     }
 
+    /**
+     * Executes one query for a machine caller under a mandatory rollback-only,
+     * read-only scope and tighter result limits. Production access is decided
+     * by the caller's authorization policy rather than an interactive name
+     * confirmation.
+     */
+    public SqlResult executeReadOnly(
+            long connectionId,
+            String sql,
+            String schemaName,
+            Integer requestedMaxRows,
+            String actor,
+            SqlQueryLimits limits
+    ) throws Exception {
+        String executionSql = singleStatement(sql, "MCP 查询");
+        if (classifier.classify(executionSql) != SqlStatementClassifier.Kind.QUERY) {
+            throw new IllegalArgumentException("MCP 只允许执行单条只读查询");
+        }
+        DbConnection dbConnection = connections.require(connectionId);
+        if (!dbConnection.readonly()) {
+            throw new IllegalArgumentException("MCP 查询只能使用只读连接");
+        }
+        int maxRows = limits.normalizeRows(requestedMaxRows);
+        long started = System.nanoTime();
+        try (Connection connection = openConnection(connectionId, schemaName);
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
+             Statement statement = connection.createStatement()) {
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 200), limits.timeoutSeconds());
+            statement.setMaxRows(maxRows + 1);
+            boolean hasResult = statement.execute(executionSql);
+            if (!hasResult) {
+                throw new IllegalArgumentException("MCP 查询没有返回结果集，已拒绝该语句");
+            }
+            try (ResultSet rs = statement.getResultSet()) {
+                SqlResult result = readResult(
+                        rs,
+                        started,
+                        maxRows,
+                        limits.maxCells(),
+                        limits.maxTextChars(),
+                        limits.maxCellTextChars()
+                );
+                audit.log(actor, "MCP_SQL_QUERY", "connection:" + connectionId, "read-only query");
+                history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
+                return result;
+            }
+        } catch (Exception e) {
+            history.insert(connectionId, sql, "MCP_QUERY", "FAILED", elapsed(started), error(e), actor);
+            throw e;
+        }
+    }
+
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
         return execute(connectionId, sql, requestedMaxRows, actor, null, null, null);
     }
@@ -318,6 +371,43 @@ public class SqlService {
             return result;
         } catch (Exception e) {
             history.insert(connectionId, sql, "EXPLAIN", "FAILED", elapsed(started), error(e), actor);
+            throw e;
+        }
+    }
+
+    public SqlResult explainReadOnly(
+            long connectionId,
+            String sql,
+            String schemaName,
+            String actor,
+            SqlQueryLimits limits
+    ) throws Exception {
+        long started = System.nanoTime();
+        String executionSql = singleStatement(sql, "MCP 执行计划");
+        DbConnection dbConnection = connections.require(connectionId);
+        if (!dbConnection.readonly()) {
+            throw new IllegalArgumentException("MCP 执行计划只能使用只读连接");
+        }
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (!dialect.capabilities().explain()) {
+            throw new IllegalStateException("当前数据库类型不支持执行计划");
+        }
+        if (!classifier.isQuery(executionSql)) {
+            throw new IllegalArgumentException("执行计划只支持查询语句");
+        }
+        try (Connection connection = openConnection(connectionId, schemaName);
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true)) {
+            SqlResult result = dialect.explain(
+                    connection,
+                    executionSql,
+                    limits.normalizeRows(null),
+                    limits.timeoutSeconds()
+            );
+            audit.log(actor, "MCP_SQL_EXPLAIN", "connection:" + connectionId, "read-only explain");
+            history.insert(connectionId, sql, "MCP_EXPLAIN", "SUCCESS", result.elapsedMs(), null, actor);
+            return result;
+        } catch (Exception e) {
+            history.insert(connectionId, sql, "MCP_EXPLAIN", "FAILED", elapsed(started), error(e), actor);
             throw e;
         }
     }
@@ -545,6 +635,17 @@ public class SqlService {
     }
 
     private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget) throws Exception {
+        return readResult(rs, startedNanos, maxRows, cellBudget, textBudget, MAX_CELL_TEXT_CHARS);
+    }
+
+    private SqlResult readResult(
+            ResultSet rs,
+            long startedNanos,
+            int maxRows,
+            int cellBudget,
+            long textBudget,
+            int cellTextBudget
+    ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
         List<ResultColumn> columns = new ArrayList<>();
@@ -560,7 +661,7 @@ public class SqlService {
         while (rows.size() < effectiveMaxRows && rs.next()) {
             List<Object> row = new ArrayList<>(columnCount);
             for (int index = 1; index <= columnCount; index++) {
-                int remainingText = (int) Math.min(MAX_CELL_TEXT_CHARS, Math.max(0, textBudget - textChars));
+                int remainingText = (int) Math.min(cellTextBudget, Math.max(0, textBudget - textChars));
                 Object value = serializableValue(rs, metadata, index, remainingText);
                 row.add(value);
                 if (value instanceof CharSequence text) textChars += text.length();

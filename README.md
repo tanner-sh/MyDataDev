@@ -4,7 +4,7 @@ MyDataDev 是一个面向私有网络使用的 Web 数据库管理工具原型�
 
 ## 技术栈
 
-- 后端：Spring Boot 3、Java 17、JDBC、H2 元数据库
+- 后端：Spring Boot 3、Java 17、JDBC、H2 元数据库、Spring AI MCP Server
 - 前端：React、Vite、TypeScript、Ant Design、Monaco Editor
 - 数据库驱动：H2、MySQL、PostgreSQL、SQL Server、SQLite、MariaDB、ClickHouse、Oracle、达梦、OceanBase
 - 本地状态：连接配置、审计日志、SQL 历史和备份任务存储在后端 H2 元数据库中
@@ -89,6 +89,11 @@ npm run build
 - 备份与恢复：支持备份校验值、保留策略、历史下载，以及 SQL、MySQL dump、Oracle dmp 的预检和后台恢复。
 - SQL 备份生成：支持导出表结构、数据、索引和约束；CLOB、BLOB 和 VARBINARY 会转换为对应数据库字面量。
 - 审计记录：连接、SQL 执行、数据提交和备份操作会写入审计或历史记录。
+- MCP Server：通过 Streamable HTTP 向获授权的 AI agent 提供连接发现、元数据浏览、表数据浏览、只读查询和执行计划能力。
+
+## MCP Server
+
+MCP Server 默认关闭。启用后端的 `/mcp` 端点后，每个 AI agent 使用独立 API Key，并且只能访问同时满足“agent 连接白名单”和“连接已标记为只读”的数据库。详细配置、客户端示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
 
 ## 备份说明
 

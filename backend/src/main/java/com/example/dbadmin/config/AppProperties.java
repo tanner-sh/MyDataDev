@@ -16,6 +16,7 @@ public class AppProperties {
     private final BackgroundTasks backgroundTasks = new BackgroundTasks();
     private final Maintenance maintenance = new Maintenance();
     private final RemotePool remotePool = new RemotePool();
+    private final Mcp mcp = new Mcp();
 
     public String getCryptoKey() {
         return cryptoKey;
@@ -55,6 +56,10 @@ public class AppProperties {
 
     public RemotePool getRemotePool() {
         return remotePool;
+    }
+
+    public Mcp getMcp() {
+        return mcp;
     }
 
     public static class Sql {
@@ -221,6 +226,75 @@ public class AppProperties {
         public void setMaximumPoolSize(int maximumPoolSize) { this.maximumPoolSize = maximumPoolSize; }
         public int getConnectionTimeoutMs() { return connectionTimeoutMs; }
         public void setConnectionTimeoutMs(int connectionTimeoutMs) { this.connectionTimeoutMs = connectionTimeoutMs; }
+    }
+
+    public static class Mcp {
+        private boolean enabled;
+        private List<String> allowedOrigins = new ArrayList<>();
+        private int defaultQueryRows = 100;
+        private int maxQueryRows = 500;
+        private int maxResultCells = 20_000;
+        private long maxResultTextChars = 1_000_000;
+        private int maxCellTextChars = 20_000;
+        private int maxSqlChars = 200_000;
+        private int queryTimeoutSeconds = 30;
+        private int metadataPageSize = 50;
+        private int maxMetadataPageSize = 200;
+        private int tablePageSize = 50;
+        private int maxTablePageSize = 100;
+        private int sessionTtlMinutes = 120;
+        private List<McpAgent> agents = new ArrayList<>();
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public List<String> getAllowedOrigins() { return allowedOrigins; }
+        public void setAllowedOrigins(List<String> allowedOrigins) { this.allowedOrigins = copy(allowedOrigins); }
+        public int getDefaultQueryRows() { return defaultQueryRows; }
+        public void setDefaultQueryRows(int defaultQueryRows) { this.defaultQueryRows = defaultQueryRows; }
+        public int getMaxQueryRows() { return maxQueryRows; }
+        public void setMaxQueryRows(int maxQueryRows) { this.maxQueryRows = maxQueryRows; }
+        public int getMaxResultCells() { return maxResultCells; }
+        public void setMaxResultCells(int maxResultCells) { this.maxResultCells = maxResultCells; }
+        public long getMaxResultTextChars() { return maxResultTextChars; }
+        public void setMaxResultTextChars(long maxResultTextChars) { this.maxResultTextChars = maxResultTextChars; }
+        public int getMaxCellTextChars() { return maxCellTextChars; }
+        public void setMaxCellTextChars(int maxCellTextChars) { this.maxCellTextChars = maxCellTextChars; }
+        public int getMaxSqlChars() { return maxSqlChars; }
+        public void setMaxSqlChars(int maxSqlChars) { this.maxSqlChars = maxSqlChars; }
+        public int getQueryTimeoutSeconds() { return queryTimeoutSeconds; }
+        public void setQueryTimeoutSeconds(int queryTimeoutSeconds) { this.queryTimeoutSeconds = queryTimeoutSeconds; }
+        public int getMetadataPageSize() { return metadataPageSize; }
+        public void setMetadataPageSize(int metadataPageSize) { this.metadataPageSize = metadataPageSize; }
+        public int getMaxMetadataPageSize() { return maxMetadataPageSize; }
+        public void setMaxMetadataPageSize(int maxMetadataPageSize) { this.maxMetadataPageSize = maxMetadataPageSize; }
+        public int getTablePageSize() { return tablePageSize; }
+        public void setTablePageSize(int tablePageSize) { this.tablePageSize = tablePageSize; }
+        public int getMaxTablePageSize() { return maxTablePageSize; }
+        public void setMaxTablePageSize(int maxTablePageSize) { this.maxTablePageSize = maxTablePageSize; }
+        public int getSessionTtlMinutes() { return sessionTtlMinutes; }
+        public void setSessionTtlMinutes(int sessionTtlMinutes) { this.sessionTtlMinutes = sessionTtlMinutes; }
+        public List<McpAgent> getAgents() { return agents; }
+        public void setAgents(List<McpAgent> agents) { this.agents = agents == null ? new ArrayList<>() : new ArrayList<>(agents); }
+
+        private static List<String> copy(List<String> values) {
+            return values == null ? new ArrayList<>() : new ArrayList<>(values);
+        }
+    }
+
+    public static class McpAgent {
+        private String id;
+        private String keyHash;
+        private List<Long> connectionIds = new ArrayList<>();
+        private boolean allowProduction;
+
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+        public String getKeyHash() { return keyHash; }
+        public void setKeyHash(String keyHash) { this.keyHash = keyHash; }
+        public List<Long> getConnectionIds() { return connectionIds; }
+        public void setConnectionIds(List<Long> connectionIds) { this.connectionIds = connectionIds == null ? new ArrayList<>() : new ArrayList<>(connectionIds); }
+        public boolean isAllowProduction() { return allowProduction; }
+        public void setAllowProduction(boolean allowProduction) { this.allowProduction = allowProduction; }
     }
 
     public static class NativeTools {
