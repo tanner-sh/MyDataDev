@@ -253,16 +253,25 @@ public final class ApiDtos {
     ) {
     }
 
-    public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId) {
+    public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+        public SqlRequest(Long connectionId, String sql, Integer maxRows, String executionId) {
+            this(connectionId, sql, maxRows, executionId, null);
+        }
     }
 
-    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer offset, Integer pageSize, @Size(max = 120) String executionId) {
+    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer offset, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+        public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize, String executionId) {
+            this(connectionId, sql, offset, pageSize, executionId, null);
+        }
     }
 
     public record ResultColumn(String key, String label, String typeName) {
     }
 
-    public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
+    public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore, String schemaName) {
+        public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
+            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null);
+        }
     }
 
     public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page) {
@@ -275,7 +284,10 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+        public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId) {
+            this(connectionId, sql, maxRows, pageSize, executionId, null);
+        }
     }
 
     public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
@@ -393,7 +405,10 @@ public final class ApiDtos {
     public record DataCommitResponse(List<String> sql, int affectedRows) {
     }
 
-    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format) {
+    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format, @Size(max = 240) String schemaName) {
+        public ExportRequest(Long connectionId, String sql, String format) {
+            this(connectionId, sql, format, null);
+        }
     }
 
     public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName, Integer retentionDays, Integer retentionCount) {

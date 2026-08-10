@@ -37,7 +37,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation);
+        return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation, request.schemaName());
     }
 
     @PostMapping("/execute-script")
@@ -46,7 +46,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation);
+        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName());
     }
 
     @PostMapping("/query-page")
@@ -55,7 +55,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(), actor, request.executionId(), productionConfirmation);
+        return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName());
     }
 
     @PostMapping("/explain")
@@ -64,7 +64,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        return sqlService.explain(request.connectionId(), request.sql(), actor, productionConfirmation);
+        return sqlService.explain(request.connectionId(), request.sql(), actor, productionConfirmation, request.schemaName());
     }
 
     @PostMapping("/format")
@@ -98,7 +98,7 @@ public class SqlController {
         exportService.validate(request.connectionId(), request.sql(), format, productionConfirmation);
         StreamingResponseBody body = output -> {
             try {
-                exportService.stream(request.connectionId(), request.sql(), format, actor, productionConfirmation, output);
+                exportService.stream(request.connectionId(), request.sql(), format, actor, productionConfirmation, request.schemaName(), output);
             } catch (java.io.IOException e) {
                 throw e;
             } catch (Exception e) {

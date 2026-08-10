@@ -14,6 +14,8 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DefaultDialectTest {
@@ -35,6 +37,25 @@ class DefaultDialectTest {
         when(connection.getCatalog()).thenReturn("demo");
 
         assertThat(dialect.currentSchema(connection)).isEqualTo("demo");
+    }
+
+    @Test
+    void activatesRequestedSchemaForSqlExecution() throws Exception {
+        Connection connection = mock(Connection.class);
+
+        dialect.activateNamespace(connection, "ARCHIVE");
+
+        verify(connection).setSchema("ARCHIVE");
+    }
+
+    @Test
+    void keepsCurrentSchemaWithoutCallingUnsupportedDriverMethods() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.getSchema()).thenReturn("PUBLIC");
+
+        dialect.activateNamespace(connection, "PUBLIC");
+
+        verify(connection, never()).setSchema("PUBLIC");
     }
 
     @Test

@@ -83,6 +83,22 @@ public interface DatabaseDialect {
         return new MetadataScope(connection.getCatalog(), namespace == null || namespace.isBlank() ? null : namespace);
     }
 
+    default void activateNamespace(Connection connection, String namespace) throws SQLException {
+        if (namespace == null || namespace.isBlank()) return;
+        if (namespaceKind() == NamespaceKind.CATALOG) {
+            connection.setCatalog(namespace);
+        } else {
+            String current = null;
+            try {
+                current = currentSchema(connection);
+            } catch (Exception ignored) {
+                // Let setSchema provide the authoritative support/error result.
+            }
+            if (namespace.equals(current)) return;
+            connection.setSchema(namespace);
+        }
+    }
+
     default String resultNamespace(ResultSet resultSet) throws SQLException {
         return resultSet.getString(namespaceKind() == NamespaceKind.CATALOG ? "TABLE_CAT" : "TABLE_SCHEM");
     }

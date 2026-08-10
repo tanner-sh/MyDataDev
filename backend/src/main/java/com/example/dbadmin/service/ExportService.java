@@ -72,7 +72,7 @@ public class ExportService {
     }
 
     public void export(long connectionId, String sql, String format, String actor, OutputStream output) throws Exception {
-        stream(connectionId, sql, format, actor, null, output);
+        stream(connectionId, sql, format, actor, null, null, output);
     }
 
     public void validate(long connectionId, String sql, String format, String productionConfirmation) {
@@ -88,13 +88,18 @@ public class ExportService {
 
     public void stream(long connectionId, String sql, String format, String actor,
                        String productionConfirmation, OutputStream rawOutput) throws Exception {
+        stream(connectionId, sql, format, actor, productionConfirmation, null, rawOutput);
+    }
+
+    public void stream(long connectionId, String sql, String format, String actor,
+                       String productionConfirmation, String schemaName, OutputStream rawOutput) throws Exception {
         validate(connectionId, sql, format, productionConfirmation);
         String normalizedFormat = normalizeFormat(format);
         String statementSql = splitter.split(sql).get(0).sql();
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         long started = System.nanoTime();
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
              Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
@@ -114,6 +119,10 @@ public class ExportService {
     }
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation) throws Exception {
+        return prepare(connectionId, sql, format, actor, productionConfirmation, null);
+    }
+
+    public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName) throws Exception {
         String normalizedFormat = normalizeFormat(format);
         var statements = splitter.split(sql);
         if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
@@ -124,7 +133,7 @@ public class ExportService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         long started = System.nanoTime();
         Path file = Files.createTempFile("dbadmin-export-", "." + normalizedFormat);
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              // Export is contractually read-only even when the saved
              // connection itself is writable. Roll back SELECT routines with
              // transactional side effects and apply the JDBC read-only hint.
@@ -158,6 +167,12 @@ public class ExportService {
             case "xml" -> writeXml(rs, output);
             default -> throw new IllegalArgumentException("不支持的导出格式：" + format);
         };
+    }
+
+    private Connection openConnection(long connectionId, String schemaName) throws Exception {
+        return schemaName == null || schemaName.isBlank()
+                ? connections.open(connectionId)
+                : connections.open(connectionId, schemaName);
     }
 
     private boolean writeJson(ResultSet rs, OutputStream output) throws Exception {

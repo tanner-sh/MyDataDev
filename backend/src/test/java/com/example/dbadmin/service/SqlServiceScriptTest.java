@@ -16,6 +16,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -201,6 +202,33 @@ class SqlServiceScriptTest {
     }
 
     @Test
+    void executesAndPagesWithinRequestedSchema() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE SCHEMA ARCHIVE");
+            connection.createStatement().execute("CREATE TABLE PUBLIC.context_values(id INT PRIMARY KEY, label VARCHAR(20))");
+            connection.createStatement().execute("CREATE TABLE ARCHIVE.context_values(id INT PRIMARY KEY, label VARCHAR(20))");
+            connection.createStatement().execute("INSERT INTO PUBLIC.context_values VALUES (1, 'default')");
+            connection.createStatement().execute("INSERT INTO ARCHIVE.context_values VALUES (1, 'archive-1'), (2, 'archive-2'), (3, 'archive-3')");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        var direct = service.execute(1L, "select label from context_values order by id", 10, "admin", null, null, "ARCHIVE");
+        var firstPage = service.executeScript(
+                1L, "select label from context_values order by id", null, 2, "admin", null, null, "ARCHIVE"
+        ).results().get(0).result();
+        var secondPage = service.executePage(
+                1L, "select label from context_values order by id", 2, 2, "admin", null, null, firstPage.page().schemaName()
+        );
+
+        assertThat(direct.rows()).extracting(row -> row.get(0)).containsExactly("archive-1", "archive-2", "archive-3");
+        assertThat(firstPage.rows()).extracting(row -> row.get(0)).containsExactly("archive-1", "archive-2");
+        assertThat(firstPage.page().schemaName()).isEqualTo("ARCHIVE");
+        assertThat(secondPage.rows()).extracting(row -> row.get(0)).containsExactly("archive-3");
+        assertThat(secondPage.page().schemaName()).isEqualTo("ARCHIVE");
+    }
+
+    @Test
     void keepsExplicitlyPagedSelectAsOneShotResult() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         SqlService service = service(url, mock(SqlHistoryRepository.class));
@@ -245,6 +273,11 @@ class SqlServiceScriptTest {
     private SqlService service(String url, SqlHistoryRepository history, MetadataService metadata) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.open(anyLong(), anyString())).thenAnswer(invocation -> {
+            Connection connection = DriverManager.getConnection(url, "sa", "");
+            connection.setSchema(invocation.getArgument(1, String.class));
+            return connection;
+        });
         when(connections.require(anyLong())).thenReturn(new DbConnection(
                 1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));

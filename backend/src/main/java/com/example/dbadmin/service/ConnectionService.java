@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.dto.ApiDtos.ConnectionRequest;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
+import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
@@ -110,6 +111,26 @@ public class ConnectionService {
     public Connection open(long id) throws Exception {
         DbConnection c = require(id);
         return dataSources.open(c, crypto.decrypt(c.encryptedPassword()));
+    }
+
+    public Connection open(long id, String schemaName) throws Exception {
+        DbConnection configured = require(id);
+        Connection connection = dataSources.open(configured, crypto.decrypt(configured.encryptedPassword()));
+        var dialect = dialectRegistry.dialectFor(configured);
+        try {
+            dialect.activateNamespace(connection, schemaName);
+            return connection;
+        } catch (Exception error) {
+            try {
+                connection.close();
+            } catch (Exception closeError) {
+                error.addSuppressed(closeError);
+            }
+            String targetKind = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
+                    ? "数据库"
+                    : "Schema";
+            throw new IllegalArgumentException("无法切换到" + targetKind + "：" + schemaName, error);
+        }
     }
 
     public DbConnection require(long id) {

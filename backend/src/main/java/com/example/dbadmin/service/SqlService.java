@@ -80,7 +80,7 @@ public class SqlService {
         this.executions = executions;
     }
 
-    public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {
+    public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
         String executionSql = singleStatement(sql, "单条执行");
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, classifier.classify(executionSql), productionConfirmation);
@@ -88,7 +88,7 @@ public class SqlService {
         boolean sessionMutation = classifier.changesSession(executionSql);
         int maxRows = normalizeMaxRows(requestedMaxRows);
         long started = System.nanoTime();
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
              Statement statement = connection.createStatement()) {
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
@@ -126,10 +126,14 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
-        return execute(connectionId, sql, requestedMaxRows, actor, null, null);
+        return execute(connectionId, sql, requestedMaxRows, actor, null, null, null);
     }
 
-    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation) throws Exception {
+    public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {
+        return execute(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, null);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
         List<StatementSegment> statements = scriptSplitter.split(sql);
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         if (statements.size() > 50) throw new IllegalArgumentException("一次最多执行 50 条 SQL");
@@ -137,7 +141,7 @@ public class SqlService {
         if (requestedPageSize != null && statements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
             long started = System.nanoTime();
             try {
-                SqlResult result = executePage(connectionId, statements.get(0).sql(), 0, requestedPageSize, actor, executionId, productionConfirmation);
+                SqlResult result = executePage(connectionId, statements.get(0).sql(), 0, requestedPageSize, actor, executionId, productionConfirmation, schemaName);
                 long elapsedMs = elapsed(started);
                 history.insert(connectionId, sql, "EXECUTE_SCRIPT", "SUCCESS", elapsedMs, null, actor);
                 SqlStatementResult statementResult = new SqlStatementResult(
@@ -165,7 +169,7 @@ public class SqlService {
         int returnedCells = 0;
         long returnedTextChars = 0;
 
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
              Statement jdbc = connection.createStatement()) {
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
@@ -226,11 +230,15 @@ public class SqlService {
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
-        return executeScript(connectionId, sql, requestedMaxRows, null, actor, null, null);
+        return executeScript(connectionId, sql, requestedMaxRows, null, actor, null, null, null);
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {
-        return executeScript(connectionId, sql, requestedMaxRows, null, actor, executionId, productionConfirmation);
+        return executeScript(connectionId, sql, requestedMaxRows, null, actor, executionId, productionConfirmation, null);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation) throws Exception {
+        return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, null);
     }
 
     public SqlResult executePage(
@@ -240,7 +248,8 @@ public class SqlService {
             Integer requestedPageSize,
             String actor,
             String executionId,
-            String productionConfirmation
+            String productionConfirmation,
+            String schemaName
     ) throws Exception {
         String executionSql = singleStatement(sql, "分页查询");
         if (!classifier.isAutomaticallyPageable(executionSql)) {
@@ -258,7 +267,7 @@ public class SqlService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         String pageSql = dialect.pageQuery(executionSql, pageSize + 1, offset);
         long started = System.nanoTime();
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
              Statement statement = connection.createStatement()) {
             dialect.configureReadStatement(connection, statement, Math.min(pageSize + 1, 500), properties.getSql().getTimeoutSeconds());
@@ -266,7 +275,7 @@ public class SqlService {
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
                 try (ResultSet rs = statement.executeQuery(pageSql)) {
-                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn());
+                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn(), schemaName);
                     audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     return result;
                 }
@@ -276,7 +285,19 @@ public class SqlService {
         }
     }
 
-    public SqlResult explain(long connectionId, String sql, String actor, String productionConfirmation) throws Exception {
+    public SqlResult executePage(
+            long connectionId,
+            String sql,
+            Integer requestedOffset,
+            Integer requestedPageSize,
+            String actor,
+            String executionId,
+            String productionConfirmation
+    ) throws Exception {
+        return executePage(connectionId, sql, requestedOffset, requestedPageSize, actor, executionId, productionConfirmation, null);
+    }
+
+    public SqlResult explain(long connectionId, String sql, String actor, String productionConfirmation, String schemaName) throws Exception {
         long started = System.nanoTime();
         String executionSql = singleStatement(sql, "执行计划");
         DbConnection dbConnection = connections.require(connectionId);
@@ -286,7 +307,7 @@ public class SqlService {
         }
         if (!classifier.isQuery(executionSql)) throw new IllegalArgumentException("执行计划只支持查询语句");
         executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
-        try (Connection connection = connections.open(connectionId);
+        try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly())) {
             SqlResult result = dialect.explain(connection, executionSql, properties.getSql().getMaxRows(), properties.getSql().getTimeoutSeconds());
             audit.log(actor, "SQL_EXPLAIN", "connection:" + connectionId, abbreviate(sql));
@@ -299,7 +320,11 @@ public class SqlService {
     }
 
     public SqlResult explain(long connectionId, String sql, String actor) throws Exception {
-        return explain(connectionId, sql, actor, null);
+        return explain(connectionId, sql, actor, null, null);
+    }
+
+    public SqlResult explain(long connectionId, String sql, String actor, String productionConfirmation) throws Exception {
+        return explain(connectionId, sql, actor, productionConfirmation, null);
     }
 
     public boolean cancel(String executionId) throws Exception {
@@ -481,7 +506,8 @@ public class SqlService {
             int offset,
             int requestedPageSize,
             int pageSize,
-            String helperColumn
+            String helperColumn,
+            String schemaName
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -511,7 +537,7 @@ public class SqlService {
             }
         }
         boolean hasMore = payloadLimitReached || rs.next();
-        SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore);
+        SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName);
         return new SqlResult(columns, rows, -1, elapsed(startedNanos), true, effectivePageSize, payloadLimitReached, page);
     }
 
@@ -548,6 +574,12 @@ public class SqlService {
 
     private SqlResult emptyResult(int affectedRows, long elapsedMs, int maxRows) {
         return new SqlResult(List.of(), List.of(), affectedRows, elapsedMs, false, maxRows, false);
+    }
+
+    private Connection openConnection(long connectionId, String schemaName) throws Exception {
+        return schemaName == null || schemaName.isBlank()
+                ? connections.open(connectionId)
+                : connections.open(connectionId, schemaName);
     }
 
     private int normalizeMaxRows(Integer requestedMaxRows) {

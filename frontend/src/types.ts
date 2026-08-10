@@ -126,6 +126,7 @@ export type Metadata = {
 export type ResultColumn = { key: string; label: string; typeName: string };
 export type SqlPageInfo = {
   connectionId: number;
+  schemaName?: string;
   offset: number;
   requestedPageSize: number;
   effectivePageSize: number;

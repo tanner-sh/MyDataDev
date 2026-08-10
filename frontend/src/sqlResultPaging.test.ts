@@ -4,6 +4,7 @@ import type { SqlPageInfo } from './types';
 
 const page = (patch: Partial<SqlPageInfo> = {}): SqlPageInfo => ({
   connectionId: 1,
+  schemaName: 'archive',
   offset: 0,
   requestedPageSize: 500,
   effectivePageSize: 500,

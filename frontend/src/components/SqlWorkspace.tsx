@@ -26,8 +26,10 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
   selected: Connection | null;
+  activeSchema?: string;
+  namespaceKind?: 'SCHEMA' | 'CATALOG';
   sessionConnectionId: number | null;
   tabs: SqlTab[];
   activeTabId: string;
@@ -186,7 +188,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, sessionConnec
       <Header className="workspace-toolbar">
         <div className="toolbar-title">
           <Text strong>SQL 查询工作台</Text>
-          <Text type="secondary" className="ellipsis-text">{selected?.jdbcUrl || '请先选择数据库连接'}</Text>
+          <Text type="secondary" className="ellipsis-text">
+            {selected ? `${namespaceKind === 'CATALOG' ? '当前数据库' : '当前 Schema'}：${activeSchema || '连接默认值'} · ${selected.jdbcUrl}` : '请先选择数据库连接'}
+          </Text>
         </div>
         <div className="sql-toolbar-actions">
           <Space size={4} className="sql-toolbar-group">

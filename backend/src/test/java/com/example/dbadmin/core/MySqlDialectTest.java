@@ -8,6 +8,7 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MySqlDialectTest {
@@ -25,6 +26,15 @@ class MySqlDialectTest {
         assertThat(dialect.qualifiedName("trading", "cash_ledger"))
                 .isEqualTo("`trading`.`cash_ledger`");
         assertThat(dialect.quoteIdentifier("odd`name")).isEqualTo("`odd``name`");
+    }
+
+    @Test
+    void activatesRequestedDatabaseAsJdbcCatalog() throws Exception {
+        Connection connection = mock(Connection.class);
+
+        dialect.activateNamespace(connection, "i_fin_fi_va_db");
+
+        verify(connection).setCatalog("i_fin_fi_va_db");
     }
 
     @Test

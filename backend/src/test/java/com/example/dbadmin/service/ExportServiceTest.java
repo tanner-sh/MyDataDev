@@ -19,6 +19,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -32,12 +33,20 @@ class ExportServiceTest {
         try (var connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE export_values(id INT PRIMARY KEY, name VARCHAR(40), note VARCHAR(80), active BOOLEAN, empty VARCHAR(10))");
             connection.createStatement().execute("INSERT INTO export_values VALUES (1, 'Alice', 'a, \"quoted\" value', TRUE, NULL)");
+            connection.createStatement().execute("CREATE SCHEMA archive");
+            connection.createStatement().execute("CREATE TABLE archive.export_values(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO archive.export_values VALUES (2, 'Archive')");
         }
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.require(anyLong())).thenReturn(new DbConnection(
                 1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.open(anyLong(), anyString())).thenAnswer(invocation -> {
+            var connection = DriverManager.getConnection(url, "sa", "");
+            connection.setSchema(invocation.getArgument(1, String.class));
+            return connection;
+        });
         AppProperties properties = new AppProperties();
         properties.getSql().setTimeoutSeconds(10);
         exportService = new ExportService(
@@ -71,6 +80,16 @@ class ExportServiceTest {
         assertThat(body.get("rows").get(0).get(1).asText()).isEqualTo("Alice");
         assertThat(body.get("truncated").asBoolean()).isFalse();
         assertThat(body.get("maxRows").asInt()).isEqualTo(ExportService.EXPORT_MAX_ROWS);
+    }
+
+    @Test
+    void exportsFromRequestedSchema() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        exportService.stream(1L, "select name from export_values", "json", "admin", null, "archive", output);
+
+        JsonNode body = mapper.readTree(output.toByteArray());
+        assertThat(body.get("rows").get(0).get(0).asText()).isEqualTo("Archive");
     }
 
     @Test

@@ -14,6 +14,7 @@ import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
+import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
@@ -182,6 +183,7 @@ export default function App() {
     ));
   }, [metadata, selected, structureCacheRevision]);
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
+  const activeSqlSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -914,7 +916,7 @@ export default function App() {
         const data = await api<SqlResult>(path, {
           method: 'POST',
           headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
-          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, executionId })
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, executionId, schemaName: activeSqlSchema })
         });
         const result: SqlStatementResult = {
           index: 1,
@@ -931,7 +933,7 @@ export default function App() {
         const data = await api<SqlScriptResult>('/sql/execute-script', {
           method: 'POST',
           headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
-          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, pageSize: layoutPreferences.sqlPageSize, executionId })
+          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, pageSize: layoutPreferences.sqlPageSize, executionId, schemaName: activeSqlSchema })
         });
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
@@ -998,7 +1000,8 @@ export default function App() {
           sql: statementResult.sql,
           offset: navigation.offset,
           pageSize: navigation.pageSize,
-          executionId
+          executionId,
+          schemaName: page.schemaName
         })
       });
       if (data.page) data.page.previousOffsets = navigation.previousOffsets;
@@ -1141,7 +1144,7 @@ export default function App() {
           'X-User': 'admin',
           ...(productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : {})
         },
-        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format })
+        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema })
       });
       if (!response.ok) {
         const err = await response.json().catch(() => ({ message: response.statusText }));
@@ -2179,6 +2182,8 @@ export default function App() {
               <SqlWorkspace
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 selected={selected}
+                activeSchema={activeSqlSchema}
+                namespaceKind={metadata?.namespaceKind}
                 sessionConnectionId={selected?.id ?? null}
                 tabs={sqlTabs}
                 activeTabId={activeSqlTab.id}
