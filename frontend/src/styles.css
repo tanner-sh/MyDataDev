@@ -2581,6 +2581,43 @@ body {
   max-width: 340px;
 }
 
+.mcp-settings-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.mcp-status-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.mcp-status-row .ant-typography {
+  margin-bottom: 0;
+}
+
+.mcp-section-alert {
+  margin-bottom: 16px;
+}
+
+.mcp-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+@media (max-width: 720px) {
+  .mcp-status-row {
+    flex-direction: column;
+  }
+
+  .mcp-limit-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .backup-center-shell > .ant-tabs > .ant-tabs-nav {
   margin: 0 0 12px;
 }

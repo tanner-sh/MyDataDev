@@ -333,3 +333,43 @@ export type ImportResult = { rows: Record<string, unknown>[]; message: string };
 export type ResultRow = { key: string; values: unknown[] };
 export type EditableRow = TableRow;
 export type RefreshConnectionsOptions = { retry?: boolean; preferredConnectionId?: number };
+
+export type McpLimits = {
+  defaultQueryRows: number;
+  maxQueryRows: number;
+  maxResultCells: number;
+  maxResultTextChars: number;
+  maxCellTextChars: number;
+  maxSqlChars: number;
+  queryTimeoutSeconds: number;
+  metadataPageSize: number;
+  maxMetadataPageSize: number;
+  tablePageSize: number;
+  maxTablePageSize: number;
+  sessionTtlMinutes: number;
+};
+export type McpAgent = {
+  id: number;
+  agentId: string;
+  enabled: boolean;
+  allowProduction: boolean;
+  connectionIds: number[];
+  createdAt: string;
+  updatedAt: string;
+};
+export type McpConnectionOption = {
+  id: number;
+  name: string;
+  dbType: string;
+  environment: string;
+  readonly: boolean;
+};
+export type McpConfig = {
+  enabled: boolean;
+  endpointPath: string;
+  allowedOrigins: string[];
+  limits: McpLimits;
+  agents: McpAgent[];
+  connections: McpConnectionOption[];
+};
+export type McpCredential = { agent: McpAgent; credential: string };

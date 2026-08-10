@@ -2,7 +2,6 @@ package com.example.dbadmin.config;
 
 import com.example.dbadmin.mcp.McpApiKeyAuthenticationFilter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,7 +16,6 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 public class SecurityConfig {
     @Bean
-    @ConditionalOnProperty(prefix = "app.mcp", name = "enabled", havingValue = "true")
     FilterRegistrationBean<McpApiKeyAuthenticationFilter> disableGlobalMcpFilterRegistration(
             McpApiKeyAuthenticationFilter apiKeyFilter
     ) {
@@ -28,7 +26,6 @@ public class SecurityConfig {
 
     @Bean
     @Order(1)
-    @ConditionalOnProperty(prefix = "app.mcp", name = "enabled", havingValue = "true")
     SecurityFilterChain mcpSecurity(HttpSecurity http, McpApiKeyAuthenticationFilter apiKeyFilter) throws Exception {
         return http
                 .securityMatcher("/mcp")

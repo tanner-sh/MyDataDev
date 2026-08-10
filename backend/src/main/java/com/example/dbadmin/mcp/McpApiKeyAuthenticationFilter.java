@@ -1,12 +1,10 @@
 package com.example.dbadmin.mcp;
 
-import com.example.dbadmin.config.AppProperties;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -17,32 +15,26 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 @Component
-@ConditionalOnProperty(prefix = "app.mcp", name = "enabled", havingValue = "true")
 public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
     static final String SESSION_HEADER = "Mcp-Session-Id";
 
     private final McpApiKeyRegistry keys;
     private final McpSessionOwnershipStore sessions;
+    private final McpConfigurationService configuration;
     private final MeterRegistry metrics;
-    private final Set<String> allowedOrigins;
 
     public McpApiKeyAuthenticationFilter(
             McpApiKeyRegistry keys,
             McpSessionOwnershipStore sessions,
-            AppProperties properties,
+            McpConfigurationService configuration,
             MeterRegistry metrics
     ) {
         this.keys = keys;
         this.sessions = sessions;
+        this.configuration = configuration;
         this.metrics = metrics;
-        this.allowedOrigins = properties.getMcp().getAllowedOrigins().stream()
-                .filter(origin -> origin != null && !origin.isBlank())
-                .map(McpApiKeyAuthenticationFilter::normalizeOrigin)
-                .collect(Collectors.toUnmodifiableSet());
     }
 
     @Override
@@ -53,8 +45,14 @@ public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        McpRuntimeConfig config = configuration.snapshot();
+        if (!config.settings().enabled()) {
+            metrics.counter("dbadmin.mcp.security.denied", "reason", "disabled").increment();
+            response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "MCP service is disabled");
+            return;
+        }
         String origin = request.getHeader(HttpHeaders.ORIGIN);
-        if (origin != null && !allowedOrigins.contains(normalizeOrigin(origin))) {
+        if (origin != null && !config.allowedOrigins().contains(normalizeOrigin(origin))) {
             metrics.counter("dbadmin.mcp.security.denied", "reason", "origin").increment();
             response.sendError(HttpServletResponse.SC_FORBIDDEN, "Forbidden");
             return;

@@ -1,19 +1,23 @@
 package com.example.dbadmin.mcp;
 
-import com.example.dbadmin.config.AppProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
-import java.util.List;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class McpApiKeyRegistryTest {
     @Test
     void authenticatesAgentAndReturnsConfiguredPermissions() {
-        AppProperties properties = properties(agent("codex", "secret-value", List.of(1L, 2L), true));
-        McpApiKeyRegistry registry = new McpApiKeyRegistry(properties);
+        McpConfigurationService configuration = mock(McpConfigurationService.class);
+        McpRuntimeConfig.Agent agent = agent("codex", "secret-value", Set.of(1L, 2L), true, true);
+        when(configuration.snapshot()).thenReturn(config(Map.of(agent.agentId(), agent)));
+        McpApiKeyRegistry registry = new McpApiKeyRegistry(configuration);
 
         assertThat(registry.authenticate("codex.secret-value"))
                 .contains(new McpAgentPrincipal("codex", java.util.Set.of(1L, 2L), true));
@@ -23,42 +27,34 @@ class McpApiKeyRegistryTest {
     }
 
     @Test
-    void rejectsMissingDuplicateOrInvalidAgentConfiguration() {
-        assertThatThrownBy(() -> new McpApiKeyRegistry(new AppProperties()))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("没有配置");
-
-        AppProperties duplicate = properties(
-                agent("agent", "first", List.of(1L), false),
-                agent("agent", "second", List.of(2L), false)
+    void readsLatestSnapshotAndRejectsDisabledAgent() {
+        McpConfigurationService configuration = mock(McpConfigurationService.class);
+        McpRuntimeConfig.Agent enabled = agent("agent", "secret", Set.of(1L), false, true);
+        McpRuntimeConfig.Agent disabled = agent("agent", "secret", Set.of(1L), false, false);
+        when(configuration.snapshot()).thenReturn(
+                config(Map.of(enabled.agentId(), enabled)),
+                config(Map.of(disabled.agentId(), disabled))
         );
-        assertThatThrownBy(() -> new McpApiKeyRegistry(duplicate))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("重复");
+        McpApiKeyRegistry registry = new McpApiKeyRegistry(configuration);
 
-        AppProperties invalidHash = new AppProperties();
-        AppProperties.McpAgent invalid = new AppProperties.McpAgent();
-        invalid.setId("agent");
-        invalid.setKeyHash("plain-text-secret");
-        invalid.setConnectionIds(List.of(1L));
-        invalidHash.getMcp().setAgents(List.of(invalid));
-        assertThatThrownBy(() -> new McpApiKeyRegistry(invalidHash))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("BCrypt");
+        assertThat(registry.authenticate("agent.secret")).isPresent();
+        assertThat(registry.authenticate("agent.secret")).isEmpty();
     }
 
-    private AppProperties properties(AppProperties.McpAgent... agents) {
-        AppProperties properties = new AppProperties();
-        properties.getMcp().setAgents(List.of(agents));
-        return properties;
+    private McpRuntimeConfig config(Map<String, McpRuntimeConfig.Agent> agents) {
+        return new McpRuntimeConfig(settings(), Set.of(), agents);
     }
 
-    private AppProperties.McpAgent agent(String id, String secret, List<Long> connectionIds, boolean allowProduction) {
-        AppProperties.McpAgent agent = new AppProperties.McpAgent();
-        agent.setId(id);
-        agent.setKeyHash(new BCryptPasswordEncoder(4).encode(secret));
-        agent.setConnectionIds(connectionIds);
-        agent.setAllowProduction(allowProduction);
-        return agent;
+    private McpRuntimeConfig.Agent agent(String id, String secret, Set<Long> connectionIds,
+                                         boolean allowProduction, boolean enabled) {
+        return new McpRuntimeConfig.Agent(
+                1L, id, new BCryptPasswordEncoder(4).encode(secret), enabled,
+                allowProduction, connectionIds, Instant.EPOCH, Instant.EPOCH
+        );
+    }
+
+    private McpRuntimeConfig.Settings settings() {
+        return new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
+                20_000, 100_000, 30, 100, 500, 100, 500, 30);
     }
 }

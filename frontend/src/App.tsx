@@ -44,6 +44,7 @@ const MAX_RETAINED_RESULT_UNITS = 400_000;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
+const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const ObjectDetailWorkspace = lazy(() => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace })));
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
@@ -134,7 +135,7 @@ export default function App() {
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
@@ -2029,6 +2030,7 @@ export default function App() {
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openConnectionsFromHeader = useStableEvent(() => setActiveDrawer('connections'));
   const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
+  const openMcpFromHeader = useStableEvent(() => setActiveDrawer('mcp'));
   const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
   const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
   const previewBackupScheduleEvent = useStableEvent((cron: string) => previewBackupSchedule(cron));
@@ -2147,6 +2149,7 @@ export default function App() {
           onRefreshConnections={refreshConnectionsFromHeader}
           onOpenConnections={openConnectionsFromHeader}
           onOpenBackups={openBackupsFromHeader}
+          onOpenMcp={openMcpFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -2366,6 +2369,19 @@ export default function App() {
           onDeleteHistory={deleteBackupHistoryEvent}
           onDownloadHistory={downloadBackupHistoryEvent}
           />
+        </Suspense>
+      </Drawer>
+
+      <Drawer
+        title="MCP Server 设置"
+        size={960}
+        open={activeDrawer === 'mcp'}
+        rootClassName="management-drawer mcp-management-drawer"
+        onClose={() => setActiveDrawer(null)}
+        destroyOnHidden
+      >
+        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载 MCP 设置…</div>}>
+          {activeDrawer === 'mcp' && <McpSettingsPanel />}
         </Suspense>
       </Drawer>
       {(tableCreateOpen || tableLifecycleAction) && (

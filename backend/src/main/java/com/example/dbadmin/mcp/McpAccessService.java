@@ -3,7 +3,6 @@ package com.example.dbadmin.mcp;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.service.ConnectionService;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -11,7 +10,6 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 @Service
-@ConditionalOnProperty(prefix = "app.mcp", name = "enabled", havingValue = "true")
 public class McpAccessService {
     private final ConnectionService connections;
 

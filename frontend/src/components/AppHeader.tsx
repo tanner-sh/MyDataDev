@@ -1,5 +1,6 @@
 import { Badge, Button, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import {
+  ApiOutlined,
   CloudServerOutlined,
   DatabaseOutlined,
   MenuFoldOutlined,
@@ -26,6 +27,7 @@ type AppHeaderProps = {
   onRefreshConnections: () => void;
   onOpenConnections: () => void;
   onOpenBackups: () => void;
+  onOpenMcp: () => void;
   onToggleTheme: () => void;
 };
 
@@ -40,6 +42,7 @@ export const AppHeader = memo(function AppHeader({
   onRefreshConnections,
   onOpenConnections,
   onOpenBackups,
+  onOpenMcp,
   onToggleTheme
 }: AppHeaderProps) {
   return (
@@ -119,6 +122,9 @@ export const AppHeader = memo(function AppHeader({
         </Tooltip>
         <Tooltip title="备份任务">
           <Button type="text" icon={<CloudServerOutlined />} aria-label="备份任务" disabled={!selected} onClick={onOpenBackups}>备份任务</Button>
+        </Tooltip>
+        <Tooltip title="MCP Server 设置">
+          <Button type="text" icon={<ApiOutlined />} aria-label="MCP Server 设置" onClick={onOpenMcp}>MCP</Button>
         </Tooltip>
         <Tooltip title={themeMode === 'light' ? '切换深色主题' : '切换浅色主题'}>
           <Button

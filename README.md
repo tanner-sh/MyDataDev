@@ -53,7 +53,7 @@ npm install
 npm run dev
 ```
 
-前端默认访问 `http://localhost:5173`。前端 API 地址目前在 `frontend/src/constants.ts` 中配置为 `http://localhost:8080/api`。
+前端默认访问 `http://localhost:5173`。开发服务器会将 `/api` 和 `/mcp` 代理到 `http://localhost:8080`；生产部署也应在同一入口转发这两个路径，或通过 `VITE_API_BASE_URL` 指定后端 `/api` 地址。
 
 ## 构建与测试
 
@@ -93,7 +93,7 @@ npm run build
 
 ## MCP Server
 
-MCP Server 默认关闭。启用后端的 `/mcp` 端点后，每个 AI agent 使用独立 API Key，并且只能访问同时满足“agent 连接白名单”和“连接已标记为只读”的数据库。详细配置、客户端示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
+MCP Server 默认关闭。后端启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。每个 AI agent 使用独立 API Key，并且只能访问同时满足“Agent 连接白名单”和“连接已标记为只读”的数据库。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
 
 ## 备份说明
 

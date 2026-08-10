@@ -1,6 +1,5 @@
 package com.example.dbadmin.mcp;
 
-import com.example.dbadmin.config.AppProperties;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -10,9 +9,13 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
-import java.util.List;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class McpApiKeyAuthenticationFilterTest {
     @AfterEach
@@ -64,26 +67,28 @@ class McpApiKeyAuthenticationFilterTest {
     }
 
     private McpApiKeyAuthenticationFilter filter() {
-        AppProperties properties = new AppProperties();
-        properties.getMcp().setAllowedOrigins(List.of("https://trusted.example/"));
-        properties.getMcp().setAgents(List.of(
-                agent("agent-a", "secret-a", 1L),
-                agent("agent-b", "secret-b", 2L)
+        McpConfigurationService configuration = mock(McpConfigurationService.class);
+        McpRuntimeConfig.Agent agentA = agent(1L, "agent-a", "secret-a", 1L);
+        McpRuntimeConfig.Agent agentB = agent(2L, "agent-b", "secret-b", 2L);
+        when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(
+                new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
+                        20_000, 100_000, 30, 100, 500, 100, 500, 30),
+                Set.of("https://trusted.example"),
+                Map.of(agentA.agentId(), agentA, agentB.agentId(), agentB)
         ));
         return new McpApiKeyAuthenticationFilter(
-                new McpApiKeyRegistry(properties),
-                new McpSessionOwnershipStore(properties),
-                properties,
+                new McpApiKeyRegistry(configuration),
+                new McpSessionOwnershipStore(configuration),
+                configuration,
                 new SimpleMeterRegistry()
         );
     }
 
-    private AppProperties.McpAgent agent(String id, String secret, long connectionId) {
-        AppProperties.McpAgent agent = new AppProperties.McpAgent();
-        agent.setId(id);
-        agent.setKeyHash(new BCryptPasswordEncoder(4).encode(secret));
-        agent.setConnectionIds(List.of(connectionId));
-        return agent;
+    private McpRuntimeConfig.Agent agent(long numericId, String id, String secret, long connectionId) {
+        return new McpRuntimeConfig.Agent(
+                numericId, id, new BCryptPasswordEncoder(4).encode(secret), true,
+                false, Set.of(connectionId), Instant.EPOCH, Instant.EPOCH
+        );
     }
 
     private MockHttpServletRequest authorizedRequest(String credential) {

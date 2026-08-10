@@ -6,7 +6,18 @@ MyDataDev 后端内置一个只读 MCP Server，使用 Streamable HTTP 协议向
 http://<backend-host>:8080/mcp
 ```
 
-MCP 默认关闭，不影响现有 Web 和 REST API。启用 MCP 只会保护 `/mcp`；现有 `/api` 的网络访问控制方式保持不变。
+MCP 默认关闭，不影响现有 Web 和 REST API。后端启动后，管理员可完全通过 Web 配置和热启停 MCP，不需要额外执行生成密钥或 MCP 启动命令。启用 MCP 只会保护 `/mcp`；现有 `/api` 的网络访问控制方式保持不变。
+
+## 通过 Web 开启
+
+1. 正常启动 MyDataDev 后端和前端。
+2. 在连接管理中，将准备提供给 AI agent 的连接标记为“只读”。连接本身也必须使用数据库侧只读账户。
+3. 点击页面右上角的 **MCP**，进入 **MCP Server 设置**。
+4. 点击 **新建 Agent**，填写 Agent ID，选择允许访问的只读连接；生产连接需要额外确认生产权限。
+5. 系统会自动生成高熵 API Key。立即复制完整凭据或客户端 JSON；关闭弹窗后无法找回，只能轮换 Key。
+6. 打开 MCP Server 开关。所有修改都会即时生效，无需重启后端。
+
+系统会阻止在没有有效 Agent 和只读连接授权时开启 MCP，也会阻止在运行中停用或删除最后一个有效 Agent。
 
 ## 安全模型
 
@@ -23,7 +34,7 @@ SQL 工具只接受分类为查询的单条语句，会拒绝 DML、DDL、存储
 
 API Key 会出现在每次请求的 `Authorization` 请求头中。跨主机部署时应通过反向代理提供 HTTPS，不要在不可信明文网络上传输 Key。`/mcp` 不应直接暴露到公网。
 
-## 创建 agent API Key
+## Agent API Key
 
 凭据格式为：
 
@@ -31,19 +42,13 @@ API Key 会出现在每次请求的 `Authorization` 请求头中。跨主机部�
 <agent-id>.<raw-secret>
 ```
 
-配置文件只保存 `raw-secret` 的 BCrypt 哈希，不保存完整凭据。建议使用随机生成的高熵 secret，并为每个 agent 单独创建和轮换。
+系统使用安全随机数自动生成 `raw-secret`，在 H2 元数据库中只保存 cost 12 的 BCrypt 哈希，不保存完整凭据。每个 Agent 应使用独立 Key；Web 中的“轮换 Key”会立即废止旧 Key，并清除该 Agent 已建立的 MCP session。
 
-如果系统安装了 Apache `htpasswd`，可用下面的交互式命令生成 cost 12 的 BCrypt 哈希，避免把 secret 写进 shell 历史：
+## 配置存储与旧配置迁移
 
-```bash
-htpasswd -nBC 12 mcp-agent
-```
+Web 配置保存在 MyDataDev 自身的 H2 元数据库中，包括服务状态、Agent、BCrypt 哈希、连接白名单、生产权限、Origin 和资源限制。数据库中一旦存在 MCP 配置，后续启动都以数据库为准。
 
-命令会提示输入两次密码，输出格式为 `mcp-agent:$2y$...`。配置 `key-hash` 时只复制冒号后的 `$2y$...` 部分。也可以使用其他支持 `$2a$`、`$2b$` 或 `$2y$` 的 BCrypt 工具。
-
-## 服务端配置
-
-不要把 agent Key 哈希、真实连接密码或加密密钥提交到 Git。建议在服务器创建仓库外的配置文件，例如 `/etc/mydatadev/mcp-secrets.yml`：
+为兼容早期版本，升级后首次启动会将已有 `app.mcp` YAML 配置导入数据库一次。例如旧部署仍可保留：
 
 ```yaml
 app:
@@ -61,32 +66,15 @@ app:
         allow-production: true
 ```
 
-然后启用并启动后端：
+导入完成后，YAML 的 MCP 配置不再覆盖 Web 中的修改，可以从部署配置中移除。不要把 Agent Key 哈希、真实连接密码或加密密钥提交到 Git。
 
-```bash
-cd backend
-MCP_ENABLED=true \
-SPRING_CONFIG_ADDITIONAL_LOCATION=file:/etc/mydatadev/mcp-secrets.yml \
-DB_ADMIN_CRYPTO_KEY='<deployment-crypto-key>' \
-mvn spring-boot:run
-```
-
-启用 MCP 但没有配置 agent、agent ID 重复、哈希无效或连接 ID 非正数时，后端会拒绝启动。
-
-如果浏览器 MCP 客户端需要访问端点，必须将准确的 Origin 加入 `allowed-origins`，例如：
-
-```yaml
-app:
-  mcp:
-    allowed-origins:
-      - https://agent-console.example.internal
-```
+如果浏览器 MCP 客户端需要访问端点，必须在 Web 设置中将准确的 Origin 加入允许列表，例如 `https://agent-console.example.internal`。
 
 空列表会拒绝所有携带 `Origin` 的 MCP 请求，同时允许不携带 `Origin` 的服务端/CLI 客户端。不要使用宽泛或动态反射的 Origin。
 
 ## 客户端配置
 
-不同 MCP 客户端的字段名称略有区别，核心配置如下：
+创建或轮换 Agent 后，Web 会生成可直接复制的配置。不同 MCP 客户端的字段名称略有区别，核心配置如下：
 
 ```json
 {
@@ -101,6 +89,8 @@ app:
   }
 }
 ```
+
+本地开发时 Vite 会同时代理 `/api` 和 `/mcp`。生产环境若让前端与后端共用域名，反向代理也应同时转发这两个路径；若前端使用跨域的 `VITE_API_BASE_URL`，Web 会按该后端地址生成 MCP URL。
 
 客户端必须在初始化和后续会话请求中都发送同一个 Bearer 凭据。服务端会把 MCP session 绑定到创建它的 agent，其他 agent 不能复用该 session ID。
 
@@ -121,7 +111,7 @@ app:
 
 ## 限制与可观测性
 
-默认限制位于 `backend/src/main/resources/application.yml` 的 `app.mcp` 下，包括：
+默认限制在第一次初始化时来自 `backend/src/main/resources/application.yml`，之后可在 Web 的“高级资源限制”中调整并即时生效，包括：
 
 - 查询默认 100 行、最多 500 行。
 - 单次结果最多 20,000 个单元格。
