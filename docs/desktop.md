@@ -112,21 +112,28 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 `.github/workflows/desktop-release.yml` 在四种原生 runner 上并行构建。每个平台都会运行后端、前端和桌面端测试，生成安装包后启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。
 
-项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.1.0` 时：
+项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.1.1` 时：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 标签构建成功后会发布四个平台的安装包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
 
-## 第一版签名限制
+## 无 Apple 开发者账号的发布策略
 
-当前流水线生成的是未签名安装包，不包含商店发布、代码签名、公证或自动更新：
+当前流水线不使用付费的 Apple Developer ID。macOS 应用会在打包时完成全量 ad-hoc 签名，确保 Electron、内嵌 Java Runtime 和应用资源构成一个签名结构完整的 `.app`。这会消除 `code has no resources but signature indicates they must be present` 这类产物自身的签名结构错误，但 ad-hoc 签名不能证明开发者身份，也不包含 Apple 公证。Gatekeeper 仍可能根据 macOS 版本显示“无法验证开发者”或“应用已损坏”。
 
-- macOS 首次启动可能被 Gatekeeper 阻止，可在“系统设置 → 隐私与安全性”中确认打开。
+- macOS 用户首次启动仍会被 Gatekeeper 阻止。确认下载文件的 SHA-256 与 Release 中的 `SHA256SUMS.txt` 一致后，先尝试打开一次，再进入“系统设置 → 隐私与安全性”点击“仍要打开”。
+- 如果系统没有显示“仍要打开”，可在确认校验和后仅移除 MyDataDev 的下载隔离标记：
+
+  ```bash
+  sudo xattr -dr com.apple.quarantine "/Applications/MyDataDev.app"
+  open "/Applications/MyDataDev.app"
+  ```
+
 - Windows 可能显示 SmartScreen 警告，用户需要确认来源后继续运行。
 - Linux DEB/RPM 未使用发行仓库签名，应通过 Release 中的 `SHA256SUMS.txt` 校验下载文件。
 
-面向非开发用户公开分发前，建议分别配置 Apple Developer ID 与公证、Windows Authenticode 证书，以及 Linux 软件仓库签名。
+每次 macOS 构建都会对 DMG 内的应用执行 `codesign --verify --deep --strict`，并检查 bundle ID、ad-hoc 签名和资源密封。当前策略不能提供“下载后直接双击”的无警告体验；如果未来需要面向非开发用户无提示分发，仍需改为 Apple Developer ID 签名和公证。

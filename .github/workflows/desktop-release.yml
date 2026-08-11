@@ -83,6 +83,30 @@ jobs:
         run: npm run make
         working-directory: desktop
 
+      - name: macOS ad-hoc 签名结构校验
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=$(find desktop/out/make -name '*.dmg' -type f -print -quit)
+          test -n "$dmg"
+
+          mount_dir=$(mktemp -d "$RUNNER_TEMP/mydatadev-dmg.XXXXXX")
+          cleanup() {
+            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+            rmdir "$mount_dir" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
+          app="$mount_dir/MyDataDev.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          signature=$(codesign -dv --verbose=4 "$app" 2>&1)
+          grep -Fq 'Identifier=com.tanner.mydatadev' <<<"$signature"
+          grep -Fq 'Signature=adhoc' <<<"$signature"
+          grep -Fq 'Sealed Resources version=2' <<<"$signature"
+
       - name: macOS 安装前烟测
         if: runner.os == 'macOS'
         shell: bash
@@ -127,6 +151,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           pattern: mydatadev-*
@@ -137,7 +163,7 @@ jobs:
         working-directory: release-assets
         run: sha256sum MyDataDev-* > SHA256SUMS.txt
 
-      - name: 发布未签名安装包
+      - name: 发布安装包
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -146,5 +172,8 @@ jobs:
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" release-assets/* --clobber
           else
-            gh release create "${{ github.ref_name }}" release-assets/* --generate-notes --title "MyDataDev ${{ github.ref_name }}"
+            gh release create "${{ github.ref_name }}" release-assets/* \
+              --generate-notes \
+              --notes-file docs/macos-unsigned-release-notes.md \
+              --title "MyDataDev ${{ github.ref_name }}"
           fi

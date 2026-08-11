@@ -12,6 +12,22 @@ const icon = process.platform === 'darwin'
   : process.platform === 'win32'
     ? path.join(directory, 'assets', 'icon.ico')
     : path.join(directory, 'assets', 'icon.png');
+const adHocMacSigning = process.platform === 'darwin'
+  ? {
+      identity: '-',
+      identityValidation: false,
+      continueOnError: false,
+      strictVerify: true,
+      preAutoEntitlements: false,
+      preEmbedProvisioningProfile: false,
+      optionsForFile: () => ({
+        // Ad-hoc signatures have no Team ID, so Electron's libraries cannot use
+        // hardened library validation. This still seals the complete app bundle.
+        hardenedRuntime: false,
+        timestamp: 'none'
+      })
+    }
+  : undefined;
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -19,6 +35,7 @@ const config: ForgeConfig = {
     executableName: 'MyDataDev',
     appBundleId: 'com.tanner.mydatadev',
     appCategoryType: 'public.app-category.developer-tools',
+    osxSign: adHocMacSigning,
     asar: true,
     prune: true,
     ignore: [
