@@ -108,11 +108,24 @@ app:
 
 | 客户端 | 全局配置 | 项目级配置 | 说明 |
 | --- | --- | --- | --- |
-| Codex CLI | `~/.codex/config.toml`；`codex mcp add` 默认写入全局配置 | `<项目根目录>/.codex/config.toml`，仅可信项目加载 | 推荐项目隔离时使用独立 Agent 和环境变量 |
+| Codex CLI | `~/.codex/config.toml`；`codex mcp add` 默认写入全局配置 | `<项目根目录>/.codex/config.toml`，仅可信项目加载 | 推荐使用环境变量；也支持静态 `http_headers` |
 | Claude Code | 用户级配置或 `--scope user` | `<项目根目录>/.mcp.json` | 支持在 Header 中展开环境变量 |
 | Claude Desktop | `claude_desktop_config.json` | 不支持按代码项目自动切换 | 私网静态 Bearer 使用 `mcp-remote` 桥接，配置对整个应用可见 |
 | Cursor | `~/.cursor/mcp.json` | `<项目根目录>/.cursor/mcp.json` | 桌面进程必须能够读取配置中引用的环境变量 |
 | Gemini CLI | `~/.gemini/settings.json` 或 `--scope user` | `<项目根目录>/.gemini/settings.json` | 项目配置中不要提交真实 Key |
+
+### Codex 静态 http_headers
+
+如果不希望每次启动 Codex 前设置环境变量，可以把 Bearer 凭据通过静态 `http_headers` 写入全局或项目级 `config.toml`：
+
+```toml
+[mcp_servers.mydatadev]
+url = "https://dbadmin.example.internal/mcp"
+http_headers = { "Authorization" = "Bearer <AGENT_API_KEY>" }
+enabled = true
+```
+
+普通 Web 帮助使用 `<AGENT_API_KEY>` 占位符；创建或轮换 Agent 后的一次性凭据弹窗会生成包含真实 Key 的静态 Header 配置。该方式无需环境变量，但完整 Key 会以明文保存在 `config.toml`。只应保存到本机私有配置，设置严格文件权限，并确保 `.codex/config.toml` 不进入 Git、工单、日志或聊天记录。环境变量方式仍是推荐方案。
 
 Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通常要求公网可达并使用 OAuth。MyDataDev 默认面向私有网络并采用 Agent Bearer Key，因此 Web 帮助使用 `mcp-remote` 把 Desktop 的本地 stdio 请求桥接到 `/mcp`；HTTP 私网地址需要显式允许，跨主机仍应优先使用 HTTPS。
 

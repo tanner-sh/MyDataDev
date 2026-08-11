@@ -3,6 +3,7 @@ import {
   buildMcpClientGuides,
   claudeCodeJsonConfig,
   claudeDesktopConfig,
+  codexStaticHeaderTomlConfig,
   codexTomlConfig,
   cursorMcpConfig,
   geminiMcpConfig,
@@ -16,6 +17,10 @@ describe('MCP client configuration generators', () => {
   it('generates native remote HTTP shapes for supported clients', () => {
     expect(codexTomlConfig(ENDPOINT)).toContain(`url = "${ENDPOINT}"`);
     expect(codexTomlConfig(ENDPOINT)).toContain('bearer_token_env_var = "MYDATADEV_MCP_TOKEN"');
+    expect(codexStaticHeaderTomlConfig(ENDPOINT, CREDENTIAL)).toContain(
+      `http_headers = { "Authorization" = "Bearer ${CREDENTIAL}" }`
+    );
+    expect(codexStaticHeaderTomlConfig(ENDPOINT, CREDENTIAL)).not.toContain('bearer_token_env_var');
 
     expect(JSON.parse(claudeCodeJsonConfig(ENDPOINT, CREDENTIAL))).toMatchObject({
       mcpServers: { mydatadev: { type: 'http', url: ENDPOINT, headers: { Authorization: `Bearer ${CREDENTIAL}` } } }
@@ -59,6 +64,15 @@ describe('MCP client configuration generators', () => {
     const onboarding = buildMcpClientGuides(ENDPOINT, CREDENTIAL);
     expect(onboarding.find((guide) => guide.id === 'generic')?.snippets[0].content).toContain(CREDENTIAL);
     expect(onboarding.find((guide) => guide.id === 'claude-desktop')?.snippets[0].content).toContain(CREDENTIAL);
+    expect(
+      onboarding.find((guide) => guide.id === 'codex')?.snippets
+        .find((snippet) => snippet.id === 'codex-static-header-toml')?.content
+    ).toContain(CREDENTIAL);
+
+    const codexHelp = help.find((guide) => guide.id === 'codex');
+    expect(
+      codexHelp?.snippets.find((snippet) => snippet.id === 'codex-static-header-toml')?.content
+    ).toContain('<AGENT_API_KEY>');
   });
 
   it('distinguishes global and project-scoped configuration for every client', () => {

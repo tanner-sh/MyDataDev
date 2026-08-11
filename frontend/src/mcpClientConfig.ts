@@ -70,6 +70,15 @@ export function codexTomlConfig(endpoint: string) {
   ].join('\n');
 }
 
+export function codexStaticHeaderTomlConfig(endpoint: string, credential?: string) {
+  return [
+    `[mcp_servers.${MCP_SERVER_NAME}]`,
+    `url = ${tomlString(endpoint)}`,
+    `http_headers = { "Authorization" = ${tomlString(`Bearer ${credentialOrPlaceholder(credential)}`)} }`,
+    'enabled = true'
+  ].join('\n');
+}
+
 export function claudeCodeJsonConfig(endpoint: string, credential?: string) {
   const token = credential || `\${${MCP_TOKEN_ENV_VAR}}`;
   return json({
@@ -135,7 +144,7 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
     {
       id: 'codex',
       label: 'Codex CLI',
-      summary: '通过 Streamable HTTP 直连，Codex 从环境变量读取 Bearer Token，不把密钥写进 config.toml。',
+      summary: '通过 Streamable HTTP 直连；推荐从环境变量读取 Bearer Token，也可使用静态 http_headers 免去每次设置环境变量。',
       scopes: [
         {
           id: 'global',
@@ -147,13 +156,14 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
           id: 'project',
           availability: 'supported',
           location: '<项目根目录>/.codex/config.toml',
-          description: '仅可信项目加载。需要按项目隔离数据源时，建议每个项目创建独立 MyDataDev Agent，并使用独立环境变量。',
+          description: '仅可信项目加载。需要按项目隔离数据源时，建议每个项目创建独立 MyDataDev Agent；可选择独立环境变量或静态 Header。',
           recommended: true
         }
       ],
       notes: [
-        '先在启动 Codex 的同一个终端中设置环境变量。',
-        'bearer_token_env_var 必须填写环境变量名，不能直接填写 Agent API Key。'
+        '环境变量方案不会把 Key 写入 config.toml；先在启动 Codex 的同一个终端中设置变量。',
+        'bearer_token_env_var 必须填写环境变量名，不能直接填写 Agent API Key。',
+        '静态 http_headers 无需设置环境变量，但会把完整 Key 明文写入配置文件；只用于本机私有配置，并确保文件不进入 Git。'
       ],
       snippets: [
         { id: 'codex-token-zsh', title: 'macOS zsh：安全输入 Key', language: 'bash', content: zshTokenSetup },
@@ -165,7 +175,13 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
           language: 'bash',
           content: `codex mcp add ${MCP_SERVER_NAME} --url ${posixQuote(endpoint)} --bearer-token-env-var ${MCP_TOKEN_ENV_VAR}`
         },
-        { id: 'codex-toml', title: '全局 / 项目级：config.toml 内容', language: 'toml', content: codexTomlConfig(endpoint) }
+        { id: 'codex-toml', title: '推荐：环境变量 config.toml', language: 'toml', content: codexTomlConfig(endpoint) },
+        {
+          id: 'codex-static-header-toml',
+          title: '免环境变量：静态 http_headers（明文 Key）',
+          language: 'toml',
+          content: codexStaticHeaderTomlConfig(endpoint, credential)
+        }
       ],
       verify: ['运行 codex mcp list 检查状态。', '启动 Codex 后输入 /mcp，再让它“使用 mydatadev 列出可用数据库连接”。']
     },
