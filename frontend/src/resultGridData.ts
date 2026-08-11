@@ -10,6 +10,9 @@ export type ResultColumnFilter = {
 export type ResultColumnFilters = Record<string, ResultColumnFilter>;
 export type ResultSortState = { key: string; order: 'ascend' | 'descend' };
 
+export const MIN_RESULT_COLUMN_WIDTH = 88;
+export const MAX_RESULT_COLUMN_WIDTH = 520;
+
 const naturalCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
 export function compareResultValues(left: unknown, right: unknown): number {
@@ -48,6 +51,20 @@ export function sortResultRows(rows: unknown[][], columns: ResultColumn[], sort?
   return rows.map((row, index) => ({ row, index }))
     .sort((left, right) => compareResultValues(left.row[columnIndex], right.row[columnIndex]) * direction || left.index - right.index)
     .map(({ row }) => row);
+}
+
+export function suggestedResultColumnWidth(column: ResultColumn, columnIndex: number, rows: unknown[][]): number {
+  const typeName = column.typeName.toLocaleUpperCase('en-US');
+  const typeWidth = /BOOL|BIT/.test(typeName) ? 96
+    : /DATE|TIME/.test(typeName) ? 168
+      : /INT|NUMBER|DECIMAL|FLOAT|DOUBLE|REAL/.test(typeName) ? 124
+        : 148;
+  const longestValue = rows.slice(0, 30).reduce((longest, row) => {
+    const value = row[columnIndex];
+    return Math.max(longest, value == null ? 4 : String(value).length);
+  }, Math.max(column.label.length, column.typeName.length));
+  const contentWidth = longestValue * 8 + 44;
+  return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeWidth, contentWidth)));
 }
 
 function switchFilter(operator: ResultFilterOperator, candidate: string, expected: string): boolean {

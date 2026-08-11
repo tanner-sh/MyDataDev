@@ -1,13 +1,14 @@
 import type { OnMount } from '@monaco-editor/react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Layout, Space, Tabs, Tooltip, Typography } from 'antd';
-import { DownloadOutlined, FileTextOutlined, FormatPainterOutlined, FundProjectionScreenOutlined, HistoryOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Dropdown, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
+import { DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
+import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -61,8 +62,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
+  const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
   const draftRef = useRef(activeTab.sql);
   const draftCommitTimerRef = useRef<number | null>(null);
+  const previousResultsRef = useRef(activeTab.results);
   const sqlFileInputRef = useRef<HTMLInputElement>(null);
   const onSqlChangeRef = useRef(onSqlChange);
   const onResultPageChangeRef = useRef(onResultPageChange);
@@ -84,6 +87,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
     draftRef.current = activeTab.sql;
     setDraftSql(activeTab.sql);
   }, [activeTab.sql, activeTabId]);
+
+  useEffect(() => {
+    if (activeTab.results.length === 0) {
+      setResultPaneMode('normal');
+    } else if (previousResultsRef.current !== activeTab.results) {
+      setResultPaneMode((current) => nextResultPaneMode(current, 'new-result'));
+    }
+    previousResultsRef.current = activeTab.results;
+  }, [activeTab.results]);
 
   useEffect(() => () => {
     if (draftCommitTimerRef.current != null) window.clearTimeout(draftCommitTimerRef.current);
@@ -109,11 +121,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   }
 
   const activeResultKey = activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined);
+  const activeResult = activeTab.results.find((result) => statementResultKey(result) === activeResultKey) || activeTab.results[0];
   const resultItems = useMemo(() => activeTab.results.map((result) => {
     const resultKey = statementResultKey(result);
     return {
       key: resultKey,
-      label: result.status === 'FAILED' ? `错误 ${result.index}` : result.result.resultSet ? `结果 ${result.index}` : `影响 ${result.index}`,
+      label: sqlStatementResultLabel(result),
       children: (
         <StatementResultPanel
           result={result}
@@ -121,11 +134,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           dbType={selected?.dbType}
           active={activeResultKey === resultKey}
           pagingLoading={pagingResultKey === `${activeTab.id}:${resultKey}`}
+          paneMode={resultPaneMode}
+          showIdentity={false}
+          onPaneModeChange={setResultPaneMode}
           onPageChange={handleResultPageChange}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
   const moreMenu: MenuProps = {
     items: [
@@ -187,12 +203,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   return (
     <div className={`workspace sql-workspace${selected?.readonly ? ' is-readonly' : ''}`}>
       <Header className="workspace-toolbar">
-        <div className="toolbar-title">
-          <Text strong>SQL 查询工作台</Text>
-          <Text type="secondary" className="ellipsis-text">
-            {selected ? `${namespaceKind === 'CATALOG' ? '当前数据库' : '当前 Schema'}：${activeSchema || '连接默认值'} · ${selected.jdbcUrl}` : '请先选择数据库连接'}
-          </Text>
-        </div>
+        <Tooltip title={selected?.jdbcUrl} placement="bottomLeft">
+          <div className="toolbar-title sql-workspace-title">
+            <Text strong>SQL 工作台</Text>
+            <Text type="secondary" className="ellipsis-text">
+              {selected ? `${selected.name} · ${namespaceKind === 'CATALOG' ? '数据库' : 'Schema'} ${activeSchema || '连接默认值'}` : '请先选择数据库连接'}
+            </Text>
+          </div>
+        </Tooltip>
         <div className="sql-toolbar-actions">
           <Space size={4} className="sql-toolbar-group">
             <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
@@ -270,7 +288,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         }))}
       />
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
-        <div className="editor" style={{ flexBasis: `${splitLimits.value * 100}%` }}>
+        {resultPaneMode !== 'maximized' && <div className={`editor${resultPaneMode === 'collapsed' ? ' editor-with-collapsed-results' : ''}`} style={resultPaneMode === 'normal' ? { flexBasis: `${splitLimits.value * 100}%` } : undefined}>
           <SqlEditorSurface
             connectionSelected={Boolean(selected)}
             value={draftSql}
@@ -282,8 +300,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             onFormat={() => { commitDraft(); onFormat(draftRef.current); }}
             onExecute={() => { commitDraft(); onExecute(draftRef.current); }}
           />
-        </div>
-        <PaneResizer
+        </div>}
+        {resultPaneMode === 'normal' && <PaneResizer
           direction="vertical"
           unit="ratio"
           value={splitLimits.value}
@@ -293,11 +311,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           ariaLabel="调整 SQL 编辑器和结果区高度"
           controlsId="sql-split-workspace"
           onChange={onEditorSplitRatioChange}
-        />
-        <div className="sql-results-pane">
-          {activeTab.results.length === 1 ? (
+        />}
+        <div className={`sql-results-pane is-${resultPaneMode}`}>
+          {resultPaneMode === 'collapsed' && activeResult ? (
+            <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
+          ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={handleResultPageChange} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -311,12 +331,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, onPageChange }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
   active: boolean;
   pagingLoading: boolean;
+  paneMode: ResultPaneMode;
+  showIdentity: boolean;
+  onPaneModeChange: (mode: ResultPaneMode) => void;
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
@@ -327,15 +350,22 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   return (
     <div className="statement-result-panel">
       <div className="statement-result-meta">
-        <Text type="secondary">
-          第 {result.index} 条 · 用时 {result.result.elapsedMs}ms
-          {result.result.resultSet ? ` · 返回 ${rowCount} 行` : ''}
-          {result.result.truncated ? ' · 已达到服务端结果大小上限，结果可能不完整' : ''}
-        </Text>
-        <details className="statement-sql-details">
-          <summary>查看执行语句</summary>
-          <pre className="statement-sql">{result.sql}</pre>
-        </details>
+        <div className="statement-result-summary">
+          {showIdentity && <Text strong className="statement-result-title">{sqlStatementResultLabel(result)}</Text>}
+          <Text type="secondary">
+            {result.result.resultSet ? `${rowCount} 行` : `影响 ${result.result.affectedRows} 行`} · {result.result.elapsedMs}ms
+            {result.result.truncated ? ' · 结果已截断' : ''}
+          </Text>
+        </div>
+        <div className="statement-result-actions">
+          {result.result.page && (
+            <Tooltip title="翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。">
+              <Button type="text" size="small" icon={<InfoCircleOutlined />} aria-label="查看结果翻页说明" />
+            </Tooltip>
+          )}
+          <StatementSqlButton result={result} />
+          <ResultPaneModeButtons mode={paneMode} onChange={onPaneModeChange} />
+        </div>
       </div>
       {result.status === 'FAILED' ? (
         <Alert type="error" showIcon title={`第 ${result.index} 条 SQL 执行失败`} description={result.errorMessage || '数据库返回未知错误'} />
@@ -343,7 +373,6 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
         <div className="statement-result-content">
           <div className="statement-result-notices">
             {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
-            {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
           </div>
           <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} onPageChange={handlePageChange} />
         </div>
@@ -351,6 +380,67 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
     </div>
   );
 });
+
+function CollapsedResultHeader({ result, paneMode, onPaneModeChange }: {
+  result: SqlStatementResult;
+  paneMode: ResultPaneMode;
+  onPaneModeChange: (mode: ResultPaneMode) => void;
+}) {
+  const rowCount = result.result.resultSet ? result.result.rows.length : result.result.affectedRows;
+  return (
+    <div className="collapsed-result-header">
+      <div className="statement-result-summary">
+        <Text strong className="statement-result-title">{sqlStatementResultLabel(result)}</Text>
+        <Text type="secondary">{result.result.resultSet ? `${rowCount} 行` : `影响 ${rowCount} 行`} · {result.result.elapsedMs}ms</Text>
+      </div>
+      <div className="statement-result-actions">
+        <StatementSqlButton result={result} />
+        <ResultPaneModeButtons mode={paneMode} onChange={onPaneModeChange} />
+      </div>
+    </div>
+  );
+}
+
+function StatementSqlButton({ result }: { result: SqlStatementResult }) {
+  return (
+    <Popover
+      trigger="click"
+      placement="topRight"
+      title={`第 ${result.index} 条执行语句`}
+      content={<pre className="statement-sql statement-sql-popover">{result.sql}</pre>}
+    >
+      <Button type="text" size="small" icon={<FileTextOutlined />} aria-label={`查看第 ${result.index} 条执行语句`} />
+    </Popover>
+  );
+}
+
+function ResultPaneModeButtons({ mode, onChange }: {
+  mode: ResultPaneMode;
+  onChange: (mode: ResultPaneMode) => void;
+}) {
+  return (
+    <Space.Compact size="small" className="result-pane-mode-buttons">
+      <Tooltip title={mode === 'collapsed' ? '展开结果区' : '收起结果区'}>
+        <Button
+          type="text"
+          size="small"
+          icon={mode === 'collapsed' ? <UpOutlined /> : <DownOutlined />}
+          aria-label={mode === 'collapsed' ? '展开结果区' : '收起结果区'}
+          onClick={() => onChange(nextResultPaneMode(mode, 'toggle-collapse'))}
+        />
+      </Tooltip>
+      <Tooltip title={mode === 'maximized' ? '恢复分栏' : '最大化结果区'}>
+        <Button
+          type="text"
+          size="small"
+          icon={mode === 'maximized' ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+          aria-label={mode === 'maximized' ? '恢复编辑器与结果分栏' : '最大化结果区'}
+          onClick={() => onChange(nextResultPaneMode(mode, 'toggle-maximize'))}
+        />
+      </Tooltip>
+    </Space.Compact>
+  );
+}
 
 function statementResultKey(result: SqlStatementResult) {
   return `statement-${result.index}`;

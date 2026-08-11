@@ -1,4 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableRef } from 'antd/es/table';
@@ -6,7 +7,7 @@ import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface'
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
-import { filterResultRows, sortResultRows, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { downloadBlob } from '../api';
 import { timestamp } from '../utils';
 import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
@@ -28,6 +29,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
   const [sortState, setSortState] = useState<{ key: string; order: 'ascend' | 'descend' }>();
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>([]);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [selectionAnchor, setSelectionAnchor] = useState<string>();
   const [copyFormat, setCopyFormat] = useState<ResultCopyFormat>(() => readResultCopyFormat());
@@ -43,6 +45,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
+  const columnSignature = result?.resultSet ? result.columns.map((column) => `${column.key}:${column.label}:${column.typeName}`).join('|') : '';
 
   useEffect(() => {
     if (result?.page?.requestedPageSize) setPageSizeDraft(result.page.requestedPageSize);
@@ -66,6 +69,41 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     setVisibleColumnKeys(result.columns.slice(0, 50).map((column) => column.key));
   }, [result?.columns, result?.resultSet]);
 
+  useEffect(() => {
+    if (!result?.resultSet) {
+      setColumnWidths({});
+      return;
+    }
+    setColumnWidths(Object.fromEntries(result.columns.map((column, index) => [
+      column.key,
+      suggestedResultColumnWidth(column, index, result.rows)
+    ])));
+  // Widths intentionally survive row/page/filter/sort changes and reset only for a new SQL or column structure.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSql, columnSignature, result?.resultSet]);
+
+  const resizeColumn = useCallback((key: string, width: number) => {
+    setColumnWidths((current) => ({
+      ...current,
+      [key]: Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(MAX_RESULT_COLUMN_WIDTH, Math.round(width)))
+    }));
+  }, []);
+
+  const beginColumnResize = useCallback((event: ReactMouseEvent, key: string, initialWidth: number) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const handleMove = (moveEvent: MouseEvent) => resizeColumn(key, initialWidth + moveEvent.clientX - startX);
+    const handleUp = () => {
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleUp);
+      document.body.classList.remove('is-resizing-column');
+    };
+    document.body.classList.add('is-resizing-column');
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
+  }, [resizeColumn]);
+
   useLayoutEffect(() => {
     if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
     if (lastScrolledRowsRef.current === result.rows) return;
@@ -80,7 +118,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       {
         title: '序号',
         key: '__index',
-        width: 70,
+        width: 58,
         fixed: 'left',
         className: 'result-index-column',
         shouldCellUpdate: (record, previous) => record !== previous,
@@ -88,38 +126,72 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       },
       ...result.columns.map((column, columnIndex) => ({ column, columnIndex }))
         .filter(({ column }) => visible.has(column.key))
-        .map(({ column, columnIndex }) => ({
-        title: <span title={column.typeName}>{column.label}</span>,
-        key: column.key,
-        width: Math.max(140, Math.min(280, column.label.length * 14 + 48)),
-        ellipsis: true,
-        sorter: true,
-        sortOrder: sortState?.key === column.key ? sortState.order : null,
-        filteredValue: columnFilters[column.key] ? ['active'] : null,
-        filterIcon: (filtered: boolean) => <FilterFilled className={filtered ? 'result-filter-icon-active' : undefined} />,
-        filterDropdown: ({ confirm, close }: FilterDropdownProps) => (
-          <ResultFilterDropdown
-            condition={columnFilters[column.key]}
-            onApply={(condition) => {
-              setColumnFilters((current) => ({ ...current, [column.key]: condition }));
-              confirm({ closeDropdown: true });
-            }}
-            onReset={() => {
-              setColumnFilters((current) => {
-                const next = { ...current };
-                delete next[column.key];
-                return next;
-              });
-              close();
-            }}
-          />
-        ),
-        onFilter: () => true,
-        shouldCellUpdate: (record: ResultRow, previous: ResultRow) => record !== previous,
-        render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
-      }))
+        .map(({ column, columnIndex }) => {
+          const width = columnWidths[column.key] || suggestedResultColumnWidth(column, columnIndex, result.rows);
+          return {
+            title: (
+              <span className="resizable-column-title" title={`${column.label} · ${column.typeName}`}>
+                <span>{column.label}</span>
+                <span
+                  className="column-resize-handle"
+                  role="separator"
+                  aria-label={`调整 ${column.label} 列宽`}
+                  aria-orientation="vertical"
+                  tabIndex={0}
+                  onMouseDown={(event) => beginColumnResize(event, column.key, width)}
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    resizeColumn(column.key, suggestedResultColumnWidth(column, columnIndex, result.rows));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    resizeColumn(column.key, width + (event.key === 'ArrowRight' ? 12 : -12));
+                  }}
+                />
+              </span>
+            ),
+            key: column.key,
+            width,
+            ellipsis: true,
+            sorter: true,
+            sortOrder: sortState?.key === column.key ? sortState.order : null,
+            filteredValue: columnFilters[column.key] ? ['active'] : null,
+            filterIcon: (filtered: boolean) => <FilterFilled className={filtered ? 'result-filter-icon-active' : undefined} />,
+            filterDropdown: ({ confirm, close }: FilterDropdownProps) => (
+              <ResultFilterDropdown
+                condition={columnFilters[column.key]}
+                onApply={(condition) => {
+                  setColumnFilters((current) => ({ ...current, [column.key]: condition }));
+                  confirm({ closeDropdown: true });
+                }}
+                onReset={() => {
+                  setColumnFilters((current) => {
+                    const next = { ...current };
+                    delete next[column.key];
+                    return next;
+                  });
+                  close();
+                }}
+              />
+            ),
+            onFilter: () => true,
+            shouldCellUpdate: (record: ResultRow, previous: ResultRow) => record !== previous,
+            render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
+          };
+        })
     ];
-  }, [columnFilters, result?.columns, result?.resultSet, rowOffset, sortState, visibleColumnKeys]);
+  }, [beginColumnResize, columnFilters, columnWidths, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState, visibleColumnKeys]);
+
+  const tableScrollWidth = useMemo(() => {
+    if (!result?.resultSet) return 800;
+    const visible = new Set(visibleColumnKeys);
+    return Math.max(800, 58 + result.columns.reduce((total, column, index) => (
+      visible.has(column.key) ? total + (columnWidths[column.key] || suggestedResultColumnWidth(column, index, result.rows)) : total
+    ), 0));
+  }, [columnWidths, result?.columns, result?.resultSet, result?.rows, visibleColumnKeys]);
 
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
@@ -224,49 +296,10 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       }}
     >
       {messageContextHolder}
-      <div ref={viewportRef} className="data-grid-viewport">
-        {scrollY === undefined ? (
-          <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
-        ) : (
-          <Table<ResultRow>
-            ref={tableRef}
-            size="small"
-            className="data-grid data-grid-fill result-grid"
-            columns={columns}
-            dataSource={rows}
-            pagination={false}
-            loading={pagingLoading}
-            virtual
-            scroll={{ x: Math.max(800, visibleColumnKeys.length * 180 + 70), y: scrollY }}
-            rowClassName={(row) => selectedRowKeys.includes(row.key) ? 'result-row-selected' : ''}
-            onRow={(row) => ({
-              onClick: (event) => {
-                if (isInteractiveTarget(event.target)) return;
-                const next = updateResultRowSelection({
-                  current: selectedRowKeys,
-                  clicked: row.key,
-                  displayed: rows.map((item) => item.key),
-                  anchor: selectionAnchor,
-                  toggle: event.ctrlKey || event.metaKey,
-                  range: event.shiftKey
-                });
-                setSelectedRowKeys(next.selected);
-                setSelectionAnchor(next.anchor);
-                gridShellRef.current?.focus({ preventScroll: true });
-              }
-            })}
-            onChange={(_pagination, _filters, sorter) => {
-              const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
-              const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
-              setSortState(key && current.order ? { key, order: current.order } : undefined);
-            }}
-          />
-        )}
-      </div>
-      <div className="grid-pagination result-grid-pagination">
+      <div className="result-grid-toolbar">
         <div className="result-local-actions">
           <Dropdown trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
-            <Button size="small" icon={<DownloadOutlined />}>导出当前结果 <DownOutlined /></Button>
+            <Button size="small" icon={<DownloadOutlined />}>导出 <DownOutlined /></Button>
           </Dropdown>
           <Space.Compact size="small">
             <Button size="small" icon={<CopyOutlined />} onClick={copySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
@@ -300,6 +333,48 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             />
           )}
         </div>
+        <Text type="secondary" className="result-grid-toolbar-hint">单击选择 · Shift 连选 · Ctrl/Cmd+C 复制</Text>
+      </div>
+      <div ref={viewportRef} className="data-grid-viewport">
+        {scrollY === undefined ? (
+          <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
+        ) : (
+          <Table<ResultRow>
+            ref={tableRef}
+            size="small"
+            className="data-grid data-grid-fill result-grid"
+            columns={columns}
+            dataSource={rows}
+            pagination={false}
+            loading={pagingLoading}
+            virtual
+            scroll={{ x: tableScrollWidth, y: scrollY }}
+            rowClassName={(row) => selectedRowKeys.includes(row.key) ? 'result-row-selected' : ''}
+            onRow={(row) => ({
+              onClick: (event) => {
+                if (isInteractiveTarget(event.target)) return;
+                const next = updateResultRowSelection({
+                  current: selectedRowKeys,
+                  clicked: row.key,
+                  displayed: rows.map((item) => item.key),
+                  anchor: selectionAnchor,
+                  toggle: event.ctrlKey || event.metaKey,
+                  range: event.shiftKey
+                });
+                setSelectedRowKeys(next.selected);
+                setSelectionAnchor(next.anchor);
+                gridShellRef.current?.focus({ preventScroll: true });
+              }
+            })}
+            onChange={(_pagination, _filters, sorter) => {
+              const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
+              const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
+              setSortState(key && current.order ? { key, order: current.order } : undefined);
+            }}
+          />
+        )}
+      </div>
+      <div className="grid-pagination result-grid-pagination">
         <div className="result-pagination-main">
           {result.page ? (
             <>

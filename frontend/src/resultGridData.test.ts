@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareResultValues, filterResultRows, matchesResultFilter, sortResultRows } from './resultGridData';
+import { compareResultValues, filterResultRows, matchesResultFilter, sortResultRows, suggestedResultColumnWidth } from './resultGridData';
 
 describe('result grid sorting', () => {
   it('sorts numbers, booleans, natural text and null values', () => {
@@ -44,5 +44,16 @@ describe('result grid filtering', () => {
       c1: { operator: 'equals', value: 'alice' },
       c2: { operator: 'equals', value: 'ready' }
     })).toEqual([['Alice', 'READY']]);
+  });
+});
+
+describe('result grid column widths', () => {
+  it('uses column types and sampled values without producing extreme widths', () => {
+    const numeric = { key: 'c1', label: 'ID', typeName: 'INTEGER' };
+    const text = { key: 'c2', label: 'description', typeName: 'VARCHAR' };
+
+    expect(suggestedResultColumnWidth(numeric, 0, [[1], [200]])).toBeGreaterThanOrEqual(124);
+    expect(suggestedResultColumnWidth(text, 0, [['a very useful description']])).toBeGreaterThan(148);
+    expect(suggestedResultColumnWidth(text, 0, [['x'.repeat(1_000)]])).toBe(320);
   });
 });
