@@ -1,0 +1,38 @@
+{
+  "name": "mydatadev-desktop",
+  "productName": "MyDataDev",
+  "version": "0.1.0",
+  "description": "MyDataDev cross-platform database workbench",
+  "author": "Tanner",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build:main": "node scripts/build-main.mjs",
+    "check:versions": "node scripts/check-versions.mjs",
+    "collect:artifacts": "node scripts/collect-artifacts.mjs",
+    "dev": "npm run build:main && node scripts/dev.mjs",
+    "generate:icons": "node scripts/generate-icons.mjs",
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "test": "vitest run",
+    "package": "npm run prepare:resources && npm run build:main && electron-forge package",
+    "make": "npm run check:versions && npm run prepare:resources && npm run build:main && electron-forge make"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.1"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "7.11.2",
+    "@electron-forge/maker-deb": "7.11.2",
+    "@electron-forge/maker-dmg": "7.11.2",
+    "@electron-forge/maker-rpm": "7.11.2",
+    "@electron-forge/maker-squirrel": "7.11.2",
+    "@types/electron-squirrel-startup": "^1.0.2",
+    "@types/node": "^22.18.0",
+    "electron": "43.3.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.35.3",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

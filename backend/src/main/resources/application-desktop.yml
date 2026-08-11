@@ -1,0 +1,42 @@
+server:
+  address: 127.0.0.1
+  port: 5173
+  shutdown: graceful
+
+spring:
+  datasource:
+    url: jdbc:h2:file:${MYDATADEV_DESKTOP_HOME}/data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE;FILE_LOCK=FS;TRACE_LEVEL_FILE=0
+  h2:
+    console:
+      enabled: false
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          max-age: 1h
+          cache-public: false
+
+app:
+  crypto-key: ${DB_ADMIN_CRYPTO_KEY}
+  backup:
+    directory: ${MYDATADEV_DESKTOP_HOME}/backups
+  sql-file:
+    directory: ${MYDATADEV_DESKTOP_HOME}/sql-files
+  desktop:
+    control-token: ${MYDATADEV_DESKTOP_CONTROL_TOKEN}
+    parent-pid: ${MYDATADEV_DESKTOP_PARENT_PID}
+
+logging:
+  file:
+    name: ${MYDATADEV_DESKTOP_HOME}/logs/mydatadev.log
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

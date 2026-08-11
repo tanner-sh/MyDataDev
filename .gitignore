@@ -7,3 +7,10 @@ backend/backups/
 frontend/node_modules/
 frontend/dist/
 frontend/public/monaco/
+
+desktop/node_modules/
+desktop/dist/
+desktop/out/
+desktop/resources/
+desktop/release-assets/
+desktop/.dev-data/

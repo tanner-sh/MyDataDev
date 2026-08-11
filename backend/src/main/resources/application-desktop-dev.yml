@@ -1,0 +1,6 @@
+server:
+  port: 8080
+
+logging:
+  file:
+    name: ${MYDATADEV_DESKTOP_HOME}/logs/mydatadev-dev.log

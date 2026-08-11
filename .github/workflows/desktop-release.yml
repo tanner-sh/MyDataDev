@@ -1,0 +1,148 @@
+name: 桌面版构建与发布
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            platform: darwin
+            arch: arm64
+          - name: macOS x64
+            os: macos-15-intel
+            platform: darwin
+            arch: x64
+          - name: Windows x64
+            os: windows-2025
+            platform: win32
+            arch: x64
+          - name: Linux x64
+            os: ubuntu-24.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    env:
+      MYDATADEV_RELEASE_PLATFORM: ${{ matrix.platform }}
+      MYDATADEV_RELEASE_ARCH: ${{ matrix.arch }}
+      MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 安装桌面端依赖
+        run: npm ci
+        working-directory: desktop
+
+      - name: 安装 Linux 打包工具
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
+
+      - name: 运行后端测试
+        run: mvn test --batch-mode
+        working-directory: backend
+
+      - name: 运行前端测试
+        run: npm test
+        working-directory: frontend
+
+      - name: 运行桌面端测试
+        run: npm test
+        working-directory: desktop
+
+      - name: 生成原生安装包
+        run: npm run make
+        working-directory: desktop
+
+      - name: macOS 安装前烟测
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          executable=$(find desktop/out -path '*/MyDataDev.app/Contents/MacOS/MyDataDev' -type f -print -quit)
+          test -n "$executable"
+          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" "$executable" --smoke-test
+
+      - name: Windows 安装前烟测
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $executable = Get-ChildItem desktop/out -Recurse -Filter MyDataDev.exe |
+            Where-Object { $_.FullName -match 'win32-x64' } |
+            Select-Object -First 1
+          if (-not $executable) { throw '未找到 MyDataDev.exe' }
+          $env:MYDATADEV_DESKTOP_HOME = Join-Path $env:RUNNER_TEMP 'mydatadev-smoke'
+          & $executable.FullName --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Linux 安装前烟测
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          executable=$(find desktop/out -path '*/MyDataDev-linux-x64/MyDataDev' -type f -print -quit)
+          test -n "$executable"
+          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" xvfb-run -a "$executable" --smoke-test
+
+      - name: 整理安装包
+        run: npm run collect:artifacts
+        working-directory: desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mydatadev-${{ matrix.platform }}-${{ matrix.arch }}
+          path: desktop/release-assets/*
+          if-no-files-found: error
+
+  release:
+    name: 创建 GitHub Release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mydatadev-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: 生成 SHA-256 校验文件
+        working-directory: release-assets
+        run: sha256sum MyDataDev-* > SHA256SUMS.txt
+
+      - name: 发布未签名安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            gh release upload "${{ github.ref_name }}" release-assets/* --clobber
+          else
+            gh release create "${{ github.ref_name }}" release-assets/* --generate-notes --title "MyDataDev ${{ github.ref_name }}"
+          fi

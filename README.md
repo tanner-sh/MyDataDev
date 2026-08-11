@@ -1,11 +1,12 @@
 # MyDataDev
 
-MyDataDev 是一个面向私有网络使用的 Web 数据库管理工具原型，目标是提供接近 DataGrip 的常用数据库浏览、SQL 执行、数据编辑、导入导出和备份任务管理能力。应用采用前后端分离架构，目标数据库访问统一通过后端 JDBC 完成。
+MyDataDev 是一个面向私有网络和本机桌面使用的数据库管理工具，目标是提供接近 DataGrip 的常用数据库浏览、SQL 执行、数据编辑、导入导出和备份任务管理能力。Web 模式采用前后端分离架构；桌面模式将同一套前端和 Spring Boot 后端封装为独立应用，目标数据库访问统一通过后端 JDBC 完成。
 
 ## 技术栈
 
 - 后端：Spring Boot 3、Java 17、JDBC、H2 元数据库、Spring AI MCP Server
 - 前端：React、Vite、TypeScript、Ant Design、Monaco Editor
+- 桌面端：Electron、Electron Forge、随应用打包的 Java Runtime
 - 数据库驱动：H2、MySQL、PostgreSQL、SQL Server、SQLite、MariaDB、ClickHouse、Oracle、达梦、OceanBase
 - 本地状态：连接配置、审计日志、SQL 历史和备份任务存储在后端 H2 元数据库中
 
@@ -32,9 +33,14 @@ frontend/
     types.ts           前端类型定义
     utils.ts           通用工具
     styles.css         全局样式
+
+desktop/
+  src/                 Electron 主进程、后端进程和安全存储
+  scripts/             开发、资源准备、图标和发行脚本
+  forge.config.ts      三平台安装包配置
 ```
 
-## 本地运行
+## Web 模式本地运行
 
 启动后端：
 
@@ -55,6 +61,20 @@ npm run dev
 
 前端默认访问 `http://localhost:5173`。开发服务器会将 `/api` 和 `/mcp` 代理到 `http://localhost:8080`；生产部署也应在同一入口转发这两个路径，或通过 `VITE_API_BASE_URL` 指定后端 `/api` 地址。
 
+## 桌面模式
+
+桌面版无需用户单独启动前端、后端或安装 Java。应用启动时会在本机 `127.0.0.1:5173` 启动内置后端并打开桌面窗口，因此 MCP 地址仍是 `http://localhost:5173/mcp`。关闭窗口会隐藏到系统托盘；从托盘明确退出时才会优雅停止内置后端。端口已被占用时，桌面版会停止启动并给出提示。
+
+Web 模式与桌面模式的数据默认完全独立，不共享 H2 元数据库、连接配置、Agent API Key、审计、备份或 SQL 文件。桌面数据写入操作系统应用数据目录，删除或升级安装程序不会主动覆盖这些数据。开发和打包方式、数据目录、MCP 接入及未签名安装说明见 [桌面版开发与发行说明](docs/desktop.md)。
+
+启动桌面开发模式：
+
+```bash
+cd desktop
+npm install
+npm run dev
+```
+
 ## 构建与测试
 
 后端测试：
@@ -69,6 +89,14 @@ mvn test
 ```bash
 cd frontend
 npm run build
+```
+
+桌面端测试与主进程类型检查：
+
+```bash
+cd desktop
+npm test
+npm run build:main
 ```
 
 提交前建议同时运行后端测试和前端构建，确保接口、类型和页面构建都可用。
@@ -93,7 +121,7 @@ npm run build
 
 ## MCP Server
 
-MCP Server 在新配置中默认开启。后端启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。Web 内置 Codex CLI、Claude、Cursor、Gemini CLI 等客户端的动态接入帮助。每个 AI agent 使用独立 API Key，可以查询白名单内的任意已配置连接；生产连接仍需额外授权。MCP 目前只发布查询、元数据浏览和执行计划能力，不提供写入工具。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
+MCP Server 在新配置中默认开启。应用启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。Web 内置 Codex CLI、Claude、Cursor、Gemini CLI 等客户端的动态接入帮助。每个 AI agent 使用独立 API Key，可以查询白名单内的任意已配置连接；生产连接仍需额外授权。MCP 目前只发布查询、元数据浏览和执行计划能力，不提供写入工具。桌面版固定使用 `http://localhost:5173/mcp`，但其 Agent 和连接配置不会与 Web 模式共享。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
 
 ## 备份说明
 
