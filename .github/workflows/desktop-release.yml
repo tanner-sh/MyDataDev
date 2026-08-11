@@ -109,7 +109,7 @@ jobs:
         run: |
           executable=$(find desktop/out -path '*/MyDataDev-linux-x64/MyDataDev' -type f -print -quit)
           test -n "$executable"
-          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" xvfb-run -a "$executable" --smoke-test
+          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" xvfb-run -a "$executable" --no-sandbox --smoke-test
 
       - name: 整理安装包
         run: npm run collect:artifacts
