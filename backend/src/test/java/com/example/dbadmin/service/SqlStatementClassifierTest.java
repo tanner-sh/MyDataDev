@@ -62,4 +62,21 @@ class SqlStatementClassifierTest {
         assertThat(classifier.isAutomaticallyPageable("SELECT TOP 20 * FROM users")).isFalse();
         assertThat(classifier.isAutomaticallyPageable("SHOW TABLES")).isFalse();
     }
+
+    @Test
+    void requiresConfirmationForUpdateAndDeleteWithoutTopLevelWhere() {
+        assertThat(classifier.requiresUnscopedMutationConfirmation("UPDATE users SET name = 'Alice'")).isTrue();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("DELETE FROM users")).isTrue();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("UPDATE users SET note = 'WHERE id = 1' /* WHERE id = 2 */")).isTrue();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("UPDATE users SET owner_id = (SELECT id FROM owners WHERE active = TRUE)")).isTrue();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("WITH source AS (SELECT id FROM owners WHERE active = TRUE) UPDATE users SET active = FALSE")).isTrue();
+    }
+
+    @Test
+    void acceptsTopLevelWhereForUpdateAndDelete() {
+        assertThat(classifier.requiresUnscopedMutationConfirmation("UPDATE users SET name = 'Alice' WHERE id = 1")).isFalse();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("DELETE FROM users WHERE active = FALSE")).isFalse();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("SELECT * FROM users")).isFalse();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("INSERT INTO users(id) VALUES (1)")).isFalse();
+    }
 }

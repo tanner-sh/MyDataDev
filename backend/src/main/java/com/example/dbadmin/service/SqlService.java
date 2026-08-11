@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.DbObject;
@@ -18,6 +19,7 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlHistoryRepository;
 import com.example.dbadmin.service.SqlScriptSplitter.StatementSegment;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 
 import java.sql.Blob;
 import java.sql.Clob;
@@ -33,6 +35,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -81,9 +84,19 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
+        return execute(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, false);
+    }
+
+    public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
         String executionSql = singleStatement(sql, "单条执行");
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, classifier.classify(executionSql), productionConfirmation);
+        requireUnscopedMutationConfirmation(
+                connectionId,
+                actor,
+                List.of(new StatementSegment(executionSql, 0, executionSql.length())),
+                unscopedMutationConfirmed
+        );
         boolean metadataMutation = changesMetadata(executionSql);
         boolean sessionMutation = classifier.changesSession(executionSql);
         int maxRows = normalizeMaxRows(requestedMaxRows);
@@ -105,7 +118,7 @@ public class SqlService {
                     return result;
                 }
                 try (ResultSet rs = statement.getResultSet()) {
-                    SqlResult result = readResult(rs, started, maxRows);
+                    SqlResult result = readResult(rs, started, maxRows, dialect);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
                     return result;
                 }
@@ -163,7 +176,8 @@ public class SqlService {
                         maxRows,
                         limits.maxCells(),
                         limits.maxTextChars(),
-                        limits.maxCellTextChars()
+                        limits.maxCellTextChars(),
+                        dialect
                 );
                 audit.log(actor, "MCP_SQL_QUERY", "connection:" + connectionId, "read-only query");
                 history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
@@ -184,12 +198,22 @@ public class SqlService {
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
+        return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, schemaName, false);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
         List<StatementSegment> statements = scriptSplitter.split(sql);
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         int maxStatements = Math.max(1, properties.getSql().getMaxStatements());
         if (statements.size() > maxStatements) {
             throw new IllegalArgumentException("一次最多执行 " + maxStatements + " 条 SQL；更大的脚本请使用“执行本地 SQL 文件”。");
         }
+
+        DbConnection dbConnection = connections.require(connectionId);
+        for (StatementSegment statement : statements) {
+            executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statement.sql()), productionConfirmation);
+        }
+        requireUnscopedMutationConfirmation(connectionId, actor, statements, unscopedMutationConfirmed);
 
         if (requestedPageSize != null && statements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
             long started = System.nanoTime();
@@ -207,10 +231,6 @@ public class SqlService {
             }
         }
 
-        DbConnection dbConnection = connections.require(connectionId);
-        for (StatementSegment statement : statements) {
-            executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statement.sql()), productionConfirmation);
-        }
         int maxRows = normalizeMaxRows(requestedMaxRows);
         long scriptStarted = System.nanoTime();
         List<SqlStatementResult> results = new ArrayList<>();
@@ -247,7 +267,8 @@ public class SqlService {
                                         statementStarted,
                                         statementLimit,
                                         Math.max(0, MAX_RESULT_CELLS - returnedCells),
-                                        Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars)
+                                        Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars),
+                                        dialect
                                 );
                                 returnedRows += result.rows().size();
                                 returnedCells += result.rows().size() * result.columns().size();
@@ -294,6 +315,38 @@ public class SqlService {
         return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, null);
     }
 
+    private void requireUnscopedMutationConfirmation(
+            long connectionId,
+            String actor,
+            List<StatementSegment> statements,
+            boolean confirmed
+    ) {
+        List<Map<String, Object>> unsafeStatements = new ArrayList<>();
+        for (int index = 0; index < statements.size(); index++) {
+            StatementSegment statement = statements.get(index);
+            if (!classifier.requiresUnscopedMutationConfirmation(statement.sql())) continue;
+            unsafeStatements.add(Map.of(
+                    "index", index + 1,
+                    "sql", abbreviate(statement.sql())
+            ));
+        }
+        if (unsafeStatements.isEmpty()) return;
+        if (!confirmed) {
+            throw new ApiProblemException(
+                    HttpStatus.CONFLICT,
+                    "UNSCOPED_MUTATION_CONFIRMATION_REQUIRED",
+                    "检测到未包含顶层 WHERE 条件的 UPDATE/DELETE，可能影响整张表。",
+                    Map.of("statements", unsafeStatements)
+            );
+        }
+        audit.log(
+                actor,
+                "SQL_UNSCOPED_MUTATION_CONFIRMED",
+                "connection:" + connectionId,
+                "statements=" + unsafeStatements.size()
+        );
+    }
+
     public SqlResult executePage(
             long connectionId,
             String sql,
@@ -328,7 +381,7 @@ public class SqlService {
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
                 try (ResultSet rs = statement.executeQuery(pageSql)) {
-                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn(), schemaName);
+                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn(), schemaName, dialect);
                     audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     return result;
                 }
@@ -582,8 +635,8 @@ public class SqlService {
         return sql.substring(index, end + 1);
     }
 
-    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows) throws Exception {
-        return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS);
+    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
+        return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS, dialect);
     }
 
     private SqlResult readPageResult(
@@ -594,7 +647,8 @@ public class SqlService {
             int requestedPageSize,
             int pageSize,
             String helperColumn,
-            String schemaName
+            String schemaName,
+            DatabaseDialect dialect
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -625,11 +679,21 @@ public class SqlService {
         }
         boolean hasMore = payloadLimitReached || rs.next();
         SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName);
-        return new SqlResult(columns, rows, -1, elapsed(startedNanos), true, effectivePageSize, payloadLimitReached, page);
+        return new SqlResult(
+                columns,
+                rows,
+                -1,
+                elapsed(startedNanos),
+                true,
+                effectivePageSize,
+                payloadLimitReached,
+                page,
+                ResultSetSourceResolver.resolve(metadata, dialect)
+        );
     }
 
-    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget) throws Exception {
-        return readResult(rs, startedNanos, maxRows, cellBudget, textBudget, MAX_CELL_TEXT_CHARS);
+    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget, DatabaseDialect dialect) throws Exception {
+        return readResult(rs, startedNanos, maxRows, cellBudget, textBudget, MAX_CELL_TEXT_CHARS, dialect);
     }
 
     private SqlResult readResult(
@@ -638,7 +702,8 @@ public class SqlService {
             int maxRows,
             int cellBudget,
             long textBudget,
-            int cellTextBudget
+            int cellTextBudget,
+            DatabaseDialect dialect
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -667,7 +732,17 @@ public class SqlService {
             }
         }
         boolean truncated = payloadLimitReached || rs.next();
-        return new SqlResult(columns, rows, -1, elapsed(startedNanos), true, effectiveMaxRows, truncated);
+        return new SqlResult(
+                columns,
+                rows,
+                -1,
+                elapsed(startedNanos),
+                true,
+                effectiveMaxRows,
+                truncated,
+                null,
+                ResultSetSourceResolver.resolve(metadata, dialect)
+        );
     }
 
     private SqlResult emptyResult(int affectedRows, long elapsedMs, int maxRows) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareResultValues, filterResultRows, matchesResultFilter } from './resultGridData';
+import { compareResultValues, filterResultRows, matchesResultFilter, sortResultRows } from './resultGridData';
 
 describe('result grid sorting', () => {
   it('sorts numbers, booleans, natural text and null values', () => {
@@ -8,6 +8,13 @@ describe('result grid sorting', () => {
     expect(['item10', 'Item2', 'item1'].sort(compareResultValues)).toEqual(['item1', 'Item2', 'item10']);
     expect(['value', null].sort(compareResultValues)).toEqual([null, 'value']);
     expect(compareResultValues(undefined, 'value')).toBeLessThan(0);
+  });
+
+  it('sorts complete result rows without mutating their original order', () => {
+    const columns = [{ key: 'c1', label: 'id', typeName: 'INTEGER' }];
+    const rows = [[10], [2], [30]];
+    expect(sortResultRows(rows, columns, { key: 'c1', order: 'descend' })).toEqual([[30], [10], [2]]);
+    expect(rows).toEqual([[10], [2], [30]]);
   });
 });
 

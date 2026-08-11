@@ -253,9 +253,9 @@ public final class ApiDtos {
     ) {
     }
 
-    public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+    public record SqlRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed) {
         public SqlRequest(Long connectionId, String sql, Integer maxRows, String executionId) {
-            this(connectionId, sql, maxRows, executionId, null);
+            this(connectionId, sql, maxRows, executionId, null, false);
         }
     }
 
@@ -268,25 +268,35 @@ public final class ApiDtos {
     public record ResultColumn(String key, String label, String typeName) {
     }
 
+    public record ResultSourceTable(List<String> nameParts) {
+        public ResultSourceTable {
+            nameParts = nameParts == null ? List.of() : List.copyOf(nameParts);
+        }
+    }
+
     public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore, String schemaName) {
         public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
             this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null);
         }
     }
 
-    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page) {
+    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable) {
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null, null);
+        }
+
+        public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page) {
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, page, null);
         }
 
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false, null);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false, null, null);
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed) {
         public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId) {
-            this(connectionId, sql, maxRows, pageSize, executionId, null);
+            this(connectionId, sql, maxRows, pageSize, executionId, null, false);
         }
     }
 
@@ -405,9 +415,9 @@ public final class ApiDtos {
     public record DataCommitResponse(List<String> sql, int affectedRows) {
     }
 
-    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format, @Size(max = 240) String schemaName) {
+    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format, @Size(max = 240) String schemaName, @Size(max = 3) List<@NotBlank @Size(max = 240) String> targetTableParts) {
         public ExportRequest(Long connectionId, String sql, String format) {
-            this(connectionId, sql, format, null);
+            this(connectionId, sql, format, null, null);
         }
     }
 

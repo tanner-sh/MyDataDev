@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
@@ -47,7 +48,43 @@ class SqlServiceScriptTest {
         assertThat(response.results().get(1).result().rows()).hasSize(1);
         assertThat(response.results().get(1).result().columns()).extracting("label").contains("NAME");
         assertThat(response.results().get(1).result().rows().get(0)).contains("Alice");
+        assertThat(response.results().get(1).result().sourceTable().nameParts()).containsExactly("PUBLIC", "USERS");
         verify(history).insert(eq(1L), eq("insert into users(id, name) values (1, 'Alice'); select * from users"), eq("EXECUTE_SCRIPT"), eq("SUCCESS"), anyLong(), eq(null), eq("admin"));
+    }
+
+    @Test
+    void rejectsUnscopedUpdateBeforeExecutingAnyStatementAndAllowsExplicitRetry() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20))");
+            connection.createStatement().execute("INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob')");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+        String script = "insert into users values (3, 'Carol'); update users set name = 'changed'";
+
+        assertThatThrownBy(() -> service.executeScript(
+                1L, script, 500, null, "admin", null, null, null, false
+        ))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("UNSCOPED_MUTATION_CONFIRMATION_REQUIRED");
+                    assertThat(problem.details().get("statements")).asList().hasSize(1);
+                });
+
+        try (Connection connection = DriverManager.getConnection(url, "sa", "");
+             var resultSet = connection.createStatement().executeQuery("SELECT COUNT(*) FROM users")) {
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getInt(1)).isEqualTo(2);
+        }
+
+        SqlScriptResponse response = service.executeScript(
+                1L, script, 500, null, "admin", null, null, null, true
+        );
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        try (Connection connection = DriverManager.getConnection(url, "sa", "");
+             var resultSet = connection.createStatement().executeQuery("SELECT COUNT(*) FROM users WHERE name = 'changed'")) {
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getInt(1)).isEqualTo(3);
+        }
     }
 
     @Test

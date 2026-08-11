@@ -8,6 +8,7 @@ export type ResultColumnFilter = {
 };
 
 export type ResultColumnFilters = Record<string, ResultColumnFilter>;
+export type ResultSortState = { key: string; order: 'ascend' | 'descend' };
 
 const naturalCollator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
 
@@ -37,6 +38,16 @@ export function filterResultRows(rows: unknown[][], columns: ResultColumn[], fil
   });
   if (activeFilters.length === 0) return rows;
   return rows.filter((row) => activeFilters.every(({ index, filter }) => matchesResultFilter(row[index], filter)));
+}
+
+export function sortResultRows(rows: unknown[][], columns: ResultColumn[], sort?: ResultSortState): unknown[][] {
+  if (!sort) return rows;
+  const columnIndex = columns.findIndex((column) => column.key === sort.key);
+  if (columnIndex < 0) return rows;
+  const direction = sort.order === 'ascend' ? 1 : -1;
+  return rows.map((row, index) => ({ row, index }))
+    .sort((left, right) => compareResultValues(left.row[columnIndex], right.row[columnIndex]) * direction || left.index - right.index)
+    .map(({ row }) => row);
 }
 
 function switchFilter(operator: ResultFilterOperator, candidate: string, expected: string): boolean {

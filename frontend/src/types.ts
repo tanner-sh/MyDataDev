@@ -133,7 +133,8 @@ export type SqlPageInfo = {
   hasMore: boolean;
   previousOffsets?: number[];
 };
-export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean; page?: SqlPageInfo | null };
+export type SqlResultSourceTable = { nameParts: string[] };
+export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean; page?: SqlPageInfo | null; sourceTable?: SqlResultSourceTable | null };
 export type SqlPageNavigation = { offset: number; pageSize: number; previousOffsets: number[] };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
@@ -328,6 +329,7 @@ export type SqlFileExecutionPage = { items: SqlFileExecution[]; page: number; pa
 export type SqlFileCandidate = { requestId: number; file: File; connection: Connection };
 export type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
+export type ResultCopyFormat = 'sql' | 'pipe';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };
 export type ResultRow = { key: string; values: unknown[] };

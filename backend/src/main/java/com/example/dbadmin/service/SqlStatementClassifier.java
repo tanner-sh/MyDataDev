@@ -63,6 +63,17 @@ public class SqlStatementClassifier {
         return operation != null && SESSION.contains(operation.word());
     }
 
+    public boolean requiresUnscopedMutationConfirmation(String sql) {
+        List<Token> tokens = tokens(sql);
+        Operation operation = tokens.isEmpty() ? null : operation(tokens);
+        if (operation == null || !Set.of("UPDATE", "DELETE").contains(operation.word())) return false;
+        for (int index = operation.index() + 1; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.depth() == 0 && "WHERE".equals(token.word())) return false;
+        }
+        return true;
+    }
+
     private Operation operation(List<Token> tokens) {
         Token first = tokens.get(0);
         if (!"WITH".equals(first.word())) return new Operation(first.word(), 0);

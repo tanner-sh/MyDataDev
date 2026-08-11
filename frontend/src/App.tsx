@@ -4,7 +4,7 @@ import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Spin, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
-import { api, downloadBlob, downloadFromUrl } from './api';
+import { ApiError, api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
 import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
@@ -14,6 +14,7 @@ import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
+import { inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { AppHeader } from './components/AppHeader';
@@ -355,6 +356,51 @@ export default function App() {
             return Promise.reject(new Error('连接名不匹配'));
           }
           resolve(input);
+        },
+        onCancel: () => resolve(undefined)
+      });
+    });
+  }
+
+  function requestUnscopedMutationConfirmation(statements: Array<{ index: number; sql: string }>): Promise<boolean> {
+    return new Promise((resolve) => {
+      modalApi.confirm({
+        title: '确认执行无 WHERE 条件的更新或删除',
+        content: (
+          <div className="unscoped-sql-confirmation">
+            <Typography.Paragraph type="danger">以下语句没有顶层 WHERE 条件，可能更新或删除整张表中的所有数据：</Typography.Paragraph>
+            {statements.map((statement) => <pre key={statement.index}>第 {statement.index} 条：{statement.sql}</pre>)}
+          </div>
+        ),
+        okText: '仍然执行',
+        cancelText: '取消',
+        okButtonProps: { danger: true },
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false)
+      });
+    });
+  }
+
+  function requestSqlExportTarget(): Promise<string[] | undefined> {
+    let input = '';
+    return new Promise((resolve) => {
+      modalApi.confirm({
+        title: '指定 SQL 插入目标表',
+        content: (
+          <div>
+            <Typography.Paragraph type="secondary">当前查询包含多个来源或复杂子查询，无法安全判断 INSERT 的目标表。</Typography.Paragraph>
+            <Input autoFocus placeholder="schema.table" onChange={(event) => { input = event.target.value; }} />
+          </div>
+        ),
+        okText: '继续导出',
+        cancelText: '取消',
+        onOk: () => {
+          const parts = parseQualifiedTableName(input);
+          if (!parts) {
+            toastApi.error('请输入有效的表名，例如 public.users 或 "My Schema"."User"');
+            return Promise.reject(new Error('目标表格式无效'));
+          }
+          resolve(parts);
         },
         onCancel: () => resolve(undefined)
       });
@@ -931,11 +977,32 @@ export default function App() {
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success' });
         } else {
-        const data = await api<SqlScriptResult>('/sql/execute-script', {
+        const executeScript = (unscopedMutationConfirmed: boolean) => api<SqlScriptResult>('/sql/execute-script', {
           method: 'POST',
           headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
-          body: JSON.stringify({ connectionId: selected.id, sql: target.sql, pageSize: layoutPreferences.sqlPageSize, executionId, schemaName: activeSqlSchema })
+          body: JSON.stringify({
+            connectionId: selected.id,
+            sql: target.sql,
+            pageSize: layoutPreferences.sqlPageSize,
+            executionId,
+            schemaName: activeSqlSchema,
+            unscopedMutationConfirmed
+          })
         });
+        let data: SqlScriptResult;
+        try {
+          data = await executeScript(false);
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.code !== 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED') throw error;
+          setSqlCancellable(false);
+          const confirmed = await requestUnscopedMutationConfirmation(error.statements || []);
+          if (!confirmed) {
+            updateActiveSqlTab({ message: '已取消无 WHERE 条件的 UPDATE/DELETE', statusKind: 'info' });
+            return;
+          }
+          setSqlCancellable(true);
+          data = await executeScript(true);
+        }
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
         const firstResultSet = data.results.find((item) => item.result?.resultSet);
@@ -1135,6 +1202,18 @@ export default function App() {
     try {
       const productionConfirmation = await requestProductionConfirmation('导出查询结果');
       if (selected.environment === 'prod' && !productionConfirmation) return;
+      let targetTableParts: string[] | undefined;
+      if (format === 'sql') {
+        targetTableParts = inferSqlTargetParts(target.sql);
+        if (targetTableParts?.length === 1 && activeSqlSchema) targetTableParts = [activeSqlSchema, ...targetTableParts];
+        if (!targetTableParts) {
+          targetTableParts = await requestSqlExportTarget();
+          if (!targetTableParts) {
+            updateActiveSqlTab({ message: '已取消 SQL 导出', statusKind: 'info' });
+            return;
+          }
+        }
+      }
       setSqlLoading(true);
       setSqlCancellable(false);
       try {
@@ -1145,7 +1224,7 @@ export default function App() {
           'X-User': 'admin',
           ...(productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : {})
         },
-        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema })
+        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts })
       });
       if (!response.ok) {
         const err = await response.json().catch(() => ({ message: response.statusText }));

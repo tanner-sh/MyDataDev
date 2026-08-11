@@ -118,13 +118,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         <StatementResultPanel
           result={result}
           selectedConnectionId={selected?.id}
+          dbType={selected?.dbType}
           active={activeResultKey === resultKey}
           pagingLoading={pagingResultKey === `${activeTab.id}:${resultKey}`}
           onPageChange={handleResultPageChange}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, selected?.dbType, selected?.id]);
   const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
   const moreMenu: MenuProps = {
     items: [
@@ -134,13 +135,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       {
         key: 'export',
         icon: <DownloadOutlined />,
-        label: '导出查询结果',
+        label: '重新查询并导出',
         disabled: !selected || loading,
         children: [
-          { key: 'export:csv', label: '导出 CSV' },
-          { key: 'export:json', label: '导出 JSON' },
-          { key: 'export:sql', label: '导出 SQL' },
-          { key: 'export:xml', label: '导出 XML' }
+          { key: 'export:csv', label: '重新查询并导出 CSV' },
+          { key: 'export:json', label: '重新查询并导出 JSON' },
+          { key: 'export:sql', label: '重新查询并导出 SQL' },
+          { key: 'export:xml', label: '重新查询并导出 XML' }
         ]
       },
       {
@@ -296,7 +297,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         <div className="sql-results-pane">
           {activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={handleResultPageChange} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} onPageChange={handleResultPageChange} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -310,9 +311,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, active, pagingLoading, onPageChange }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, onPageChange }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
+  dbType?: string;
   active: boolean;
   pagingLoading: boolean;
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
@@ -343,7 +345,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
             {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
             {result.result.page && <Text type="secondary" className="result-paging-hint">翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。</Text>}
           </div>
-          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} onPageChange={handlePageChange} />
+          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} onPageChange={handlePageChange} />
         </div>
       )}
     </div>

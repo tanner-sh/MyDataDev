@@ -1,28 +1,43 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Empty, Input, InputNumber, Select, Space, Spin, Table, Tooltip, Typography } from 'antd';
-import { FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tooltip, Typography, message } from 'antd';
+import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
-import type { ResultRow, SqlPageNavigation, SqlResult } from '../types';
+import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
-import { compareResultValues, filterResultRows, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { filterResultRows, sortResultRows, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { downloadBlob } from '../api';
+import { timestamp } from '../utils';
+import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
+import { updateResultRowSelection } from '../resultRowSelection';
 
 const { Text } = Typography;
 
-export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, onPageChange }: {
+export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, onPageChange }: {
   result: SqlResult | null;
   fill?: boolean;
   active?: boolean;
   pagingLoading?: boolean;
   pagingEnabled?: boolean;
+  dbType?: string;
+  sourceSql?: string;
   onPageChange?: (navigation: SqlPageNavigation) => void;
 }) {
   const [pageSizeDraft, setPageSizeDraft] = useState(500);
   const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
   const [sortState, setSortState] = useState<{ key: string; order: 'ascend' | 'descend' }>();
   const [visibleColumnKeys, setVisibleColumnKeys] = useState<string[]>([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [selectionAnchor, setSelectionAnchor] = useState<string>();
+  const [copyFormat, setCopyFormat] = useState<ResultCopyFormat>(() => readResultCopyFormat());
+  const [manualTargetParts, setManualTargetParts] = useState<string[]>();
+  const [targetDialogOpen, setTargetDialogOpen] = useState(false);
+  const [targetDraft, setTargetDraft] = useState('');
+  const [messageApi, messageContextHolder] = message.useMessage();
   const tableRef = useRef<TableRef>(null);
+  const gridShellRef = useRef<HTMLDivElement>(null);
+  const pendingTargetActionRef = useRef<((parts: string[]) => void) | null>(null);
   const lastScrolledRowsRef = useRef<SqlResult['rows'] | null>(null);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
@@ -36,6 +51,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   useEffect(() => {
     setColumnFilters({});
     setSortState(undefined);
+    setSelectedRowKeys([]);
+    setSelectionAnchor(undefined);
+    setManualTargetParts(undefined);
+    setTargetDialogOpen(false);
+    pendingTargetActionRef.current = null;
   }, [result?.rows]);
 
   useEffect(() => {
@@ -72,7 +92,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         key: column.key,
         width: Math.max(140, Math.min(280, column.label.length * 14 + 48)),
         ellipsis: true,
-        sorter: (left: ResultRow, right: ResultRow) => compareResultValues(left.values[columnIndex], right.values[columnIndex]),
+        sorter: true,
         sortOrder: sortState?.key === column.key ? sortState.order : null,
         filteredValue: columnFilters[column.key] ? ['active'] : null,
         filterIcon: (filtered: boolean) => <FilterFilled className={filtered ? 'result-filter-icon-active' : undefined} />,
@@ -103,17 +123,106 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
     const originalIndexes = new Map(result.rows.map((values, index) => [values, index]));
-    return filterResultRows(result.rows, result.columns, columnFilters).map((values) => ({
+    return sortResultRows(filterResultRows(result.rows, result.columns, columnFilters), result.columns, sortState).map((values) => ({
       values,
       key: String(rowOffset + (originalIndexes.get(values) ?? 0))
     }));
-  }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset]);
+  }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
+
+  useEffect(() => {
+    const displayed = new Set(rows.map((row) => row.key));
+    setSelectedRowKeys((current) => current.filter((key) => displayed.has(key)));
+    if (selectionAnchor && !displayed.has(selectionAnchor)) setSelectionAnchor(undefined);
+  }, [rows, selectionAnchor]);
+
+  const selectedRows = useMemo(() => {
+    const selected = new Set(selectedRowKeys);
+    return rows.filter((row) => selected.has(row.key));
+  }, [rows, selectedRowKeys]);
+
+  const inferredTargetParts = useMemo(
+    () => inferSqlTargetParts(sourceSql, result?.sourceTable),
+    [result?.sourceTable, sourceSql]
+  );
+
+  const requireTarget = (action: (parts: string[]) => void) => {
+    const target = manualTargetParts || inferredTargetParts;
+    if (target) {
+      action(target);
+      return;
+    }
+    pendingTargetActionRef.current = action;
+    setTargetDraft('');
+    setTargetDialogOpen(true);
+  };
+
+  const exportLoadedRows = (format: ExportFormat) => {
+    if (!result?.resultSet) return;
+    const scopedRows = (selectedRows.length > 0 ? selectedRows : rows).map((row) => row.values);
+    const perform = (targetTableParts?: string[]) => {
+      try {
+        const content = serializeQueryResult(format, result.columns, scopedRows, {
+          dbType,
+          targetTableParts,
+          truncated: Boolean(result.truncated),
+          maxRows: result.maxRows
+        });
+        const mime = format === 'json' ? 'application/json' : format === 'xml' ? 'application/xml' : 'text/plain';
+        downloadBlob(new Blob([content], { type: `${mime};charset=utf-8` }), `query-result-${timestamp()}.${format}`);
+        void messageApi.success(`已导出当前结果中的 ${scopedRows.length} 行`);
+      } catch (error) {
+        void messageApi.error((error as Error).message);
+      }
+    };
+    if (format === 'sql') requireTarget((parts) => perform(parts));
+    else perform();
+  };
+
+  const copySelectedRows = () => {
+    if (!result?.resultSet || selectedRows.length === 0) {
+      void messageApi.info('请先选择要复制的结果行');
+      return;
+    }
+    const perform = async (targetTableParts?: string[]) => {
+      try {
+        const content = serializeCopiedRows(copyFormat, result.columns, selectedRows.map((row) => row.values), { dbType, targetTableParts });
+        await copyText(content);
+        void messageApi.success(`已复制 ${selectedRows.length} 行（${copyFormat === 'sql' ? 'SQL 插入' : '管道分隔'}）`);
+      } catch (error) {
+        void messageApi.error(`复制失败：${(error as Error).message}`);
+      }
+    };
+    if (copyFormat === 'sql') requireTarget((parts) => void perform(parts));
+    else void perform();
+  };
+
+  useEffect(() => {
+    if (!active || !result?.resultSet) return;
+    const handleCopyShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || isTextEntryTarget(event.target)) return;
+      event.preventDefault();
+      copySelectedRows();
+    };
+    window.addEventListener('keydown', handleCopyShortcut);
+    return () => window.removeEventListener('keydown', handleCopyShortcut);
+  });
 
   if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
   if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
 
   return (
-    <div className={`result-grid-shell${fill ? ' result-grid-shell-fill' : ''}`}>
+    <div
+      ref={gridShellRef}
+      className={`result-grid-shell${fill ? ' result-grid-shell-fill' : ''}`}
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || isTextEntryTarget(event.target)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        copySelectedRows();
+      }}
+    >
+      {messageContextHolder}
       <div ref={viewportRef} className="data-grid-viewport">
         {scrollY === undefined ? (
           <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
@@ -128,6 +237,23 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             loading={pagingLoading}
             virtual
             scroll={{ x: Math.max(800, visibleColumnKeys.length * 180 + 70), y: scrollY }}
+            rowClassName={(row) => selectedRowKeys.includes(row.key) ? 'result-row-selected' : ''}
+            onRow={(row) => ({
+              onClick: (event) => {
+                if (isInteractiveTarget(event.target)) return;
+                const next = updateResultRowSelection({
+                  current: selectedRowKeys,
+                  clicked: row.key,
+                  displayed: rows.map((item) => item.key),
+                  anchor: selectionAnchor,
+                  toggle: event.ctrlKey || event.metaKey,
+                  range: event.shiftKey
+                });
+                setSelectedRowKeys(next.selected);
+                setSelectionAnchor(next.anchor);
+                gridShellRef.current?.focus({ preventScroll: true });
+              }
+            })}
             onChange={(_pagination, _filters, sorter) => {
               const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
               const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
@@ -137,18 +263,42 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         )}
       </div>
       <div className="grid-pagination result-grid-pagination">
-        {result.columns.length > 20 && (
-          <Select
-            mode="multiple"
-            size="small"
-            maxTagCount="responsive"
-            className="result-column-selector"
-            aria-label="选择结果列"
-            value={visibleColumnKeys}
-            options={result.columns.map((column) => ({ value: column.key, label: column.label }))}
-            onChange={(keys) => setVisibleColumnKeys(keys.length > 0 ? keys : [result.columns[0].key])}
-          />
-        )}
+        <div className="result-local-actions">
+          <Dropdown trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
+            <Button size="small" icon={<DownloadOutlined />}>导出当前结果 <DownOutlined /></Button>
+          </Dropdown>
+          <Space.Compact size="small">
+            <Button size="small" icon={<CopyOutlined />} onClick={copySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
+            <Dropdown trigger={['click']} menu={{
+              selectable: true,
+              selectedKeys: [copyFormat],
+              items: [
+                { key: 'pipe', label: '管道分隔', icon: copyFormat === 'pipe' ? <CheckOutlined /> : undefined },
+                { key: 'sql', label: 'SQL 插入', icon: copyFormat === 'sql' ? <CheckOutlined /> : undefined }
+              ],
+              onClick: ({ key }) => {
+                const next = key as ResultCopyFormat;
+                setCopyFormat(next);
+                writeResultCopyFormat(next);
+              }
+            }}>
+              <Button size="small" aria-label="选择复制格式" icon={<DownOutlined />} />
+            </Dropdown>
+          </Space.Compact>
+          {selectedRowKeys.length > 0 && <Text type="secondary">已选 {selectedRowKeys.length} 行</Text>}
+          {result.columns.length > 20 && (
+            <Select
+              mode="multiple"
+              size="small"
+              maxTagCount="responsive"
+              className="result-column-selector"
+              aria-label="选择结果列"
+              value={visibleColumnKeys}
+              options={result.columns.map((column) => ({ value: column.key, label: column.label }))}
+              onChange={(keys) => setVisibleColumnKeys(keys.length > 0 ? keys : [result.columns[0].key])}
+            />
+          )}
+        </div>
         <div className="result-pagination-main">
           {result.page ? (
             <>
@@ -193,9 +343,65 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           )}
         </div>
       </div>
+      <Modal
+        title="指定 SQL 插入目标表"
+        open={targetDialogOpen}
+        okText="继续"
+        cancelText="取消"
+        onCancel={() => {
+          setTargetDialogOpen(false);
+          pendingTargetActionRef.current = null;
+        }}
+        onOk={() => {
+          const parts = parseQualifiedTableName(targetDraft);
+          if (!parts) {
+            void messageApi.error('请输入有效的表名，例如 public.users 或 "My Schema"."User"');
+            return;
+          }
+          setManualTargetParts(parts);
+          setTargetDialogOpen(false);
+          const action = pendingTargetActionRef.current;
+          pendingTargetActionRef.current = null;
+          action?.(parts);
+        }}
+      >
+        <Typography.Paragraph type="secondary">当前查询包含多个来源或复杂子查询，无法安全判断 INSERT 的目标表。</Typography.Paragraph>
+        <Input autoFocus value={targetDraft} placeholder="schema.table" onChange={(event) => setTargetDraft(event.target.value)} onPressEnter={() => undefined} />
+      </Modal>
     </div>
   );
 });
+
+const LOCAL_EXPORT_ITEMS = [
+  { key: 'csv', label: 'CSV' },
+  { key: 'json', label: 'JSON' },
+  { key: 'sql', label: 'SQL 插入' },
+  { key: 'xml', label: 'XML' }
+];
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"]'));
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('button, a, input, textarea, select, [role="button"], [contenteditable="true"]'));
+}
+
+async function copyText(content: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(content);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = content;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('浏览器未允许访问剪贴板');
+}
 
 const FILTER_OPTIONS: Array<{ value: ResultFilterOperator; label: string }> = [
   { value: 'contains', label: '包含' },

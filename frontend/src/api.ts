@@ -3,6 +3,7 @@ import { API } from './constants';
 export class ApiError extends Error {
   code?: string;
   confirmationText?: string;
+  statements?: Array<{ index: number; sql: string }>;
   status: number;
 
   constructor(message: string, status: number, payload?: Record<string, unknown>) {
@@ -11,6 +12,15 @@ export class ApiError extends Error {
     this.status = status;
     this.code = typeof payload?.code === 'string' ? payload.code : undefined;
     this.confirmationText = typeof payload?.confirmationText === 'string' ? payload.confirmationText : undefined;
+    this.statements = Array.isArray(payload?.statements)
+      ? payload.statements.flatMap((item) => {
+          if (!item || typeof item !== 'object') return [];
+          const statement = item as Record<string, unknown>;
+          return typeof statement.index === 'number' && typeof statement.sql === 'string'
+            ? [{ index: statement.index, sql: statement.sql }]
+            : [];
+        })
+      : undefined;
   }
 }
 

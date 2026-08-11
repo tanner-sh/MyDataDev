@@ -1,0 +1,205 @@
+import { parseSqlTableReferences, tokenizeSql, type SqlQuoteStyle } from './sqlCompletion';
+import type { ExportFormat, ResultColumn, ResultCopyFormat, SqlResultSourceTable } from './types';
+
+export type ResultSerializationOptions = {
+  dbType?: string;
+  targetTableParts?: string[];
+  truncated?: boolean;
+  maxRows?: number;
+};
+
+const NUMERIC_TYPES = /(^|\s)(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|number|real|float|double|serial|bigserial)(\s|$|\()/i;
+const NUMERIC_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const COPY_FORMAT_KEY = 'mydatadev.result-copy-format';
+
+export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null): string[] | undefined {
+  if (!sql?.trim()) return validTargetParts(sourceTable?.nameParts);
+  const tokens = tokenizeSql(sql).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
+  const firstIdentifier = tokens.find((token) => token.kind === 'identifier');
+  if (!firstIdentifier || firstIdentifier.value.toUpperCase() !== 'SELECT') return undefined;
+
+  let depth = 0;
+  const depthAt = new Map<number, number>();
+  for (const token of tokens) {
+    depthAt.set(token.start, depth);
+    if (token.text === '(') depth += 1;
+    else if (token.text === ')') depth = Math.max(0, depth - 1);
+  }
+
+  const references = parseSqlTableReferences(sql).filter((reference) => reference.sourceKeyword === 'FROM' || reference.sourceKeyword === 'JOIN');
+  if (references.length !== 1 || depthAt.get(references[0].start) !== 0) return undefined;
+  const topLevelComplexKeyword = tokens.some((token) => depthAt.get(token.start) === 0
+    && token.kind === 'identifier'
+    && ['WITH', 'JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'MINUS'].includes(token.value.toUpperCase()));
+  if (topLevelComplexKeyword) return undefined;
+  return validTargetParts(references[0].parts.map((part) => part.value));
+}
+
+export function parseQualifiedTableName(input: string): string[] | undefined {
+  const tokens = tokenizeSql(input).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
+  if (tokens.length === 0 || tokens.length > 5) return undefined;
+  const parts: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (index % 2 === 0) {
+      if (token.kind !== 'identifier' || !token.closed || !token.value.trim()) return undefined;
+      parts.push(token.value);
+    } else if (token.kind !== 'symbol' || token.text !== '.') {
+      return undefined;
+    }
+  }
+  return tokens.length % 2 === 1 ? validTargetParts(parts) : undefined;
+}
+
+export function quoteQualifiedTable(parts: string[], dbType?: string): string {
+  const style = quoteStyleForDb(dbType);
+  return parts.map((part) => quoteIdentifier(part, style)).join('.');
+}
+
+export function serializeQueryResult(
+  format: ExportFormat,
+  columns: ResultColumn[],
+  rows: unknown[][],
+  options: ResultSerializationOptions = {}
+): string {
+  switch (format) {
+    case 'csv': return serializeCsv(columns, rows);
+    case 'json': return serializeJson(columns, rows, options);
+    case 'xml': return serializeXml(columns, rows, options);
+    case 'sql': return serializeSql(columns, rows, options);
+  }
+}
+
+export function serializeCopiedRows(
+  format: ResultCopyFormat,
+  columns: ResultColumn[],
+  rows: unknown[][],
+  options: ResultSerializationOptions = {}
+): string {
+  return format === 'sql' ? serializeSql(columns, rows, options) : serializePipe(rows);
+}
+
+export function readResultCopyFormat(storage: Pick<Storage, 'getItem'> | undefined = typeof localStorage === 'undefined' ? undefined : localStorage): ResultCopyFormat {
+  try {
+    return storage?.getItem(COPY_FORMAT_KEY) === 'sql' ? 'sql' : 'pipe';
+  } catch {
+    return 'pipe';
+  }
+}
+
+export function writeResultCopyFormat(format: ResultCopyFormat, storage: Pick<Storage, 'setItem'> | undefined = typeof localStorage === 'undefined' ? undefined : localStorage) {
+  try {
+    storage?.setItem(COPY_FORMAT_KEY, format);
+  } catch {
+    // Storage can be unavailable in private browsing or embedded desktop shells.
+  }
+}
+
+function serializeCsv(columns: ResultColumn[], rows: unknown[][]): string {
+  const lines = [columns.map((column) => csvValue(column.label)).join(',')];
+  for (const row of rows) lines.push(columns.map((_column, index) => csvValue(row[index])).join(','));
+  return `\uFEFF${lines.join('\r\n')}\r\n`;
+}
+
+function serializeJson(columns: ResultColumn[], rows: unknown[][], options: ResultSerializationOptions): string {
+  return JSON.stringify({
+    columns: columns.map((column) => column.label),
+    rows,
+    truncated: Boolean(options.truncated),
+    maxRows: options.maxRows ?? rows.length
+  }, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2);
+}
+
+function serializeXml(columns: ResultColumn[], rows: unknown[][], options: ResultSerializationOptions): string {
+  const body = rows.map((row) => [
+    '    <row>',
+    ...columns.map((column, index) => `      <column name="${xmlValue(column.label)}">${xmlValue(displayValue(row[index]))}</column>`),
+    '    </row>'
+  ].join('\n')).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<result>\n  <rows>\n${body}${body ? '\n' : ''}  </rows>\n  <truncated>${Boolean(options.truncated)}</truncated>\n  <maxRows>${options.maxRows ?? rows.length}</maxRows>\n</result>\n`;
+}
+
+function serializeSql(columns: ResultColumn[], rows: unknown[][], options: ResultSerializationOptions): string {
+  const target = validTargetParts(options.targetTableParts);
+  if (!target) throw new Error('无法确定 SQL 插入的目标表，请先指定目标表');
+  if (rows.length === 0) return '-- 查询结果为空，未生成 INSERT 语句。\n';
+  const style = quoteStyleForDb(options.dbType);
+  const names = uniqueColumnNames(columns).map((name) => quoteIdentifier(name, style)).join(', ');
+  const table = quoteQualifiedTable(target, options.dbType);
+  return `${rows.map((row) => {
+    const values = columns.map((column, index) => sqlLiteral(row[index], column.typeName)).join(', ');
+    return `INSERT INTO ${table} (${names}) VALUES (${values});`;
+  }).join('\n')}\n`;
+}
+
+function serializePipe(rows: unknown[][]): string {
+  return rows.map((row) => row.map((value) => pipeValue(value)).join('|')).join('\n');
+}
+
+function uniqueColumnNames(columns: ResultColumn[]): string[] {
+  const used = new Set<string>();
+  return columns.map((column) => {
+    const base = column.label;
+    let name = base;
+    let suffix = 2;
+    while (used.has(name.toLocaleLowerCase())) name = `${base}_${suffix++}`;
+    used.add(name.toLocaleLowerCase());
+    return name;
+  });
+}
+
+function csvValue(value: unknown): string {
+  return `"${displayValue(value).split('"').join('""')}"`;
+}
+
+function pipeValue(value: unknown): string {
+  if (value == null) return 'NULL';
+  return displayValue(value)
+    .split('\\').join('\\\\')
+    .split('|').join('\\|')
+    .split('\r').join('\\r')
+    .split('\n').join('\\n');
+}
+
+function sqlLiteral(value: unknown, typeName: string): string {
+  if (value == null) return 'NULL';
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value);
+  const text = displayValue(value);
+  if (NUMERIC_TYPES.test(typeName) && NUMERIC_VALUE.test(text.trim())) return text.trim();
+  return `'${text.split("'").join("''")}'`;
+}
+
+function displayValue(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, (_key, nested) => typeof nested === 'bigint' ? nested.toString() : nested);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function xmlValue(value: string): string {
+  return value.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;').split("'").join('&apos;');
+}
+
+function quoteStyleForDb(dbType?: string): SqlQuoteStyle {
+  const normalized = dbType?.toLowerCase() || '';
+  if (['mysql', 'mariadb', 'oceanbase-mysql', 'clickhouse'].includes(normalized)) return 'backtick';
+  if (normalized === 'sqlserver') return 'bracket';
+  return 'double';
+}
+
+function quoteIdentifier(value: string, style: SqlQuoteStyle): string {
+  if (style === 'backtick') return `\`${value.split('`').join('``')}\``;
+  if (style === 'bracket') return `[${value.split(']').join(']]')}]`;
+  return `"${value.split('"').join('""')}"`;
+}
+
+function validTargetParts(parts?: string[] | null): string[] | undefined {
+  if (!parts || parts.length === 0 || parts.length > 3 || parts.some((part) => !part.trim())) return undefined;
+  return parts.map((part) => part.trim());
+}

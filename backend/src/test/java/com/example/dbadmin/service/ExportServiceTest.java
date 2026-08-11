@@ -117,7 +117,37 @@ class ExportServiceTest {
     void streamsSqlSnapshotAndMakesDuplicateColumnNamesUnique() throws Exception {
         String body = export("select id as \"value\", name as \"value\" from export_values", "sql");
 
-        assertThat(body).isEqualTo("INSERT INTO query_result (\"value\", \"value_2\") VALUES (1, 'Alice');\n");
+        assertThat(body).isEqualTo("INSERT INTO \"public\".\"export_values\" (\"value\", \"value_2\") VALUES (1, 'Alice');\n");
+    }
+
+    @Test
+    void usesExplicitQualifiedTargetForSqlExport() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        exportService.stream(
+                1L,
+                "select id, name from export_values",
+                "sql",
+                "admin",
+                null,
+                null,
+                java.util.List.of("archive", "copied_values"),
+                output
+        );
+
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .startsWith("INSERT INTO \"archive\".\"copied_values\" (\"id\", \"name\") VALUES");
+    }
+
+    @Test
+    void rejectsAmbiguousSqlTargetInsteadOfUsingGenericTableName() {
+        assertThatThrownBy(() -> export(
+                "select current_values.id, archived_values.name from export_values current_values "
+                        + "join archive.export_values archived_values on archived_values.id = current_values.id",
+                "sql"
+        ))
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .hasMessageContaining("指定目标表");
     }
 
     @Test

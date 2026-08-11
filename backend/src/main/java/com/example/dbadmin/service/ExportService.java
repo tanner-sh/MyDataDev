@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
@@ -9,6 +10,7 @@ import com.example.dbadmin.repo.SqlHistoryRepository;
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -72,7 +74,7 @@ public class ExportService {
     }
 
     public void export(long connectionId, String sql, String format, String actor, OutputStream output) throws Exception {
-        stream(connectionId, sql, format, actor, null, null, output);
+        stream(connectionId, sql, format, actor, null, null, null, output);
     }
 
     public void validate(long connectionId, String sql, String format, String productionConfirmation) {
@@ -88,12 +90,18 @@ public class ExportService {
 
     public void stream(long connectionId, String sql, String format, String actor,
                        String productionConfirmation, OutputStream rawOutput) throws Exception {
-        stream(connectionId, sql, format, actor, productionConfirmation, null, rawOutput);
+        stream(connectionId, sql, format, actor, productionConfirmation, null, null, rawOutput);
     }
 
     public void stream(long connectionId, String sql, String format, String actor,
                        String productionConfirmation, String schemaName, OutputStream rawOutput) throws Exception {
+        stream(connectionId, sql, format, actor, productionConfirmation, schemaName, null, rawOutput);
+    }
+
+    public void stream(long connectionId, String sql, String format, String actor,
+                       String productionConfirmation, String schemaName, List<String> targetTableParts, OutputStream rawOutput) throws Exception {
         validate(connectionId, sql, format, productionConfirmation);
+        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizeFormat(format));
         String normalizedFormat = normalizeFormat(format);
         String statementSql = splitter.split(sql).get(0).sql();
         DbConnection dbConnection = connections.require(connectionId);
@@ -105,7 +113,7 @@ public class ExportService {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(EXPORT_MAX_ROWS + 1);
             try (ResultSet rs = statement.executeQuery(statementSql)) {
-                write(rs, normalizedFormat, new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES));
+                write(rs, normalizedFormat, new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES), dialect, normalizedTarget);
             }
             rawOutput.flush();
             long elapsed = (System.nanoTime() - started) / 1_000_000;
@@ -123,7 +131,12 @@ public class ExportService {
     }
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName) throws Exception {
+        return prepare(connectionId, sql, format, actor, productionConfirmation, schemaName, null);
+    }
+
+    public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName, List<String> targetTableParts) throws Exception {
         String normalizedFormat = normalizeFormat(format);
+        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         var statements = splitter.split(sql);
         if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
             throw new IllegalArgumentException("导出仅支持单条查询语句，不会执行写入或 DDL。");
@@ -145,7 +158,7 @@ public class ExportService {
             statement.setMaxRows(EXPORT_MAX_ROWS + 1);
             boolean truncated;
             try (ResultSet rs = statement.executeQuery(statements.get(0).sql())) {
-                truncated = write(rs, normalizedFormat, output);
+                truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget);
             }
             long elapsed = (System.nanoTime() - started) / 1_000_000;
             audit.log(actor, "SQL_EXPORT", "connection:" + connectionId, abbreviate(sql));
@@ -159,11 +172,11 @@ public class ExportService {
         }
     }
 
-    private boolean write(ResultSet rs, String format, OutputStream output) throws Exception {
+    private boolean write(ResultSet rs, String format, OutputStream output, DatabaseDialect dialect, List<String> targetTableParts) throws Exception {
         return switch (format) {
             case "json" -> writeJson(rs, output);
             case "csv" -> writeCsv(rs, output);
-            case "sql" -> writeSql(rs, output);
+            case "sql" -> writeSql(rs, output, dialect, targetTableParts);
             case "xml" -> writeXml(rs, output);
             default -> throw new IllegalArgumentException("不支持的导出格式：" + format);
         };
@@ -220,15 +233,28 @@ public class ExportService {
         return truncated;
     }
 
-    private boolean writeSql(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeSql(ResultSet rs, OutputStream output, DatabaseDialect dialect, List<String> requestedTargetTableParts) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
-        List<String> columns = uniqueColumnNames(metadata).stream().map(this::sqlIdentifier).toList();
+        List<String> targetTableParts = requestedTargetTableParts;
+        if (targetTableParts == null || targetTableParts.isEmpty()) {
+            var sourceTable = ResultSetSourceResolver.resolve(metadata, dialect);
+            targetTableParts = sourceTable == null ? List.of() : sourceTable.nameParts();
+        }
+        if (targetTableParts.isEmpty()) {
+            throw new ApiProblemException(
+                    HttpStatus.CONFLICT,
+                    "SQL_EXPORT_TARGET_REQUIRED",
+                    "无法从查询结果确定唯一的 INSERT 目标表，请指定目标表后重试。"
+            );
+        }
+        String targetTable = targetTableParts.stream().map(dialect::quoteIdentifier).collect(Collectors.joining("."));
+        List<String> columns = uniqueColumnNames(metadata).stream().map(dialect::quoteIdentifier).toList();
         int rows = 0;
         while (rows < EXPORT_MAX_ROWS && rs.next()) {
             List<String> values = new ArrayList<>();
             for (int index = 1; index <= metadata.getColumnCount(); index++) values.add(sqlLiteral(sqlExportValue(rs.getObject(index))));
-            writer.write("INSERT INTO query_result (" + String.join(", ", columns) + ") VALUES (" + String.join(", ", values) + ");");
+            writer.write("INSERT INTO " + targetTable + " (" + String.join(", ", columns) + ") VALUES (" + String.join(", ", values) + ");");
             writer.newLine();
             rows++;
         }
@@ -305,13 +331,17 @@ public class ExportService {
         return normalized;
     }
 
+    private List<String> normalizeTargetTableParts(List<String> values, String format) {
+        if (!"sql".equals(format) || values == null || values.isEmpty()) return List.of();
+        if (values.size() > 3) throw new IllegalArgumentException("INSERT 目标表最多支持三级限定名称。");
+        List<String> normalized = values.stream().map(value -> value == null ? "" : value.trim()).toList();
+        if (normalized.stream().anyMatch(String::isBlank)) throw new IllegalArgumentException("INSERT 目标表名称不能为空。");
+        return List.copyOf(normalized);
+    }
+
     private String csvValue(Object value) {
         String text = value == null ? "" : value.toString();
         return "\"" + text.replace("\"", "\"\"") + "\"";
-    }
-
-    private String sqlIdentifier(String value) {
-        return "\"" + value.replace("\"", "\"\"") + "\"";
     }
 
     private String sqlLiteral(Object value) {
