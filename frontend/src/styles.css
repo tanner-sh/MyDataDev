@@ -2604,6 +2604,10 @@ body {
   min-width: 0;
 }
 
+.mcp-help-panel > .ant-card {
+  min-width: 0;
+}
+
 .mcp-status-row {
   display: flex;
   align-items: flex-start;
@@ -2632,6 +2636,10 @@ body {
   min-width: 0;
 }
 
+.mcp-client-tabs {
+  width: 100%;
+}
+
 .mcp-client-tabs > .ant-tabs-nav {
   margin-bottom: 14px;
 }
@@ -2639,6 +2647,40 @@ body {
 .mcp-client-guide {
   display: grid;
   gap: 14px;
+}
+
+.mcp-config-scope-section {
+  min-width: 0;
+}
+
+.mcp-config-scope-section h5 {
+  margin: 0 0 10px;
+}
+
+.mcp-config-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mcp-config-scope-card {
+  min-width: 0;
+  padding: 12px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+
+.mcp-config-scope-card .ant-typography {
+  margin: 0;
+}
+
+.mcp-config-scope-card code {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .mcp-help-list {
@@ -2729,6 +2771,10 @@ body {
   }
 
   .mcp-help-security-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-config-scope-grid {
     grid-template-columns: 1fr;
   }
 

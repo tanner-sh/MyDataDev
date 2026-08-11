@@ -24,7 +24,7 @@ MCP 可以在没有 Agent 时保持开启，但此时没有任何有效 API Key�
 MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接入帮助会使用当前部署的实际 MCP URL，提供：
 
 - 当前服务状态、可用 Agent 数量和五步接入流程。
-- Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI 和通用 Streamable HTTP 配置。
+- Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI 和通用 Streamable HTTP 配置，并明确区分全局与项目级范围。
 - macOS zsh、Linux bash 与 Windows PowerShell 的密钥环境变量示例。
 - 安全边界、可用工具清单和 401、503、网络、授权等常见问题处理。
 
@@ -100,13 +100,19 @@ app:
 }
 ```
 
-| 客户端 | 推荐接入方式 | 说明 |
-| --- | --- | --- |
-| Codex CLI | `codex mcp add --url ... --bearer-token-env-var ...` | 从环境变量读取 Bearer Token，不把 Key 写进 `config.toml` |
-| Claude Code | HTTP MCP 命令或 `.mcp.json` | 支持在 URL 和 Header 中展开环境变量 |
-| Claude Desktop | `mcp-remote` 本地 stdio 桥接 | 当前私网静态 Bearer 方案不适合 Claude 云端自定义连接器；桥接需要 Node.js 18+ |
-| Cursor | `.cursor/mcp.json` 或全局 `~/.cursor/mcp.json` | 桌面进程必须能够读取配置中引用的环境变量 |
-| Gemini CLI | `gemini mcp add --transport http` 或 `settings.json` | 支持 HTTP Header 和用户/项目级配置 |
+### 配置范围与数据源隔离
+
+全局配置会让当前用户的所有项目加载同一个 MCP Server；项目级配置只在对应项目中加载。配置范围只决定客户端在哪里加载 MCP，不决定数据库权限。真正可访问的数据源始终由 MyDataDev 中对应 Agent 的连接白名单控制。
+
+如果不同项目需要访问不同数据源，应为每个项目创建独立的 MyDataDev Agent、API Key 和环境变量，并使用项目级配置。Web 示例统一使用 `MYDATADEV_MCP_TOKEN`，复制到项目后可改成项目专属名称，例如 `VALUATION_MYDATADEV_MCP_TOKEN`。`bearer_token_env_var` 等字段必须填写环境变量名称，不能直接填写完整 API Key。
+
+| 客户端 | 全局配置 | 项目级配置 | 说明 |
+| --- | --- | --- | --- |
+| Codex CLI | `~/.codex/config.toml`；`codex mcp add` 默认写入全局配置 | `<项目根目录>/.codex/config.toml`，仅可信项目加载 | 推荐项目隔离时使用独立 Agent 和环境变量 |
+| Claude Code | 用户级配置或 `--scope user` | `<项目根目录>/.mcp.json` | 支持在 Header 中展开环境变量 |
+| Claude Desktop | `claude_desktop_config.json` | 不支持按代码项目自动切换 | 私网静态 Bearer 使用 `mcp-remote` 桥接，配置对整个应用可见 |
+| Cursor | `~/.cursor/mcp.json` | `<项目根目录>/.cursor/mcp.json` | 桌面进程必须能够读取配置中引用的环境变量 |
+| Gemini CLI | `~/.gemini/settings.json` 或 `--scope user` | `<项目根目录>/.gemini/settings.json` | 项目配置中不要提交真实 Key |
 
 Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通常要求公网可达并使用 OAuth。MyDataDev 默认面向私有网络并采用 Agent Bearer Key，因此 Web 帮助使用 `mcp-remote` 把 Desktop 的本地 stdio 请求桥接到 `/mcp`；HTTP 私网地址需要显式允许，跨主机仍应优先使用 HTTPS。
 

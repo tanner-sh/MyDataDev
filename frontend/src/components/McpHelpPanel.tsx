@@ -87,6 +87,13 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
           title="帮助页使用占位 Key。创建或轮换 Agent 后，一次性密钥弹窗会生成包含真实凭据的可复制配置。"
           className="mcp-section-alert"
         />
+        <Alert
+          type="info"
+          showIcon
+          title="先选择配置范围：全局配置会在所有项目中加载 MCP，项目级配置只在当前项目中加载。"
+          description="配置范围不会改变数据库权限；真正可访问的数据源由 MyDataDev Agent 的连接白名单决定。需要项目隔离时，应为每个项目创建独立 Agent、API Key 和环境变量。Web 示例统一使用 MYDATADEV_MCP_TOKEN，复制到项目后可改成项目专属名称。"
+          className="mcp-section-alert"
+        />
         <McpClientGuideTabs endpoint={endpoint} onCopy={onCopy} />
       </Card>
 

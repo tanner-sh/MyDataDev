@@ -61,6 +61,20 @@ describe('MCP client configuration generators', () => {
     expect(onboarding.find((guide) => guide.id === 'claude-desktop')?.snippets[0].content).toContain(CREDENTIAL);
   });
 
+  it('distinguishes global and project-scoped configuration for every client', () => {
+    const guides = buildMcpClientGuides(ENDPOINT);
+    expect(guides.every((guide) => guide.scopes.map((scope) => scope.id).join(',') === 'global,project')).toBe(true);
+
+    expect(guides.find((guide) => guide.id === 'codex')?.scopes).toMatchObject([
+      { id: 'global', location: '~/.codex/config.toml' },
+      { id: 'project', location: '<项目根目录>/.codex/config.toml', recommended: true }
+    ]);
+    expect(guides.find((guide) => guide.id === 'claude-desktop')?.scopes).toMatchObject([
+      { id: 'global', availability: 'supported' },
+      { id: 'project', availability: 'unsupported' }
+    ]);
+  });
+
   it('escapes endpoint values in generated JSON and TOML', () => {
     const endpoint = 'https://example.internal/mcp?name="analytics"';
     expect(JSON.parse(genericMcpConfig(endpoint)).mcpServers.mydatadev.url).toBe(endpoint);

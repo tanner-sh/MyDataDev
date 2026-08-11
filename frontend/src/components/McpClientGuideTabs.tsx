@@ -1,4 +1,4 @@
-import { Alert, Button, Space, Tabs, Typography } from 'antd';
+import { Alert, Button, Space, Tabs, Tag, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
 import { buildMcpClientGuides } from '../mcpClientConfig';
@@ -30,6 +30,25 @@ export function McpClientGuideTabs({ endpoint, credential, compact = false, onCo
               showIcon
               title={guide.summary}
             />
+            <section className="mcp-config-scope-section">
+              <Title level={5}>选择配置范围</Title>
+              <div className="mcp-config-scope-grid">
+                {guide.scopes.map((scope) => (
+                  <div className="mcp-config-scope-card" key={scope.id}>
+                    <Space size={[6, 6]} wrap>
+                      <Tag color={scope.id === 'global' ? 'blue' : 'purple'}>
+                        {scope.id === 'global' ? '全局配置' : '项目级配置'}
+                      </Tag>
+                      {scope.recommended && <Tag color="success">推荐</Tag>}
+                      {scope.availability === 'unsupported' && <Tag>不支持</Tag>}
+                      {scope.availability === 'client-dependent' && <Tag>取决于客户端</Tag>}
+                    </Space>
+                    <Text code>{scope.location}</Text>
+                    <Paragraph type="secondary">{scope.description}</Paragraph>
+                  </div>
+                ))}
+              </div>
+            </section>
             <ul className="mcp-help-list">
               {guide.notes.map((note) => <li key={note}>{note}</li>)}
             </ul>
