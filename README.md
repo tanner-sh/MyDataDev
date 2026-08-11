@@ -1,46 +1,74 @@
-# MyDataDev
+<div align="center">
+  <img src="desktop/assets/icon.png" width="112" alt="MyDataDev Logo" />
+  <h1>MyDataDev</h1>
+  <p>
+    面向本机与私有网络的现代数据库工作台<br />
+    在一套界面中完成数据库浏览、SQL 开发、数据维护、对象管理、备份恢复与 AI 查询接入
+  </p>
 
-MyDataDev 是一个面向私有网络和本机桌面使用的数据库管理工具，目标是提供接近 DataGrip 的常用数据库浏览、SQL 执行、数据编辑、导入导出和备份任务管理能力。Web 模式采用前后端分离架构；桌面模式将同一套前端和 Spring Boot 后端封装为独立应用，目标数据库访问统一通过后端 JDBC 完成。
+  <p>
+    <img src="https://img.shields.io/badge/Java-17-ED8B00?logo=openjdk&logoColor=white" alt="Java 17" />
+    <img src="https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.5" />
+    <img src="https://img.shields.io/badge/React-TypeScript-3178C6?logo=react&logoColor=white" alt="React and TypeScript" />
+    <img src="https://img.shields.io/badge/Desktop-Electron-47848F?logo=electron&logoColor=white" alt="Electron Desktop" />
+    <img src="https://img.shields.io/badge/MCP-Read--only-6F42C1" alt="Read-only MCP Server" />
+  </p>
 
-## 技术栈
+  <p>
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><strong>下载桌面版</strong></a>
+    · <a href="#快速开始">快速开始</a>
+    · <a href="#核心能力">核心能力</a>
+    · <a href="#文档">文档</a>
+  </p>
+</div>
 
-- 后端：Spring Boot 3、Java 17、JDBC、H2 元数据库、Spring AI MCP Server
-- 前端：React、Vite、TypeScript、Ant Design、Monaco Editor
-- 桌面端：Electron、Electron Forge、随应用打包的 Java Runtime
-- 数据库驱动：H2、MySQL、PostgreSQL、SQL Server、SQLite、MariaDB、ClickHouse、Oracle、达梦、OceanBase
-- 本地状态：连接配置、审计日志、SQL 历史和备份任务存储在后端 H2 元数据库中
+---
 
-## 项目结构
+## 项目简介
 
-```text
-backend/
-  src/main/java/com/example/dbadmin/
-    api/       REST 接口
-    service/   业务逻辑
-    repo/      JDBC 持久化
-    core/      数据库方言适配
-    model/     领域模型
-    dto/       请求和响应 DTO
-  src/main/resources/
-    application.yml
-    schema.sql
-  src/test/java/       后端测试
+MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理工具，同时提供开箱即用的 Electron 桌面版。所有目标数据库访问统一由 Spring Boot 后端通过 JDBC 完成，前端专注于连接管理、资源浏览、SQL 工作台、表格编辑和运维任务。
 
-frontend/
-  src/
-    components/        React 组件
-    api.ts             API 请求封装
-    types.ts           前端类型定义
-    utils.ts           通用工具
-    styles.css         全局样式
+项目适合个人开发环境、内部研发网络和受控运维场景。它不是面向公网的托管数据库服务；Web 模式应部署在可信网络中，并配合反向代理和组织现有的身份认证体系使用。
 
-desktop/
-  src/                 Electron 主进程、后端进程和安全存储
-  scripts/             开发、资源准备、图标和发行脚本
-  forge.config.ts      三平台安装包配置
-```
+## 核心能力
 
-## Web 模式本地运行
+| 能力 | 说明 |
+| --- | --- |
+| **多数据库连接** | 新增、编辑、复制、删除和测试连接；区分开发、测试、生产环境，支持只读连接和加密保存密码。 |
+| **SQL 工作台** | Monaco 多标签编辑器、SQL 格式化、智能补全、多语句执行、分页结果、执行计划、任务取消与 SQL 历史。 |
+| **数据浏览与维护** | 游标分页浏览表数据，新增、编辑和删除行；提交前预览 SQL，对无稳定行标识和危险更新进行保护。 |
+| **导入与导出** | 将 CSV、JSON、SQL 数据导入为待提交记录；查询结果可导出为 CSV、JSON、SQL 或 XML。 |
+| **表与数据库对象** | 查看字段、主键、索引、外键、行数和 DDL；按方言管理表、视图、物化视图、序列、触发器、存储过程和函数。 |
+| **备份与恢复** | SQL 逻辑备份、定时任务、保留策略、历史与校验值；支持 MySQL/MariaDB 和 Oracle 原生工具以及后台恢复任务。 |
+| **大 SQL 文件执行** | 上传并在后台执行 SQL 文件，跟踪语句进度、结果统计和失败位置，支持取消与异常任务恢复。 |
+| **只读 MCP Server** | 通过 Agent API Key、连接白名单和生产环境授权，为 AI 客户端提供元数据浏览、表数据浏览、只读查询和执行计划。 |
+| **Web 与桌面双模式** | Web 前后端可独立部署；桌面版内置前端、后端和 Java Runtime，支持 macOS、Windows 与 Linux。 |
+
+### 数据库支持
+
+MyDataDev 内置以下数据库类型及对应 JDBC 驱动：
+
+`H2` · `MySQL` · `MariaDB` · `PostgreSQL` · `SQL Server` · `SQLite` · `ClickHouse` · `Oracle` · `达梦` · `OceanBase MySQL 模式` · `OceanBase Oracle 模式`
+
+基础 SQL 执行和元数据浏览由 JDBC 提供；表编辑、执行计划、对象管理、备份与恢复等高级能力会根据数据库方言和驱动能力自动启用。原生备份或恢复还要求相应工具安装在运行后端的机器上。
+
+## 快速开始
+
+### 桌面版
+
+从 [GitHub Releases](https://github.com/tanner-sh/MyDataDev/releases/latest) 下载当前平台的安装包：
+
+| 平台 | 架构与安装包 |
+| --- | --- |
+| macOS | Apple Silicon / Intel，DMG |
+| Windows | x64，Setup.exe |
+| Linux | x64，DEB / RPM |
+
+桌面版无需额外安装 Java，也无需分别启动前端和后端。应用会在本机启动内置服务，数据、备份和日志保存在操作系统应用数据目录中。当前 macOS 发行版未使用 Apple Developer ID 公证，首次打开方式见[桌面版开发与发行说明](docs/desktop.md#无-apple-开发者账号的发布策略)。
+
+### Web 开发模式
+
+开发环境需要 Java 17、Maven 3.9+ 和 Node.js 22。
 
 启动后端：
 
@@ -48,8 +76,6 @@ desktop/
 cd backend
 mvn spring-boot:run
 ```
-
-后端默认监听 `http://localhost:8080`。
 
 启动前端：
 
@@ -59,127 +85,109 @@ npm install
 npm run dev
 ```
 
-前端默认访问 `http://localhost:5173`。开发服务器会将 `/api` 和 `/mcp` 代理到 `http://localhost:8080`；生产部署也应在同一入口转发这两个路径，或通过 `VITE_API_BASE_URL` 指定后端 `/api` 地址。
+打开 <http://localhost:5173>。Vite 会将 `/api` 和 `/mcp` 代理到默认的后端地址 `http://localhost:8080`。
 
-## 桌面模式
+Web 与桌面模式默认使用彼此独立的元数据库和文件目录，不会自动共享连接、密码、SQL 历史、MCP Agent、备份任务或备份文件。
 
-桌面版无需用户单独启动前端、后端或安装 Java。应用启动时会在本机 `127.0.0.1:5173` 启动内置后端并打开桌面窗口，因此 MCP 地址仍是 `http://localhost:5173/mcp`。关闭窗口会隐藏到系统托盘；从托盘明确退出时才会优雅停止内置后端。端口已被占用时，桌面版会停止启动并给出提示。
+## 使用概览
 
-Web 模式与桌面模式的数据默认完全独立，不共享 H2 元数据库、连接配置、Agent API Key、审计、备份或 SQL 文件。桌面数据写入操作系统应用数据目录，删除或升级安装程序不会主动覆盖这些数据。开发和打包方式、数据目录、MCP 接入及无 Apple Developer ID 的安装说明见 [桌面版开发与发行说明](docs/desktop.md)。
+1. 在连接管理中选择数据库类型并填写 JDBC 地址，测试成功后保存连接。
+2. 从左侧资源管理器浏览 Schema、表、视图和其他数据库对象。
+3. 在 SQL 工作台编写语句，使用补全、格式化、脚本执行、分页结果和执行计划。
+4. 打开表数据或对象详情，预览并提交数据、表结构及对象变更。
+5. 按需创建备份任务、执行恢复，或在 MCP 设置中向 AI Agent 授予只读查询权限。
 
-启动桌面开发模式：
+生产连接上的 SQL、数据编辑、对象变更和恢复操作需要额外确认；标记为只读的连接会在后端拒绝写入与结构变更。应用层保护不能替代数据库权限，生产环境仍应使用最小权限数据库账号。
 
-```bash
-cd desktop
-npm install
-npm run dev
+## 架构
+
+```mermaid
+flowchart LR
+    Browser[Web 浏览器] --> UI[React + Ant Design]
+    Desktop[Electron 桌面应用] --> UI
+    UI -->|REST /api| Backend[Spring Boot 业务服务]
+    Agent[AI Agent] -->|Streamable HTTP /mcp| Backend
+    Backend -->|JDBC| Databases[(目标数据库)]
+    Backend --> Metadata[(H2 元数据库)]
+    Backend --> Files[(备份与任务文件)]
 ```
 
-## 构建与测试
+- **前端**：React、TypeScript、Vite、Ant Design、Monaco Editor。
+- **后端**：Spring Boot 3、Java 17、Spring JDBC、数据库方言适配与 Spring AI MCP Server。
+- **桌面端**：Electron 负责窗口、托盘、后端生命周期和操作系统安全存储，并随应用分发精简 Java Runtime。
+- **本地状态**：H2 保存连接配置、SQL 历史、审计记录、MCP 授权和任务状态；目标业务数据始终保留在远程数据库中。
 
-后端测试：
+## 项目结构
+
+```text
+MyDataDev/
+├── backend/        Spring Boot API、JDBC 服务、数据库方言与 JUnit 测试
+├── frontend/       React 页面、公共类型、客户端逻辑与 Vitest 测试
+├── desktop/        Electron 主进程、资源准备、打包与发行脚本
+├── database/       示例数据库与初始化脚本
+├── docs/           MCP、桌面版和发行说明
+└── .github/        桌面版多平台构建与 Release 工作流
+```
+
+## 构建与验证
+
+后端：
 
 ```bash
 cd backend
 mvn test
 ```
 
-前端类型检查与生产构建：
+前端：
 
 ```bash
 cd frontend
+npm install
+npm test
 npm run build
 ```
 
-桌面端测试与主进程类型检查：
+桌面端：
 
 ```bash
 cd desktop
+npm install
 npm test
 npm run build:main
 ```
 
-提交前建议同时运行后端测试和前端构建，确保接口、类型和页面构建都可用。
+生成当前平台的桌面安装包：
 
-## 已实现能力
+```bash
+cd desktop
+npm run make
+```
 
-- 数据库连接管理：连接新增、编辑、复制、删除、测试连接和只读标记。
-- 密码保护：连接密码加密后存储，密钥由 `DB_ADMIN_CRYPTO_KEY` 控制。
-- 元数据浏览：默认按当前 Schema 加载表和视图，切换其他 Schema 时按需加载并缓存；支持查看字段、索引、主键、行数和基础 DDL。
-- SQL 工作台：支持多标签页、SQL 格式化、脚本拆分执行、执行计划、语句级结果展示和 SQL 历史。
-- 智能补全：按当前数据库/Schema 提供表、视图、别名和字段补全，字段结构按需加载并缓存。
-- 结果浏览：SQL 默认最多返回 500 行并支持调整上限和前端分页；表数据使用无总数的快速服务端翻页。
-- 查询结果导出：支持 CSV、JSON、SQL、XML 导出。
-- 表数据编辑：支持表格浏览、新增行、编辑行、删除行、SQL 预览和提交；无主键或唯一键时限制危险编辑。
-- 数据导入：支持 CSV、JSON、SQL 文件导入为待提交插入行。
-- 备份任务管理：支持按连接展示备份任务，新建、编辑、启停、删除、手动执行、定时执行、下载最近备份文件。
-- 多方式备份：支持内置 SQL 逻辑备份、MySQL/MariaDB `mysqldump`、Oracle `exp`，原生工具支持自动发现或手动覆盖路径。
-- 备份与恢复：支持备份校验值、保留策略、历史下载，以及 SQL、MySQL dump、Oracle dmp 的预检和后台恢复。
-- SQL 备份生成：支持导出表结构、数据、索引和约束；CLOB、BLOB 和 VARBINARY 会转换为对应数据库字面量。
-- 审计记录：连接、SQL 执行、数据提交和备份操作会写入审计或历史记录。
-- MCP Server：通过 Streamable HTTP 向获授权的 AI agent 提供连接发现、元数据浏览、表数据浏览、只读查询和执行计划能力。
+桌面安装包需要在对应操作系统上原生构建；完整的开发、签名和发行流程参见[桌面版开发与发行说明](docs/desktop.md)。
 
-## MCP Server
-
-MCP Server 在新配置中默认开启。应用启动后可在页面右上角的 **MCP** 设置中创建 Agent、生成一次性 API Key、配置连接白名单并热启停，无需额外命令。Web 内置 Codex CLI、Claude、Cursor、Gemini CLI 等客户端的动态接入帮助。每个 AI agent 使用独立 API Key，可以查询白名单内的任意已配置连接；生产连接仍需额外授权。MCP 目前只发布查询、元数据浏览和执行计划能力，不提供写入工具。桌面版固定使用 `http://localhost:5173/mcp`，但其 Agent 和连接配置不会与 Web 模式共享。详细接入示例和安全边界见 [MCP Server 使用说明](docs/mcp-server.md)。
-
-## 备份说明
-
-备份文件默认写入后端配置的 `app.backup.directory`，默认值为 `./backups`。删除备份任务时可选择是否同时删除最近一次生成的备份文件；后端会校验文件路径必须位于备份目录内，避免误删其他路径文件。
-
-备份方式包括：
-
-- `SQL`：通过 JDBC 查询数据并生成 SQL `INSERT` 文件，适合轻量和跨库场景。
-- `MYSQLDUMP`：调用后端服务器上的 `mysqldump`，支持 MySQL/MariaDB 全库或单表备份，密码通过环境变量传递。
-- `ORACLE_EXP`：调用后端服务器上的 Oracle `exp`，支持全库或单表备份，复杂连接名可在任务中覆盖。
-
-原生备份和恢复工具必须安装在运行后端服务的机器或容器内。自动模式会在每次备份执行或恢复预检时，依次从固定配置、`MYSQL_HOME`/`ORACLE_HOME`、后端进程 `PATH`、额外搜索目录和有限常见安装目录中解析工具；也可以在界面中手动指定路径。额外参数按“一行一个参数”填写，输出文件、账号、密码、数据库范围等关键参数由系统控制。
-
-定时备份使用 Spring cron 表达式。启用定时任务时必须填写合法 cron；空 cron 表示手动任务。
-
-## 配置说明
+## 配置与安全
 
 主要配置位于 `backend/src/main/resources/application.yml`：
 
-- `server.port`：后端端口，默认 `8080`
-- `spring.datasource.*`：H2 元数据库配置
-- `app.crypto-key`：连接密码加密密钥，建议通过 `DB_ADMIN_CRYPTO_KEY` 环境变量提供
-- `app.sql.max-rows`：SQL 查询默认最大行数
-- `app.sql.timeout-seconds`：SQL 执行超时时间
-- `app.backup.directory`：备份文件输出目录
-- `app.native-tools.mysqldump-path`、`mysql-path`、`oracle-exp-path`、`oracle-imp-path`：可选的原生工具固定路径
-- `app.native-tools.extra-search-paths`：自动发现时额外检查的目录列表
-- `app.native-tools.probe-timeout-seconds`：版本探测超时，默认 `3` 秒
+| 配置 | 用途 |
+| --- | --- |
+| `server.port` | 后端监听端口，默认 `8080`。 |
+| `spring.datasource.*` | MyDataDev 自身的 H2 元数据库连接。 |
+| `app.crypto-key` | 连接密码加密密钥，生产部署应通过 `DB_ADMIN_CRYPTO_KEY` 注入强密钥。 |
+| `app.sql.*` | SQL 行数、语句数量与执行超时限制。 |
+| `app.backup.*` | 备份目录、超时和 SQL 批量写入设置。 |
+| `app.restore.*` / `app.sql-file.*` | 恢复上传与大 SQL 文件任务限制。 |
+| `app.mcp.*` | MCP 初次初始化的开关、资源限制和兼容配置。 |
 
-不要将真实数据库凭据或生产密钥提交到 Git。
+请勿将真实数据库密码、Agent API Key 或生产加密密钥提交到 Git。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
 
-## Oracle 连接示例
+## 文档
 
-```text
-Service Name: jdbc:oracle:thin:@//localhost:1521/ORCLPDB1
-SID:          jdbc:oracle:thin:@localhost:1521:ORCL
-```
+- [桌面版开发、数据目录与发行说明](docs/desktop.md)
+- [MCP Server 配置、客户端接入与安全边界](docs/mcp-server.md)
+- [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md)
+- [仓库结构、编码与提交规范](AGENTS.md)
 
-Oracle 表数据分页使用兼容 Oracle 11g 的 `ROWNUM` 查询；执行计划使用 `EXPLAIN PLAN FOR ...` 和 `DBMS_XPLAN.DISPLAY()`。
+## 当前状态
 
-## 达梦与 OceanBase 连接示例
-
-```text
-达梦：                 jdbc:dm://localhost:5236
-OceanBase MySQL 模式： jdbc:oceanbase://localhost:2881/demo
-OceanBase Oracle 模式：jdbc:oceanbase://localhost:2881/demo
-```
-
-OceanBase 连接类型必须与租户兼容模式一致。MySQL/OceanBase MySQL 模式按 Catalog 浏览对象；Oracle、达梦和 OceanBase Oracle 模式按 Schema 浏览对象。
-
-## 提交约定
-
-本项目约定 Git 提交信息使用中文，并尽量写清楚改动内容。复杂改动建议使用中文标题加多条中文说明，例如：
-
-```text
-完善备份任务管理并优化结果区布局
-
-- 新增备份任务编辑、启停和删除接口
-- 补充前端任务管理入口和删除确认
-- 增加服务层测试覆盖 cron 校验和文件删除策略
-```
+MyDataDev 当前版本为 `0.1.1`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。
