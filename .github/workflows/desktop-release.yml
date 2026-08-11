@@ -140,6 +140,7 @@ jobs:
       - name: 发布未签名安装包
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
