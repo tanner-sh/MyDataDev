@@ -11,6 +11,7 @@ await rm(path.join(desktopDirectory, 'dist'), { recursive: true, force: true });
 const result = spawnSync(tsc, ['-p', 'tsconfig.json'], {
   cwd: desktopDirectory,
   env: process.env,
+  shell: process.platform === 'win32',
   stdio: 'inherit'
 });
 if (result.status !== 0) process.exit(result.status || 1);

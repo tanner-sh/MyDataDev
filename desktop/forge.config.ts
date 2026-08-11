@@ -60,6 +60,7 @@ const config: ForgeConfig = {
           name: 'mydatadev',
           productName: 'MyDataDev',
           genericName: 'Database Workbench',
+          bin: 'MyDataDev',
           categories: ['Development', 'Database'],
           icon: path.join(directory, 'assets', 'icon.png')
         }
@@ -72,6 +73,7 @@ const config: ForgeConfig = {
           name: 'mydatadev',
           productName: 'MyDataDev',
           genericName: 'Database Workbench',
+          bin: 'MyDataDev',
           categories: ['Development', 'Database'],
           icon: path.join(directory, 'assets', 'icon.png')
         }

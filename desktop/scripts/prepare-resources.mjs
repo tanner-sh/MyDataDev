@@ -17,7 +17,8 @@ function command(name) {
 }
 
 function run(executable, args, cwd) {
-  const result = spawnSync(executable, args, { cwd, stdio: 'inherit', env: process.env });
+  const shell = process.platform === 'win32' && executable.toLowerCase().endsWith('.cmd');
+  const result = spawnSync(executable, args, { cwd, stdio: 'inherit', env: process.env, shell });
   if (result.status !== 0) process.exit(result.status || 1);
 }
 

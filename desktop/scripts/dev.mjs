@@ -29,7 +29,13 @@ async function developmentKey() {
 }
 
 function start(executable, args, cwd, environment) {
-  const child = spawn(executable, args, { cwd, env: environment, stdio: 'inherit', windowsHide: true });
+  const child = spawn(executable, args, {
+    cwd,
+    env: environment,
+    stdio: 'inherit',
+    windowsHide: true,
+    shell: process.platform === 'win32' && executable.toLowerCase().endsWith('.cmd')
+  });
   children.add(child);
   child.once('exit', () => children.delete(child));
   return child;

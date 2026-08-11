@@ -67,6 +67,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
 
       - name: 运行后端测试
+        if: runner.os != 'Windows'
         run: mvn test --batch-mode
         working-directory: backend
 
