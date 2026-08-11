@@ -447,9 +447,18 @@ body {
   box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--primary) 55%, transparent);
 }
 
-.result-grid .ant-table-tbody > tr.result-row-selected > td,
-.result-grid .ant-table-tbody > tr.result-row-selected:hover > td {
-  background: var(--primary-soft) !important;
+.result-grid .result-row-selected > .ant-table-cell,
+.result-grid .result-row-selected .ant-table-cell,
+.result-grid .result-row-selected:hover > .ant-table-cell,
+.result-grid .result-row-selected:hover .ant-table-cell {
+  background: color-mix(in srgb, var(--primary) 18%, var(--surface)) !important;
+}
+
+.result-grid .result-row-selected > .result-index-column,
+.result-grid .result-row-selected .result-index-column {
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--primary);
 }
 
 .result-grid .ant-table-tbody > tr > td {
@@ -461,6 +470,14 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.result-selection-tag {
+  margin-inline-end: 0;
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  color: var(--primary);
+  background: var(--primary-soft);
+  font-weight: 600;
 }
 
 .result-pagination-main,

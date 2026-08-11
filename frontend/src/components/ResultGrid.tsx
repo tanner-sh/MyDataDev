@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tooltip, Typography, message } from 'antd';
+import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
@@ -82,6 +82,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         key: '__index',
         width: 70,
         fixed: 'left',
+        className: 'result-index-column',
         shouldCellUpdate: (record, previous) => record !== previous,
         render: (_value, _row, index) => rowOffset + index + 1
       },
@@ -285,7 +286,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               <Button size="small" aria-label="选择复制格式" icon={<DownOutlined />} />
             </Dropdown>
           </Space.Compact>
-          {selectedRowKeys.length > 0 && <Text type="secondary">已选 {selectedRowKeys.length} 行</Text>}
+          {selectedRowKeys.length > 0 && <Tag className="result-selection-tag">已选 {selectedRowKeys.length} 行</Tag>}
           {result.columns.length > 20 && (
             <Select
               mode="multiple"
