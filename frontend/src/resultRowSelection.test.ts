@@ -16,4 +16,28 @@ describe('result row selection', () => {
   it('selects a contiguous range with Shift', () => {
     expect(updateResultRowSelection({ current: ['2'], clicked: '4', displayed, anchor: '2', range: true })).toEqual({ selected: ['2', '3', '4'], anchor: '2' });
   });
+
+  it('uses a cached index and preserves displayed order for large selections', () => {
+    const manyRows = Array.from({ length: 10_000 }, (_value, index) => String(index));
+    const displayedIndex = new Map(manyRows.map((key, index) => [key, index]));
+    const range = updateResultRowSelection({
+      current: ['9999'],
+      clicked: '7499',
+      displayed: manyRows,
+      displayedIndex,
+      anchor: '2500',
+      range: true
+    });
+
+    expect(range.selected).toHaveLength(5_000);
+    expect(range.selected[0]).toBe('2500');
+    expect(range.selected[range.selected.length - 1]).toBe('7499');
+    expect(updateResultRowSelection({
+      current: ['9000', '9500'],
+      clicked: '100',
+      displayed: manyRows,
+      displayedIndex,
+      toggle: true
+    }).selected).toEqual(['100', '9000', '9500']);
+  });
 });

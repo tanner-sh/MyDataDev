@@ -2,6 +2,7 @@ export type ResultRowSelectionInput = {
   current: string[];
   clicked: string;
   displayed: string[];
+  displayedIndex?: ReadonlyMap<string, number>;
   anchor?: string;
   toggle?: boolean;
   range?: boolean;
@@ -10,21 +11,31 @@ export type ResultRowSelectionInput = {
 export type ResultRowSelection = { selected: string[]; anchor: string };
 
 export function updateResultRowSelection(input: ResultRowSelectionInput): ResultRowSelection {
-  const current = new Set(input.current);
+  const displayedIndex = input.displayedIndex || new Map(input.displayed.map((key, index) => [key, index]));
   if (input.range && input.anchor) {
-    const anchorIndex = input.displayed.indexOf(input.anchor);
-    const clickedIndex = input.displayed.indexOf(input.clicked);
-    if (anchorIndex >= 0 && clickedIndex >= 0) {
+    const anchorIndex = displayedIndex.get(input.anchor);
+    const clickedIndex = displayedIndex.get(input.clicked);
+    if (anchorIndex !== undefined && clickedIndex !== undefined) {
       const range = input.displayed.slice(Math.min(anchorIndex, clickedIndex), Math.max(anchorIndex, clickedIndex) + 1);
-      if (!input.toggle) current.clear();
+      if (!input.toggle) return { selected: range, anchor: input.anchor };
+      const current = new Set(input.current);
       range.forEach((key) => current.add(key));
-      return { selected: input.displayed.filter((key) => current.has(key)), anchor: input.anchor };
+      return { selected: orderSelectedKeys(current, displayedIndex), anchor: input.anchor };
     }
   }
   if (input.toggle) {
-    if (current.has(input.clicked)) current.delete(input.clicked);
-    else current.add(input.clicked);
-    return { selected: input.displayed.filter((key) => current.has(key)), anchor: input.clicked };
+    const current = new Set(input.current);
+    if (current.has(input.clicked)) {
+      return { selected: input.current.filter((key) => key !== input.clicked), anchor: input.clicked };
+    }
+    current.add(input.clicked);
+    return { selected: orderSelectedKeys(current, displayedIndex), anchor: input.clicked };
   }
   return { selected: [input.clicked], anchor: input.clicked };
+}
+
+function orderSelectedKeys(keys: ReadonlySet<string>, displayedIndex: ReadonlyMap<string, number>): string[] {
+  return [...keys]
+    .filter((key) => displayedIndex.has(key))
+    .sort((left, right) => displayedIndex.get(left)! - displayedIndex.get(right)!);
 }

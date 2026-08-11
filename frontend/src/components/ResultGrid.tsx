@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
 import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
-import type { ColumnsType, TableRef } from 'antd/es/table';
+import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
@@ -14,6 +14,7 @@ import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, ser
 import { updateResultRowSelection } from '../resultRowSelection';
 
 const { Text } = Typography;
+type ResultRowClassName = (record: ResultRow, index: number, indent: number) => string;
 
 export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, onPageChange }: {
   result: SqlResult | null;
@@ -41,6 +42,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const gridShellRef = useRef<HTMLDivElement>(null);
   const pendingTargetActionRef = useRef<((parts: string[]) => void) | null>(null);
   const lastScrolledRowsRef = useRef<SqlResult['rows'] | null>(null);
+  const selectionStateRef = useRef<{
+    selected: string[];
+    selectedSet: ReadonlySet<string>;
+    anchor?: string;
+    displayed: string[];
+    displayedIndex: ReadonlyMap<string, number>;
+  }>({ selected: [], selectedSet: new Set(), displayed: [], displayedIndex: new Map() });
+  const copySelectedRowsRef = useRef<() => void>(() => undefined);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
   const rowCount = result?.resultSet ? result.rows.length : 0;
@@ -202,16 +211,78 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     }));
   }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
 
-  useEffect(() => {
-    const displayed = new Set(rows.map((row) => row.key));
-    setSelectedRowKeys((current) => current.filter((key) => displayed.has(key)));
-    if (selectionAnchor && !displayed.has(selectionAnchor)) setSelectionAnchor(undefined);
-  }, [rows, selectionAnchor]);
+  const displayedRowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
+  const displayedRowIndex = useMemo(() => new Map(displayedRowKeys.map((key, index) => [key, index])), [displayedRowKeys]);
+  const displayedRowKeySet = useMemo(() => new Set(displayedRowKeys), [displayedRowKeys]);
+  const rowByKey = useMemo(() => new Map(rows.map((row) => [row.key, row])), [rows]);
+  const selectedRowKeySet = useMemo(() => new Set(selectedRowKeys), [selectedRowKeys]);
 
-  const selectedRows = useMemo(() => {
-    const selected = new Set(selectedRowKeys);
-    return rows.filter((row) => selected.has(row.key));
-  }, [rows, selectedRowKeys]);
+  selectionStateRef.current = {
+    selected: selectedRowKeys,
+    selectedSet: selectedRowKeySet,
+    anchor: selectionAnchor,
+    displayed: displayedRowKeys,
+    displayedIndex: displayedRowIndex
+  };
+
+  useEffect(() => {
+    setSelectedRowKeys((current) => {
+      const next = current.filter((key) => displayedRowKeySet.has(key));
+      return next.length === current.length ? current : next;
+    });
+    setSelectionAnchor((current) => current && !displayedRowKeySet.has(current) ? undefined : current);
+  }, [displayedRowKeySet]);
+
+  const selectedRows = useMemo(
+    () => selectedRowKeys.flatMap((key) => rowByKey.has(key) ? [rowByKey.get(key)!] : []),
+    [rowByKey, selectedRowKeys]
+  );
+
+  const selectResultRow = useCallback((rowKey: string, event: ReactMouseEvent<HTMLElement>) => {
+    if (isInteractiveTarget(event.target)) return;
+    const current = selectionStateRef.current;
+    const next = updateResultRowSelection({
+      current: current.selected,
+      clicked: rowKey,
+      displayed: current.displayed,
+      displayedIndex: current.displayedIndex,
+      anchor: current.anchor,
+      toggle: event.ctrlKey || event.metaKey,
+      range: event.shiftKey
+    });
+    selectionStateRef.current = {
+      ...current,
+      selected: next.selected,
+      selectedSet: new Set(next.selected),
+      anchor: next.anchor
+    };
+    setSelectedRowKeys(next.selected);
+    setSelectionAnchor(next.anchor);
+    gridShellRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const resultRowClassName = useCallback<ResultRowClassName>(
+    (row) => selectionStateRef.current.selectedSet.has(row.key) ? 'result-row-selected' : '',
+    []
+  );
+  const resultOnRow = useCallback<NonNullable<TableProps<ResultRow>['onRow']>>((row) => ({
+    'aria-selected': selectionStateRef.current.selectedSet.has(row.key),
+    onClick: (event) => selectResultRow(row.key, event)
+  }), [selectResultRow]);
+  const resultTableChange = useCallback<NonNullable<TableProps<ResultRow>['onChange']>>((_pagination, _filters, sorter) => {
+    const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
+    const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
+    setSortState(key && current.order ? { key, order: current.order } : undefined);
+  }, []);
+
+  useLayoutEffect(() => {
+    const selected = selectionStateRef.current.selectedSet;
+    viewportRef.current?.querySelectorAll<HTMLElement>('.ant-table-row[data-row-key]').forEach((row) => {
+      const isSelected = selected.has(row.dataset.rowKey || '');
+      row.classList.toggle('result-row-selected', isSelected);
+      row.setAttribute('aria-selected', String(isSelected));
+    });
+  }, [rows, scrollY, selectedRowKeySet, viewportRef]);
 
   const inferredTargetParts = useMemo(
     () => inferSqlTargetParts(sourceSql, result?.sourceTable),
@@ -269,16 +340,19 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     else void perform();
   };
 
+  copySelectedRowsRef.current = copySelectedRows;
+  const requestCopySelectedRows = useCallback(() => copySelectedRowsRef.current(), []);
+
   useEffect(() => {
     if (!active || !result?.resultSet) return;
     const handleCopyShortcut = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || isTextEntryTarget(event.target)) return;
       event.preventDefault();
-      copySelectedRows();
+      requestCopySelectedRows();
     };
     window.addEventListener('keydown', handleCopyShortcut);
     return () => window.removeEventListener('keydown', handleCopyShortcut);
-  });
+  }, [active, requestCopySelectedRows, result?.resultSet]);
 
   if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
   if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
@@ -292,7 +366,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || isTextEntryTarget(event.target)) return;
         event.preventDefault();
         event.stopPropagation();
-        copySelectedRows();
+        requestCopySelectedRows();
       }}
     >
       {messageContextHolder}
@@ -302,7 +376,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             <Button size="small" icon={<DownloadOutlined />}>导出 <DownOutlined /></Button>
           </Dropdown>
           <Space.Compact size="small">
-            <Button size="small" icon={<CopyOutlined />} onClick={copySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
+            <Button size="small" icon={<CopyOutlined />} onClick={requestCopySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
             <Dropdown trigger={['click']} menu={{
               selectable: true,
               selectedKeys: [copyFormat],
@@ -339,38 +413,16 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         {scrollY === undefined ? (
           <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
         ) : (
-          <Table<ResultRow>
-            ref={tableRef}
-            size="small"
-            className="data-grid data-grid-fill result-grid"
+          <MemoizedResultTable
+            tableRef={tableRef}
             columns={columns}
-            dataSource={rows}
-            pagination={false}
-            loading={pagingLoading}
-            virtual
-            scroll={{ x: tableScrollWidth, y: scrollY }}
-            rowClassName={(row) => selectedRowKeys.includes(row.key) ? 'result-row-selected' : ''}
-            onRow={(row) => ({
-              onClick: (event) => {
-                if (isInteractiveTarget(event.target)) return;
-                const next = updateResultRowSelection({
-                  current: selectedRowKeys,
-                  clicked: row.key,
-                  displayed: rows.map((item) => item.key),
-                  anchor: selectionAnchor,
-                  toggle: event.ctrlKey || event.metaKey,
-                  range: event.shiftKey
-                });
-                setSelectedRowKeys(next.selected);
-                setSelectionAnchor(next.anchor);
-                gridShellRef.current?.focus({ preventScroll: true });
-              }
-            })}
-            onChange={(_pagination, _filters, sorter) => {
-              const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
-              const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
-              setSortState(key && current.order ? { key, order: current.order } : undefined);
-            }}
+            rows={rows}
+            pagingLoading={pagingLoading}
+            scrollX={tableScrollWidth}
+            scrollY={scrollY}
+            rowClassName={resultRowClassName}
+            onRow={resultOnRow}
+            onChange={resultTableChange}
           />
         )}
       </div>
@@ -445,6 +497,35 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         <Input autoFocus value={targetDraft} placeholder="schema.table" onChange={(event) => setTargetDraft(event.target.value)} onPressEnter={() => undefined} />
       </Modal>
     </div>
+  );
+});
+
+const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, columns, rows, pagingLoading, scrollX, scrollY, rowClassName, onRow, onChange }: {
+  tableRef: Ref<TableRef>;
+  columns: ColumnsType<ResultRow>;
+  rows: ResultRow[];
+  pagingLoading: boolean;
+  scrollX: number;
+  scrollY: number;
+  rowClassName: ResultRowClassName;
+  onRow: NonNullable<TableProps<ResultRow>['onRow']>;
+  onChange: NonNullable<TableProps<ResultRow>['onChange']>;
+}) {
+  return (
+    <Table<ResultRow>
+      ref={tableRef}
+      size="small"
+      className="data-grid data-grid-fill result-grid"
+      columns={columns}
+      dataSource={rows}
+      pagination={false}
+      loading={pagingLoading}
+      virtual
+      scroll={{ x: scrollX, y: scrollY }}
+      rowClassName={rowClassName}
+      onRow={onRow}
+      onChange={onChange}
+    />
   );
 });
 
