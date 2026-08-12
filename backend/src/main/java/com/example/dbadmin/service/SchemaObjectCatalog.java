@@ -22,8 +22,15 @@ import java.util.Locale;
 @Component
 public class SchemaObjectCatalog {
     private static final int MAX_QUERY_ROWS = 20_001;
+    private static final long MAX_PAGE_OFFSET = 1_000_000;
 
     public record CatalogObject(String schemaName, String name, String specificName, String subtype, String status) {
+    }
+
+    public record CatalogPage(List<CatalogObject> items, int total, boolean totalExact, boolean hasMore) {
+        public CatalogPage {
+            items = List.copyOf(items);
+        }
     }
 
     public List<CatalogObject> list(Connection connection, DbConnection configured, String schema, SchemaObjectKind kind) throws Exception {
@@ -42,6 +49,98 @@ public class SchemaObjectCatalog {
                 .sorted(Comparator.comparing(CatalogObject::name, String.CASE_INSENSITIVE_ORDER)
                         .thenComparing(object -> value(object.specificName())))
                 .toList();
+    }
+
+    public CatalogPage page(
+            Connection connection,
+            DbConnection configured,
+            DatabaseDialect dialect,
+            String schema,
+            SchemaObjectKind kind,
+            String keyword,
+            int page,
+            int pageSize,
+            int timeoutSeconds
+    ) throws Exception {
+        long offset = (long) page * pageSize;
+        if (offset > MAX_PAGE_OFFSET) {
+            throw new IllegalArgumentException("对象分页偏移过大，请使用搜索条件缩小范围。");
+        }
+        CatalogQuery query = catalogQuery(configured, schema, kind);
+        if (query == null) return new CatalogPage(List.of(), 0, true, false);
+
+        List<Object> parameters = new ArrayList<>(query.parameters());
+        StringBuilder filtered = new StringBuilder("SELECT schema_name, object_name, specific_name, subtype, object_status FROM (")
+                .append(query.sql())
+                .append(") dbadmin_schema_objects");
+        if (keyword != null && !keyword.isBlank()) {
+            if (family(configured).equals("clickhouse")) {
+                filtered.append(" WHERE positionCaseInsensitive(object_name, ?) > 0");
+                parameters.add(keyword);
+            } else {
+                filtered.append(" WHERE LOWER(object_name) LIKE ? ESCAPE '!'");
+                parameters.add("%" + likePattern(keyword.toLowerCase(Locale.ROOT)) + "%");
+            }
+        }
+        filtered.append(" ORDER BY LOWER(object_name), object_name, specific_name");
+
+        int limit = pageSize + 1;
+        String sql = dialect.pageQuery(filtered.toString(), limit, Math.toIntExact(offset));
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            dialect.configureReadStatement(connection, statement, Math.min(limit, 200), timeoutSeconds);
+            statement.setMaxRows(limit);
+            for (int index = 0; index < parameters.size(); index++) {
+                statement.setObject(index + 1, parameters.get(index));
+            }
+            List<CatalogObject> objects = new ArrayList<>(limit);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next() && objects.size() < limit) objects.add(catalogObject(rs));
+            }
+            boolean hasMore = objects.size() > pageSize;
+            if (hasMore) objects = new ArrayList<>(objects.subList(0, pageSize));
+            int total = (int) Math.min(Integer.MAX_VALUE, offset + objects.size() + (hasMore ? 1L : 0L));
+            return new CatalogPage(objects, total, !hasMore, hasMore);
+        }
+    }
+
+    public List<CatalogObject> find(
+            Connection connection,
+            DbConnection configured,
+            DatabaseDialect dialect,
+            String schema,
+            SchemaObjectKind kind,
+            String name,
+            String specificName,
+            int timeoutSeconds
+    ) throws Exception {
+        CatalogQuery query = catalogQuery(configured, schema, kind);
+        if (query == null) return List.of();
+        List<Object> parameters = new ArrayList<>(query.parameters());
+        parameters.add(name);
+        parameters.add(specificName == null ? "" : specificName);
+        String sql = "SELECT schema_name, object_name, specific_name, subtype, object_status FROM ("
+                + query.sql()
+                + ") dbadmin_schema_objects WHERE object_name = ? AND COALESCE(specific_name, '') = ?";
+        return boundedQuery(connection, dialect, sql, parameters, 2, timeoutSeconds);
+    }
+
+    public boolean existsByName(
+            Connection connection,
+            DbConnection configured,
+            DatabaseDialect dialect,
+            String schema,
+            SchemaObjectKind kind,
+            String name,
+            int timeoutSeconds
+    ) throws Exception {
+        CatalogQuery query = catalogQuery(configured, schema, kind);
+        if (query == null) return false;
+        List<Object> parameters = new ArrayList<>(query.parameters());
+        parameters.add(name.toLowerCase(Locale.ROOT));
+        String sql = "SELECT schema_name, object_name, specific_name, subtype, object_status FROM ("
+                + query.sql()
+                + ") dbadmin_schema_objects WHERE LOWER(object_name) = ?";
+        return !boundedQuery(connection, dialect, sql, parameters, 1, timeoutSeconds).isEmpty();
     }
 
     public String source(Connection connection, DbConnection configured, DatabaseDialect dialect, SchemaObjectKind kind, CatalogObject object) throws Exception {
@@ -195,6 +294,140 @@ public class SchemaObjectCatalog {
             case "mysql", "oceanbase-mysql" -> "mysql";
             default -> type;
         };
+    }
+
+    private CatalogQuery catalogQuery(DbConnection configured, String schema, SchemaObjectKind kind) {
+        return switch (family(configured)) {
+            case "postgresql" -> switch (kind) {
+                case VIEW, MATERIALIZED_VIEW, SEQUENCE -> querySpec("""
+                        SELECT n.nspname AS schema_name, c.relname AS object_name,
+                               c.oid::text AS specific_name, '' AS subtype, '' AS object_status
+                        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = ? AND c.relkind = ?
+                        """, schema, kind == SchemaObjectKind.VIEW ? "v" : kind == SchemaObjectKind.MATERIALIZED_VIEW ? "m" : "S");
+                case TRIGGER -> querySpec("""
+                        SELECT n.nspname AS schema_name, t.tgname AS object_name,
+                               t.oid::text AS specific_name, c.relname AS subtype,
+                               CASE t.tgenabled WHEN 'D' THEN 'DISABLED' ELSE 'ENABLED' END AS object_status
+                        FROM pg_trigger t
+                        JOIN pg_class c ON c.oid = t.tgrelid
+                        JOIN pg_namespace n ON n.oid = c.relnamespace
+                        WHERE n.nspname = ? AND NOT t.tgisinternal
+                        """, schema);
+                case PROCEDURE, FUNCTION -> querySpec("""
+                        SELECT n.nspname AS schema_name, p.proname AS object_name,
+                               p.oid::text AS specific_name,
+                               pg_get_function_identity_arguments(p.oid) AS subtype, '' AS object_status
+                        FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = ? AND p.prokind = ?
+                        """, schema, kind == SchemaObjectKind.PROCEDURE ? "p" : "f");
+            };
+            case "oracle" -> querySpec("""
+                    SELECT OWNER AS schema_name, OBJECT_NAME AS object_name,
+                           TO_CHAR(OBJECT_ID) AS specific_name, '' AS subtype, STATUS AS object_status
+                    FROM ALL_OBJECTS
+                    WHERE OWNER = ? AND OBJECT_TYPE = ?
+                    """, upper(schema), oracleObjectType(kind));
+            case "sqlserver" -> sqlServerCatalogQuery(schema, kind);
+            case "sqlite" -> kind == SchemaObjectKind.VIEW || kind == SchemaObjectKind.TRIGGER
+                    ? querySpec("SELECT ? AS schema_name, name AS object_name, name AS specific_name, type AS subtype, '' AS object_status FROM sqlite_master WHERE type = ?",
+                    schema == null || schema.isBlank() ? "main" : schema, sqliteType(kind))
+                    : null;
+            case "h2" -> switch (kind) {
+                case VIEW -> querySpec("SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS object_name, TABLE_NAME AS specific_name, '' AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = ?", upper(schema));
+                case SEQUENCE -> querySpec("SELECT SEQUENCE_SCHEMA AS schema_name, SEQUENCE_NAME AS object_name, SEQUENCE_NAME AS specific_name, DATA_TYPE AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ?", upper(schema));
+                case TRIGGER -> querySpec("SELECT TRIGGER_SCHEMA AS schema_name, TRIGGER_NAME AS object_name, TRIGGER_NAME AS specific_name, EVENT_OBJECT_TABLE AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA = ?", upper(schema));
+                case FUNCTION -> querySpec("SELECT ROUTINE_SCHEMA AS schema_name, ROUTINE_NAME AS object_name, SPECIFIC_NAME AS specific_name, '' AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = 'FUNCTION'", upper(schema));
+                default -> null;
+            };
+            case "clickhouse" -> {
+                if (kind == SchemaObjectKind.VIEW || kind == SchemaObjectKind.MATERIALIZED_VIEW) {
+                    String engine = kind == SchemaObjectKind.VIEW ? "View" : "MaterializedView";
+                    yield querySpec("SELECT database AS schema_name, name AS object_name, toString(uuid) AS specific_name, engine AS subtype, '' AS object_status FROM system.tables WHERE database = ? AND engine = ?", schema, engine);
+                }
+                if (kind == SchemaObjectKind.FUNCTION) {
+                    yield querySpec("SELECT '' AS schema_name, name AS object_name, name AS specific_name, origin AS subtype, '' AS object_status FROM system.functions WHERE origin = 'SQLUserDefined'");
+                }
+                yield null;
+            }
+            case "mysql", "mariadb" -> mySqlCatalogQuery(schema, kind, family(configured).equals("mariadb"));
+            default -> null;
+        };
+    }
+
+    private CatalogQuery sqlServerCatalogQuery(String schema, SchemaObjectKind kind) {
+        if (kind == SchemaObjectKind.MATERIALIZED_VIEW) return null;
+        if (kind == SchemaObjectKind.SEQUENCE) {
+            return querySpec("""
+                    SELECT s.name AS schema_name, q.name AS object_name,
+                           CONVERT(varchar(30), q.object_id) AS specific_name,
+                           q.type_desc AS subtype, '' AS object_status
+                    FROM sys.sequences q JOIN sys.schemas s ON s.schema_id = q.schema_id
+                    WHERE s.name = ?
+                    """, schema);
+        }
+        if (kind == SchemaObjectKind.TRIGGER) {
+            return querySpec("""
+                    SELECT s.name AS schema_name, o.name AS object_name,
+                           CONVERT(varchar(30), o.object_id) AS specific_name,
+                           OBJECT_NAME(t.parent_id) AS subtype,
+                           CASE WHEN t.is_disabled = 1 THEN 'DISABLED' ELSE 'ENABLED' END AS object_status
+                    FROM sys.triggers t
+                    JOIN sys.objects o ON o.object_id = t.object_id
+                    JOIN sys.schemas s ON s.schema_id = o.schema_id
+                    WHERE s.name = ? AND t.parent_class = 1
+                    """, schema);
+        }
+        String types = switch (kind) {
+            case VIEW -> "'V'";
+            case PROCEDURE -> "'P','PC'";
+            case FUNCTION -> "'FN','IF','TF','FS','FT'";
+            default -> "''";
+        };
+        return querySpec("SELECT s.name AS schema_name, o.name AS object_name, CONVERT(varchar(30), o.object_id) AS specific_name, '' AS subtype, '' AS object_status"
+                + " FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id WHERE s.name = ? AND o.type IN (" + types + ")", schema);
+    }
+
+    private CatalogQuery mySqlCatalogQuery(String schema, SchemaObjectKind kind, boolean mariaDb) {
+        return switch (kind) {
+            case VIEW -> querySpec("SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS object_name, TABLE_NAME AS specific_name, CHECK_OPTION AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = ?", schema);
+            case MATERIALIZED_VIEW -> null;
+            case SEQUENCE -> mariaDb
+                    ? querySpec("SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS object_name, TABLE_NAME AS specific_name, TABLE_TYPE AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'SEQUENCE'", schema)
+                    : null;
+            case TRIGGER -> querySpec("SELECT TRIGGER_SCHEMA AS schema_name, TRIGGER_NAME AS object_name, TRIGGER_NAME AS specific_name, CONCAT(ACTION_TIMING, ' ', EVENT_MANIPULATION, ' ON ', EVENT_OBJECT_TABLE) AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA = ?", schema);
+            case PROCEDURE, FUNCTION -> querySpec("SELECT ROUTINE_SCHEMA AS schema_name, ROUTINE_NAME AS object_name, SPECIFIC_NAME AS specific_name, '' AS subtype, ROUTINE_TYPE AS object_status FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = ?", schema, kind.name());
+        };
+    }
+
+    private CatalogQuery querySpec(String sql, Object... parameters) {
+        return new CatalogQuery(sql.strip(), java.util.Arrays.asList(parameters));
+    }
+
+    private String likePattern(String keyword) {
+        return keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+    }
+
+    private List<CatalogObject> boundedQuery(
+            Connection connection,
+            DatabaseDialect dialect,
+            String sql,
+            List<Object> parameters,
+            int limit,
+            int timeoutSeconds
+    ) throws Exception {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            dialect.configureReadStatement(connection, statement, limit, timeoutSeconds);
+            statement.setMaxRows(limit);
+            for (int index = 0; index < parameters.size(); index++) {
+                statement.setObject(index + 1, parameters.get(index));
+            }
+            List<CatalogObject> objects = new ArrayList<>(limit);
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next() && objects.size() < limit) objects.add(catalogObject(rs));
+            }
+            return objects;
+        }
     }
 
     private List<CatalogObject> listPostgreSql(Connection connection, String schema, SchemaObjectKind kind) throws Exception {
@@ -513,6 +746,12 @@ public class SchemaObjectCatalog {
 
     private String value(String value) {
         return value == null ? "" : value;
+    }
+
+    private record CatalogQuery(String sql, List<Object> parameters) {
+        private CatalogQuery {
+            parameters = List.copyOf(parameters);
+        }
     }
 
     @FunctionalInterface

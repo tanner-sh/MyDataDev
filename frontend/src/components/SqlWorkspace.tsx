@@ -290,7 +290,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         {resultPaneMode !== 'maximized' && <div className={`editor${resultPaneMode === 'collapsed' ? ' editor-with-collapsed-results' : ''}`} style={resultPaneMode === 'normal' ? { flexBasis: `${splitLimits.value * 100}%` } : undefined}>
           <SqlEditorSurface
-            connectionSelected={Boolean(selected)}
             value={draftSql}
             themeMode={themeMode}
             options={EDITOR_OPTIONS}

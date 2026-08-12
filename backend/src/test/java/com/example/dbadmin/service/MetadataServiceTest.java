@@ -119,6 +119,23 @@ class MetadataServiceTest {
     }
 
     @Test
+    void unfilteredFirstPageDoesNotScanTheWholeObjectCatalogForAnExactCount() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            for (int index = 0; index < 10; index++) {
+                connection.createStatement().execute("CREATE TABLE perf_table_" + index + "(id BIGINT PRIMARY KEY)");
+            }
+        }
+
+        MetadataResponse response = service(url).inspect(1L, "PUBLIC", null, 0, 2, false);
+
+        assertThat(response.objects()).hasSize(2);
+        assertThat(response.hasMore()).isTrue();
+        assertThat(response.totalObjects()).isEqualTo(3);
+        assertThat(response.totalObjectsExact()).isFalse();
+    }
+
+    @Test
     void completionTreatsUnderscoreAsALiteralPrefixCharacter() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

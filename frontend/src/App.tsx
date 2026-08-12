@@ -40,6 +40,7 @@ const OBJECT_PAGE_SIZE = 200;
 const MAX_TABLE_CHANGES = 1_000;
 const MAX_STRUCTURE_CACHE_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
+const METADATA_SEARCH_DEBOUNCE_MS = 500;
 const MAX_SQL_TABS = 20;
 const MAX_RETAINED_RESULT_UNITS = 400_000;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
@@ -855,7 +856,7 @@ export default function App() {
       runMetadataSearch('', kind);
       return;
     }
-    metadataSearchTimerRef.current = window.setTimeout(() => runMetadataSearch(keyword, kind), 300);
+    metadataSearchTimerRef.current = window.setTimeout(() => runMetadataSearch(keyword, kind), METADATA_SEARCH_DEBOUNCE_MS);
   }
 
   function requestRefreshDatabaseObjects() {
@@ -1021,7 +1022,7 @@ export default function App() {
           selectStatementRange(target.baseOffset + failed.startOffset, target.baseOffset + failed.endOffset);
         }
         if (data.metadataChanged) {
-          await loadMetadata(selected, { page: 0, refresh: true });
+          void loadMetadata(selected, { page: 0, refresh: true, background: true });
         }
         }
         await refreshSqlHistoryQuietly(selected);

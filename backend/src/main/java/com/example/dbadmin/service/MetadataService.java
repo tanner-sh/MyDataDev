@@ -70,7 +70,9 @@ public class MetadataService {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
-            cache.evictConnection(connectionId);
+            synchronized (cacheLoadLock(connectionId)) {
+                cache.evictConnection(connectionId);
+            }
         }
         MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
         if (schemaCatalog == null) {
@@ -87,19 +89,11 @@ public class MetadataService {
         int normalizedPage = Math.max(page == null ? 0 : page, 0);
         int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
         String normalizedKeyword = searchTerm(keyword);
-        var cachedPage = cache.metadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize);
-        boolean cacheHit = cachedPage.isPresent();
-        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = cachedPage.orElseGet(() -> {
-            try (Connection connection = connections.open(connectionId)) {
-                MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
-                        connectionId, connection, dialect, selectedSchema, normalizedKeyword, MatchMode.CONTAINS,
-                        normalizedPage, normalizedPageSize, false
-                );
-                return cache.putMetadataPage(connectionId, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize, loaded);
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to load metadata page", e);
-            }
-        });
+        MetadataPageLoad pageLoad = loadMetadataPage(
+                connectionId, dialect, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize
+        );
+        boolean cacheHit = pageLoad.cacheHit();
+        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = pageLoad.value();
         MetadataCacheService.MetadataObjectPage objectPage = pageValue.value();
         return new MetadataResponse(
                 schemaCatalog.schemas(),
@@ -287,7 +281,14 @@ public class MetadataService {
         List<DbObject> objects = new ArrayList<>(pageSize + 1);
         List<DbObject> catalogObjects = loadCatalog ? new ArrayList<>() : null;
         String[] types = physicalOnly && !loadCatalog ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
-        int maxCatalogObjects = 20_000;
+        // The explorer needs one page before it needs an exact object count.
+        // Only cache a complete catalog when it fits in that requested page;
+        // otherwise stop after pageSize + 1 rows and report an inexact total.
+        // This keeps a schema with thousands of objects from blocking the
+        // first render merely to calculate a number for the footer.
+        // Backup target selection intentionally keeps its exact table count
+        // contract for ordinary catalogs; the explorer can return immediately.
+        int maxCatalogObjects = physicalOnly ? 20_000 : pageSize;
         try (ResultSet rs = meta.getTables(scope.catalog(), schemaPattern, tablePattern, types)) {
             while (rs.next()) {
                 String schema = dialect.resultNamespace(rs);
@@ -325,6 +326,41 @@ public class MetadataService {
         if (hasMore) objects = new ArrayList<>(objects.subList(0, pageSize));
         int total = (int) Math.min(Integer.MAX_VALUE, matched);
         return new MetadataCacheService.MetadataObjectPage(objects, total, exhausted, hasMore);
+    }
+
+    private MetadataPageLoad loadMetadataPage(
+            long connectionId,
+            DatabaseDialect dialect,
+            String selectedSchema,
+            String keyword,
+            int page,
+            int pageSize
+    ) throws Exception {
+        var cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
+        if (cachedPage.isPresent()) {
+            return new MetadataPageLoad(cachedPage.get(), true);
+        }
+
+        // DatabaseMetaData calls cannot be reliably cancelled by every JDBC
+        // driver after the browser aborts a search. Coalesce metadata misses
+        // per connection so stale requests cannot occupy the whole remote
+        // connection pool while a newer search is waiting.
+        synchronized (cacheLoadLock(connectionId)) {
+            cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
+            if (cachedPage.isPresent()) {
+                return new MetadataPageLoad(cachedPage.get(), true);
+            }
+            try (Connection connection = connections.open(connectionId)) {
+                MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
+                        connectionId, connection, dialect, selectedSchema, keyword, MatchMode.CONTAINS,
+                        page, pageSize, false
+                );
+                return new MetadataPageLoad(
+                        cache.putMetadataPage(connectionId, selectedSchema, keyword, page, pageSize, loaded),
+                        false
+                );
+            }
+        }
     }
 
     private Object cacheLoadLock(long connectionId) {
@@ -1166,6 +1202,12 @@ public class MetadataService {
     }
 
     private record PageSlice<T>(List<T> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    private record MetadataPageLoad(
+            MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> value,
+            boolean cacheHit
+    ) {
     }
 
     private record TableLifecyclePlan(

@@ -66,6 +66,7 @@ type GroupState = {
   items: SchemaObjectSummary[];
   page: number;
   total: number;
+  totalExact: boolean;
   hasMore: boolean;
   loading: boolean;
   cachedAt?: string;
@@ -148,7 +149,7 @@ export function SchemaObjectManager({
     const group = groups[activeKind];
     onSummaryChange(activeKind, group ? {
       loaded: group.items.length,
-      total: group.loading && group.items.length === 0 ? undefined : group.total,
+      total: (group.loading && group.items.length === 0) || !group.totalExact ? undefined : group.total,
       hasMore: group.hasMore,
       loading: group.loading,
       cachedAt: group.cachedAt,
@@ -163,7 +164,7 @@ export function SchemaObjectManager({
     const scope = requestScopeRef.current;
     setGroups((current) => ({
       ...current,
-      [kind]: { ...(current[kind] || { items: [], page: 0, total: 0, hasMore: false }), loading: true, error: undefined }
+      [kind]: { ...(current[kind] || { items: [], page: 0, total: 0, totalExact: false, hasMore: false }), loading: true, error: undefined }
     }));
     const params = new URLSearchParams({ kind, page: String(page), pageSize: '100' });
     if (schemaName) params.set('schemaName', schemaName);
@@ -178,6 +179,7 @@ export function SchemaObjectManager({
           items: append ? [...(current[kind]?.items || []), ...response.items] : response.items,
           page: response.page,
           total: response.total,
+          totalExact: response.totalExact,
           hasMore: response.hasMore,
           loading: false,
           cachedAt: response.cachedAt,
@@ -189,7 +191,7 @@ export function SchemaObjectManager({
       setGroups((current) => ({
         ...current,
         [kind]: {
-          ...(current[kind] || { items: [], page: 0, total: 0, hasMore: false }),
+          ...(current[kind] || { items: [], page: 0, total: 0, totalExact: false, hasMore: false }),
           loading: false,
           error: error instanceof Error ? error.message : '对象加载失败'
         }

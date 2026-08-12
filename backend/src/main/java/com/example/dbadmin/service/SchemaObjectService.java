@@ -56,7 +56,6 @@ import java.util.regex.Pattern;
 
 @Service
 public class SchemaObjectService {
-    private static final int MAX_CATALOG_OBJECTS = 20_000;
     private static final int MAX_RESULT_ROWS = 500;
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final int MAX_CELL_TEXT = 100_000;
@@ -77,6 +76,7 @@ public class SchemaObjectService {
     private final SqlHistoryRepository history;
     private final AppProperties properties;
     private final SqlScriptSplitter scriptSplitter;
+    private final Object[] catalogLoadLocks = catalogLoadLocks();
 
     public SchemaObjectService(
             ConnectionService connections,
@@ -105,30 +105,17 @@ public class SchemaObjectService {
         DbConnection configured = connections.require(connectionId);
         requireCapability(configured, kind, SchemaObjectOperation.LIST);
         String schema = normalizeObjectSchema(configured, kind, schemaName);
-        if (refresh) cache.evictConnection(connectionId);
-        var cached = cache.schemaObjectCatalog(connectionId, schema, kind.name());
-        boolean cacheHit = cached.isPresent();
-        MetadataCacheService.CachedValue<List<SchemaObjectSummary>> value = cached.orElse(null);
-        if (value == null) {
-            List<SchemaObjectSummary> loaded;
-            try (Connection connection = connections.open(connectionId)) {
-                loaded = loadCatalog(connection, configured, schema, kind);
-            }
-            value = cache.putSchemaObjectCatalog(connectionId, schema, kind.name(), loaded);
-        }
         String search = keyword == null ? "" : keyword.trim().toLowerCase(Locale.ROOT);
         if (search.length() > 200) throw new IllegalArgumentException("搜索关键字最多 200 个字符。");
-        List<SchemaObjectSummary> filtered = value.value().stream()
-                .filter(object -> search.isBlank() || object.displayName().toLowerCase(Locale.ROOT).contains(search))
-                .toList();
         int normalizedPage = Math.max(page == null ? 0 : page, 0);
         int normalizedPageSize = Math.min(Math.max(pageSize == null ? 100 : pageSize, 1), 500);
-        long offset = (long) normalizedPage * normalizedPageSize;
-        int from = (int) Math.min(offset, filtered.size());
-        int to = Math.min(from + normalizedPageSize, filtered.size());
+        SchemaObjectPageLoad pageLoad = loadCatalogPage(
+                connectionId, configured, schema, kind, search, normalizedPage, normalizedPageSize, refresh
+        );
+        MetadataCacheService.SchemaObjectPageValue pageValue = pageLoad.value().value();
         return new SchemaObjectPage(
-                filtered.subList(from, to), filtered.size(), normalizedPage, normalizedPageSize, to < filtered.size(),
-                value.cachedAt().toString(), cacheHit
+                pageValue.items(), pageValue.total(), pageValue.totalExact(), normalizedPage, normalizedPageSize,
+                pageValue.hasMore(), pageLoad.value().cachedAt().toString(), pageLoad.cacheHit()
         );
     }
 
@@ -277,8 +264,10 @@ public class SchemaObjectService {
             if (request.objectKey() != null && !request.objectKey().isBlank()) throw new IllegalArgumentException("新建对象不能携带已有对象标识。");
             String source = requireDefinitionSource(request.source(), operation, kind, schema, request.objectName(), catalog.family(configured));
             try (Connection connection = connections.open(connectionId)) {
-                boolean exists = loadCatalog(connection, configured, schema, kind).stream()
-                        .anyMatch(object -> object.name().equalsIgnoreCase(request.objectName()));
+                boolean exists = catalog.existsByName(
+                        connection, configured, dialect, schema, kind, request.objectName(),
+                        Math.max(properties.getSql().getTimeoutSeconds(), 1)
+                );
                 if (exists) throw new ApiProblemException(HttpStatus.CONFLICT, "SCHEMA_OBJECT_ALREADY_EXISTS", "目标对象已存在：" + qualifiedName(schema, request.objectName()));
             }
             return new LifecyclePlan(operation, kind, schema, source, qualifiedName(schema, request.objectName()));
@@ -353,20 +342,61 @@ public class SchemaObjectService {
         );
     }
 
-    private List<SchemaObjectSummary> loadCatalog(Connection connection, DbConnection configured, String schema, SchemaObjectKind kind) throws Exception {
-        List<SchemaObjectCatalog.CatalogObject> objects = catalog.list(connection, configured, schema, kind);
-        if (objects.size() > MAX_CATALOG_OBJECTS) {
-            throw new IllegalStateException("该对象类型超过 " + MAX_CATALOG_OBJECTS + " 个，请缩小命名空间范围。");
+    private SchemaObjectPageLoad loadCatalogPage(
+            long connectionId,
+            DbConnection configured,
+            String schema,
+            SchemaObjectKind kind,
+            String keyword,
+            int page,
+            int pageSize,
+            boolean refresh
+    ) throws Exception {
+        if (!refresh) {
+            var cached = cache.schemaObjectPage(connectionId, schema, kind.name(), keyword, page, pageSize);
+            if (cached.isPresent()) return new SchemaObjectPageLoad(cached.get(), true);
         }
-        return objects.stream().map(object -> summary(kind, object)).toList();
+
+        synchronized (catalogLoadLock(connectionId)) {
+            if (refresh) {
+                cache.evictSchemaObjectPages(connectionId, schema, kind.name());
+            } else {
+                var cached = cache.schemaObjectPage(connectionId, schema, kind.name(), keyword, page, pageSize);
+                if (cached.isPresent()) return new SchemaObjectPageLoad(cached.get(), true);
+            }
+            DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
+            try (Connection connection = connections.open(connectionId)) {
+                SchemaObjectCatalog.CatalogPage loaded = catalog.page(
+                        connection, configured, dialect, schema, kind, keyword, page, pageSize,
+                        Math.max(properties.getSql().getTimeoutSeconds(), 1)
+                );
+                MetadataCacheService.SchemaObjectPageValue pageValue = new MetadataCacheService.SchemaObjectPageValue(
+                        loaded.items().stream().map(object -> summary(kind, object)).toList(),
+                        loaded.total(), loaded.totalExact(), loaded.hasMore()
+                );
+                return new SchemaObjectPageLoad(
+                        cache.putSchemaObjectPage(connectionId, schema, kind.name(), keyword, page, pageSize, pageValue),
+                        false
+                );
+            }
+        }
+    }
+
+    private Object catalogLoadLock(long connectionId) {
+        return catalogLoadLocks[Math.floorMod(Long.hashCode(connectionId), catalogLoadLocks.length)];
+    }
+
+    private static Object[] catalogLoadLocks() {
+        Object[] locks = new Object[64];
+        java.util.Arrays.setAll(locks, ignored -> new Object());
+        return locks;
     }
 
     private ResolvedObject resolve(Connection connection, DbConnection configured, ObjectRef reference) throws Exception {
-        List<SchemaObjectCatalog.CatalogObject> objects = catalog.list(connection, configured, reference.schemaName(), reference.kind());
-        List<SchemaObjectCatalog.CatalogObject> matches = objects.stream()
-                .filter(object -> object.name().equals(reference.name()))
-                .filter(object -> value(object.specificName()).equals(reference.specificName()))
-                .toList();
+        List<SchemaObjectCatalog.CatalogObject> matches = catalog.find(
+                connection, configured, dialectRegistry.dialectFor(configured), reference.schemaName(), reference.kind(),
+                reference.name(), reference.specificName(), Math.max(properties.getSql().getTimeoutSeconds(), 1)
+        );
         if (matches.size() != 1) {
             throw new ApiProblemException(HttpStatus.NOT_FOUND, "SCHEMA_OBJECT_NOT_FOUND", "数据库对象不存在或已发生变化，请刷新对象列表。");
         }
@@ -830,5 +860,11 @@ public class SchemaObjectService {
     }
 
     private record LifecyclePlan(SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String sql, String confirmationTarget) {
+    }
+
+    private record SchemaObjectPageLoad(
+            MetadataCacheService.CachedValue<MetadataCacheService.SchemaObjectPageValue> value,
+            boolean cacheHit
+    ) {
     }
 }

@@ -1,7 +1,7 @@
 export type SqlEditorShortcut = 'execute' | 'format';
 
-export function shouldLoadSqlEditor(connectionSelected: boolean, userRequested: boolean) {
-  return connectionSelected || userRequested;
+export function shouldLoadSqlEditor(userRequested: boolean) {
+  return userRequested;
 }
 
 export function resolveSqlEditorShortcut(event: {

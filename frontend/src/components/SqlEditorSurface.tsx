@@ -7,7 +7,6 @@ import { resolveSqlEditorShortcut, shouldLoadSqlEditor } from '../sqlEditorSurfa
 type SqlEditorComponent = ComponentType<EditorProps>;
 
 export const SqlEditorSurface = memo(function SqlEditorSurface({
-  connectionSelected,
   value,
   themeMode,
   options,
@@ -17,7 +16,6 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
   onFormat,
   onExecute
 }: {
-  connectionSelected: boolean;
   value: string;
   themeMode: 'light' | 'dark';
   options: EditorProps['options'];
@@ -63,7 +61,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     }
   }, []);
 
-  const loadRequested = shouldLoadSqlEditor(connectionSelected, userRequested);
+  const loadRequested = shouldLoadSqlEditor(userRequested);
   useEffect(() => {
     if (loadRequested) void loadEditor();
   }, [loadEditor, loadRequested]);

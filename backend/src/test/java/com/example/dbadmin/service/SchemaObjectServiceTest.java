@@ -52,6 +52,31 @@ class SchemaObjectServiceTest {
     }
 
     @Test
+    void pagesAndFiltersSchemaObjectsInTheDatabase() throws Exception {
+        Fixture fixture = fixture(false, "dev");
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE VIEW report_2024 AS SELECT 1 AS metric_value");
+            connection.createStatement().execute("CREATE VIEW reportX2024 AS SELECT 1 AS metric_value");
+            connection.createStatement().execute("CREATE VIEW summary_view AS SELECT 1 AS metric_value");
+        }
+
+        var first = fixture.service().list(1L, "PUBLIC", "VIEW", null, 0, 2, false);
+        assertThat(first.items()).hasSize(2);
+        assertThat(first.hasMore()).isTrue();
+        assertThat(first.total()).isEqualTo(3);
+        assertThat(first.totalExact()).isFalse();
+
+        var last = fixture.service().list(1L, "PUBLIC", "VIEW", null, 1, 2, false);
+        assertThat(last.items()).hasSize(1);
+        assertThat(last.hasMore()).isFalse();
+        assertThat(last.total()).isEqualTo(3);
+        assertThat(last.totalExact()).isTrue();
+
+        var literalUnderscore = fixture.service().list(1L, "PUBLIC", "VIEW", "report_", 0, 10, false);
+        assertThat(literalUnderscore.items()).extracting("name").containsExactly("REPORT_2024");
+    }
+
+    @Test
     void rejectsClientBatchSeparatorsAndReadonlyMutation() throws Exception {
         Fixture writable = fixture(false, "dev");
         var invalid = new SchemaObjectLifecycleRequest(

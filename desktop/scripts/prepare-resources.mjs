@@ -24,7 +24,10 @@ function run(executable, args, cwd) {
 
 run(process.execPath, [path.join(directory, 'check-versions.mjs')], desktopDirectory);
 run(command('npm'), ['run', 'build'], frontendDirectory);
-run(command('mvn'), ['-Pdesktop', '-DskipTests', 'package'], backendDirectory);
+// The desktop profile copies fingerprinted Vite assets into target/classes.
+// Clear the previous target first so obsolete hashes are not retained in the
+// packaged JAR across successive local builds.
+run(command('mvn'), ['-Pdesktop', '-DskipTests', 'clean', 'package'], backendDirectory);
 run(process.execPath, [path.join(directory, 'generate-icons.mjs')], desktopDirectory);
 
 await rm(resourcesDirectory, { recursive: true, force: true });

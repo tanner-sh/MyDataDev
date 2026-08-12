@@ -43,9 +43,9 @@ public class MetadataCacheService {
     private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache();
     private final Cache<ObjectKey, CachedValue<ObjectDdlResponse>> ddls = detailCache();
     private final Cache<ObjectKey, CachedValue<RowIdentity>> rowIdentities = detailCache();
-    private final Cache<SchemaObjectCatalogKey, CachedValue<List<SchemaObjectSummary>>> schemaObjectCatalogs = Caffeine.newBuilder()
+    private final Cache<SchemaObjectPageKey, CachedValue<SchemaObjectPageValue>> schemaObjectPages = Caffeine.newBuilder()
             .maximumWeight(100_000)
-            .weigher((SchemaObjectCatalogKey ignored, CachedValue<List<SchemaObjectSummary>> value) -> 10 + value.value().size())
+            .weigher((SchemaObjectPageKey ignored, CachedValue<SchemaObjectPageValue> value) -> 10 + value.value().items().size())
             .expireAfterAccess(TTL)
             .build();
     private final Cache<SchemaObjectDetailKey, CachedValue<SchemaObjectDetail>> schemaObjectDetails = Caffeine.newBuilder()
@@ -125,14 +125,30 @@ public class MetadataCacheService {
         rowIdentities.put(key(connectionId, schemaName, objectName), new CachedValue<>(value, Instant.now()));
     }
 
-    public Optional<CachedValue<List<SchemaObjectSummary>>> schemaObjectCatalog(long connectionId, String schemaName, String kind) {
-        return Optional.ofNullable(schemaObjectCatalogs.getIfPresent(new SchemaObjectCatalogKey(connectionId, exact(schemaName), kind)));
+    public Optional<CachedValue<SchemaObjectPageValue>> schemaObjectPage(
+            long connectionId, String schemaName, String kind, String keyword, int page, int pageSize
+    ) {
+        return Optional.ofNullable(schemaObjectPages.getIfPresent(
+                new SchemaObjectPageKey(connectionId, exact(schemaName), kind, folded(keyword), page, pageSize)
+        ));
     }
 
-    public CachedValue<List<SchemaObjectSummary>> putSchemaObjectCatalog(long connectionId, String schemaName, String kind, List<SchemaObjectSummary> objects) {
-        CachedValue<List<SchemaObjectSummary>> value = new CachedValue<>(List.copyOf(objects), Instant.now());
-        schemaObjectCatalogs.put(new SchemaObjectCatalogKey(connectionId, exact(schemaName), kind), value);
+    public CachedValue<SchemaObjectPageValue> putSchemaObjectPage(
+            long connectionId, String schemaName, String kind, String keyword, int page, int pageSize,
+            SchemaObjectPageValue pageValue
+    ) {
+        CachedValue<SchemaObjectPageValue> value = new CachedValue<>(pageValue, Instant.now());
+        schemaObjectPages.put(new SchemaObjectPageKey(
+                connectionId, exact(schemaName), kind, folded(keyword), page, pageSize
+        ), value);
         return value;
+    }
+
+    public void evictSchemaObjectPages(long connectionId, String schemaName, String kind) {
+        String normalizedSchema = exact(schemaName);
+        schemaObjectPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId
+                && key.schemaName().equals(normalizedSchema)
+                && key.kind().equals(kind));
     }
 
     public Optional<CachedValue<SchemaObjectDetail>> schemaObjectDetail(long connectionId, String objectKey) {
@@ -154,7 +170,7 @@ public class MetadataCacheService {
         relations.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         ddls.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         rowIdentities.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        schemaObjectCatalogs.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
+        schemaObjectPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
         schemaObjectDetails.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
     }
 
@@ -221,6 +237,17 @@ public class MetadataCacheService {
         }
     }
 
+    public record SchemaObjectPageValue(
+            List<SchemaObjectSummary> items,
+            int total,
+            boolean totalExact,
+            boolean hasMore
+    ) {
+        public SchemaObjectPageValue {
+            items = List.copyOf(items);
+        }
+    }
+
     private record ObjectKey(long connectionId, String schemaName, String objectName) {
     }
 
@@ -230,7 +257,14 @@ public class MetadataCacheService {
     private record ObjectCatalogKey(long connectionId, String schemaName) {
     }
 
-    private record SchemaObjectCatalogKey(long connectionId, String schemaName, String kind) {
+    private record SchemaObjectPageKey(
+            long connectionId,
+            String schemaName,
+            String kind,
+            String keyword,
+            int page,
+            int pageSize
+    ) {
     }
 
     private record SchemaObjectDetailKey(long connectionId, String objectKey) {

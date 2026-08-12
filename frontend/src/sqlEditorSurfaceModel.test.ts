@@ -2,10 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveSqlEditorShortcut, shouldLoadSqlEditor } from './sqlEditorSurfaceModel';
 
 describe('SQL editor surface model', () => {
-  it('loads the advanced editor after selecting a connection or requesting it', () => {
-    expect(shouldLoadSqlEditor(false, false)).toBe(false);
-    expect(shouldLoadSqlEditor(true, false)).toBe(true);
-    expect(shouldLoadSqlEditor(false, true)).toBe(true);
+  it('loads the advanced editor only after the user requests it', () => {
+    expect(shouldLoadSqlEditor(false)).toBe(false);
+    expect(shouldLoadSqlEditor(true)).toBe(true);
   });
 
   it('resolves supported fallback editor shortcuts', () => {

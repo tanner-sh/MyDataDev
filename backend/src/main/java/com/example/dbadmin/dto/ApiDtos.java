@@ -133,6 +133,7 @@ public final class ApiDtos {
     public record SchemaObjectPage(
             List<SchemaObjectSummary> items,
             int total,
+            boolean totalExact,
             int page,
             int pageSize,
             boolean hasMore,

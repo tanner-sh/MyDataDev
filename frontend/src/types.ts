@@ -34,6 +34,7 @@ export type SchemaObjectSummary = {
 export type SchemaObjectPage = {
   items: SchemaObjectSummary[];
   total: number;
+  totalExact: boolean;
   page: number;
   pageSize: number;
   hasMore: boolean;
