@@ -1,9 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Key, MouseEvent as ReactMouseEvent, Ref } from 'react';
+import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
 import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
-import type { FilterDropdownProps, SorterResult, TableRowSelection } from 'antd/es/table/interface';
+import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
@@ -51,6 +51,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     displayedIndex: ReadonlyMap<string, number>;
   }>({ selected: [], selectedSet: new Set(), displayed: [], displayedIndex: new Map() });
   const copySelectedRowsRef = useRef<() => void>(() => undefined);
+  const resultRowCheckboxChangeRef = useRef<(rowKey: string, checked: boolean) => void>(() => undefined);
+  const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
   const rowCount = result?.resultSet ? result.rows.length : 0;
@@ -125,6 +127,44 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     if (!result?.resultSet) return [];
     const visible = new Set(visibleColumnKeys);
     return [
+      {
+        title: (
+          <span className="result-selection-checkbox-wrap">
+            <button
+              type="button"
+              role="checkbox"
+              className="result-selection-checkbox result-selection-checkbox-all"
+              aria-label="全选当前结果行"
+              aria-checked="false"
+              onClick={(event) => {
+                event.stopPropagation();
+                resultSelectAllChangeRef.current(event.currentTarget.getAttribute('aria-checked') !== 'true');
+              }}
+            />
+          </span>
+        ),
+        key: '__selection',
+        width: RESULT_SELECTION_COLUMN_WIDTH,
+        fixed: 'left',
+        className: 'result-selection-column',
+        shouldCellUpdate: (record: ResultRow, previous: ResultRow) => record !== previous,
+        render: (_value: unknown, row: ResultRow) => (
+          <span className="result-selection-checkbox-wrap">
+            <button
+              type="button"
+              role="checkbox"
+              className="result-selection-checkbox result-selection-checkbox-row"
+              aria-label={`选择第 ${Number(row.key) + 1} 行`}
+              aria-checked={selectionStateRef.current.selectedSet.has(row.key)}
+              data-result-selection-key={row.key}
+              onClick={(event) => {
+                event.stopPropagation();
+                resultRowCheckboxChangeRef.current(row.key, event.currentTarget.getAttribute('aria-checked') !== 'true');
+              }}
+            />
+          </span>
+        )
+      },
       {
         title: '序号',
         key: '__index',
@@ -266,33 +306,39 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     gridShellRef.current?.focus({ preventScroll: true });
   }, [commitResultRowSelection]);
 
-  const resultRowSelection = useMemo<TableRowSelection<ResultRow>>(() => ({
-    fixed: true,
-    columnWidth: RESULT_SELECTION_COLUMN_WIDTH,
-    selectedRowKeys,
-    onChange: (keys: Key[]) => {
-      const current = selectionStateRef.current;
-      const requested = keys.map(String);
-      const requestedSet = new Set(requested);
-      const changedKey = current.displayed.find((key) => current.selectedSet.has(key) !== requestedSet.has(key));
-      commitResultRowSelection(replaceResultRowSelection(
-        current.displayed,
-        requested,
-        requested.length === 0 ? undefined : changedKey ?? current.anchor
-      ));
-    }
-  }), [commitResultRowSelection, selectedRowKeys]);
+  const setResultRowChecked = useCallback((rowKey: string, checked: boolean) => {
+    const current = selectionStateRef.current;
+    if (current.selectedSet.has(rowKey) === checked) return;
+    const requested = new Set(current.selected);
+    if (checked) requested.add(rowKey);
+    else requested.delete(rowKey);
+    commitResultRowSelection(replaceResultRowSelection(
+      current.displayed,
+      requested,
+      requested.size > 0 ? rowKey : undefined
+    ));
+  }, [commitResultRowSelection]);
+
+  const setAllResultRowsChecked = useCallback((checked: boolean) => {
+    const current = selectionStateRef.current;
+    if (checked && current.displayed.length === current.selected.length) return;
+    if (!checked && current.selected.length === 0) return;
+    commitResultRowSelection(replaceResultRowSelection(
+      current.displayed,
+      checked ? current.displayed : []
+    ));
+  }, [commitResultRowSelection]);
+
+  resultRowCheckboxChangeRef.current = setResultRowChecked;
+  resultSelectAllChangeRef.current = setAllResultRowsChecked;
 
   const selectAllDisplayedRows = useCallback(() => {
-    const current = selectionStateRef.current;
-    commitResultRowSelection(replaceResultRowSelection(current.displayed, current.displayed));
-  }, [commitResultRowSelection]);
+    setAllResultRowsChecked(true);
+  }, [setAllResultRowsChecked]);
 
   const clearSelectedRows = useCallback(() => {
-    const current = selectionStateRef.current;
-    if (current.selected.length === 0) return;
-    commitResultRowSelection(replaceResultRowSelection(current.displayed, []));
-  }, [commitResultRowSelection]);
+    setAllResultRowsChecked(false);
+  }, [setAllResultRowsChecked]);
 
   const resultRowClassName = useCallback<ResultRowClassName>(
     (row) => selectionStateRef.current.selectedSet.has(row.key) ? 'result-row-selected' : '',
@@ -309,11 +355,24 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   }, []);
 
   useLayoutEffect(() => {
-    const selected = selectionStateRef.current.selectedSet;
-    viewportRef.current?.querySelectorAll<HTMLElement>('.ant-table-row[data-row-key]').forEach((row) => {
-      const isSelected = selected.has(row.dataset.rowKey || '');
-      row.classList.toggle('result-row-selected', isSelected);
-      row.setAttribute('aria-selected', String(isSelected));
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const current = selectionStateRef.current;
+    viewport.querySelectorAll<HTMLElement>('.ant-table-row[data-row-key]').forEach((row) => {
+      const selected = current.selectedSet.has(row.dataset.rowKey || '');
+      row.classList.toggle('result-row-selected', selected);
+      row.setAttribute('aria-selected', String(selected));
+      row.querySelectorAll<HTMLElement>('.result-selection-checkbox-row').forEach((checkbox) => {
+        checkbox.setAttribute('aria-checked', String(selected));
+      });
+    });
+    const selectedCount = current.displayed.reduce((count, key) => count + (current.selectedSet.has(key) ? 1 : 0), 0);
+    const allSelected = current.displayed.length > 0 && selectedCount === current.displayed.length;
+    const indeterminate = selectedCount > 0 && selectedCount < current.displayed.length;
+    viewport.querySelectorAll<HTMLElement>('.result-selection-checkbox-all').forEach((selectAll) => {
+      selectAll.classList.toggle('is-checked', allSelected);
+      selectAll.classList.toggle('is-indeterminate', indeterminate);
+      selectAll.setAttribute('aria-checked', indeterminate ? 'mixed' : String(allSelected));
     });
   }, [rows, scrollY, selectedRowKeySet, viewportRef]);
 
@@ -469,7 +528,6 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             scrollX={tableScrollWidth}
             scrollY={scrollY}
             rowClassName={resultRowClassName}
-            rowSelection={resultRowSelection}
             onRow={resultOnRow}
             onChange={resultTableChange}
           />
@@ -549,7 +607,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   );
 });
 
-const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, columns, rows, pagingLoading, scrollX, scrollY, rowClassName, rowSelection, onRow, onChange }: {
+const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, columns, rows, pagingLoading, scrollX, scrollY, rowClassName, onRow, onChange }: {
   tableRef: Ref<TableRef>;
   columns: ColumnsType<ResultRow>;
   rows: ResultRow[];
@@ -557,7 +615,6 @@ const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, column
   scrollX: number;
   scrollY: number;
   rowClassName: ResultRowClassName;
-  rowSelection: TableRowSelection<ResultRow>;
   onRow: NonNullable<TableProps<ResultRow>['onRow']>;
   onChange: NonNullable<TableProps<ResultRow>['onChange']>;
 }) {
@@ -573,7 +630,6 @@ const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, column
       virtual
       scroll={{ x: scrollX, y: scrollY }}
       rowClassName={rowClassName}
-      rowSelection={rowSelection}
       onRow={onRow}
       onChange={onChange}
     />
