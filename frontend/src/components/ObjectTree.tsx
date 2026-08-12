@@ -10,6 +10,8 @@ import {
   InfoCircleOutlined,
   KeyOutlined,
   MoreOutlined,
+  StarFilled,
+  StarOutlined,
   TableOutlined,
   UnorderedListOutlined
 } from '@ant-design/icons';
@@ -33,6 +35,7 @@ export type ObjectTreeProps = {
   embedded?: boolean;
   showTypeGroups?: boolean;
   activeObject?: Pick<DbObject, 'schemaName' | 'name'> | null;
+  keyboardObject?: Pick<DbObject, 'schemaName' | 'name'> | null;
   keyword?: string;
   emptyDescription?: string;
   structureLoadingKey?: string | null;
@@ -43,6 +46,8 @@ export type ObjectTreeProps = {
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
   onBackupTable?: (object: DbObject) => void;
+  isObjectFavorite?: (object: DbObject) => boolean;
+  onToggleFavorite?: (object: DbObject) => void;
   tableLifecycleEnabled?: boolean;
   onRenameTable?: (object: DbObject) => void;
   onDropTable?: (object: DbObject) => void;
@@ -51,7 +56,7 @@ export type ObjectTreeProps = {
 type AggregatedIndex = { name: string; columns: string[]; unique: boolean };
 type FlatRow =
   | { id: string; kind: 'group'; level: number; key: Key; label: string; count: number; expanded: boolean }
-  | { id: string; kind: 'object'; level: number; key: Key; object: DbObject; expanded: boolean; selected: boolean }
+  | { id: string; kind: 'object'; level: number; key: Key; object: DbObject; expanded: boolean; selected: boolean; keyboardSelected: boolean }
   | { id: string; kind: 'structure-group'; level: number; key: Key; object: DbObject; structureKind: 'columns' | 'indexes'; label: string; count: number; expanded: boolean }
   | { id: string; kind: 'column'; level: number; object: DbObject; name: string; meta: string }
   | { id: string; kind: 'index'; level: number; object: DbObject; name: string; meta: string }
@@ -110,6 +115,7 @@ export const ObjectTree = memo(function ObjectTree({
   embedded = false,
   showTypeGroups = true,
   activeObject,
+  keyboardObject,
   keyword,
   emptyDescription = '当前 Schema 暂无数据库对象',
   structureLoadingKey,
@@ -120,6 +126,8 @@ export const ObjectTree = memo(function ObjectTree({
   onOpenDetail,
   onOpenTable,
   onBackupTable,
+  isObjectFavorite,
+  onToggleFavorite,
   tableLifecycleEnabled = false,
   onRenameTable,
   onDropTable
@@ -163,11 +171,17 @@ export const ObjectTree = memo(function ObjectTree({
     const matched = findMatchingDatabaseObject(objects, activeObject);
     return matched ? databaseObjectNodeKey(matched) : null;
   }, [activeObject, objects]);
+  const keyboardObjectKey = useMemo(() => {
+    if (!keyboardObject) return null;
+    const matched = findMatchingDatabaseObject(objects, keyboardObject);
+    return matched ? databaseObjectNodeKey(matched) : null;
+  }, [keyboardObject, objects]);
 
-  const rows = useMemo(() => flattenRows(groups, groupKeys, expandedKeys, selectedObjectKey, structureLoadingKey, structureLoadingKeys, structureErrors, showTypeGroups), [
+  const rows = useMemo(() => flattenRows(groups, groupKeys, expandedKeys, selectedObjectKey, keyboardObjectKey, structureLoadingKey, structureLoadingKeys, structureErrors, showTypeGroups), [
     expandedKeys,
     groupKeys,
     groups,
+    keyboardObjectKey,
     selectedObjectKey,
     structureErrors,
     structureLoadingKey,
@@ -178,6 +192,17 @@ export const ObjectTree = memo(function ObjectTree({
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
   const visibleRows = rows.slice(start, end);
+
+  useEffect(() => {
+    if (!keyboardObjectKey || embedded) return;
+    const rowIndex = rows.findIndex((row) => row.kind === 'object' && String(row.key) === keyboardObjectKey);
+    const viewport = viewportRef.current;
+    if (rowIndex < 0 || !viewport) return;
+    const rowTop = rowIndex * ROW_HEIGHT;
+    const rowBottom = rowTop + ROW_HEIGHT;
+    if (rowTop < viewport.scrollTop) viewport.scrollTop = rowTop;
+    else if (rowBottom > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = rowBottom - viewport.clientHeight;
+  }, [embedded, keyboardObjectKey, rows]);
 
   async function requestStructure(object: DbObject) {
     const identity = objectStructureKey(object);
@@ -230,6 +255,7 @@ export const ObjectTree = memo(function ObjectTree({
     return [
       { key: 'detail', icon: <InfoCircleOutlined />, label: '查看对象详情' },
       { key: 'structure', icon: <UnorderedListOutlined />, label: expanded ? '收起字段和索引' : '展开字段和索引' },
+      ...(onToggleFavorite ? [{ key: 'favorite', icon: isObjectFavorite?.(object) ? <StarFilled /> : <StarOutlined />, label: isObjectFavorite?.(object) ? '取消收藏' : '收藏对象' }] : []),
       ...(!isView && onBackupTable ? [{ key: 'backup', icon: <CloudDownloadOutlined />, label: '备份此表' }] : []),
       ...(!isView && onRenameTable && onDropTable ? [
         { type: 'divider' as const },
@@ -280,7 +306,7 @@ export const ObjectTree = memo(function ObjectTree({
       const displayName = fullObjectName(row.object);
       const isView = row.object.type.toUpperCase().includes('VIEW');
       return (
-        <div className={`object-tree-row object-tree-object-row${row.selected ? ' is-selected' : ''}`} style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded} aria-selected={row.selected}>
+        <div className={`object-tree-row object-tree-object-row${row.selected ? ' is-selected' : ''}${row.keyboardSelected ? ' is-keyboard-selected' : ''}`} style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded} aria-selected={row.selected}>
           <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'} ${displayName} 的结构`} onClick={() => setObjectExpanded(row.object, row.key, !row.expanded)} />
           <TreeIcon>{objectIcon(row.object)}</TreeIcon>
           <button className="object-tree-row-main object-tree-object-trigger" type="button" title={`${displayName} · 查看详情`} onClick={() => onOpenDetail(row.object)}>
@@ -288,7 +314,7 @@ export const ObjectTree = memo(function ObjectTree({
           </button>
           <span className="object-tree-actions">
             {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
-            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'backup') onBackupTable?.(row.object); if (key === 'rename') onRenameTable?.(row.object); if (key === 'drop') onDropTable?.(row.object); } }}>
+            <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'favorite') onToggleFavorite?.(row.object); if (key === 'backup') onBackupTable?.(row.object); if (key === 'rename') onRenameTable?.(row.object); if (key === 'drop') onDropTable?.(row.object); } }}>
               <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
             </Dropdown>
           </span>
@@ -326,6 +352,7 @@ function flattenRows(
   groupKeys: Key[],
   expandedKeys: Key[],
   selectedObjectKey: string | null,
+  keyboardObjectKey: string | null,
   structureLoadingKey: string | null | undefined,
   structureLoadingKeys: Set<string>,
   structureErrors: Set<string>,
@@ -341,7 +368,7 @@ function flattenRows(
     group.objects.forEach((object) => {
       const objectKey = databaseObjectNodeKey(object);
       const objectExpanded = expandedKeys.includes(objectKey);
-      rows.push({ id: objectKey, kind: 'object', level: objectLevel, key: objectKey, object, expanded: objectExpanded, selected: selectedObjectKey === objectKey });
+      rows.push({ id: objectKey, kind: 'object', level: objectLevel, key: objectKey, object, expanded: objectExpanded, selected: selectedObjectKey === objectKey, keyboardSelected: keyboardObjectKey === objectKey });
       if (!objectExpanded) return;
       const structureLevel = objectLevel + 1;
       const leafLevel = structureLevel + 1;

@@ -1,5 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import type { KeyboardEvent } from 'react';
+import { Button, Input, Segmented, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { CloseOutlined, CodeOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import {
   explorerObjectCountLabel,
@@ -13,6 +14,13 @@ import type { Connection, DbObject, Metadata, SchemaObjectKind } from '../types'
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
 import type { SchemaObjectListSummary } from './SchemaObjectManager';
+import {
+  objectPreferenceKey,
+  readFavoriteObjectKeys,
+  readRecentObjects,
+  rememberRecentObject,
+  writeFavoriteObjectKeys
+} from '../workspacePreferences';
 
 const { Text } = Typography;
 const SchemaObjectManager = lazy(() => import('./SchemaObjectManager').then((module) => ({ default: module.SchemaObjectManager })));
@@ -77,6 +85,10 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onDropTable
 }: ResourceExplorerProps) {
   const [activeKind, setActiveKind] = useState<ExplorerObjectKind>('TABLE');
+  const [objectView, setObjectView] = useState<'all' | 'favorites' | 'recent'>('all');
+  const [favoriteObjectKeys, setFavoriteObjectKeys] = useState<string[]>(() => readFavoriteObjectKeys());
+  const [recentObjects, setRecentObjects] = useState(() => readRecentObjects());
+  const [keyboardObjectIndex, setKeyboardObjectIndex] = useState(-1);
   const [schemaObjectRefreshToken, setSchemaObjectRefreshToken] = useState(0);
   const [schemaObjectLoadMoreToken, setSchemaObjectLoadMoreToken] = useState(0);
   const [schemaCreateKind, setSchemaCreateKind] = useState<SchemaObjectKind>();
@@ -88,6 +100,24 @@ export const ResourceExplorer = memo(function ResourceExplorer({
     () => managesViews ? objects.filter((object) => !object.type.toUpperCase().includes('VIEW')) : objects,
     [managesViews, objects]
   );
+  const favoriteObjectKeySet = useMemo(() => new Set(favoriteObjectKeys), [favoriteObjectKeys]);
+  const visibleTableObjects = useMemo(() => {
+    if (!selected || objectView === 'all') return tableObjects;
+    if (objectView === 'favorites') {
+      return tableObjects.filter((object) => favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)));
+    }
+    const byKey = new Map(tableObjects.map((object) => [objectPreferenceKey(selected.id, object), object]));
+    return recentObjects
+      .filter((entry) => entry.connectionId === selected.id)
+      .map((entry) => byKey.get(entry.key))
+      .filter((object): object is DbObject => Boolean(object));
+  }, [favoriteObjectKeySet, objectView, recentObjects, selected, tableObjects]);
+  const favoriteCount = useMemo(() => selected
+    ? tableObjects.filter((object) => favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object))).length
+    : 0, [favoriteObjectKeySet, selected, tableObjects]);
+  const recentCount = useMemo(() => selected
+    ? recentObjects.filter((entry) => entry.connectionId === selected.id && tableObjects.some((object) => objectPreferenceKey(selected.id, object) === entry.key)).length
+    : 0, [recentObjects, selected, tableObjects]);
   const activeSchemaKind = activeKind === 'TABLE' ? undefined : activeKind;
   const activeCapability = activeSchemaKind
     ? schemaCapabilities.find((capability) => capability.kind === activeSchemaKind)
@@ -103,7 +133,13 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   useEffect(() => {
     setSchemaCounts({});
     setSchemaCreateKind(undefined);
+    setObjectView('all');
+    setKeyboardObjectIndex(-1);
   }, [selected?.id]);
+
+  useEffect(() => {
+    setKeyboardObjectIndex((current) => Math.min(current, visibleTableObjects.length - 1));
+  }, [visibleTableObjects.length]);
 
   useEffect(() => {
     if (!supportedKinds.includes(activeKind)) {
@@ -142,6 +178,45 @@ export const ResourceExplorer = memo(function ResourceExplorer({
 
   function kindIcon(kind: ExplorerObjectKind) {
     return kind === 'TABLE' ? <TableOutlined /> : <CodeOutlined />;
+  }
+
+  function rememberObject(object: DbObject) {
+    if (!selected) return;
+    setRecentObjects((current) => rememberRecentObject(current, selected.id, object));
+  }
+
+  function openObjectDetail(object: DbObject) {
+    rememberObject(object);
+    onOpenDetail(object);
+  }
+
+  function openTableData(object: DbObject) {
+    rememberObject(object);
+    onOpenTable(object);
+  }
+
+  function toggleFavoriteObject(object: DbObject) {
+    if (!selected) return;
+    const key = objectPreferenceKey(selected.id, object);
+    setFavoriteObjectKeys((current) => {
+      const next = current.includes(key) ? current.filter((item) => item !== key) : [...current, key];
+      writeFavoriteObjectKeys(next);
+      return next;
+    });
+  }
+
+  function handleObjectSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (activeKind !== 'TABLE' || visibleTableObjects.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setKeyboardObjectIndex((current) => Math.min(visibleTableObjects.length - 1, current + 1));
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setKeyboardObjectIndex((current) => Math.max(0, current - 1));
+    } else if (event.key === 'Enter' && keyboardObjectIndex >= 0) {
+      event.preventDefault();
+      openObjectDetail(visibleTableObjects[keyboardObjectIndex]);
+    }
   }
 
   const kindOptions = supportedKinds.map((kind) => {
@@ -239,9 +314,33 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           placeholder={`搜索${activeLabel}`}
           disabled={!selected || metadataBlockingLoading}
           value={metadataQuery.keyword}
-          onChange={(event) => onKeywordChange(event.target.value, activeKind)}
+          onChange={(event) => {
+            setKeyboardObjectIndex(-1);
+            onKeywordChange(event.target.value, activeKind);
+          }}
+          onKeyDown={handleObjectSearchKeyDown}
           onSearch={(keyword) => onSearch(keyword, activeKind)}
         />
+        {activeKind === 'TABLE' && (
+          <div className="object-view-filter">
+            <Segmented
+              block
+              size="small"
+              aria-label="筛选表对象"
+              value={objectView}
+              options={[
+                { value: 'all', label: `全部 ${tableObjects.length}` },
+                { value: 'favorites', label: `收藏 ${favoriteCount}` },
+                { value: 'recent', label: `最近 ${recentCount}` }
+              ]}
+              onChange={(value) => {
+                setObjectView(value as typeof objectView);
+                setKeyboardObjectIndex(-1);
+              }}
+            />
+            <Text type="secondary">↑↓ 选择，Enter 查看 · 当前显示 {visibleTableObjects.length} 个</Text>
+          </div>
+        )}
       </div>
 
       {connectionsError && <div className="explorer-error" role="alert">{connectionsError}</div>}
@@ -255,18 +354,25 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <ObjectTree
             key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
             showTypeGroups={false}
-            objects={tableObjects}
+            objects={visibleTableObjects}
             activeObject={activeObject}
+            keyboardObject={visibleTableObjects[keyboardObjectIndex]}
             keyword={metadataAppliedKeyword}
-            emptyDescription={metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
+            emptyDescription={objectView === 'favorites'
+              ? '当前已加载对象中暂无收藏表'
+              : objectView === 'recent'
+                ? '当前已加载对象中暂无最近访问的表'
+                : metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
             structureLoadingKey={structureLoadingKey}
             hasMore={metadata?.hasMore}
             loadingMore={metadataLoading && !metadataBlockingLoading}
             onLoadMore={onLoadMore}
             onLoadStructure={onLoadStructure}
-            onOpenDetail={onOpenDetail}
-            onOpenTable={onOpenTable}
+            onOpenDetail={openObjectDetail}
+            onOpenTable={openTableData}
             onBackupTable={onBackupTable}
+            isObjectFavorite={(object) => Boolean(selected && favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)))}
+            onToggleFavorite={toggleFavoriteObject}
             tableLifecycleEnabled={tableLifecycleEnabled}
             onRenameTable={onRenameTable}
             onDropTable={onDropTable}

@@ -8,16 +8,18 @@ import {
   MoonOutlined,
   ReloadOutlined,
   SettingOutlined,
+  StarFilled,
   SunOutlined
 } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 
 const { Text } = Typography;
 
 type AppHeaderProps = {
   connections: Connection[];
+  favoriteConnectionIds: number[];
   selected: Connection | null;
   connectionsLoading: boolean;
   explorerCollapsed: boolean;
@@ -33,6 +35,7 @@ type AppHeaderProps = {
 
 export const AppHeader = memo(function AppHeader({
   connections,
+  favoriteConnectionIds,
   selected,
   connectionsLoading,
   explorerCollapsed,
@@ -45,6 +48,19 @@ export const AppHeader = memo(function AppHeader({
   onOpenMcp,
   onToggleTheme
 }: AppHeaderProps) {
+  const connectionOptions = useMemo(() => {
+    const favorites = new Set(favoriteConnectionIds);
+    return connections
+      .map((connection, index) => ({ connection, index }))
+      .sort((left, right) => {
+        if (left.connection.id === selected?.id) return -1;
+        if (right.connection.id === selected?.id) return 1;
+        const favoriteDifference = Number(favorites.has(right.connection.id)) - Number(favorites.has(left.connection.id));
+        return favoriteDifference || left.index - right.index;
+      })
+      .map(({ connection }) => ({ value: connection.id, label: connection.name, connection }));
+  }, [connections, favoriteConnectionIds, selected?.id]);
+
   return (
     <header className="app-header">
       <div className="app-header-brand">
@@ -65,7 +81,7 @@ export const AppHeader = memo(function AppHeader({
       </div>
 
       <div className="connection-switcher">
-        <Badge status={selected ? 'success' : 'default'} />
+        <Badge status={selected?.environment === 'prod' ? 'error' : selected ? 'success' : 'default'} />
         <Select
           variant="borderless"
           className="connection-select"
@@ -73,17 +89,13 @@ export const AppHeader = memo(function AppHeader({
           placeholder="选择数据库连接"
           loading={connectionsLoading}
           optionLabelProp="label"
-          options={connections.map((connection) => ({
-            value: connection.id,
-            label: connection.name,
-            connection
-          }))}
+          options={connectionOptions}
           optionRender={(option) => {
             const connection = option.data.connection as Connection;
             return (
               <div className="connection-option">
                 <div className="connection-option-main">
-                  <Text strong ellipsis>{connection.name}</Text>
+                  <Text strong ellipsis>{favoriteConnectionIds.includes(connection.id) && <StarFilled className="favorite-icon" />} {connection.name}</Text>
                   <Text type="secondary" ellipsis>{connection.jdbcUrl}</Text>
                 </div>
                 <Tag variant="filled">{environmentLabel(connection.environment)}</Tag>
@@ -97,11 +109,11 @@ export const AppHeader = memo(function AppHeader({
         />
         {selected && (
           <Space size={4} className="connection-context-tags">
-            <Tag color="blue" variant="filled">{dbTypeLabel(selected.dbType)}</Tag>
-            <Tag color={selected.environment === 'prod' ? 'red' : 'default'} variant="filled">
+            <Tag className="connection-db-tag" color="blue" variant="filled">{dbTypeLabel(selected.dbType)}</Tag>
+            <Tag className="connection-environment-tag" color={selected.environment === 'prod' ? 'red' : 'default'} variant="filled">
               {environmentLabel(selected.environment)}
             </Tag>
-            {selected.readonly && <Tag color="orange" variant="filled">只读</Tag>}
+            {selected.readonly && <Tag className="connection-readonly-tag" color="orange" variant="filled">只读</Tag>}
           </Space>
         )}
       </div>

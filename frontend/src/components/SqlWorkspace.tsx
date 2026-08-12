@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
@@ -63,6 +63,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
+  const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
   const draftRef = useRef(activeTab.sql);
   const draftCommitTimerRef = useRef<number | null>(null);
   const previousResultsRef = useRef(activeTab.results);
@@ -70,6 +71,18 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   const onSqlChangeRef = useRef(onSqlChange);
   const onResultPageChangeRef = useRef(onResultPageChange);
   const { elementRef: splitRef, height: splitHeight } = useVisibleElementHeight();
+
+  useEffect(() => {
+    if (!loading) {
+      setExecutionElapsedMs(0);
+      return;
+    }
+    const startedAt = performance.now();
+    const updateElapsed = () => setExecutionElapsedMs(performance.now() - startedAt);
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   useEffect(() => {
     onSqlChangeRef.current = onSqlChange;
@@ -118,6 +131,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       draftCommitTimerRef.current = null;
     }
     onSqlChangeRef.current(sessionConnectionId, activeTabId, draftRef.current);
+  }
+
+  function appendSelectTemplate() {
+    const template = 'SELECT *\nFROM table_name\nLIMIT 100;';
+    updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${template}`);
   }
 
   const activeResultKey = activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined);
@@ -233,15 +251,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
               {loading && cancellable ? (
                 <Button className="sql-toolbar-button sql-execute-button" size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel}>
-                  <span className="sql-toolbar-label">取消</span>
+                  <span className="sql-toolbar-label">{cancelling ? '正在取消' : `取消 ${formatElapsed(executionElapsedMs)}`}</span>
                 </Button>
               ) : loading ? (
                 <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" aria-label="SQL 处理中" loading disabled>
-                  <span className="sql-toolbar-label">处理中</span>
+                  <span className="sql-toolbar-label">处理中 {formatElapsed(executionElapsedMs)}</span>
                 </Button>
               ) : (
-                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" icon={<PlayCircleOutlined />} aria-label="执行当前或选中 SQL" disabled={!selected} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
-                  <span className="sql-toolbar-label">执行</span>
+                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<PlayCircleOutlined />} aria-label={selected?.environment === 'prod' ? '在生产环境执行当前或选中 SQL' : '执行当前或选中 SQL'} disabled={!selected} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
+                  <span className="sql-toolbar-label">{selected?.environment === 'prod' ? '生产执行' : '执行'}</span>
                 </Button>
               )}
             </Tooltip>
@@ -321,11 +339,21 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
           ) : (
-            <ResultGrid result={null} fill />
+            <div className="sql-result-empty-state">
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无执行结果" />
+              <Text type="secondary">选中 SQL 后按 Ctrl/Cmd+Enter，或直接执行光标所在语句。</Text>
+              <Space wrap>
+                <Button type="primary" icon={<PlayCircleOutlined />} danger={selected?.environment === 'prod'} disabled={!selected || !draftSql.trim()} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
+                  {selected?.environment === 'prod' ? '在生产环境执行' : '执行当前 SQL'}
+                </Button>
+                <Button icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>查看历史</Button>
+                <Button icon={<FileTextOutlined />} onClick={appendSelectTemplate}>追加 SELECT 模板</Button>
+              </Space>
+            </div>
           )}
         </div>
       </div>
-      <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{tabs.length} 个查询标签</Text>} />
+      <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{loading ? `${cancelling ? '正在取消' : '执行中'} · ${formatElapsed(executionElapsedMs)} · ` : ''}{tabs.length} 个查询标签</Text>} />
     </div>
   );
 });
@@ -443,6 +471,14 @@ function ResultPaneModeButtons({ mode, onChange }: {
 
 function statementResultKey(result: SqlStatementResult) {
   return `statement-${result.index}`;
+}
+
+function formatElapsed(elapsedMs: number) {
+  if (elapsedMs < 1_000) return `${Math.max(0, Math.round(elapsedMs))}ms`;
+  if (elapsedMs < 60_000) return `${(elapsedMs / 1_000).toFixed(1)}s`;
+  const minutes = Math.floor(elapsedMs / 60_000);
+  const seconds = Math.floor((elapsedMs % 60_000) / 1_000);
+  return `${minutes}m ${seconds}s`;
 }
 
 function editorSplitLimits(containerHeight: number | undefined, preferredValue: number) {

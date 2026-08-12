@@ -17,6 +17,7 @@ import type { SqlEditorOnMount } from './sqlEditorTypes';
 import { inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
+import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
@@ -56,6 +57,7 @@ const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel'
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
+  const [favoriteConnectionIds, setFavoriteConnectionIds] = useState<number[]>(() => readFavoriteConnectionIds());
   const [selected, setSelected] = useState<Connection | null>(null);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
@@ -570,6 +572,11 @@ export default function App() {
     try {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}`, { method: 'DELETE' });
       showSuccess(`已删除连接：${connection.name}`);
+      setFavoriteConnectionIds((current) => {
+        const next = current.filter((id) => id !== connection.id);
+        writeFavoriteConnectionIds(next);
+        return next;
+      });
       const remaining = connections.filter((row) => row.id !== connection.id);
       setConnections(remaining);
       if (selected?.id === connection.id) {
@@ -2086,6 +2093,13 @@ export default function App() {
   const deleteBackupHistoryEvent = useStableEvent((taskId: number, historyId: number, deleteFile: boolean) => deleteBackupHistory(taskId, historyId, deleteFile));
   const downloadBackupHistoryEvent = useStableEvent((taskId: number, historyId: number) => downloadBackupHistory(taskId, historyId));
   const toggleThemeFromHeader = useStableEvent(() => layoutPreferences.setThemeMode((current) => current === 'light' ? 'dark' : 'light'));
+  const toggleFavoriteConnectionEvent = useStableEvent((connectionId: number) => {
+    setFavoriteConnectionIds((current) => {
+      const next = current.includes(connectionId) ? current.filter((id) => id !== connectionId) : [...current, connectionId];
+      writeFavoriteConnectionIds(next);
+      return next;
+    });
+  });
   const addSqlTabEvent = useStableEvent(() => addSqlTab());
   const closeSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => closeSqlTab(tabId, liveSql));
   const renameSqlTabEvent = useStableEvent((tabId: string) => renameSqlTab(tabId));
@@ -2116,14 +2130,57 @@ export default function App() {
   const addTableRowEvent = useStableEvent(() => addRow());
   const importTableRowsEvent = useStableEvent((file: File) => importRows(file));
   const previewTableChangesEvent = useStableEvent(() => previewChanges());
+  const discardTableChangesEvent = useStableEvent(() => discardTableChanges());
   const commitTableChangesEvent = useStableEvent(() => commitChanges());
   const returnFromObjectEvent = useStableEvent(() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台'));
   const reloadObjectDetailEvent = useStableEvent(() => requestRefreshDatabaseObjects());
   const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
-  const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory) => {
-    editorRef.current?.setValue(historyItem.sql);
-    updateActiveSqlTab({ sql: historyItem.sql });
-    setHistoryOpen(false);
+  const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory, mode: 'new-tab' | 'replace-current') => {
+    if (mode === 'new-tab') {
+      if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
+        toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
+        return;
+      }
+      const currentId = activeSqlTabIdRef.current;
+      const liveSql = editorRef.current?.getValue();
+      const nextTabs = sqlTabsRef.current.map((tab) => tab.id === currentId && liveSql !== undefined && liveSql !== tab.sql
+        ? { ...tab, sql: liveSql, dirty: true }
+        : tab);
+      const nextIndex = sqlTabSeqRef.current + 1;
+      sqlTabSeqRef.current = nextIndex;
+      const historyTab: SqlTab = {
+        ...createSqlTab(nextIndex),
+        title: `历史 SQL ${nextIndex}`,
+        sql: historyItem.sql,
+        dirty: true,
+        message: '已从执行历史打开，原标签草稿保持不变。',
+        statusKind: 'info'
+      };
+      setSqlTabs([...nextTabs, historyTab]);
+      setActiveSqlTabId(historyTab.id);
+      setHistoryOpen(false);
+      return;
+    }
+
+    const currentTab = sqlTabsRef.current.find((tab) => tab.id === activeSqlTabIdRef.current);
+    const currentSql = editorRef.current?.getValue() ?? currentTab?.sql ?? '';
+    const replaceCurrent = () => {
+      editorRef.current?.setValue(historyItem.sql);
+      if (currentTab) updateSqlTab(currentTab.id, { sql: historyItem.sql, dirty: true });
+      setHistoryOpen(false);
+    };
+    if (!currentSql.trim() || currentSql === historyItem.sql) {
+      replaceCurrent();
+      return;
+    }
+    modalApi.confirm({
+      title: '替换当前 SQL 草稿？',
+      content: `当前标签“${currentTab?.title || '未命名查询'}”中的内容将被执行历史覆盖。`,
+      okText: '确认替换',
+      cancelText: '保留当前草稿',
+      okButtonProps: { danger: true },
+      onOk: replaceCurrent
+    });
   });
   const closeSqlFileTasksEvent = useStableEvent(() => {
     setSqlFileTasksOpen(false);
@@ -2181,6 +2238,7 @@ export default function App() {
       <div className="app-shell" data-theme={layoutPreferences.themeMode}>
         <AppHeader
           connections={connections}
+          favoriteConnectionIds={favoriteConnectionIds}
           selected={selected}
           connectionsLoading={connectionsLoading}
           explorerCollapsed={compactLayout ? !mobileExplorerOpen : layoutPreferences.explorerCollapsed}
@@ -2280,6 +2338,7 @@ export default function App() {
                 onAddRow={addTableRowEvent}
                 onImportFile={importTableRowsEvent}
                 onPreview={previewTableChangesEvent}
+                onDiscardChanges={discardTableChangesEvent}
                 onCommit={commitTableChangesEvent}
                 onEdit={editCell}
                 onDelete={deleteRow}
@@ -2331,6 +2390,7 @@ export default function App() {
             <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载连接管理…</div>}>
               <ConnectionList
                 connections={connections}
+                favoriteConnectionIds={favoriteConnectionIds}
                 selectedId={selected?.id}
                 connectionsLoading={connectionsLoading}
                 connectionsError={connectionsError}
@@ -2341,6 +2401,7 @@ export default function App() {
                 onTest={testSavedConnection}
                 onDuplicate={duplicateConnection}
                 onDelete={deleteConnection}
+                onToggleFavorite={toggleFavoriteConnectionEvent}
               />
             </Suspense>
           )}
@@ -2385,32 +2446,34 @@ export default function App() {
         onClose={() => setActiveDrawer(null)}
         destroyOnHidden
       >
-        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载备份管理…</div>}>
-          <BackupPanel
-          connections={connections}
-          backups={backups}
-          taskPage={backupTaskPage}
-          taskHasMore={backupTaskHasMore}
-          selected={selected}
-          activeTable={currentBackupTable}
-          loading={backupLoading}
-          namespaceKind={metadata?.namespaceKind}
-          editorRequest={backupEditorRequest}
-          onLoadNamespaces={loadBackupNamespacesEvent}
-          onLoadTables={loadBackupTablesEvent}
-          onPreviewSchedule={previewBackupScheduleEvent}
-          onSave={saveBackupEvent}
-          onToggle={toggleBackupEvent}
-          onDelete={deleteBackupEvent}
-          onRun={runBackupEvent}
-          onDownload={downloadBackupEvent}
-          onLoadHistory={loadBackupHistoryEvent}
-          onLoadTaskPage={loadBackupTaskPageEvent}
-          onCancelHistory={cancelBackupHistoryEvent}
-          onDeleteHistory={deleteBackupHistoryEvent}
-          onDownloadHistory={downloadBackupHistoryEvent}
-          />
-        </Suspense>
+        {activeDrawer === 'backups' && (
+          <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载备份管理…</div>}>
+            <BackupPanel
+              connections={connections}
+              backups={backups}
+              taskPage={backupTaskPage}
+              taskHasMore={backupTaskHasMore}
+              selected={selected}
+              activeTable={currentBackupTable}
+              loading={backupLoading}
+              namespaceKind={metadata?.namespaceKind}
+              editorRequest={backupEditorRequest}
+              onLoadNamespaces={loadBackupNamespacesEvent}
+              onLoadTables={loadBackupTablesEvent}
+              onPreviewSchedule={previewBackupScheduleEvent}
+              onSave={saveBackupEvent}
+              onToggle={toggleBackupEvent}
+              onDelete={deleteBackupEvent}
+              onRun={runBackupEvent}
+              onDownload={downloadBackupEvent}
+              onLoadHistory={loadBackupHistoryEvent}
+              onLoadTaskPage={loadBackupTaskPageEvent}
+              onCancelHistory={cancelBackupHistoryEvent}
+              onDeleteHistory={deleteBackupHistoryEvent}
+              onDownloadHistory={downloadBackupHistoryEvent}
+            />
+          </Suspense>
+        )}
       </Drawer>
 
       <Drawer

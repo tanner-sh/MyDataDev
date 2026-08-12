@@ -136,6 +136,28 @@ body {
   gap: 6px;
 }
 
+.connection-list-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 112px 112px 32px;
+  gap: 6px;
+}
+
+.connection-filter-summary {
+  font-size: 11px;
+}
+
+.connection-favorite-button {
+  width: 22px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  padding: 0 !important;
+  color: var(--warning);
+}
+
+.favorite-icon {
+  color: var(--warning);
+}
+
 .connection-list .ant-list-items {
   display: grid;
   gap: 6px;
@@ -1666,6 +1688,51 @@ body.is-resizing-column * {
   gap: 6px;
 }
 
+.object-view-filter {
+  display: grid;
+  gap: 3px;
+}
+
+.object-view-filter > .ant-typography {
+  padding-inline: 2px;
+  font-size: 10px;
+}
+
+.sql-result-empty-state {
+  height: 100%;
+  min-height: 180px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.sql-result-empty-state .ant-empty {
+  margin-block: 0;
+}
+
+.result-scope-tag {
+  margin-inline-end: 0;
+}
+
+.result-filter-scope {
+  max-width: 240px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.backup-disabled-action-wrap {
+  display: inline-flex;
+  width: 100%;
+}
+
+.backup-disabled-action-wrap > .ant-btn {
+  width: 100%;
+}
+
 .object-type-toolbar {
   min-width: 0;
   display: flex;
@@ -2015,6 +2082,11 @@ body.is-resizing-column * {
 .object-tree-row.is-selected {
   color: var(--primary);
   background: var(--primary-soft);
+}
+
+.object-tree-row.is-keyboard-selected:not(.is-selected) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent);
+  background: color-mix(in srgb, var(--primary-soft) 55%, transparent);
 }
 
 .object-tree-switcher,
@@ -3217,7 +3289,7 @@ body.is-resizing-column * {
     grid-template-columns: minmax(190px, auto) minmax(240px, 1fr) auto;
   }
 
-  .connection-context-tags {
+  .connection-db-tag {
     display: none;
   }
 
@@ -3236,6 +3308,10 @@ body.is-resizing-column * {
   .app-header {
     grid-template-columns: auto minmax(190px, 1fr) auto;
     gap: 6px;
+  }
+
+  .connection-readonly-tag {
+    display: none;
   }
 
   .brand-copy .ant-typography:last-child,
@@ -3309,6 +3385,18 @@ body.is-resizing-column * {
 
   .connection-select {
     min-width: 100px;
+  }
+
+  .connection-list-filters {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+  }
+
+  .connection-list-filters > .ant-input-search {
+    grid-column: 1 / 3;
+  }
+
+  .connection-list-filters > .ant-select {
+    grid-row: 2;
   }
 
   .app-header-actions > .ant-space-item:first-child {

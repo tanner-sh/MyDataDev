@@ -479,11 +479,13 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       {messageContextHolder}
       <div className="result-grid-toolbar">
         <div className="result-local-actions">
-          <Dropdown trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
-            <Button size="small" icon={<DownloadOutlined />}>导出 <DownOutlined /></Button>
-          </Dropdown>
+          <Tooltip title={selectedRows.length > 0 ? '仅导出当前批次中已选择的行' : '仅导出当前已加载批次；如需完整数据，请使用 SQL 工作台“重新查询并导出”'}>
+            <Dropdown trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
+              <Button size="small" icon={<DownloadOutlined />} aria-label={selectedRows.length > 0 ? `导出已选择的 ${selectedRows.length} 行` : `导出当前批次 ${rows.length} 行`}>导出{selectedRows.length > 0 ? `已选 ${selectedRows.length} 行` : `本批 ${rows.length} 行`} <DownOutlined /></Button>
+            </Dropdown>
+          </Tooltip>
           <Space.Compact size="small">
-            <Button size="small" icon={<CopyOutlined />} onClick={requestCopySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
+            <Button size="small" icon={<CopyOutlined />} aria-label={selectedRows.length > 0 ? `复制已选择的 ${selectedRows.length} 行` : '复制已选择的结果行'} onClick={requestCopySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
             <Dropdown trigger={['click']} menu={{
               selectable: true,
               selectedKeys: [copyFormat],
@@ -501,6 +503,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             </Dropdown>
           </Space.Compact>
           {selectedRowKeys.length > 0 && <Tag className="result-selection-tag">已选 {selectedRowKeys.length} 行</Tag>}
+          <Tag className="result-scope-tag" color="blue">本地操作 · 当前批次</Tag>
           {result.columns.length > 20 && (
             <Select
               mode="multiple"
@@ -692,6 +695,7 @@ function ResultFilterDropdown({ condition, onApply, onReset }: {
 
   return (
     <div className="result-filter-dropdown" onKeyDown={(event) => event.stopPropagation()}>
+      <Text type="secondary" className="result-filter-scope">仅筛选当前已加载批次，不会重新查询数据库。</Text>
       <Select value={operator} options={FILTER_OPTIONS} onChange={setOperator} />
       <Input
         autoFocus

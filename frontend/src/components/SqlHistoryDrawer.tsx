@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { Button, Drawer, Empty, Input, Pagination, Space, Tag, Tooltip, Typography } from 'antd';
-import { CopyOutlined } from '@ant-design/icons';
+import { CopyOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import type { SqlHistory } from '../types';
 import { formatHistoryTime } from '../utils';
 
@@ -10,7 +10,7 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({ open, history, 
   open: boolean;
   history: SqlHistory[];
   onClose: () => void;
-  onPick: (history: SqlHistory) => void;
+  onPick: (history: SqlHistory, mode: 'new-tab' | 'replace-current') => void;
 }) {
   const [keyword, setKeyword] = useState('');
   const [page, setPage] = useState(1);
@@ -39,7 +39,12 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({ open, history, 
                 </Space>
                 <Space size={4}>
                   <Tooltip title="复制 SQL"><Button size="small" type="text" icon={<CopyOutlined />} aria-label="复制 SQL" onClick={() => void navigator.clipboard.writeText(item.sql)} /></Tooltip>
-                  <Button size="small" onClick={() => onPick(item)}>回填</Button>
+                  <Tooltip title="保留当前草稿，在新 SQL 标签中打开">
+                    <Button size="small" type="primary" ghost icon={<PlusOutlined />} aria-label="在新标签打开此历史 SQL" onClick={() => onPick(item, 'new-tab')}>新标签</Button>
+                  </Tooltip>
+                  <Tooltip title="替换当前标签中的 SQL；有内容时会再次确认">
+                    <Button size="small" type="text" icon={<SwapOutlined />} aria-label="用此历史 SQL 替换当前标签" onClick={() => onPick(item, 'replace-current')}>替换</Button>
+                  </Tooltip>
                 </Space>
               </div>
               <Space orientation="vertical" size={4} className="full-width">

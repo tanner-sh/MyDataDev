@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Drawer, Dropdown, Layout, Select, Space, Typography, Upload } from 'antd';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Typography, Upload } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -11,12 +11,14 @@ import {
   ReloadOutlined,
   RightOutlined,
   SaveOutlined,
+  UndoOutlined,
   UploadOutlined
 } from '@ant-design/icons';
 import type { ActiveTable, TableData, TableRow, WorkspaceStatus } from '../types';
 import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
+import { buildChanges } from '../utils';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -41,6 +43,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onAddRow,
   onImportFile,
   onPreview,
+  onDiscardChanges,
   onCommit,
   onEdit,
   onDelete,
@@ -65,6 +68,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onAddRow: () => void;
   onImportFile: (file: File) => void;
   onPreview: () => void;
+  onDiscardChanges: () => void;
   onCommit: () => void;
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
@@ -76,6 +80,14 @@ export const TableWorkspace = memo(function TableWorkspace({
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
   const editingDisabled = readonlyConnection || !editingSupported;
+  const changeSummary = useMemo(() => {
+    const changes = buildChanges(tableRows, tableData?.keyColumns || []);
+    return {
+      inserts: changes.filter((change) => change.type === 'INSERT').length,
+      updates: changes.filter((change) => change.type === 'UPDATE').length,
+      deletes: changes.filter((change) => change.type === 'DELETE').length
+    };
+  }, [tableData?.keyColumns, tableRows]);
   const secondaryMenu: MenuProps = {
     items: [
       { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading || !onBackupTable },
@@ -139,6 +151,15 @@ export const TableWorkspace = memo(function TableWorkspace({
             <Button className="table-more-actions" size="small" icon={<MoreOutlined />} aria-label="更多表格操作">更多</Button>
           </Dropdown>
           <Space size={8} className="table-primary-actions">
+            <Popconfirm
+              title={`撤销全部 ${pendingCount} 项变更？`}
+              description="所有尚未提交的新增、编辑和删除都会恢复。"
+              okText="撤销全部"
+              cancelText="保留变更"
+              onConfirm={onDiscardChanges}
+            >
+              <Button size="small" icon={<UndoOutlined />} disabled={!pendingCount || loading}>撤销全部</Button>
+            </Popconfirm>
             <Button
               size="small"
               icon={<EyeOutlined />}
@@ -148,9 +169,9 @@ export const TableWorkspace = memo(function TableWorkspace({
                 onPreview();
               }}
             >
-              预览
+              预览 {pendingCount || ''}
             </Button>
-            <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交</Button>
+            <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount || ''}</Button>
           </Space>
           <input
             ref={importInputRef}
@@ -202,7 +223,12 @@ export const TableWorkspace = memo(function TableWorkspace({
       </div>
       <WorkspaceStatusBar
         status={status}
-        trailing={pendingCount > 0 ? <Badge status="warning" text={`待提交 ${pendingCount} 项`} /> : <Text type="secondary">无待提交变更</Text>}
+        trailing={pendingCount > 0 ? (
+          <Space size={8}>
+            <Badge status="warning" text={`待提交 ${pendingCount} 项`} />
+            <Text type="secondary">新增 {changeSummary.inserts} · 修改 {changeSummary.updates} · 删除 {changeSummary.deletes}</Text>
+          </Space>
+        ) : <Text type="secondary">无待提交变更</Text>}
       />
       <Drawer
         title="变更语句预览"

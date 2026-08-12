@@ -550,6 +550,11 @@ function BackupTasksPanel({
   }
 
   const methodOptions = backupMethodOptions(selected, backupMethod);
+  const currentTableBackupDisabledReason = !selected
+    ? '请先选择数据库连接'
+    : !activeTable
+      ? '请先从资源管理器打开一张表，再创建当前表备份任务'
+      : loading ? '当前备份操作完成后可继续创建任务' : '';
 
   return (
     <section className="inspector-section">
@@ -560,8 +565,12 @@ function BackupTasksPanel({
       </div>
       <Space orientation="vertical" size={10} className="full-width">
         <Space.Compact block>
-          <Button size="small" icon={<PlusOutlined />} disabled={!selected || loading} onClick={openDatabaseTask}>新建任务</Button>
-          <Button size="small" icon={<PlusOutlined />} disabled={!selected || !activeTable || loading} onClick={() => openTableTask()}>备份当前表</Button>
+          <Button size="small" icon={<PlusOutlined />} aria-label="新建数据库备份任务" disabled={!selected || loading} onClick={openDatabaseTask}>新建任务</Button>
+          <Tooltip title={currentTableBackupDisabledReason}>
+            <span className="backup-disabled-action-wrap">
+              <Button size="small" icon={<PlusOutlined />} aria-label="新建当前表备份任务" disabled={Boolean(currentTableBackupDisabledReason)} onClick={() => openTableTask()}>备份当前表</Button>
+            </span>
+          </Tooltip>
         </Space.Compact>
         {backups.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务，点击上方按钮创建' : '请选择连接'} /> : (
           <div className="backup-task-list">
@@ -772,6 +781,16 @@ function BackupTasksPanel({
             />
           </Form.Item>
           {!nativeBackup && <Alert type="info" showIcon title="SQL 备份包含表结构、数据、索引和约束，并支持跨数据库恢复；超大数据库仍建议使用原生工具。" />}
+          {nativeBackup && toolMode === 'AUTO' && (
+            <NativeToolStatusAlert
+              status={nativeTools.find((item) => item.tool === nativeToolForBackup(backupMethod))}
+              loading={nativeToolsLoading}
+              error={nativeToolsError}
+              onRefresh={onRefreshNativeTools}
+              onUseSql={() => form.setFieldValue('backupMethod', 'SQL')}
+            />
+          )}
+          {nativeBackup && toolMode === 'MANUAL' && <Alert type="info" showIcon title="当前使用手动工具路径" description="请在下方高级设置中确认应用服务器可访问的可执行文件路径。" />}
 
           <Divider titlePlacement="start" plain>执行计划</Divider>
           <Form.Item label="执行频率" name="scheduleKind" rules={[{ required: true, message: '请选择执行频率' }]}>
@@ -855,7 +874,7 @@ function BackupTasksPanel({
                   <Form.Item label="工具路径模式" name="toolMode">
                     <Select options={[{ value: 'AUTO', label: '自动发现（每次执行重新解析）' }, { value: 'MANUAL', label: '手动指定路径' }]} />
                   </Form.Item>
-                  {toolMode === 'AUTO' ? <NativeToolStatusAlert status={nativeTools.find((item) => item.tool === nativeToolForBackup(backupMethod))} loading={nativeToolsLoading} error={nativeToolsError} onRefresh={onRefreshNativeTools} /> : (
+                  {toolMode === 'MANUAL' && (
                     <Form.Item label="工具路径" name="toolPath" rules={[{ required: true, whitespace: true, message: '请输入原生备份工具路径' }]}>
                       <Input placeholder={backupMethod === 'ORACLE_EXP' ? '/opt/oracle/bin/exp' : '/usr/local/bin/mysqldump'} />
                     </Form.Item>
@@ -1125,7 +1144,7 @@ type NativeToolDiscoveryProps = {
   onRefreshNativeTools: () => Promise<void>;
 };
 
-function NativeToolStatusAlert({ status, loading, error, onRefresh }: { status?: NativeToolStatus; loading: boolean; error: string; onRefresh: () => Promise<void> }) {
+function NativeToolStatusAlert({ status, loading, error, onRefresh, onUseSql }: { status?: NativeToolStatus; loading: boolean; error: string; onRefresh: () => Promise<void>; onUseSql: () => void }) {
   const available = status?.available;
   return <Alert
     className="native-tool-status-alert"
@@ -1133,6 +1152,9 @@ function NativeToolStatusAlert({ status, loading, error, onRefresh }: { status?:
     showIcon
     title={loading ? '正在检测应用服务器上的工具…' : available ? `已发现 ${status.displayName}` : status?.displayName ? `未发现 ${status.displayName}` : '尚未获得工具检测结果'}
     description={available ? <Space orientation="vertical" size={0}><Text code>{status.resolvedPath}</Text>{status.version && <Text type="secondary">{status.version}</Text>}</Space> : error || status?.message}
-    action={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void onRefresh()}>重新检测</Button>}
+    action={<Space size={4} wrap>
+      <Button size="small" onClick={onUseSql}>改用 SQL 备份</Button>
+      <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void onRefresh()}>重新检测</Button>
+    </Space>}
   />;
 }
