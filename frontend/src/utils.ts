@@ -1,7 +1,7 @@
-import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from './constants';
 import type { BackupTask, LegacyBackupScope, RowChange, SqlTab, TableRow } from './types';
+import type { SqlEditorOnMount } from './sqlEditorTypes';
 
 export function createSqlTab(index: number): SqlTab {
   return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', dirty: false, results: [], message: '' };
@@ -107,7 +107,7 @@ export function formatFileSize(size?: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function sqlKeywordCompletionItems(monaco: Parameters<OnMount>[1], range: Monaco.IRange) {
+export function sqlKeywordCompletionItems(monaco: Parameters<SqlEditorOnMount>[1], range: Monaco.IRange) {
   return [
     'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN',
     'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'INSERT', 'UPDATE', 'DELETE'
@@ -120,7 +120,7 @@ export function sqlKeywordCompletionItems(monaco: Parameters<OnMount>[1], range:
   }));
 }
 
-export function completionKind(monaco: Parameters<OnMount>[1], kind: string) {
+export function completionKind(monaco: Parameters<SqlEditorOnMount>[1], kind: string) {
   if (kind === 'TABLE') return monaco.languages.CompletionItemKind.Class;
   if (kind === 'COLUMN') return monaco.languages.CompletionItemKind.Field;
   if (kind === 'SCHEMA') return monaco.languages.CompletionItemKind.Module;

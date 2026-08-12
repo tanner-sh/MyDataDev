@@ -24,16 +24,22 @@ public class RemoteDataSourceRegistry {
     static final int MAX_POOLS = 20;
     private static final int MAX_POOL_SIZE = 3;
     private static final long CONNECTION_TIMEOUT_MS = 10_000;
+    private static final long IDLE_TIMEOUT_MS = 300_000;
+    private static final long MAX_LIFETIME_MS = 1_800_000;
     private final Map<Long, PoolEntry> pools = new LinkedHashMap<>();
     private final int maxPools;
     private final int maximumPoolSize;
     private final long connectionTimeoutMs;
+    private final long idleTimeoutMs;
+    private final long maxLifetimeMs;
     private final MeterRegistry meterRegistry;
 
     public RemoteDataSourceRegistry() {
         this.maxPools = MAX_POOLS;
         this.maximumPoolSize = MAX_POOL_SIZE;
         this.connectionTimeoutMs = CONNECTION_TIMEOUT_MS;
+        this.idleTimeoutMs = IDLE_TIMEOUT_MS;
+        this.maxLifetimeMs = MAX_LIFETIME_MS;
         this.meterRegistry = null;
     }
 
@@ -42,6 +48,8 @@ public class RemoteDataSourceRegistry {
         this.maxPools = Math.max(1, properties.getRemotePool().getMaxPools());
         this.maximumPoolSize = Math.max(2, properties.getRemotePool().getMaximumPoolSize());
         this.connectionTimeoutMs = Math.max(1_000, properties.getRemotePool().getConnectionTimeoutMs());
+        this.idleTimeoutMs = Math.max(10_000, properties.getRemotePool().getIdleTimeoutMs());
+        this.maxLifetimeMs = Math.max(30_000, properties.getRemotePool().getMaxLifetimeMs());
         this.meterRegistry = meterRegistry.getIfAvailable();
     }
 
@@ -138,8 +146,8 @@ public class RemoteDataSourceRegistry {
         config.setMaximumPoolSize(maximumPoolSize);
         config.setConnectionTimeout(connectionTimeoutMs);
         config.setValidationTimeout(5_000);
-        config.setIdleTimeout(60_000);
-        config.setMaxLifetime(600_000);
+        config.setIdleTimeout(idleTimeoutMs);
+        config.setMaxLifetime(maxLifetimeMs);
         // Pool construction happens under the registry lock; defer the first
         // network attempt so one unreachable database cannot block every pool.
         config.setInitializationFailTimeout(-1);

@@ -26,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.contains;
@@ -133,6 +134,54 @@ class MetadataServiceTest {
         assertThat(response.hasMore()).isTrue();
         assertThat(response.totalObjects()).isEqualTo(3);
         assertThat(response.totalObjectsExact()).isFalse();
+    }
+
+    @Test
+    void coldInspectionReusesOneJdbcConnectionForSchemasAndFirstPage() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(1L)).thenReturn(new DbConnection(
+                1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
+        ));
+        MetadataService service = new MetadataService(
+                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard()
+        );
+
+        MetadataResponse response = service.inspect(1L, null, null, 0, 200, false);
+
+        assertThat(response.objects()).extracting("name").contains("USERS");
+        verify(connections, times(1)).open(1L);
+    }
+
+    @Test
+    void oracleInspectionUsesNativePagedObjectCatalog() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=Oracle;DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE ALL_OBJECTS(OWNER VARCHAR2(128), OBJECT_NAME VARCHAR2(128), OBJECT_TYPE VARCHAR2(30))");
+            connection.createStatement().execute("INSERT INTO ALL_OBJECTS VALUES ('PUBLIC', 'ALPHA_TABLE', 'TABLE')");
+            connection.createStatement().execute("INSERT INTO ALL_OBJECTS VALUES ('PUBLIC', 'BETA_TABLE', 'TABLE')");
+            connection.createStatement().execute("INSERT INTO ALL_OBJECTS VALUES ('PUBLIC', 'GAMMA_VIEW', 'VIEW')");
+        }
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(1L)).thenReturn(new DbConnection(
+                1L, "oracle", "oracle", url, "sa", "", "dev", false, Instant.now(), Instant.now()
+        ));
+        MetadataService service = new MetadataService(
+                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard()
+        );
+
+        MetadataResponse first = service.inspect(1L, "PUBLIC", null, 0, 2, false);
+        MetadataResponse search = service.inspect(1L, "PUBLIC", "gamma_", 0, 10, false);
+
+        assertThat(first.objects()).extracting("name").containsExactly("ALPHA_TABLE", "BETA_TABLE");
+        assertThat(first.hasMore()).isTrue();
+        assertThat(first.totalObjectsExact()).isFalse();
+        assertThat(search.objects()).extracting("name").containsExactly("GAMMA_VIEW");
     }
 
     @Test

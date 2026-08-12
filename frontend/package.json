@@ -11,12 +11,11 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.2",
-    "@monaco-editor/react": "latest",
     "@vitejs/plugin-react": "latest",
     "antd": "^6.5.0",
+    "monaco-editor": "0.55.1",
     "react": "latest",
     "react-dom": "latest",
-    "monaco-editor": "0.55.1",
     "typescript": "latest",
     "vite": "latest"
   },

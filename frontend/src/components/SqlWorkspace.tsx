@@ -1,4 +1,3 @@
-import type { OnMount } from '@monaco-editor/react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
@@ -9,6 +8,7 @@ import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
+import type { SqlEditorOnMount } from '../sqlEditorTypes';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -49,7 +49,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onTabRename: (tabId: string) => void;
   onTabDuplicate: (tabId: string, liveSql?: string) => void;
   onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
-  onEditorMount: OnMount;
+  onEditorMount: SqlEditorOnMount;
   onFormat: (liveSql?: string) => void;
   onExplain: (liveSql?: string) => void;
   onExecute: (liveSql?: string) => void;

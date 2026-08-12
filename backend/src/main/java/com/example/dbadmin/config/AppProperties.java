@@ -219,6 +219,8 @@ public class AppProperties {
         private int maxPools = 20;
         private int maximumPoolSize = 3;
         private int connectionTimeoutMs = 10_000;
+        private long idleTimeoutMs = 300_000;
+        private long maxLifetimeMs = 1_800_000;
 
         public int getMaxPools() { return maxPools; }
         public void setMaxPools(int maxPools) { this.maxPools = maxPools; }
@@ -226,6 +228,10 @@ public class AppProperties {
         public void setMaximumPoolSize(int maximumPoolSize) { this.maximumPoolSize = maximumPoolSize; }
         public int getConnectionTimeoutMs() { return connectionTimeoutMs; }
         public void setConnectionTimeoutMs(int connectionTimeoutMs) { this.connectionTimeoutMs = connectionTimeoutMs; }
+        public long getIdleTimeoutMs() { return idleTimeoutMs; }
+        public void setIdleTimeoutMs(long idleTimeoutMs) { this.idleTimeoutMs = idleTimeoutMs; }
+        public long getMaxLifetimeMs() { return maxLifetimeMs; }
+        public void setMaxLifetimeMs(long maxLifetimeMs) { this.maxLifetimeMs = maxLifetimeMs; }
     }
 
     public static class Mcp {

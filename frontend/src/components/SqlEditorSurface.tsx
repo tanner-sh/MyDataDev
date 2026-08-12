@@ -1,10 +1,10 @@
-import type { EditorProps, OnMount } from '@monaco-editor/react';
 import { Button } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType, KeyboardEvent } from 'react';
 import { resolveSqlEditorShortcut, shouldLoadSqlEditor } from '../sqlEditorSurfaceModel';
+import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 
-type SqlEditorComponent = ComponentType<EditorProps>;
+type SqlEditorComponent = ComponentType<SqlEditorProps>;
 
 export const SqlEditorSurface = memo(function SqlEditorSurface({
   value,
@@ -18,9 +18,9 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
 }: {
   value: string;
   themeMode: 'light' | 'dark';
-  options: EditorProps['options'];
+  options: SqlEditorProps['options'];
   executeDisabled: boolean;
-  onMount: OnMount;
+  onMount: SqlEditorOnMount;
   onChange: (value: string) => void;
   onFormat: () => void;
   onExecute: () => void;

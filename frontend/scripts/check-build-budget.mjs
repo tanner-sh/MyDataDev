@@ -12,6 +12,7 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // ceiling. Keep a small allowance for that split while the stricter initial
 // payload budget continues to protect startup performance.
 const MAX_SQL_WORKSPACE_GZIP_BYTES = 1420 * 1024;
+const MAX_SQL_EDITOR_GZIP_BYTES = 690 * 1024;
 const distDirectory = resolve(process.cwd(), 'dist');
 const html = readFileSync(resolve(distDirectory, 'index.html'), 'utf8');
 const assetUrls = [...new Set([...html.matchAll(/(?:src|href)="(\/[^"?]+\.(?:js|css))"/g)].map((match) => match[1]))];
@@ -27,6 +28,7 @@ const gzipBytes = assets.reduce((total, asset) => total + asset.gzipBytes, 0);
 const manifest = JSON.parse(readFileSync(resolve(distDirectory, '.vite/manifest.json'), 'utf8'));
 const sqlWorkspaceEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlWorkspace.tsx');
 const sqlEditorEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlEditor.tsx');
+let sqlEditorGzipBytes = 0;
 const workspaceFiles = new Set(assetUrls.map((assetUrl) => assetUrl.slice(1)));
 if (sqlWorkspaceEntry) collectManifestFiles(sqlWorkspaceEntry[0], workspaceFiles);
 const workspaceAssets = [...workspaceFiles]
@@ -53,9 +55,14 @@ if (!sqlWorkspaceEntry) {
 if (!sqlEditorEntry) {
   failures.push('构建清单中未找到 SQL 编辑器入口，无法检查自动补全能力');
 } else {
-  const sqlEditorBundle = readFileSync(resolve(distDirectory, sqlEditorEntry[1].file), 'utf8');
+  const sqlEditorFile = resolve(distDirectory, sqlEditorEntry[1].file);
+  const sqlEditorBundle = readFileSync(sqlEditorFile, 'utf8');
+  sqlEditorGzipBytes = gzipSync(sqlEditorBundle).byteLength;
   if (!sqlEditorBundle.includes('editor.contrib.suggestController') || !sqlEditorBundle.includes('editor.action.triggerSuggest')) {
     failures.push('SQL 编辑器产物缺少 Monaco SuggestController，自动补全弹窗将不可用');
+  }
+  if (sqlEditorGzipBytes > MAX_SQL_EDITOR_GZIP_BYTES) {
+    failures.push(`SQL 编辑器 gzip ${formatBytes(sqlEditorGzipBytes)} 超过限制 ${formatBytes(MAX_SQL_EDITOR_GZIP_BYTES)}`);
   }
 }
 if (workspaceGzipBytes > MAX_SQL_WORKSPACE_GZIP_BYTES) {

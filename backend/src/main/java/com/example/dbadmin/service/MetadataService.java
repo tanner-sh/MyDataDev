@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
+import com.example.dbadmin.core.OracleDialect;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
 import com.example.dbadmin.dto.ApiDtos.CompletionCatalogResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupTargetItem;
@@ -56,6 +57,7 @@ public class MetadataService {
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
     private static final long MAX_METADATA_OFFSET = 1_000_000;
     private static final int MAX_SEARCH_LENGTH = 200;
+    private static final int METADATA_QUERY_TIMEOUT_SECONDS = 15;
 
     @Autowired
     public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit, MetadataCacheService cache, ExecutionGuard executionGuard) {
@@ -71,29 +73,18 @@ public class MetadataService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
             synchronized (cacheLoadLock(connectionId)) {
-                cache.evictConnection(connectionId);
+                cache.evictMetadataDirectory(connectionId);
             }
         }
-        MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
-        if (schemaCatalog == null) {
-            synchronized (cacheLoadLock(connectionId)) {
-                schemaCatalog = cache.schemaCatalog(connectionId).orElse(null);
-                if (schemaCatalog == null) {
-                    try (Connection connection = connections.open(connectionId)) {
-                        schemaCatalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
-                    }
-                }
-            }
-        }
-        String selectedSchema = selectedSchema(schemaCatalog, schemaFilter);
         int normalizedPage = Math.max(page == null ? 0 : page, 0);
         int normalizedPageSize = Math.min(Math.max(pageSize == null ? 200 : pageSize, 1), 500);
         String normalizedKeyword = searchTerm(keyword);
-        MetadataPageLoad pageLoad = loadMetadataPage(
-                connectionId, dialect, selectedSchema, normalizedKeyword, normalizedPage, normalizedPageSize
+        InspectionLoad inspection = loadInspection(
+                connectionId, dbConnection, dialect, schemaFilter, normalizedKeyword, normalizedPage, normalizedPageSize
         );
-        boolean cacheHit = pageLoad.cacheHit();
-        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = pageLoad.value();
+        MetadataCacheService.SchemaCatalogSnapshot schemaCatalog = inspection.catalog();
+        String selectedSchema = inspection.selectedSchema();
+        MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue = inspection.pageValue();
         MetadataCacheService.MetadataObjectPage objectPage = pageValue.value();
         return new MetadataResponse(
                 schemaCatalog.schemas(),
@@ -107,14 +98,14 @@ public class MetadataService {
                 normalizedPageSize,
                 objectPage.hasMore(),
                 pageValue.cachedAt().toString(),
-                cacheHit
+                inspection.cacheHit()
         );
     }
 
     public CompletionCatalogResponse completionCatalog(long connectionId, String requestedNamespace, String prefix, Integer limit, boolean refresh) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-        if (refresh) cache.evictConnection(connectionId);
+        if (refresh) cache.evictMetadataDirectory(connectionId);
         MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
         boolean cacheHit = catalog != null;
         if (catalog == null) {
@@ -154,7 +145,7 @@ public class MetadataService {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
-            cache.evictConnection(connectionId);
+            cache.evictMetadataDirectory(connectionId);
         }
         MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
         if (catalog == null) {
@@ -185,7 +176,7 @@ public class MetadataService {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (refresh) {
-            cache.evictConnection(connectionId);
+            cache.evictMetadataDirectory(connectionId);
         }
         MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
         if (catalog == null) {
@@ -267,6 +258,9 @@ public class MetadataService {
         if (cachedCatalog.isPresent()) {
             return pageFromCatalog(cachedCatalog.get().value(), keyword, matchMode, page, pageSize, physicalOnly);
         }
+        if (dialect instanceof OracleDialect) {
+            return queryOracleObjectPage(connection, dialect, selectedSchema, keyword, matchMode, page, pageSize, physicalOnly);
+        }
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, selectedSchema);
         String schemaPattern = scope.schemaPattern() == null ? null : metadataPattern(meta, scope.schemaPattern(), MatchMode.EXACT);
@@ -328,17 +322,93 @@ public class MetadataService {
         return new MetadataCacheService.MetadataObjectPage(objects, total, exhausted, hasMore);
     }
 
-    private MetadataPageLoad loadMetadataPage(
-            long connectionId,
+    private MetadataCacheService.MetadataObjectPage queryOracleObjectPage(
+            Connection connection,
             DatabaseDialect dialect,
             String selectedSchema,
+            String keyword,
+            MatchMode matchMode,
+            int page,
+            int pageSize,
+            boolean physicalOnly
+    ) throws Exception {
+        long offset = (long) page * pageSize;
+        if (offset > MAX_METADATA_OFFSET) {
+            throw new IllegalArgumentException("元数据分页偏移过大，请使用搜索条件缩小范围。");
+        }
+        List<Object> parameters = new ArrayList<>();
+        StringBuilder filter = new StringBuilder(" FROM ALL_OBJECTS WHERE OWNER = ? AND OBJECT_TYPE IN (")
+                .append(physicalOnly ? "'TABLE'" : "'TABLE','VIEW'")
+                .append(')');
+        parameters.add(selectedSchema == null ? "" : selectedSchema);
+        if (keyword != null && !keyword.isBlank()) {
+            String normalized = oracleLikePattern(keyword.toUpperCase(Locale.ROOT), matchMode);
+            filter.append(" AND UPPER(OBJECT_NAME) LIKE ? ESCAPE '!'");
+            parameters.add(normalized);
+        }
+
+        int total = -1;
+        if (physicalOnly) {
+            try (var statement = connection.prepareStatement("SELECT COUNT(*)" + filter)) {
+                dialect.configureReadStatement(connection, statement, 1, METADATA_QUERY_TIMEOUT_SECONDS);
+                for (int index = 0; index < parameters.size(); index++) statement.setObject(index + 1, parameters.get(index));
+                try (ResultSet rs = statement.executeQuery()) {
+                    total = rs.next() ? rs.getInt(1) : 0;
+                }
+            }
+        }
+
+        String baseSql = "SELECT OWNER AS SCHEMA_NAME, OBJECT_NAME, OBJECT_TYPE" + filter + " ORDER BY OBJECT_NAME, OBJECT_TYPE";
+        int limit = pageSize + 1;
+        String pagedSql = dialect.pageQuery(baseSql, limit, Math.toIntExact(offset));
+        List<DbObject> objects = new ArrayList<>(limit);
+        try (var statement = connection.prepareStatement(pagedSql)) {
+            dialect.configureReadStatement(connection, statement, Math.min(limit, 200), METADATA_QUERY_TIMEOUT_SECONDS);
+            statement.setMaxRows(limit);
+            for (int index = 0; index < parameters.size(); index++) statement.setObject(index + 1, parameters.get(index));
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next() && objects.size() < limit) {
+                    objects.add(new DbObject(
+                            rs.getString("SCHEMA_NAME"), rs.getString("OBJECT_NAME"), rs.getString("OBJECT_TYPE"),
+                            List.of(), List.of()
+                    ));
+                }
+            }
+        }
+        boolean hasMore = objects.size() > pageSize;
+        if (hasMore) objects = new ArrayList<>(objects.subList(0, pageSize));
+        if (physicalOnly) {
+            return new MetadataCacheService.MetadataObjectPage(objects, total, true, hasMore);
+        }
+        int observedTotal = (int) Math.min(Integer.MAX_VALUE, offset + objects.size() + (hasMore ? 1L : 0L));
+        return new MetadataCacheService.MetadataObjectPage(objects, observedTotal, !hasMore, hasMore);
+    }
+
+    private String oracleLikePattern(String keyword, MatchMode mode) {
+        String escaped = keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_");
+        return switch (mode) {
+            case EXACT -> escaped;
+            case PREFIX -> escaped + "%";
+            case CONTAINS -> "%" + escaped + "%";
+        };
+    }
+
+    private InspectionLoad loadInspection(
+            long connectionId,
+            DbConnection dbConnection,
+            DatabaseDialect dialect,
+            String schemaFilter,
             String keyword,
             int page,
             int pageSize
     ) throws Exception {
-        var cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
-        if (cachedPage.isPresent()) {
-            return new MetadataPageLoad(cachedPage.get(), true);
+        MetadataCacheService.SchemaCatalogSnapshot catalog = cache.schemaCatalog(connectionId).orElse(null);
+        if (catalog != null) {
+            String selectedSchema = selectedSchema(catalog, schemaFilter);
+            var cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
+            if (cachedPage.isPresent()) {
+                return new InspectionLoad(catalog, selectedSchema, cachedPage.get(), true);
+            }
         }
 
         // DatabaseMetaData calls cannot be reliably cancelled by every JDBC
@@ -346,16 +416,26 @@ public class MetadataService {
         // per connection so stale requests cannot occupy the whole remote
         // connection pool while a newer search is waiting.
         synchronized (cacheLoadLock(connectionId)) {
-            cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
-            if (cachedPage.isPresent()) {
-                return new MetadataPageLoad(cachedPage.get(), true);
+            catalog = cache.schemaCatalog(connectionId).orElse(null);
+            if (catalog != null) {
+                String selectedSchema = selectedSchema(catalog, schemaFilter);
+                var cachedPage = cache.metadataPage(connectionId, selectedSchema, keyword, page, pageSize);
+                if (cachedPage.isPresent()) {
+                    return new InspectionLoad(catalog, selectedSchema, cachedPage.get(), true);
+                }
             }
             try (Connection connection = connections.open(connectionId)) {
+                if (catalog == null) {
+                    catalog = loadSchemaCatalog(connectionId, connection, dbConnection, dialect);
+                }
+                String selectedSchema = selectedSchema(catalog, schemaFilter);
                 MetadataCacheService.MetadataObjectPage loaded = queryObjectPage(
                         connectionId, connection, dialect, selectedSchema, keyword, MatchMode.CONTAINS,
                         page, pageSize, false
                 );
-                return new MetadataPageLoad(
+                return new InspectionLoad(
+                        catalog,
+                        selectedSchema,
                         cache.putMetadataPage(connectionId, selectedSchema, keyword, page, pageSize, loaded),
                         false
                 );
@@ -1204,8 +1284,10 @@ public class MetadataService {
     private record PageSlice<T>(List<T> items, int page, int pageSize, boolean hasMore) {
     }
 
-    private record MetadataPageLoad(
-            MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> value,
+    private record InspectionLoad(
+            MetadataCacheService.SchemaCatalogSnapshot catalog,
+            String selectedSchema,
+            MetadataCacheService.CachedValue<MetadataCacheService.MetadataObjectPage> pageValue,
             boolean cacheHit
     ) {
     }

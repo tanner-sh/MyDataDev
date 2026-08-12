@@ -1,5 +1,4 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { OnMount } from '@monaco-editor/react';
 import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Spin, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
@@ -14,9 +13,11 @@ import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
+import type { SqlEditorOnMount } from './sqlEditorTypes';
 import { inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
+import { enforceResultBudget } from './resultRetention';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -42,7 +43,6 @@ const MAX_STRUCTURE_CACHE_ENTRIES = 500;
 const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const METADATA_SEARCH_DEBOUNCE_MS = 500;
 const MAX_SQL_TABS = 20;
-const MAX_RETAINED_RESULT_UNITS = 400_000;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -53,45 +53,6 @@ const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then
 const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
-
-function resultUnits(tab: SqlTab) {
-  return tab.results.reduce((total, statement) => {
-    const result = statement.result;
-    if (!result?.resultSet) return total;
-    let units = result.rows.length * Math.max(result.columns.length, 1);
-    for (const row of result.rows) {
-      for (const value of row) {
-        if (typeof value === 'string') units += Math.ceil(value.length / 100);
-      }
-    }
-    return total + units;
-  }, 0);
-}
-
-function enforceResultBudget(tabs: SqlTab[], protectedTabId: string) {
-  let retained = 0;
-  const keep = new Set<string>();
-  const candidates = [
-    ...tabs.filter((tab) => tab.id === protectedTabId),
-    ...tabs.filter((tab) => tab.id !== protectedTabId).reverse()
-  ];
-  for (const tab of candidates) {
-    const units = resultUnits(tab);
-    if (tab.id === protectedTabId || retained + units <= MAX_RETAINED_RESULT_UNITS) {
-      keep.add(tab.id);
-      retained += units;
-    }
-  }
-  return tabs.map((tab) => {
-    if (keep.has(tab.id) || tab.results.length === 0) return tab;
-    return {
-      ...tab,
-      results: [],
-      activeResultKey: undefined,
-      message: '为控制浏览器内存，已释放该标签页的旧结果；SQL 文本仍保留，可重新执行。'
-    };
-  });
-}
 
 export default function App() {
   const [connections, setConnections] = useState<Connection[]>([]);
@@ -1477,7 +1438,7 @@ export default function App() {
   async function sqlCompletionItems(
     model: Monaco.editor.ITextModel,
     position: Monaco.Position,
-    monaco: Parameters<OnMount>[1],
+    monaco: Parameters<SqlEditorOnMount>[1],
     token: Monaco.CancellationToken,
     context: ReturnType<typeof analyzeSqlCompletion> = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position))
   ) {
@@ -1554,7 +1515,7 @@ export default function App() {
     return columnItems.length > 0 ? [...columnItems, ...keywords] : [...tableItems, ...keywords];
   }
 
-  const handleEditorMount: OnMount = (editor, monaco) => {
+  const handleEditorMount: SqlEditorOnMount = (editor, monaco) => {
     editorRef.current = editor;
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
@@ -2133,7 +2094,7 @@ export default function App() {
     if (sqlSessionConnectionIdRef.current !== connectionId) return;
     updateSqlTab(tabId, { sql });
   });
-  const mountSqlEditorEvent = useStableEvent<Parameters<OnMount>, ReturnType<OnMount>>((...args) => handleEditorMount(...args));
+  const mountSqlEditorEvent = useStableEvent<Parameters<SqlEditorOnMount>, ReturnType<SqlEditorOnMount>>((...args) => handleEditorMount(...args));
   const formatSqlEvent = useStableEvent((liveSql?: string) => formatSql(liveSql));
   const explainSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/explain', undefined, liveSql));
   const executeSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/execute', undefined, liveSql));

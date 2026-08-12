@@ -17,11 +17,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.time.Duration;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class MetadataCacheService {
     private static final Duration TTL = Duration.ofMinutes(10);
-    private final Cache<Long, SchemaCatalogSnapshot> schemaCatalogs = Caffeine.newBuilder()
+    private final ConcurrentHashMap<Long, AtomicLong> connectionGenerations = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, AtomicLong> directoryGenerations = new ConcurrentHashMap<>();
+    private final Cache<SchemaCatalogKey, SchemaCatalogSnapshot> schemaCatalogs = Caffeine.newBuilder()
             .maximumSize(100)
             .expireAfterAccess(TTL)
             .build();
@@ -56,12 +60,12 @@ public class MetadataCacheService {
             .build();
 
     public Optional<SchemaCatalogSnapshot> schemaCatalog(long connectionId) {
-        return Optional.ofNullable(schemaCatalogs.getIfPresent(connectionId));
+        return Optional.ofNullable(schemaCatalogs.getIfPresent(schemaCatalogKey(connectionId)));
     }
 
     public SchemaCatalogSnapshot putSchemaCatalog(long connectionId, List<String> schemas, String currentSchema, boolean currentIsCatalog) {
         SchemaCatalogSnapshot snapshot = new SchemaCatalogSnapshot(List.copyOf(schemas), currentSchema, currentIsCatalog, Instant.now());
-        schemaCatalogs.put(connectionId, snapshot);
+        schemaCatalogs.put(schemaCatalogKey(connectionId), snapshot);
         return snapshot;
     }
 
@@ -76,12 +80,12 @@ public class MetadataCacheService {
     }
 
     public Optional<CachedValue<List<DbObject>>> objectCatalog(long connectionId, String schemaName) {
-        return Optional.ofNullable(objectCatalogs.getIfPresent(new ObjectCatalogKey(connectionId, exact(schemaName))));
+        return Optional.ofNullable(objectCatalogs.getIfPresent(objectCatalogKey(connectionId, schemaName)));
     }
 
     public CachedValue<List<DbObject>> putObjectCatalog(long connectionId, String schemaName, List<DbObject> objects) {
         CachedValue<List<DbObject>> cached = new CachedValue<>(List.copyOf(objects), Instant.now());
-        objectCatalogs.put(new ObjectCatalogKey(connectionId, exact(schemaName)), cached);
+        objectCatalogs.put(objectCatalogKey(connectionId, schemaName), cached);
         return cached;
     }
 
@@ -129,7 +133,7 @@ public class MetadataCacheService {
             long connectionId, String schemaName, String kind, String keyword, int page, int pageSize
     ) {
         return Optional.ofNullable(schemaObjectPages.getIfPresent(
-                new SchemaObjectPageKey(connectionId, exact(schemaName), kind, folded(keyword), page, pageSize)
+                schemaObjectPageKey(connectionId, schemaName, kind, keyword, page, pageSize)
         ));
     }
 
@@ -138,58 +142,57 @@ public class MetadataCacheService {
             SchemaObjectPageValue pageValue
     ) {
         CachedValue<SchemaObjectPageValue> value = new CachedValue<>(pageValue, Instant.now());
-        schemaObjectPages.put(new SchemaObjectPageKey(
-                connectionId, exact(schemaName), kind, folded(keyword), page, pageSize
-        ), value);
+        schemaObjectPages.put(schemaObjectPageKey(connectionId, schemaName, kind, keyword, page, pageSize), value);
         return value;
     }
 
     public void evictSchemaObjectPages(long connectionId, String schemaName, String kind) {
         String normalizedSchema = exact(schemaName);
+        long generation = directoryGeneration(connectionId);
         schemaObjectPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId
+                && key.generation() == generation
                 && key.schemaName().equals(normalizedSchema)
                 && key.kind().equals(kind));
     }
 
     public Optional<CachedValue<SchemaObjectDetail>> schemaObjectDetail(long connectionId, String objectKey) {
-        return Optional.ofNullable(schemaObjectDetails.getIfPresent(new SchemaObjectDetailKey(connectionId, objectKey)));
+        return Optional.ofNullable(schemaObjectDetails.getIfPresent(schemaObjectDetailKey(connectionId, objectKey)));
     }
 
     public CachedValue<SchemaObjectDetail> putSchemaObjectDetail(long connectionId, String objectKey, SchemaObjectDetail detail) {
         CachedValue<SchemaObjectDetail> value = new CachedValue<>(detail, Instant.now());
-        schemaObjectDetails.put(new SchemaObjectDetailKey(connectionId, objectKey), value);
+        schemaObjectDetails.put(schemaObjectDetailKey(connectionId, objectKey), value);
         return value;
     }
 
     public void evictConnection(long connectionId) {
-        schemaCatalogs.invalidate(connectionId);
-        metadataPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        objectCatalogs.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        structures.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        details.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        relations.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        ddls.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        rowIdentities.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        schemaObjectPages.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
-        schemaObjectDetails.asMap().keySet().removeIf(key -> key.connectionId() == connectionId);
+        generation(connectionGenerations, connectionId).incrementAndGet();
+        generation(directoryGenerations, connectionId).incrementAndGet();
+    }
+
+    /**
+     * Invalidates only namespace/object listings. Object details, DDL and row
+     * identities remain valid after a user merely refreshes the explorer.
+     */
+    public void evictMetadataDirectory(long connectionId) {
+        generation(directoryGenerations, connectionId).incrementAndGet();
     }
 
     public void evictObject(long connectionId, String schemaName, String objectName) {
         String normalizedSchema = exact(schemaName);
         String normalizedObject = exact(objectName);
-        metadataPages.asMap().keySet().removeIf(pageKey -> pageKey.connectionId() == connectionId
-                && (normalizedSchema.isBlank() || pageKey.schemaName().equalsIgnoreCase(normalizedSchema)));
-        objectCatalogs.asMap().keySet().removeIf(catalogKey -> catalogKey.connectionId() == connectionId
-                && (normalizedSchema.isBlank() || catalogKey.schemaName().equalsIgnoreCase(normalizedSchema)));
-        structures.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
-        details.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
-        relations.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
-        ddls.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
-        rowIdentities.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, normalizedSchema, normalizedObject));
+        evictMetadataDirectory(connectionId);
+        long generation = connectionGeneration(connectionId);
+        structures.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, generation, normalizedSchema, normalizedObject));
+        details.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, generation, normalizedSchema, normalizedObject));
+        relations.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, generation, normalizedSchema, normalizedObject));
+        ddls.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, generation, normalizedSchema, normalizedObject));
+        rowIdentities.asMap().keySet().removeIf(key -> matchesObject(key, connectionId, generation, normalizedSchema, normalizedObject));
     }
 
-    private boolean matchesObject(ObjectKey key, long connectionId, String schemaName, String objectName) {
+    private boolean matchesObject(ObjectKey key, long connectionId, long generation, String schemaName, String objectName) {
         return key.connectionId() == connectionId
+                && key.generation() == generation
                 && (schemaName.isBlank() || key.schemaName().equalsIgnoreCase(schemaName))
                 && key.objectName().equalsIgnoreCase(objectName);
     }
@@ -201,11 +204,43 @@ public class MetadataCacheService {
     private ObjectKey key(long connectionId, String schemaName, String objectName) {
         // Quoted identifiers can differ only by case (for example "Foo" and
         // "foo" in PostgreSQL). Never fold object cache keys.
-        return new ObjectKey(connectionId, exact(schemaName), exact(objectName));
+        return new ObjectKey(connectionId, connectionGeneration(connectionId), exact(schemaName), exact(objectName));
     }
 
     private MetadataPageKey metadataPageKey(long connectionId, String schemaName, String keyword, int page, int pageSize) {
-        return new MetadataPageKey(connectionId, exact(schemaName), folded(keyword), page, pageSize);
+        return new MetadataPageKey(connectionId, directoryGeneration(connectionId), exact(schemaName), folded(keyword), page, pageSize);
+    }
+
+    private ObjectCatalogKey objectCatalogKey(long connectionId, String schemaName) {
+        return new ObjectCatalogKey(connectionId, directoryGeneration(connectionId), exact(schemaName));
+    }
+
+    private SchemaCatalogKey schemaCatalogKey(long connectionId) {
+        return new SchemaCatalogKey(connectionId, directoryGeneration(connectionId));
+    }
+
+    private SchemaObjectPageKey schemaObjectPageKey(
+            long connectionId, String schemaName, String kind, String keyword, int page, int pageSize
+    ) {
+        return new SchemaObjectPageKey(
+                connectionId, directoryGeneration(connectionId), exact(schemaName), kind, folded(keyword), page, pageSize
+        );
+    }
+
+    private SchemaObjectDetailKey schemaObjectDetailKey(long connectionId, String objectKey) {
+        return new SchemaObjectDetailKey(connectionId, connectionGeneration(connectionId), objectKey);
+    }
+
+    private long connectionGeneration(long connectionId) {
+        return generation(connectionGenerations, connectionId).get();
+    }
+
+    private long directoryGeneration(long connectionId) {
+        return generation(directoryGenerations, connectionId).get();
+    }
+
+    private AtomicLong generation(ConcurrentHashMap<Long, AtomicLong> generations, long connectionId) {
+        return generations.computeIfAbsent(connectionId, ignored -> new AtomicLong());
     }
 
     private String exact(String value) {
@@ -248,17 +283,21 @@ public class MetadataCacheService {
         }
     }
 
-    private record ObjectKey(long connectionId, String schemaName, String objectName) {
+    private record ObjectKey(long connectionId, long generation, String schemaName, String objectName) {
     }
 
-    private record MetadataPageKey(long connectionId, String schemaName, String keyword, int page, int pageSize) {
+    private record MetadataPageKey(long connectionId, long generation, String schemaName, String keyword, int page, int pageSize) {
     }
 
-    private record ObjectCatalogKey(long connectionId, String schemaName) {
+    private record ObjectCatalogKey(long connectionId, long generation, String schemaName) {
+    }
+
+    private record SchemaCatalogKey(long connectionId, long generation) {
     }
 
     private record SchemaObjectPageKey(
             long connectionId,
+            long generation,
             String schemaName,
             String kind,
             String keyword,
@@ -267,6 +306,6 @@ public class MetadataCacheService {
     ) {
     }
 
-    private record SchemaObjectDetailKey(long connectionId, String objectKey) {
+    private record SchemaObjectDetailKey(long connectionId, long generation, String objectKey) {
     }
 }
