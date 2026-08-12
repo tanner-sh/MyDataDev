@@ -8,7 +8,21 @@ export type ResultRowSelectionInput = {
   range?: boolean;
 };
 
-export type ResultRowSelection = { selected: string[]; anchor: string };
+export type ResultRowSelection = { selected: string[]; anchor?: string };
+
+export function replaceResultRowSelection(
+  displayed: string[],
+  requested: Iterable<string>,
+  anchor?: string
+): ResultRowSelection {
+  const requestedSet = new Set(requested);
+  const selected = displayed.filter((key) => requestedSet.has(key));
+  const displayedSet = new Set(displayed);
+  return {
+    selected,
+    anchor: anchor && displayedSet.has(anchor) ? anchor : selected[0]
+  };
+}
 
 export function updateResultRowSelection(input: ResultRowSelectionInput): ResultRowSelection {
   const displayedIndex = input.displayedIndex || new Map(input.displayed.map((key, index) => [key, index]));

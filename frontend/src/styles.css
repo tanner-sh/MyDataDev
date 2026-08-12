@@ -505,6 +505,10 @@ body {
   line-height: 20px;
 }
 
+.result-grid .ant-table-selection-column {
+  padding-inline: 6px !important;
+}
+
 .result-local-actions {
   min-width: max-content;
   display: flex;

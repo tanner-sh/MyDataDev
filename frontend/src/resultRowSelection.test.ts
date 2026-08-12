@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { updateResultRowSelection } from './resultRowSelection';
+import { replaceResultRowSelection, updateResultRowSelection } from './resultRowSelection';
 
 const displayed = ['1', '2', '3', '4'];
 
@@ -15,6 +15,16 @@ describe('result row selection', () => {
 
   it('selects a contiguous range with Shift', () => {
     expect(updateResultRowSelection({ current: ['2'], clicked: '4', displayed, anchor: '2', range: true })).toEqual({ selected: ['2', '3', '4'], anchor: '2' });
+  });
+
+  it('selects or clears all displayed rows in displayed order', () => {
+    expect(replaceResultRowSelection(displayed, displayed)).toEqual({ selected: displayed, anchor: '1' });
+    expect(replaceResultRowSelection(displayed, [])).toEqual({ selected: [], anchor: undefined });
+  });
+
+  it('drops rows outside the filtered result and preserves a valid anchor', () => {
+    expect(replaceResultRowSelection(['2', '4'], ['4', 'missing', '2'], '4')).toEqual({ selected: ['2', '4'], anchor: '4' });
+    expect(replaceResultRowSelection(['2', '4'], ['4'], 'missing')).toEqual({ selected: ['4'], anchor: '4' });
   });
 
   it('uses a cached index and preserves displayed order for large selections', () => {
