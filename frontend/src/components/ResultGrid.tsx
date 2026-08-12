@@ -11,7 +11,7 @@ import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sor
 import { downloadBlob } from '../api';
 import { timestamp } from '../utils';
 import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
-import { replaceResultRowSelection, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
+import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 
 const { Text } = Typography;
 type ResultRowClassName = (record: ResultRow, index: number, indent: number) => string;
@@ -435,17 +435,6 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   copySelectedRowsRef.current = copySelectedRows;
   const requestCopySelectedRows = useCallback(() => copySelectedRowsRef.current(), []);
 
-  useEffect(() => {
-    if (!active || !result?.resultSet) return;
-    const handleCopyShortcut = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c' || isTextEntryTarget(event.target)) return;
-      event.preventDefault();
-      requestCopySelectedRows();
-    };
-    window.addEventListener('keydown', handleCopyShortcut);
-    return () => window.removeEventListener('keydown', handleCopyShortcut);
-  }, [active, requestCopySelectedRows, result?.resultSet]);
-
   if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
   if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
 
@@ -455,21 +444,25 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       className={`result-grid-shell${fill ? ' result-grid-shell-fill' : ''}`}
       tabIndex={0}
       onKeyDown={(event) => {
-        if (isTextEntryTarget(event.target)) return;
-        const key = event.key.toLowerCase();
-        if ((event.ctrlKey || event.metaKey) && key === 'a') {
+        const action = resolveResultGridKeyboardAction({
+          key: event.key,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          textEntry: isTextEntryTarget(event.target)
+        });
+        if (action === 'select-all') {
           event.preventDefault();
           event.stopPropagation();
           selectAllDisplayedRows();
           return;
         }
-        if (key === 'escape') {
+        if (action === 'clear-selection') {
           event.preventDefault();
           event.stopPropagation();
           clearSelectedRows();
           return;
         }
-        if ((event.ctrlKey || event.metaKey) && key === 'c') {
+        if (action === 'copy') {
           event.preventDefault();
           event.stopPropagation();
           requestCopySelectedRows();
@@ -517,7 +510,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             />
           )}
         </div>
-        <Text type="secondary" className="result-grid-toolbar-hint">单击选择 · Shift 连选 · Ctrl/Cmd+A 全选 · Ctrl/Cmd+C 复制 · Esc 清空</Text>
+        <Text type="secondary" className="result-grid-toolbar-hint">单击选择 · Shift 连选 · 结果区聚焦时 Ctrl/Cmd+C 复制 · Ctrl/Cmd+A 全选 · Esc 清空</Text>
       </div>
       <div ref={viewportRef} className="data-grid-viewport">
         {scrollY === undefined ? (

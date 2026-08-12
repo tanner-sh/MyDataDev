@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { replaceResultRowSelection, updateResultRowSelection } from './resultRowSelection';
+import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection } from './resultRowSelection';
 
 const displayed = ['1', '2', '3', '4'];
 
@@ -49,5 +49,19 @@ describe('result row selection', () => {
       displayedIndex,
       toggle: true
     }).selected).toEqual(['100', '9000', '9500']);
+  });
+
+  it('resolves result shortcuts only for the focused result surface', () => {
+    expect(resolveResultGridKeyboardAction({ key: 'c', ctrlKey: true })).toBe('copy');
+    expect(resolveResultGridKeyboardAction({ key: 'C', metaKey: true })).toBe('copy');
+    expect(resolveResultGridKeyboardAction({ key: 'a', ctrlKey: true })).toBe('select-all');
+    expect(resolveResultGridKeyboardAction({ key: 'Escape' })).toBe('clear-selection');
+    expect(resolveResultGridKeyboardAction({ key: 'c' })).toBeUndefined();
+  });
+
+  it('does not handle shortcuts originating from an input control', () => {
+    expect(resolveResultGridKeyboardAction({ key: 'c', ctrlKey: true, textEntry: true })).toBeUndefined();
+    expect(resolveResultGridKeyboardAction({ key: 'a', metaKey: true, textEntry: true })).toBeUndefined();
+    expect(resolveResultGridKeyboardAction({ key: 'Escape', textEntry: true })).toBeUndefined();
   });
 });

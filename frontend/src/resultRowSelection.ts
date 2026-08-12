@@ -10,6 +10,23 @@ export type ResultRowSelectionInput = {
 
 export type ResultRowSelection = { selected: string[]; anchor?: string };
 
+export type ResultGridKeyboardAction = 'select-all' | 'copy' | 'clear-selection';
+
+export function resolveResultGridKeyboardAction(input: {
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  textEntry?: boolean;
+}): ResultGridKeyboardAction | undefined {
+  if (input.textEntry) return undefined;
+  const key = input.key.toLocaleLowerCase();
+  const modifier = input.ctrlKey || input.metaKey;
+  if (modifier && key === 'a') return 'select-all';
+  if (modifier && key === 'c') return 'copy';
+  if (key === 'escape') return 'clear-selection';
+  return undefined;
+}
+
 export function replaceResultRowSelection(
   displayed: string[],
   requested: Iterable<string>,
