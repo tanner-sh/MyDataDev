@@ -42,7 +42,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const tableRef = useRef<TableRef>(null);
   const gridShellRef = useRef<HTMLDivElement>(null);
   const pendingTargetActionRef = useRef<((parts: string[]) => void) | null>(null);
-  const lastScrolledRowsRef = useRef<SqlResult['rows'] | null>(null);
+  const lastDisplayedRowsRef = useRef<ResultRow[] | null>(null);
   const selectionStateRef = useRef<{
     selected: string[];
     selectedSet: ReadonlySet<string>;
@@ -115,13 +115,6 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     document.addEventListener('mousemove', handleMove);
     document.addEventListener('mouseup', handleUp);
   }, [resizeColumn]);
-
-  useLayoutEffect(() => {
-    if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
-    if (lastScrolledRowsRef.current === result.rows) return;
-    tableRef.current.scrollTo({ top: 0 });
-    lastScrolledRowsRef.current = result.rows;
-  }, [result?.resultSet, result?.rows, scrollY]);
 
   const columns = useMemo<ColumnsType<ResultRow>>(() => {
     if (!result?.resultSet) return [];
@@ -256,6 +249,13 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const displayedRowIndex = useMemo(() => new Map(displayedRowKeys.map((key, index) => [key, index])), [displayedRowKeys]);
   const displayedRowKeySet = useMemo(() => new Set(displayedRowKeys), [displayedRowKeys]);
   const selectedRowKeySet = useMemo(() => new Set(selectedRowKeys), [selectedRowKeys]);
+
+  useLayoutEffect(() => {
+    if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
+    if (lastDisplayedRowsRef.current === rows) return;
+    tableRef.current.scrollTo({ top: 0 });
+    lastDisplayedRowsRef.current = rows;
+  }, [result?.resultSet, rows, scrollY]);
 
   selectionStateRef.current = {
     selected: selectedRowKeys,

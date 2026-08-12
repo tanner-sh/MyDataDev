@@ -17,10 +17,11 @@ import {
 } from '@ant-design/icons';
 import { Button, Dropdown, Empty, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Key, ReactNode, UIEvent } from 'react';
 import {
   collapseObjectBranch,
+  clampObjectTreeScrollTop,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -32,6 +33,7 @@ import type { DbObject } from '../types';
 
 export type ObjectTreeProps = {
   objects: DbObject[];
+  scrollScopeKey: string;
   embedded?: boolean;
   showTypeGroups?: boolean;
   activeObject?: Pick<DbObject, 'schemaName' | 'name'> | null;
@@ -112,6 +114,7 @@ function TreeIcon({ children }: { children?: ReactNode }) {
 
 export const ObjectTree = memo(function ObjectTree({
   objects,
+  scrollScopeKey,
   embedded = false,
   showTypeGroups = true,
   activeObject,
@@ -142,6 +145,9 @@ export const ObjectTree = memo(function ObjectTree({
   const [viewportHeight, setViewportHeight] = useState(400);
   const scrollFrameRef = useRef<number | null>(null);
   const latestScrollRef = useRef({ top: 0, height: 0, clientHeight: 0 });
+  const scrollPositionsRef = useRef(new Map<string, number>());
+  const activeScrollScopeRef = useRef(scrollScopeKey);
+  const lastViewportRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRequestedRef = useRef(false);
 
   useEffect(() => {
@@ -193,6 +199,39 @@ export const ObjectTree = memo(function ObjectTree({
   const end = Math.min(rows.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
   const visibleRows = rows.slice(start, end);
 
+  useLayoutEffect(() => {
+    if (embedded) return;
+    const scopeChanged = activeScrollScopeRef.current !== scrollScopeKey;
+    if (scopeChanged && scrollFrameRef.current != null) {
+      cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
+    }
+    activeScrollScopeRef.current = scrollScopeKey;
+
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      lastViewportRef.current = null;
+      latestScrollRef.current = { top: 0, height: 0, clientHeight: 0 };
+      setScrollTop((current) => current === 0 ? current : 0);
+      return;
+    }
+
+    const viewportChanged = lastViewportRef.current !== viewport;
+    lastViewportRef.current = viewport;
+    const requestedScrollTop = scopeChanged || viewportChanged
+      ? scrollPositionsRef.current.get(scrollScopeKey) || 0
+      : viewport.scrollTop;
+    const nextScrollTop = clampObjectTreeScrollTop(requestedScrollTop, rows.length, viewport.clientHeight, ROW_HEIGHT, Boolean(loadingMore));
+    viewport.scrollTop = nextScrollTop;
+    scrollPositionsRef.current.set(scrollScopeKey, nextScrollTop);
+    latestScrollRef.current = {
+      top: nextScrollTop,
+      height: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight
+    };
+    setScrollTop((current) => current === nextScrollTop ? current : nextScrollTop);
+  }, [embedded, loadingMore, rows.length, scrollScopeKey, viewportHeight]);
+
   useEffect(() => {
     if (!keyboardObjectKey || embedded) return;
     const rowIndex = rows.findIndex((row) => row.kind === 'object' && String(row.key) === keyboardObjectKey);
@@ -236,6 +275,7 @@ export const ObjectTree = memo(function ObjectTree({
 
   function handleScroll(event: UIEvent<HTMLDivElement>) {
     const viewport = event.currentTarget;
+    scrollPositionsRef.current.set(scrollScopeKey, viewport.scrollTop);
     latestScrollRef.current = { top: viewport.scrollTop, height: viewport.scrollHeight, clientHeight: viewport.clientHeight };
     if (scrollFrameRef.current != null) return;
     scrollFrameRef.current = requestAnimationFrame(() => {

@@ -353,6 +353,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
         ) : (
           <ObjectTree
             key={`${selected?.id || 'none'}:${metadata?.selectedSchema || 'current-schema'}:${metadataAppliedKeyword}`}
+            scrollScopeKey={objectView}
             showTypeGroups={false}
             objects={visibleTableObjects}
             activeObject={activeObject}
@@ -364,9 +365,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
                 ? '当前已加载对象中暂无最近访问的表'
                 : metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
             structureLoadingKey={structureLoadingKey}
-            hasMore={metadata?.hasMore}
-            loadingMore={metadataLoading && !metadataBlockingLoading}
-            onLoadMore={onLoadMore}
+            hasMore={objectView === 'all' ? metadata?.hasMore : false}
+            loadingMore={objectView === 'all' && metadataLoading && !metadataBlockingLoading}
+            onLoadMore={objectView === 'all' ? onLoadMore : undefined}
             onLoadStructure={onLoadStructure}
             onOpenDetail={openObjectDetail}
             onOpenTable={openTableData}

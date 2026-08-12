@@ -77,3 +77,19 @@ export function collapseObjectBranch(keys: Key[], objectKey: Key) {
     return value !== target && !value.startsWith(`${target}:`);
   });
 }
+
+export function clampObjectTreeScrollTop(
+  requestedScrollTop: number,
+  rowCount: number,
+  viewportHeight: number,
+  rowHeight: number,
+  loadingMore = false
+) {
+  const safeRowCount = Math.max(0, Math.floor(rowCount));
+  const safeRowHeight = Math.max(1, rowHeight);
+  const safeViewportHeight = Math.max(0, viewportHeight);
+  const contentHeight = (safeRowCount + (loadingMore ? 1 : 0)) * safeRowHeight;
+  const maxScrollTop = Math.max(0, contentHeight - safeViewportHeight);
+  const safeRequested = Number.isFinite(requestedScrollTop) ? Math.max(0, requestedScrollTop) : 0;
+  return Math.min(safeRequested, maxScrollTop);
+}

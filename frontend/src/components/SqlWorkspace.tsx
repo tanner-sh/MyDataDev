@@ -3,6 +3,7 @@ import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, 
 import { DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import { selectSqlTemplate } from '../sqlTemplates';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
@@ -134,7 +135,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   }
 
   function appendSelectTemplate() {
-    const template = 'SELECT *\nFROM table_name\nLIMIT 100;';
+    const template = selectSqlTemplate(selected?.dbType);
     updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${template}`);
   }
 

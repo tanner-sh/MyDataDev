@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   collapseObjectBranch,
+  clampObjectTreeScrollTop,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -54,6 +55,18 @@ describe('object tree model', () => {
 
     expect(withLoadedObjectStructure(summaryObject, loadedObject)).toEqual(loadedObject);
     expect(withLoadedObjectStructure(summaryObject)).toBe(summaryObject);
+  });
+
+  it('clamps remembered virtual scroll positions to the current list height', () => {
+    expect(clampObjectTreeScrollTop(480, 100, 300, 30)).toBe(480);
+    expect(clampObjectTreeScrollTop(480, 12, 300, 30)).toBe(60);
+    expect(clampObjectTreeScrollTop(480, 5, 300, 30)).toBe(0);
+    expect(clampObjectTreeScrollTop(-20, 100, 300, 30)).toBe(0);
+  });
+
+  it('includes the loading row when calculating the virtual scroll range', () => {
+    expect(clampObjectTreeScrollTop(100, 10, 300, 30)).toBe(0);
+    expect(clampObjectTreeScrollTop(100, 10, 300, 30, true)).toBe(30);
   });
 
 });
