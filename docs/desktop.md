@@ -112,11 +112,11 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 `.github/workflows/desktop-release.yml` 在四种原生 runner 上并行构建。每个平台都会运行后端、前端和桌面端测试，生成安装包后启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。
 
-项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.1.1` 时：
+项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.2.0` 时：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 标签构建成功后会发布四个平台的安装包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
