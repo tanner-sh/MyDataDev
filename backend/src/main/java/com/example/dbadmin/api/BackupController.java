@@ -12,15 +12,15 @@ import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.service.BackupService;
 import jakarta.validation.Valid;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @RestController
@@ -90,13 +90,24 @@ public class BackupController {
         return service.cancel(id, historyId, actor);
     }
 
+    @PostMapping("/{id}/history/{historyId}/retry-upload")
+    public ResponseEntity<BackupHistory> retryUpload(@PathVariable long id, @PathVariable long historyId,
+                                                      @RequestHeader(value = "X-User", required = false) String actor) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.retryUpload(id, historyId, actor));
+    }
+
     @GetMapping("/{id}/download")
-    public ResponseEntity<Resource> download(@PathVariable long id) {
-        Path path = service.backupFile(id);
-        return ResponseEntity.ok()
+    public ResponseEntity<StreamingResponseBody> download(@PathVariable long id) {
+        BackupService.DownloadInfo info = service.backupDownloadInfo(id);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + path.getFileName() + "\"")
-                .body(new FileSystemResource(path));
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(info.fileName(), StandardCharsets.UTF_8).build().toString());
+        if (info.size() >= 0) response.contentLength(info.size());
+        return response.body(output -> {
+            try { service.writeBackupFile(id, output); }
+            catch (java.io.IOException error) { throw error; }
+            catch (Exception error) { throw new java.io.IOException(error); }
+        });
     }
 
     @GetMapping("/{id}/history")
@@ -109,12 +120,17 @@ public class BackupController {
     }
 
     @GetMapping("/{id}/history/{historyId}/download")
-    public ResponseEntity<Resource> downloadHistory(@PathVariable long id, @PathVariable long historyId) {
-        Path path = service.historyFile(id, historyId);
-        return ResponseEntity.ok()
+    public ResponseEntity<StreamingResponseBody> downloadHistory(@PathVariable long id, @PathVariable long historyId) throws Exception {
+        BackupService.DownloadInfo info = service.historyDownloadInfo(id, historyId);
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + path.getFileName() + "\"")
-                .body(new FileSystemResource(path));
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(info.fileName(), StandardCharsets.UTF_8).build().toString());
+        if (info.size() >= 0) response.contentLength(info.size());
+        return response.body(output -> {
+            try { service.writeHistoryFile(id, historyId, output); }
+            catch (java.io.IOException error) { throw error; }
+            catch (Exception error) { throw new java.io.IOException(error); }
+        });
     }
 
     @DeleteMapping("/{id}/history/{historyId}")

@@ -4,9 +4,12 @@ import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.model.StorageProfile;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
+import com.example.dbadmin.repo.StorageProfileRepository;
+import com.example.dbadmin.storage.BackupStorageRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
@@ -28,6 +31,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -360,6 +364,77 @@ class BackupServiceTest {
     }
 
     @Test
+    void uploadsBackupToRemoteStorageAndDeletesLocalStaging() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO users(id, name) VALUES (1, 'Alice')");
+        }
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupHistoryRepository histories = mock(BackupHistoryRepository.class);
+        StorageProfileRepository profiles = mock(StorageProfileRepository.class);
+        BackupStorageRegistry storage = mock(BackupStorageRegistry.class);
+        BackupTask task = remoteTask();
+        StorageProfile profile = storageProfile();
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+        when(profiles.findById(7L)).thenReturn(Optional.of(profile));
+        Path[] staging = new Path[1];
+        long[] uploadedSize = new long[1];
+        org.mockito.Mockito.doAnswer(invocation -> {
+            staging[0] = invocation.getArgument(1);
+            uploadedSize[0] = Files.size(staging[0]);
+            return null;
+        }).when(storage).upload(eq(profile), any(Path.class), anyString(), any());
+        when(storage.size(eq(profile), anyString())).thenAnswer(ignored -> uploadedSize[0]);
+        BackupService service = remoteService(url, repository, histories, profiles, storage);
+
+        service.run(1L, "admin");
+
+        ArgumentCaptor<BackupHistory> history = ArgumentCaptor.forClass(BackupHistory.class);
+        verify(histories).insert(history.capture());
+        assertThat(history.getValue().status()).isEqualTo("SUCCESS");
+        assertThat(history.getValue().filePath()).isNull();
+        assertThat(history.getValue().storageType()).isEqualTo("SFTP");
+        assertThat(history.getValue().storageProfileId()).isEqualTo(7L);
+        assertThat(history.getValue().storageObjectKey()).matches("connection-1/task-1/\\d{4}/\\d{2}/\\d{2}/.+\\.sql");
+        assertThat(staging[0]).doesNotExist();
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), anyString(), org.mockito.ArgumentMatchers.isNull(),
+                eq(uploadedSize[0]), eq("SFTP"), eq(7L), eq(history.getValue().storageObjectKey()));
+    }
+
+    @Test
+    void keepsCheckedLocalStagingWhenRemoteUploadFails() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY)");
+        }
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        BackupHistoryRepository histories = mock(BackupHistoryRepository.class);
+        StorageProfileRepository profiles = mock(StorageProfileRepository.class);
+        BackupStorageRegistry storage = mock(BackupStorageRegistry.class);
+        BackupTask task = remoteTask();
+        StorageProfile profile = storageProfile();
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+        when(profiles.findById(7L)).thenReturn(Optional.of(profile));
+        doThrow(new java.io.IOException("network unavailable")).when(storage)
+                .upload(eq(profile), any(Path.class), anyString(), any());
+        BackupService service = remoteService(url, repository, histories, profiles, storage);
+
+        assertThatThrownBy(() -> service.run(1L, "admin"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("上传文件服务失败");
+
+        ArgumentCaptor<BackupHistory> history = ArgumentCaptor.forClass(BackupHistory.class);
+        verify(histories).insert(history.capture());
+        assertThat(history.getValue().status()).isEqualTo("FAILED");
+        assertThat(history.getValue().phase()).isEqualTo("UPLOAD_FAILED");
+        assertThat(history.getValue().stagingExpiresAt()).isAfter(Instant.now());
+        assertThat(Path.of(history.getValue().filePath())).isRegularFile();
+        assertThat(history.getValue().checksumSha256()).hasSize(64);
+        verify(repository).updateStatus(eq(1L), eq("FAILED"), contains("network unavailable"));
+    }
+
+    @Test
     void deleteHistoryKeepsFileByDefaultAndRefreshesTaskSummary() throws Exception {
         Path oldFile = tempDir.resolve("old.sql");
         Files.writeString(oldFile, "old");
@@ -526,6 +601,34 @@ class BackupServiceTest {
                 mock(AuditRepository.class),
                 properties
         );
+    }
+
+    private BackupService remoteService(String url, BackupTaskRepository repository, BackupHistoryRepository histories,
+                                        StorageProfileRepository profiles, BackupStorageRegistry storage) {
+        ConnectionService connections = mock(ConnectionService.class);
+        try {
+            when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+        } catch (Exception error) {
+            throw new IllegalStateException(error);
+        }
+        when(connections.require(anyLong())).thenReturn(new DbConnection(1, "Local DB", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        AppProperties properties = new AppProperties();
+        properties.getBackup().setDirectory(tempDir.toString());
+        return BackupServiceTestFixture.create(repository, histories, connections, mock(AuditRepository.class), properties,
+                new com.example.dbadmin.core.DialectRegistry(), mock(BackupExecutionCoordinator.class), profiles, storage);
+    }
+
+    private BackupTask remoteTask() {
+        return new BackupTask(1, "remote", 1, "TABLES", "PUBLIC", "USERS", List.of("USERS"), "SQL", null,
+                null, null, null, false, null, null, null, null, null, null, null,
+                7L, "SFTP 备份", "SFTP", null, null, null);
+    }
+
+    private StorageProfile storageProfile() {
+        Instant now = Instant.now();
+        return new StorageProfile(7, "SFTP 备份", "SFTP", "files.internal", 22, "db-backups", "backup",
+                "ciphertext", null, null, null, null, null, "", null, "PASSWORD", null, null,
+                "SHA256:key", false, true, null, null, null, now, now);
     }
 
     private BackupTask task(String scope, String schema, String table) {

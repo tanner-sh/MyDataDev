@@ -13,10 +13,12 @@ import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.model.RestoreJob;
 import com.example.dbadmin.model.RestoreUpload;
+import com.example.dbadmin.model.StorageProfile;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
 import com.example.dbadmin.repo.RestoreUploadRepository;
+import com.example.dbadmin.storage.BackupStorageRegistry;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -27,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -74,6 +77,7 @@ public class RestoreService {
     private final NativeToolLocator nativeTools;
     private final BackgroundTaskControl taskControl;
     private final LargeFileUploadGuard uploadGuard;
+    private final BackupStorageRegistry storage;
     private final Map<String, PreparedPlan> plans = new ConcurrentHashMap<>();
     private final Map<Long, Statement> runningStatements = new ConcurrentHashMap<>();
     private final Map<Long, Process> runningProcesses = new ConcurrentHashMap<>();
@@ -84,7 +88,8 @@ public class RestoreService {
                           ConnectionService connections, ExecutionGuard guard, AuditRepository audit, AppProperties properties,
                           SqlRestoreTranslator translator, DialectRegistry dialectRegistry,
                           BackupExecutionCoordinator coordinator, ObjectMapper objectMapper, NativeToolLocator nativeTools,
-                          BackgroundTaskControl taskControl, LargeFileUploadGuard uploadGuard) {
+                          BackgroundTaskControl taskControl, LargeFileUploadGuard uploadGuard,
+                          BackupStorageRegistry storage) {
         this.uploads = uploads;
         this.jobs = jobs;
         this.histories = histories;
@@ -99,6 +104,7 @@ public class RestoreService {
         this.nativeTools = nativeTools;
         this.taskControl = taskControl;
         this.uploadGuard = uploadGuard;
+        this.storage = storage;
     }
 
     @PostConstruct
@@ -328,6 +334,7 @@ public class RestoreService {
         } finally {
             runningStatements.remove(id);
             runningProcesses.remove(id);
+            deleteRemoteCache(Path.of(job.sourceFilePath()));
         }
     }
 
@@ -489,12 +496,17 @@ public class RestoreService {
         }
     }
 
-    private SourceFile resolveSource(RestoreSourceRef ref, String requestedFormat, String requestedDbType) {
+    private SourceFile resolveSource(RestoreSourceRef ref, String requestedFormat, String requestedDbType) throws Exception {
         if (ref == null || ref.id() == null) throw new IllegalArgumentException("恢复来源不能为空。");
         if ("HISTORY".equalsIgnoreCase(ref.kind())) {
             BackupHistory history = histories.findById(ref.id()).orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + ref.id()));
-            if (history.filePath() == null) throw new IllegalArgumentException("该历史没有可恢复文件。");
-            Path path = FileIntegrity.checkedPath(restoreRoot(), history.filePath());
+            Path path;
+            if (history.storageProfileId() != null && history.storageObjectKey() != null && !history.storageObjectKey().isBlank()) {
+                path = materializeRemoteHistory(history);
+            } else {
+                if (history.filePath() == null) throw new IllegalArgumentException("该历史没有可恢复文件。");
+                path = FileIntegrity.checkedPath(restoreRoot(), history.filePath());
+            }
             String format = history.fileFormat() == null ? formatFromMethod(history.backupMethod(), requestedFormat) : history.fileFormat();
             String dbType = history.sourceDbType() == null ? blankToNull(requestedDbType) : history.sourceDbType();
             return new SourceFile("HISTORY", history.id(), path.getFileName().toString(), path,
@@ -507,6 +519,30 @@ public class RestoreService {
                     upload.checksumSha256(), upload.fileFormat(), upload.sourceDbType() == null ? requestedDbType : upload.sourceDbType());
         }
         throw new IllegalArgumentException("不支持的恢复来源：" + ref.kind());
+    }
+
+    private Path materializeRemoteHistory(BackupHistory history) throws Exception {
+        StorageProfile profile = storage.requireProfile(history.storageProfileId());
+        Path root = remoteCacheRoot();
+        Files.createDirectories(root);
+        long expectedSize = history.fileSize() == null ? storage.size(profile, history.storageObjectKey()) : history.fileSize();
+        if (expectedSize > 0 && Files.getFileStore(root).getUsableSpace() < expectedSize + 100L * 1024 * 1024) {
+            throw new IllegalStateException("服务器恢复缓存目录剩余空间不足。");
+        }
+        String sourceName = safeName(history.storageObjectKey());
+        Path target = root.resolve("history-" + history.id() + "-" + UUID.randomUUID() + "-" + sourceName).normalize();
+        if (!target.startsWith(root)) throw new IllegalArgumentException("远端备份文件名不安全。");
+        try (OutputStream output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
+            storage.download(profile, history.storageObjectKey(), output, ignored -> { });
+        } catch (Exception error) {
+            Files.deleteIfExists(target);
+            throw error;
+        }
+        if (expectedSize >= 0 && Files.size(target) != expectedSize) {
+            Files.deleteIfExists(target);
+            throw new IllegalStateException("远端备份下载不完整，文件大小校验失败。");
+        }
+        return target;
     }
 
     private void validateNativeCompatibility(String format, String sourceDbType, String targetDbType, String toolPath, List<String> errors) {
@@ -562,11 +598,54 @@ public class RestoreService {
                 uploads.delete(upload.id());
             } catch (Exception ignored) { }
         }
-        plans.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(Instant.now()));
+        plans.entrySet().removeIf(entry -> {
+            if (!entry.getValue().expiresAt().isBefore(Instant.now())) return false;
+            deleteRemoteCache(entry.getValue().source().path());
+            return true;
+        });
+        cleanupRemoteCache();
     }
 
     private Path restoreRoot() {
         return Path.of(properties.getBackup().getDirectory()).toAbsolutePath().normalize();
+    }
+
+    private Path remoteCacheRoot() {
+        return restoreRoot().resolve(".restore-cache").toAbsolutePath().normalize();
+    }
+
+    private void deleteRemoteCache(Path path) {
+        try {
+            Path checked = path.toAbsolutePath().normalize();
+            if (checked.startsWith(remoteCacheRoot())) Files.deleteIfExists(checked);
+        } catch (Exception error) {
+            log.warn("Unable to delete remote restore cache file {}", path, error);
+        }
+    }
+
+    private void cleanupRemoteCache() {
+        Path root = remoteCacheRoot();
+        if (!Files.isDirectory(root)) return;
+        Instant cutoff = Instant.now().minus(Math.max(1, properties.getRestore().getRemoteCacheTtlHours()), ChronoUnit.HOURS);
+        Set<Path> activePaths = jobs.findActive(null).stream()
+                .map(RestoreJob::sourceFilePath)
+                .map(Path::of)
+                .map(path -> path.toAbsolutePath().normalize())
+                .collect(java.util.stream.Collectors.toSet());
+        try (var files = Files.list(root)) {
+            files.filter(Files::isRegularFile).forEach(path -> {
+                try {
+                    if (!activePaths.contains(path.toAbsolutePath().normalize())
+                            && Files.getLastModifiedTime(path).toInstant().isBefore(cutoff)) {
+                        Files.deleteIfExists(path);
+                    }
+                } catch (Exception error) {
+                    log.warn("Unable to clean remote restore cache file {}", path, error);
+                }
+            });
+        } catch (Exception error) {
+            log.warn("Unable to scan remote restore cache directory {}", root, error);
+        }
     }
 
     private FileFingerprint verifyChecksum(Path path, String expected) throws Exception {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Button, Empty, List, Pagination, Space, Spin, Tag, Typography, message } from 'antd';
-import { DownloadOutlined, RedoOutlined } from '@ant-design/icons';
+import { DownloadOutlined, RedoOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadFromUrl } from '../api';
 import { API } from '../constants';
 import type { BackupHistory, BackupHistoryPage, Connection } from '../types';
@@ -14,6 +14,7 @@ export function BackupHistoryCenter({ selected, onRestore }: { selected: Connect
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [retryingId, setRetryingId] = useState<number | null>(null);
 
   useEffect(() => {
     setPage(0);
@@ -38,17 +39,32 @@ export function BackupHistoryCenter({ selected, onRestore }: { selected: Connect
     }
   }
 
+  async function retryUpload(history: BackupHistory) {
+    setRetryingId(history.id);
+    try {
+      await api(`/backups/${history.taskId}/history/${history.id}/retry-upload`, { method: 'POST' });
+      toast.success('已重新加入文件服务上传队列');
+      await load(page);
+    } catch (error) {
+      toast.error(`重试上传失败：${(error as Error).message}`);
+    } finally {
+      setRetryingId(null);
+    }
+  }
+
   return <div className="backup-history-center">
     {holder}
     <Spin spinning={loading}>
       {rows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份历史' : '请选择连接'} /> : <List dataSource={rows} renderItem={(history) => {
-        const restorable = history.status === 'SUCCESS' && Boolean(history.filePath);
+        const fileAvailable = history.fileAvailable ?? Boolean(history.filePath);
+        const restorable = history.status === 'SUCCESS' && fileAvailable;
         return <List.Item actions={[
-          <Button key="download" size="small" type="text" icon={<DownloadOutlined />} disabled={!history.filePath} onClick={() => downloadFromUrl(`${API}/backups/${history.taskId}/history/${history.id}/download`)}>下载</Button>,
+          ...(history.phase === 'UPLOAD_FAILED' && history.stagingAvailable ? [<Button key="retry" size="small" type="text" icon={<ReloadOutlined />} loading={retryingId === history.id} disabled={retryingId !== null} onClick={() => void retryUpload(history)}>重试上传</Button>] : []),
+          <Button key="download" size="small" type="text" icon={<DownloadOutlined />} disabled={!fileAvailable} onClick={() => downloadFromUrl(`${API}/backups/${history.taskId}/history/${history.id}/download`)}>下载</Button>,
           <Button key="restore" size="small" type="primary" ghost icon={<RedoOutlined />} disabled={!restorable} onClick={() => onRestore(history)}>恢复到…</Button>
         ]}>
           <List.Item.Meta title={<Space wrap><Tag color={statusColor(history.status)}>{backupStatusLabel(history.status)}</Tag><span>{history.fileFormat || history.backupMethod || 'SQL 备份'}</span><Text type="secondary">{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text></Space>}
-            description={<Space orientation="vertical" size={1}><Text type="secondary">{history.sourceDbType || '未知源类型'} · {formatFileSize(history.fileSize || 0)}{history.checksumSha256 ? ` · SHA-256 ${history.checksumSha256.slice(0, 12)}…` : ''}</Text>{history.message && <Text type="secondary">{history.message}</Text>}</Space>} />
+            description={<Space orientation="vertical" size={1}><Text type="secondary">{history.sourceDbType || '未知源类型'} · {formatFileSize(history.fileSize || 0)} · {history.storageType && history.storageType !== 'LOCAL' ? `${history.storageProfileName || `文件服务 #${history.storageProfileId}`} · ${history.storageType}` : '本地存储'}{history.checksumSha256 ? ` · SHA-256 ${history.checksumSha256.slice(0, 12)}…` : ''}</Text>{history.stagingExpiresAt && history.phase === 'UPLOAD_FAILED' && <Text type="warning">本地暂存文件保留至 {formatHistoryTime(history.stagingExpiresAt)}</Text>}{history.message && <Text type="secondary">{history.message}</Text>}</Space>} />
         </List.Item>;
       }} />}
     </Spin>

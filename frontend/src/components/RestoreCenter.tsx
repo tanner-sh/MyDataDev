@@ -126,7 +126,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
     if (!selected) return;
     try {
       const page = await api<BackupHistoryPage>(`/backups/history?connectionId=${selected.id}&page=0&pageSize=50`);
-      setHistoryRows(page.items.filter((row) => row.status === 'SUCCESS' && row.filePath));
+      setHistoryRows(page.items.filter((row) => row.status === 'SUCCESS' && (row.fileAvailable ?? Boolean(row.filePath))));
     } catch (error) {
       toast.error(`加载备份历史失败：${(error as Error).message}`);
     }

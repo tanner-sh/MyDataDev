@@ -12,11 +12,15 @@ import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.model.StorageProfile;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
+import com.example.dbadmin.repo.StorageProfileRepository;
+import com.example.dbadmin.storage.BackupStorageRegistry;
 import org.springframework.scheduling.support.CronExpression;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
@@ -29,6 +33,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -75,10 +80,12 @@ public class BackupService {
     private final RestoreJobRepository restoreJobs;
     private final NativeToolLocator nativeTools;
     private final BackgroundTaskControl taskControl;
+    private final StorageProfileRepository storageProfiles;
+    private final BackupStorageRegistry storage;
     private final Object[] taskLocks = taskLocks();
 
     @Autowired
-    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools, BackgroundTaskControl taskControl) {
+    public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools, BackgroundTaskControl taskControl, StorageProfileRepository storageProfiles, BackupStorageRegistry storage) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.connections = connections;
@@ -89,6 +96,8 @@ public class BackupService {
         this.restoreJobs = restoreJobs;
         this.nativeTools = nativeTools;
         this.taskControl = taskControl;
+        this.storageProfiles = storageProfiles;
+        this.storage = storage;
     }
 
     @PostConstruct
@@ -97,11 +106,11 @@ public class BackupService {
     }
 
     public List<BackupTask> list() {
-        return repository.findAll();
+        return enrichTasks(repository.findAll());
     }
 
     public List<BackupTask> list(Long connectionId) {
-        return connectionId == null ? repository.findAll() : repository.findByConnectionId(connectionId);
+        return enrichTasks(connectionId == null ? repository.findAll() : repository.findByConnectionId(connectionId));
     }
 
     public BackupTaskPage page(long connectionId, String keyword, String status, Integer page, Integer pageSize) {
@@ -112,7 +121,7 @@ public class BackupService {
         List<BackupTask> rows = repository.findPage(connectionId, keyword, status, size + 1, offset);
         boolean hasMore = rows.size() > size;
         if (hasMore) rows = rows.subList(0, size);
-        return new BackupTaskPage(List.copyOf(rows), safePage, size, hasMore);
+        return new BackupTaskPage(enrichTasks(rows), safePage, size, hasMore);
     }
 
     public BackupTask create(BackupTaskRequest request, String actor) {
@@ -140,6 +149,11 @@ public class BackupService {
             BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
             if (enabled) {
                 validateCron(task.cron(), true);
+                if (task.storageProfileId() != null) {
+                    StorageProfile profile = storageProfiles.findById(task.storageProfileId())
+                            .orElseThrow(() -> new IllegalArgumentException("文件服务配置不存在：" + task.storageProfileId()));
+                    if (!profile.enabled()) throw new ApiProblemException(HttpStatus.CONFLICT, "STORAGE_PROFILE_DISABLED", "文件服务已停用，不能启用该执行计划。");
+                }
             }
             repository.updateEnabled(id, enabled);
             audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
@@ -205,7 +219,13 @@ public class BackupService {
             historyRepository.updateExecution(executionId, "RUNNING", "PREPARING", 0, 1L, "正在准备备份。", null, null, null, null);
         }
         BackupFile backup;
+        StorageProfile storageProfile = null;
         try {
+            if (task.storageProfileId() != null) {
+                storageProfile = storageProfiles.findById(task.storageProfileId())
+                        .orElseThrow(() -> new IllegalArgumentException("文件服务配置不存在：" + task.storageProfileId()));
+                if (!storageProfile.enabled()) throw new IllegalStateException("文件服务已停用，备份任务未执行。");
+            }
             backup = runBackup(task, connection);
         } catch (Exception e) {
             boolean cancelled = e instanceof InterruptedException || Thread.currentThread().isInterrupted()
@@ -226,6 +246,79 @@ public class BackupService {
         String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
         String filePath = backup.path().toAbsolutePath().normalize().toString();
         String checksum = FileIntegrity.sha256(backup.path());
+        if (storageProfile != null) {
+            String objectKey = remoteObjectKey(task, backup.path());
+            Instant expiresAt = Instant.now().plus(Math.max(1, properties.getBackup().getFailedUploadRetentionDays()), java.time.temporal.ChronoUnit.DAYS);
+            long[] lastProgressNanos = {0};
+            boolean uploadCompleted = false;
+            try {
+                if (executionId != null) {
+                    historyRepository.updateProgress(executionId, "RUNNING", "UPLOADING", 0, backup.size(), "备份已生成，正在上传文件服务。");
+                }
+                StorageProfile selectedStorage = storageProfile;
+                storage.upload(selectedStorage, backup.path(), objectKey, transferred -> {
+                    if (executionId != null && progressDue(lastProgressNanos)) {
+                        historyRepository.updateProgress(executionId, "RUNNING", "UPLOADING", transferred, backup.size(), "正在上传文件服务。");
+                    }
+                });
+                uploadCompleted = true;
+                if (Thread.currentThread().isInterrupted()
+                        || executionId != null && historyRepository.findById(executionId).map(BackupHistory::cancelRequested).orElse(false)) {
+                    throw new InterruptedException("备份已取消。");
+                }
+                long remoteSize = storage.size(storageProfile, objectKey);
+                if (remoteSize != backup.size()) throw new IllegalStateException("远端文件大小校验失败。");
+                message = methodLabel(task.backupMethod()) + " 备份已上传至文件服务：" + storageProfile.name();
+                if (executionId == null) {
+                    recordHistory(new BackupHistory(0, id, connection.id(), "SUCCESS", message, null, backup.size(), startedAt, Instant.now(),
+                            fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), checksum,
+                            "COMPLETED", backup.size(), backup.size(), false, storageProfile.type(), storageProfile.id(),
+                            storageProfile.name(), objectKey, null));
+                } else {
+                    historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", backup.size(), backup.size(), message,
+                            null, backup.size(), checksum, Instant.now(), storageProfile.type(), storageProfile.id(), objectKey, null);
+                }
+                repository.updateStatus(id, "SUCCESS", message, null, backup.size(), storageProfile.type(), storageProfile.id(), objectKey);
+                Files.deleteIfExists(backup.path());
+            } catch (Exception uploadError) {
+                boolean cancelled = uploadError instanceof InterruptedException || Thread.currentThread().isInterrupted()
+                        || executionId != null && historyRepository.findById(executionId).map(BackupHistory::cancelRequested).orElse(false);
+                if (cancelled) {
+                    if (uploadCompleted) {
+                        try { storage.delete(storageProfile, objectKey); }
+                        catch (Exception cleanupError) { log.warn("Unable to remove cancelled remote backup task={} key={}", id, objectKey, cleanupError); }
+                    }
+                    Files.deleteIfExists(backup.path());
+                    if (executionId == null) {
+                        recordHistory(new BackupHistory(0, id, connection.id(), "CANCELLED", "备份已取消。", null, null, startedAt, Instant.now(),
+                                fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), null,
+                                "CANCELLED", 0L, backup.size(), true));
+                    } else {
+                        historyRepository.updateExecution(executionId, "CANCELLED", "CANCELLED", 0, backup.size(), "备份已取消。",
+                                null, null, null, Instant.now());
+                    }
+                    repository.updateStatus(id, "CANCELLED", "备份已取消。");
+                    audit.log(actor, "BACKUP_TASK_CANCELLED", task.name(), "备份已取消。");
+                    throw uploadError;
+                }
+                String uploadMessage = "备份已生成，但上传文件服务失败：" + safeMessage(uploadError);
+                if (executionId == null) {
+                    recordHistory(new BackupHistory(0, id, connection.id(), "FAILED", uploadMessage, filePath, backup.size(), startedAt, Instant.now(),
+                            fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), checksum,
+                            "UPLOAD_FAILED", 0L, backup.size(), false, storageProfile.type(), storageProfile.id(),
+                            storageProfile.name(), objectKey, expiresAt));
+                } else {
+                    historyRepository.updateExecution(executionId, "FAILED", "UPLOAD_FAILED", 0, backup.size(), uploadMessage,
+                            filePath, backup.size(), checksum, Instant.now(), storageProfile.type(), storageProfile.id(), objectKey, expiresAt);
+                }
+                repository.updateStatus(id, "FAILED", uploadMessage);
+                audit.log(actor, "BACKUP_UPLOAD_FAILED", task.name(), uploadMessage);
+                throw new IllegalStateException(uploadMessage, uploadError);
+            }
+            audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
+            cleanupRetention(task);
+            return repository.findById(id).orElseThrow();
+        }
         if (executionId == null) {
             recordHistory(new BackupHistory(0, id, connection.id(), "SUCCESS", message, filePath, backup.size(), startedAt, Instant.now(),
                     fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), checksum,
@@ -237,6 +330,17 @@ public class BackupService {
         audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
         cleanupRetention(task);
         return repository.findById(id).orElseThrow();
+    }
+
+    private String remoteObjectKey(BackupTask task, Path file) {
+        java.time.LocalDate today = java.time.LocalDate.now();
+        return "connection-" + task.connectionId() + "/task-" + task.id() + "/"
+                + today.getYear() + "/" + String.format("%02d", today.getMonthValue()) + "/"
+                + String.format("%02d", today.getDayOfMonth()) + "/" + file.getFileName();
+    }
+
+    private String safeMessage(Exception error) {
+        return error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage();
     }
 
     private String fileFormat(String method) {
@@ -350,10 +454,92 @@ public class BackupService {
             taskControl.requestCancel(backupOperationKey(taskId));
             coordinator.cancel(taskId);
             taskControl.release(history.connectionId(), backupOperationKey(taskId));
-            historyRepository.updateExecution(historyId, "CANCELLED", "CANCELLED", value(history.progressCurrent()), history.progressTotal(), "备份已取消。", null, null, null, Instant.now());
-            repository.updateStatus(taskId, "CANCELLED", "备份已取消。");
+            boolean uploadRetry = Set.of("UPLOAD_RETRY_QUEUED", "UPLOADING").contains(history.phase()) && history.filePath() != null;
+            if (uploadRetry) {
+                historyRepository.updateExecution(historyId, "FAILED", "UPLOAD_FAILED", value(history.progressCurrent()), history.fileSize(),
+                        "重新上传已取消，本地暂存文件仍保留。", history.filePath(), history.fileSize(), history.checksumSha256(),
+                        history.finishedAt(), history.storageType(), history.storageProfileId(), history.storageObjectKey(), history.stagingExpiresAt());
+                refreshTaskSummary(taskId);
+            } else {
+                historyRepository.updateExecution(historyId, "CANCELLED", "CANCELLED", value(history.progressCurrent()), history.progressTotal(), "备份已取消。", null, null, null, Instant.now());
+                repository.updateStatus(taskId, "CANCELLED", "备份已取消。");
+            }
             audit.log(actor, "BACKUP_TASK_CANCEL", String.valueOf(taskId), "history=" + historyId);
             return historyRepository.findById(historyId).orElseThrow();
+        }
+    }
+
+    public BackupHistory retryUpload(long taskId, long historyId, String actor) {
+        synchronized (taskLock(taskId)) {
+            BackupTask task = repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+            BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                    .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+            if (!"UPLOAD_FAILED".equals(history.phase()) || history.filePath() == null || history.storageProfileId() == null || history.storageObjectKey() == null) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_UPLOAD_NOT_RETRYABLE", "该历史记录没有可重试的上传文件。");
+            }
+            if (history.stagingExpiresAt() != null && history.stagingExpiresAt().isBefore(Instant.now())) {
+                throw new ApiProblemException(HttpStatus.GONE, "BACKUP_STAGING_EXPIRED", "本地暂存文件已过期，无法重新上传。");
+            }
+            Path path = checkedBackupPath(history.filePath());
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw new ApiProblemException(HttpStatus.GONE, "BACKUP_STAGING_EXPIRED", "本地暂存文件不存在，无法重新上传。");
+            }
+            StorageProfile profile = storageProfiles.findById(history.storageProfileId())
+                    .orElseThrow(() -> new IllegalStateException("备份使用的文件服务配置已不存在。"));
+            if (!profile.enabled()) throw new ApiProblemException(HttpStatus.CONFLICT, "STORAGE_PROFILE_DISABLED", "文件服务已停用，不能重新上传。");
+            if (coordinator.isRunning(taskId)) throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请稍后重试。");
+            historyRepository.updateProgress(historyId, "QUEUED", "UPLOAD_RETRY_QUEUED", 0, history.fileSize(), "重新上传已进入后台队列。");
+            try {
+                boolean accepted = coordinator.submit(taskId, () -> { }, () -> retryUploadInternal(task, history, profile, path, actor));
+                if (!accepted) throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请稍后重试。");
+            } catch (RejectedExecutionException error) {
+                historyRepository.updateProgress(historyId, "FAILED", "UPLOAD_FAILED", 0, history.fileSize(), "后台队列已满，请稍后重试。");
+                throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
+            }
+            audit.log(actor, "BACKUP_UPLOAD_RETRY", task.name(), "history=" + historyId);
+            return historyRepository.findById(historyId).orElseThrow();
+        }
+    }
+
+    private void retryUploadInternal(BackupTask task, BackupHistory history, StorageProfile profile, Path path, String actor) {
+        long[] lastProgressNanos = {0};
+        try {
+            if (history.checksumSha256() != null && !history.checksumSha256().equalsIgnoreCase(FileIntegrity.sha256(path))) {
+                throw new IllegalStateException("本地暂存文件校验失败，内容已发生变化。");
+            }
+            historyRepository.updateProgress(history.id(), "RUNNING", "UPLOADING", 0, history.fileSize(), "正在重新上传文件服务。");
+            storage.upload(profile, path, history.storageObjectKey(), transferred -> {
+                if (progressDue(lastProgressNanos)) historyRepository.updateProgress(history.id(), "RUNNING", "UPLOADING", transferred, history.fileSize(), "正在重新上传文件服务。");
+            });
+            long size = storage.size(profile, history.storageObjectKey());
+            if (history.fileSize() != null && size != history.fileSize()) throw new IllegalStateException("远端文件大小校验失败。");
+            String message = "备份已重新上传至文件服务：" + profile.name();
+            historyRepository.updateExecution(history.id(), "SUCCESS", "COMPLETED", size, size, message, null, size,
+                    history.checksumSha256(), history.finishedAt(), profile.type(), profile.id(), history.storageObjectKey(), null);
+            Files.deleteIfExists(path);
+            refreshTaskSummary(task.id());
+            audit.log(actor, "BACKUP_UPLOAD_RETRY_SUCCESS", task.name(), "history=" + history.id());
+        } catch (Exception error) {
+            String message = "重新上传失败：" + safeMessage(error);
+            historyRepository.updateExecution(history.id(), "FAILED", "UPLOAD_FAILED", 0, history.fileSize(), message,
+                    path.toString(), history.fileSize(), history.checksumSha256(), history.finishedAt(), profile.type(),
+                    profile.id(), history.storageObjectKey(), history.stagingExpiresAt());
+            refreshTaskSummary(task.id());
+            audit.log(actor, "BACKUP_UPLOAD_RETRY_FAILED", task.name(), message);
+        }
+    }
+
+    @Scheduled(cron = "0 41 3 * * *")
+    public void cleanupExpiredUploadStaging() {
+        List<BackupHistory> expired = historyRepository.findExpiredStaging(Instant.now(), 500);
+        for (BackupHistory history : expired) {
+            try {
+                Files.deleteIfExists(checkedBackupPath(history.filePath()));
+                historyRepository.markStagingExpired(history.id(), "上传失败的本地暂存文件已超过保留期限并被清理。");
+                refreshTaskSummary(history.taskId());
+            } catch (Exception error) {
+                log.warn("Unable to clean expired upload staging history={}", history.id(), error);
+            }
         }
     }
 
@@ -365,11 +551,19 @@ public class BackupService {
         List<BackupHistory> rows = historyRepository.findPageByConnectionId(connectionId, safePageSize + 1, offset);
         boolean hasMore = rows.size() > safePageSize;
         if (hasMore) rows = rows.subList(0, safePageSize);
-        return new BackupHistoryPage(List.copyOf(rows), safePage, safePageSize, hasMore);
+        return new BackupHistoryPage(enrichHistories(rows), safePage, safePageSize, hasMore);
     }
 
     private long value(Long value) {
         return value == null ? 0 : value;
+    }
+
+    private boolean progressDue(long[] lastProgressNanos) {
+        long now = System.nanoTime();
+        long interval = Math.max(100, properties.getBackgroundTasks().getProgressIntervalMs()) * 1_000_000L;
+        if (lastProgressNanos[0] != 0 && now - lastProgressNanos[0] < interval) return false;
+        lastProgressNanos[0] = now;
+        return true;
     }
 
     public Path backupFile(long id) {
@@ -384,6 +578,27 @@ public class BackupService {
         return path;
     }
 
+    public DownloadInfo backupDownloadInfo(long id) {
+        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+        if (!task.lastFileAvailable()) throw new IllegalStateException("该备份任务还没有生成可下载文件。");
+        if (task.lastStorageProfileId() != null && task.lastStorageObjectKey() != null) {
+            return new DownloadInfo(fileName(task.lastStorageObjectKey()), task.lastFileSize() == null ? -1 : task.lastFileSize());
+        }
+        Path path = backupFile(id);
+        return new DownloadInfo(path.getFileName().toString(), task.lastFileSize() == null ? -1 : task.lastFileSize());
+    }
+
+    public void writeBackupFile(long id, OutputStream output) throws Exception {
+        BackupTask task = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + id));
+        if (task.lastStorageProfileId() != null && task.lastStorageObjectKey() != null && "SUCCESS".equals(task.lastStatus())) {
+            StorageProfile profile = storageProfiles.findById(task.lastStorageProfileId())
+                    .orElseThrow(() -> new IllegalStateException("备份使用的文件服务配置已不存在。"));
+            storage.download(profile, task.lastStorageObjectKey(), output, ignored -> { });
+            return;
+        }
+        Files.copy(backupFile(id), output);
+    }
+
     public BackupHistoryPage history(long taskId, Integer page, Integer pageSize) {
         repository.findById(taskId).orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
         int safePage = Math.max(page == null ? 0 : page, 0);
@@ -395,7 +610,7 @@ public class BackupService {
         List<BackupHistory> rows = historyRepository.findPageByTaskId(taskId, safePageSize + 1, offset);
         boolean hasMore = rows.size() > safePageSize;
         if (hasMore) rows = rows.subList(0, safePageSize);
-        return new BackupHistoryPage(List.copyOf(rows), safePage, safePageSize, hasMore);
+        return new BackupHistoryPage(enrichHistories(rows), safePage, safePageSize, hasMore);
     }
 
     public Path historyFile(long taskId, long historyId) {
@@ -409,6 +624,30 @@ public class BackupService {
             throw new IllegalStateException("备份文件不存在，请重新执行备份任务。");
         }
         return path;
+    }
+
+    public DownloadInfo historyDownloadInfo(long taskId, long historyId) throws Exception {
+        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+        if (!history.fileAvailable()) throw new IllegalStateException("该备份历史没有可下载文件。");
+        if (history.storageProfileId() != null && history.storageObjectKey() != null) {
+            long size = history.fileSize() == null ? storage.size(storageProfiles.findById(history.storageProfileId()).orElseThrow(), history.storageObjectKey()) : history.fileSize();
+            return new DownloadInfo(fileName(history.storageObjectKey()), size);
+        }
+        Path path = historyFile(taskId, historyId);
+        return new DownloadInfo(path.getFileName().toString(), history.fileSize() == null ? Files.size(path) : history.fileSize());
+    }
+
+    public void writeHistoryFile(long taskId, long historyId, OutputStream output) throws Exception {
+        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+        if (history.storageProfileId() != null && history.storageObjectKey() != null && "SUCCESS".equals(history.status())) {
+            StorageProfile profile = storageProfiles.findById(history.storageProfileId())
+                    .orElseThrow(() -> new IllegalStateException("备份使用的文件服务配置已不存在。"));
+            storage.download(profile, history.storageObjectKey(), output, ignored -> { });
+            return;
+        }
+        Files.copy(historyFile(taskId, historyId), output);
     }
 
     public void deleteHistory(long taskId, long historyId, boolean deleteFile, String actor) throws Exception {
@@ -430,6 +669,11 @@ public class BackupService {
     }
 
     private void deleteHistoryFile(BackupHistory history) throws Exception {
+        if ("SUCCESS".equals(history.status()) && history.storageProfileId() != null && history.storageObjectKey() != null) {
+            StorageProfile profile = storageProfiles.findById(history.storageProfileId())
+                    .orElseThrow(() -> new IllegalStateException("备份使用的文件服务配置已不存在。"));
+            storage.delete(profile, history.storageObjectKey());
+        }
         if (history.filePath() == null || history.filePath().isBlank()) {
             return;
         }
@@ -446,7 +690,39 @@ public class BackupService {
             return;
         }
         BackupHistory latest = histories.get(0);
-        repository.updateSummary(taskId, latest.status(), latest.message(), latest.filePath(), latest.fileSize(), latest.finishedAt());
+        if (latest.storageProfileId() == null || latest.storageObjectKey() == null) {
+            repository.updateSummary(taskId, latest.status(), latest.message(), latest.filePath(), latest.fileSize(), latest.finishedAt());
+            return;
+        }
+        repository.updateSummary(taskId, latest.status(), latest.message(), latest.filePath(), latest.fileSize(), latest.finishedAt(),
+                latest.storageType(), latest.storageProfileId(), latest.storageObjectKey());
+    }
+
+    private String fileName(String objectKey) {
+        int index = Math.max(objectKey.lastIndexOf('/'), objectKey.lastIndexOf('\\'));
+        return index < 0 ? objectKey : objectKey.substring(index + 1);
+    }
+
+    public record DownloadInfo(String fileName, long size) { }
+
+    private List<BackupTask> enrichTasks(List<BackupTask> tasks) {
+        if (tasks.isEmpty()) return List.of();
+        Map<Long, StorageProfile> profiles = storageProfiles.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(StorageProfile::id, profile -> profile));
+        return tasks.stream().map(task -> {
+            StorageProfile profile = task.storageProfileId() == null ? null : profiles.get(task.storageProfileId());
+            return profile == null ? task : task.withStorageProfile(profile.name(), profile.type());
+        }).toList();
+    }
+
+    private List<BackupHistory> enrichHistories(List<BackupHistory> histories) {
+        if (histories.isEmpty()) return List.of();
+        Map<Long, StorageProfile> profiles = storageProfiles.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(StorageProfile::id, profile -> profile));
+        return histories.stream().map(history -> {
+            StorageProfile profile = history.storageProfileId() == null ? null : profiles.get(history.storageProfileId());
+            return profile == null ? history : history.withStorageProfileName(profile.name());
+        }).toList();
     }
 
     private BackupTask taskFromRequest(long id, BackupTaskRequest request, DbConnection connection, String lastStatus, String lastMessage, String lastFilePath, Long lastFileSize, Instant lastRunAt) {
@@ -462,6 +738,11 @@ public class BackupService {
         String nativeConnectName = blankToNull(request.nativeConnectName());
         Integer retentionDays = validateRetention(request.retentionDays(), "保留天数", 3650);
         Integer retentionCount = validateRetention(request.retentionCount(), "最大保留份数", 10000);
+        StorageProfile storageProfile = request.storageProfileId() == null ? null : storageProfiles.findById(request.storageProfileId())
+                .orElseThrow(() -> new IllegalArgumentException("文件服务配置不存在：" + request.storageProfileId()));
+        if (storageProfile != null && !storageProfile.enabled()) {
+            throw new IllegalArgumentException("所选文件服务已停用，请重新选择或启用配置。");
+        }
         if (!"SQL".equals(backupMethod)) {
             nativeTools.validateOverrideName(backupTool(backupMethod), toolPath);
         }
@@ -482,7 +763,9 @@ public class BackupService {
         return new BackupTask(
                 id, request.name().trim(), request.connectionId(), scope, resolved.namespace(), tableName, tableNames,
                 backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage,
-                lastFilePath, lastFileSize, lastRunAt, retentionDays, retentionCount
+                lastFilePath, lastFileSize, lastRunAt, retentionDays, retentionCount,
+                storageProfile == null ? null : storageProfile.id(), storageProfile == null ? null : storageProfile.name(),
+                storageProfile == null ? "LOCAL" : storageProfile.type(), null, null, null
         );
     }
 

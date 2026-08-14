@@ -35,7 +35,12 @@ public class BackupHistoryRepository {
             rs.getString("phase"),
             rs.getObject("progress_current", Long.class),
             rs.getObject("progress_total", Long.class),
-            rs.getBoolean("cancel_requested")
+            rs.getBoolean("cancel_requested"),
+            rs.getString("storage_type"),
+            rs.getObject("storage_profile_id", Long.class),
+            null,
+            rs.getString("storage_object_key"),
+            toInstant(rs.getTimestamp("staging_expires_at"))
     );
 
     public BackupHistoryRepository(JdbcTemplate jdbc) {
@@ -61,8 +66,8 @@ public class BackupHistoryRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO backup_history(task_id, connection_id, status, message, file_path, file_size, started_at, finished_at, file_format, backup_method, source_db_type, checksum_sha256, phase, progress_current, progress_total, cancel_requested)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO backup_history(task_id, connection_id, status, message, file_path, file_size, started_at, finished_at, file_format, backup_method, source_db_type, checksum_sha256, phase, progress_current, progress_total, cancel_requested, storage_type, storage_profile_id, storage_object_key, staging_expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setLong(1, history.taskId());
             ps.setLong(2, history.connectionId());
@@ -80,6 +85,10 @@ public class BackupHistoryRepository {
             ps.setObject(14, history.progressCurrent());
             ps.setObject(15, history.progressTotal());
             ps.setBoolean(16, history.cancelRequested());
+            ps.setString(17, history.storageType());
+            ps.setObject(18, history.storageProfileId());
+            ps.setString(19, history.storageObjectKey());
+            ps.setTimestamp(20, timestamp(history.stagingExpiresAt()));
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -108,12 +117,38 @@ public class BackupHistoryRepository {
 
     public void updateExecution(long id, String status, String phase, long current, Long total, String message,
                                 String filePath, Long fileSize, String checksum, Instant finishedAt) {
+        updateExecution(id, status, phase, current, total, message, filePath, fileSize, checksum, finishedAt,
+                filePath == null ? null : "LOCAL", null, null, null);
+    }
+
+    public void updateExecution(long id, String status, String phase, long current, Long total, String message,
+                                String filePath, Long fileSize, String checksum, Instant finishedAt,
+                                String storageType, Long storageProfileId, String storageObjectKey, Instant stagingExpiresAt) {
         jdbc.update("""
                 UPDATE backup_history
                 SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ?, file_path = ?,
-                    file_size = ?, checksum_sha256 = ?, finished_at = ?
+                    file_size = ?, checksum_sha256 = ?, finished_at = ?, storage_type = ?, storage_profile_id = ?,
+                    storage_object_key = ?, staging_expires_at = ?
                 WHERE id = ?
-                """, status, phase, current, total, message, filePath, fileSize, checksum, timestamp(finishedAt), id);
+                """, status, phase, current, total, message, filePath, fileSize, checksum, timestamp(finishedAt),
+                storageType, storageProfileId, storageObjectKey, timestamp(stagingExpiresAt), id);
+    }
+
+    public void updateProgress(long id, String status, String phase, long current, Long total, String message) {
+        jdbc.update("UPDATE backup_history SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ? WHERE id = ?",
+                status, phase, current, total, message, id);
+    }
+
+    public List<BackupHistory> findExpiredStaging(Instant cutoff, int limit) {
+        return jdbc.query("""
+                SELECT * FROM backup_history WHERE phase = 'UPLOAD_FAILED' AND staging_expires_at IS NOT NULL
+                  AND staging_expires_at < ? AND file_path IS NOT NULL ORDER BY staging_expires_at, id LIMIT ?
+                """, mapper, timestamp(cutoff), limit);
+    }
+
+    public void markStagingExpired(long id, String message) {
+        jdbc.update("UPDATE backup_history SET phase = 'UPLOAD_EXPIRED', file_path = NULL, staging_expires_at = NULL, message = ? WHERE id = ?",
+                message, id);
     }
 
     public void requestCancel(long id) {

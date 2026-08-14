@@ -1938,7 +1938,8 @@ export default function App() {
         cron: form.cron,
         enabled: form.enabled,
         retentionDays: form.retentionDays,
-        retentionCount: form.retentionCount
+        retentionCount: form.retentionCount,
+        storageProfileId: form.storageProfileId
       };
       const task = id
         ? await api<BackupTask>(`/backups/${id}`, { method: 'PUT', body: JSON.stringify(payload) })

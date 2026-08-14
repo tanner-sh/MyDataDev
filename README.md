@@ -39,7 +39,7 @@ MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理
 | **数据浏览与维护** | 游标分页浏览表数据，新增、编辑和删除行；提交前预览 SQL，对无稳定行标识和危险更新进行保护。 |
 | **导入与导出** | 将 CSV、JSON、SQL 数据导入为待提交记录；查询结果可导出为 CSV、JSON、SQL 或 XML。 |
 | **表与数据库对象** | 查看字段、主键、索引、外键、行数和 DDL；按方言管理表、视图、物化视图、序列、触发器、存储过程和函数。 |
-| **备份与恢复** | SQL 逻辑备份、定时任务、保留策略、历史与校验值；支持 MySQL/MariaDB 和 Oracle 原生工具以及后台恢复任务。 |
+| **备份与恢复** | SQL 逻辑备份、定时任务、保留策略、历史与校验值；支持 MySQL/MariaDB 和 Oracle 原生工具、SMB/NFS/FTP/SFTP 文件服务以及后台恢复任务。 |
 | **大 SQL 文件执行** | 上传并在后台执行 SQL 文件，跟踪语句进度、结果统计和失败位置，支持取消与异常任务恢复。 |
 | **只读 MCP Server** | 通过 Agent API Key、连接白名单和生产环境授权，为 AI 客户端提供元数据浏览、表数据浏览、只读查询和执行计划。 |
 | **Web 与桌面双模式** | Web 前后端可独立部署；桌面版内置前端、后端和 Java Runtime，支持 macOS、Windows 与 Linux。 |
@@ -175,11 +175,22 @@ npm run make
 | `spring.datasource.*` | MyDataDev 自身的 H2 元数据库连接。 |
 | `app.crypto-key` | 连接密码加密密钥，生产部署应通过 `DB_ADMIN_CRYPTO_KEY` 注入强密钥。 |
 | `app.sql.*` | SQL 行数、语句数量与执行超时限制。 |
-| `app.backup.*` | 备份目录、超时和 SQL 批量写入设置。 |
-| `app.restore.*` / `app.sql-file.*` | 恢复上传与大 SQL 文件任务限制。 |
+| `app.backup.*` | 备份目录、超时、SQL 批量写入，以及远端上传失败暂存文件的保留天数。 |
+| `app.restore.*` / `app.sql-file.*` | 恢复上传、远端恢复缓存与大 SQL 文件任务限制。 |
 | `app.mcp.*` | MCP 初次初始化的开关、资源限制和兼容配置。 |
 
 请勿将真实数据库密码、Agent API Key 或生产加密密钥提交到 Git。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
+
+### 备份文件服务
+
+在“备份与恢复 → 文件服务”中可以维护可复用的 SMB、NFS、FTP/FTPS 和 SFTP 配置，备份任务可逐个选择本地目录或文件服务。凭据和私钥使用 `app.crypto-key` 加密后保存在 MyDataDev 元数据库中；修改该密钥会导致已有密文无法解密。
+
+- SMB 使用 SMB 2/3，不启用 SMB 1。
+- NFS 当前支持 NFSv3 `AUTH_SYS`，需要配置 UID/GID，并要求后端可访问服务端 RPC portmapper、mountd 与 NFS 端口；不支持 NFSv4 和 Kerberos。
+- FTP 支持普通 FTP 和显式 FTPS，不支持隐式 FTPS。普通 FTP 不加密凭据与文件内容。
+- SFTP 支持密码和私钥认证。默认必须配置主机密钥指纹；显式 FTPS 默认校验证书与主机名。只有在可信隔离网络中才应跳过服务端身份校验。
+
+远端备份会先在 `app.backup.directory` 生成本地文件，再以临时文件名上传并原子改名。上传成功后删除本地暂存；上传失败时保留暂存文件供手动重试，默认 7 天后清理（`app.backup.failed-upload-retention-days`）。从远端历史恢复时会下载到受控缓存，恢复完成或超过 `app.restore.remote-cache-ttl-hours` 后清理。
 
 ## 文档
 

@@ -73,9 +73,11 @@ app:
     directory: ./backups
     timeout-seconds: 7200
     sql-insert-batch-size: 100
+    failed-upload-retention-days: 7
   restore:
     max-upload-bytes: 21474836480
     upload-ttl-hours: 24
+    remote-cache-ttl-hours: 24
   sql-file:
     directory: ./sql-files
     max-upload-bytes: 21474836480

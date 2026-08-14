@@ -105,6 +105,7 @@ public class AppProperties {
         private String directory = "./backups";
         private int timeoutSeconds = 7200;
         private int sqlInsertBatchSize = 100;
+        private int failedUploadRetentionDays = 7;
 
         public String getDirectory() {
             return directory;
@@ -129,11 +130,20 @@ public class AppProperties {
         public void setSqlInsertBatchSize(int sqlInsertBatchSize) {
             this.sqlInsertBatchSize = sqlInsertBatchSize;
         }
+
+        public int getFailedUploadRetentionDays() {
+            return failedUploadRetentionDays;
+        }
+
+        public void setFailedUploadRetentionDays(int failedUploadRetentionDays) {
+            this.failedUploadRetentionDays = failedUploadRetentionDays;
+        }
     }
 
     public static class Restore {
         private long maxUploadBytes = 20L * 1024 * 1024 * 1024;
         private int uploadTtlHours = 24;
+        private int remoteCacheTtlHours = 24;
 
         public long getMaxUploadBytes() {
             return maxUploadBytes;
@@ -150,6 +160,9 @@ public class AppProperties {
         public void setUploadTtlHours(int uploadTtlHours) {
             this.uploadTtlHours = uploadTtlHours;
         }
+
+        public int getRemoteCacheTtlHours() { return remoteCacheTtlHours; }
+        public void setRemoteCacheTtlHours(int remoteCacheTtlHours) { this.remoteCacheTtlHours = remoteCacheTtlHours; }
     }
 
     public static class SqlFile {

@@ -19,7 +19,8 @@ import {
   Tag,
   Tabs,
   Tooltip,
-  Typography
+  Typography,
+  message
 } from 'antd';
 import {
   CheckCircleOutlined,
@@ -51,7 +52,8 @@ import type {
   BackupTaskForm,
   Connection,
   NativeToolStatus,
-  NativeToolsResponse
+  NativeToolsResponse,
+  StorageProfile
 } from '../types';
 import { api } from '../api';
 import {
@@ -75,6 +77,7 @@ import { BackupHistoryCenter } from './BackupHistoryCenter';
 import { RestoreCenter } from './RestoreCenter';
 import { nativeToolForBackup, requestedToolPath } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
+import { StorageProfilePanel } from './StorageProfilePanel';
 
 const { Text } = Typography;
 const TARGET_PAGE_SIZE = 30;
@@ -118,6 +121,7 @@ type BackupTaskEditorValues = BackupScheduleFields & {
   enabled: boolean;
   retentionDays?: number;
   retentionCount?: number;
+  storageProfileId?: number;
 };
 
 export function BackupPanel(props: BackupPanelProps) {
@@ -126,6 +130,17 @@ export function BackupPanel(props: BackupPanelProps) {
   const [nativeTools, setNativeTools] = useState<NativeToolStatus[]>([]);
   const [nativeToolsLoading, setNativeToolsLoading] = useState(false);
   const [nativeToolsError, setNativeToolsError] = useState('');
+  const [storageProfiles, setStorageProfiles] = useState<StorageProfile[]>([]);
+  const [storageProfilesLoading, setStorageProfilesLoading] = useState(false);
+
+  const loadStorageProfiles = useCallback(async () => {
+    setStorageProfilesLoading(true);
+    try {
+      setStorageProfiles(await api<StorageProfile[]>('/storage-profiles'));
+    } finally {
+      setStorageProfilesLoading(false);
+    }
+  }, []);
 
   const loadNativeTools = useCallback(async () => {
     setNativeToolsLoading(true);
@@ -144,11 +159,16 @@ export function BackupPanel(props: BackupPanelProps) {
     if (activeTab === 'restore' && nativeTools.length === 0 && !nativeToolsLoading) void loadNativeTools();
   }, [activeTab, loadNativeTools, nativeTools.length, nativeToolsLoading]);
 
+  useEffect(() => {
+    void loadStorageProfiles().catch(() => { });
+  }, [loadStorageProfiles]);
+
   return <div className="backup-center-shell">
     <Tabs activeKey={activeTab} onChange={setActiveTab} destroyOnHidden items={[
-      { key: 'tasks', label: '备份任务', children: <BackupTasksPanel {...props} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
+      { key: 'tasks', label: '备份任务', children: <BackupTasksPanel {...props} storageProfiles={storageProfiles} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
       { key: 'history', label: '备份历史', children: <BackupHistoryCenter selected={props.selected} onRestore={(history) => { setRestoreHistory(history); setActiveTab('restore'); }} /> },
-      { key: 'restore', label: '恢复中心', children: <RestoreCenter connections={props.connections} selected={props.selected} initialHistory={restoreHistory} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> }
+      { key: 'restore', label: '恢复中心', children: <RestoreCenter connections={props.connections} selected={props.selected} initialHistory={restoreHistory} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
+      { key: 'storage', label: '文件服务', children: <StorageProfilePanel profiles={storageProfiles} loading={storageProfilesLoading} onReload={loadStorageProfiles} /> }
     ]} />
   </div>;
 }
@@ -179,8 +199,9 @@ function BackupTasksPanel({
   nativeTools,
   nativeToolsLoading,
   nativeToolsError,
-  onRefreshNativeTools
-}: BackupPanelProps & NativeToolDiscoveryProps) {
+  onRefreshNativeTools,
+  storageProfiles
+}: BackupPanelProps & NativeToolDiscoveryProps & { storageProfiles: StorageProfile[] }) {
   const [form] = Form.useForm<BackupTaskEditorValues>();
   const [modal, modalContextHolder] = Modal.useModal();
   const initialDraftRef = useRef('');
@@ -201,11 +222,13 @@ function BackupTasksPanel({
   const historyRequestIdRef = useRef(0);
   const [deletingHistoryId, setDeletingHistoryId] = useState<number | null>(null);
   const [cancellingHistoryId, setCancellingHistoryId] = useState<number | null>(null);
+  const [retryingHistoryId, setRetryingHistoryId] = useState<number | null>(null);
   const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
   const [schedulePreview, setSchedulePreview] = useState<BackupSchedulePreview | null>(null);
   const [schedulePreviewError, setSchedulePreviewError] = useState('');
   const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false);
   const [listSchedulePreviews, setListSchedulePreviews] = useState<Record<string, BackupSchedulePreview>>({});
+  const [toast, toastContextHolder] = message.useMessage();
 
   const scope = Form.useWatch('scope', form) || 'DATABASE';
   const schemaName = Form.useWatch('schemaName', form) || '';
@@ -389,6 +412,7 @@ function BackupTasksPanel({
       nativeConnectName: task.nativeConnectName || '',
       retentionDays: task.retentionDays,
       retentionCount: task.retentionCount,
+      storageProfileId: task.storageProfileId,
       enabled: Boolean(task.cron?.trim()) && task.enabled
     }, task.id);
   }
@@ -434,7 +458,8 @@ function BackupTasksPanel({
       cron: cron || undefined,
       enabled: Boolean(cron) && values.enabled,
       retentionDays: values.retentionDays,
-      retentionCount: values.retentionCount
+      retentionCount: values.retentionCount,
+      storageProfileId: values.storageProfileId
     };
     try {
       await onSave(editingId, payload);
@@ -515,6 +540,20 @@ function BackupTasksPanel({
     }
   }
 
+  async function retryUpload(historyId: number) {
+    if (!historyTask) return;
+    setRetryingHistoryId(historyId);
+    try {
+      await api(`/backups/${historyTask.id}/history/${historyId}/retry-upload`, { method: 'POST' });
+      toast.success('已重新加入文件服务上传队列');
+      await loadHistoryPage(historyTask, historyPage);
+    } catch (error) {
+      toast.error(`重试上传失败：${(error as Error).message}`);
+    } finally {
+      setRetryingHistoryId(null);
+    }
+  }
+
   async function handleTaskMenu(task: BackupTask, key: string) {
     if (key === 'edit') return openEditTask(task);
     if (key === 'download') return onDownload(task.id);
@@ -542,7 +581,7 @@ function BackupTasksPanel({
         label: task.enabled ? '暂停执行计划' : '启用执行计划',
         disabled: running
       }] : []),
-      { key: 'download', icon: <DownloadOutlined />, label: '下载最近备份', disabled: !task.lastFilePath },
+      { key: 'download', icon: <DownloadOutlined />, label: '下载最近备份', disabled: !(task.lastFileAvailable ?? Boolean(task.lastFilePath)) },
       { key: 'history', icon: <HistoryOutlined />, label: '查看执行历史' },
       { type: 'divider' },
       { key: 'delete', icon: <DeleteOutlined />, label: '删除任务', danger: true, disabled: running }
@@ -550,6 +589,14 @@ function BackupTasksPanel({
   }
 
   const methodOptions = backupMethodOptions(selected, backupMethod);
+  const storageOptions = [
+    { value: 0, label: '应用服务器本地目录' },
+    ...storageProfiles.map((profile) => ({
+      value: profile.id,
+      label: `${profile.name} · ${profile.type}${profile.enabled ? '' : '（已停用）'}`,
+      disabled: !profile.enabled
+    }))
+  ];
   const currentTableBackupDisabledReason = !selected
     ? '请先选择数据库连接'
     : !activeTable
@@ -559,6 +606,7 @@ function BackupTasksPanel({
   return (
     <section className="inspector-section">
       {modalContextHolder}
+      {toastContextHolder}
       <div className="inspector-section-header backup-context-header">
         <Text type="secondary">当前连接</Text>
         <Tag>{selected ? selected.name : '未选择连接'}</Tag>
@@ -575,6 +623,7 @@ function BackupTasksPanel({
         {backups.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务，点击上方按钮创建' : '请选择连接'} /> : (
           <div className="backup-task-list">
           {visibleBackups.map((backup) => {
+            const configuredStorage = backup.storageProfileId ? storageProfiles.find((profile) => profile.id === backup.storageProfileId) : null;
             const taskRunning = backup.lastStatus === 'RUNNING';
             const scheduled = Boolean(backup.cron?.trim());
             const taskSchedulePreview = backup.cron ? listSchedulePreviews[backup.cron.trim()] : undefined;
@@ -598,6 +647,7 @@ function BackupTasksPanel({
                   <Space orientation="vertical" size={1}>
                     <Text type="secondary">{backupMethodLabel(backup.backupMethod)} · {backupScopeLabel(backup.scope, effectiveNamespaceKind)}</Text>
                     <Text type="secondary">{backupTargetLabel(backup, effectiveNamespaceKind)} · {describeBackupSchedule(backup.cron)}{taskZoneId ? `（${taskZoneId}）` : ''}</Text>
+                    <Text type="secondary">存储位置：{configuredStorage ? `${configuredStorage.name} · ${configuredStorage.type}` : backup.storageProfileId ? `文件服务 #${backup.storageProfileId}` : '应用服务器本地目录'}</Text>
                     {recentDetails && <Text type="secondary">{recentDetails}</Text>}
                   </Space>
                 </div>
@@ -792,6 +842,14 @@ function BackupTasksPanel({
           )}
           {nativeBackup && toolMode === 'MANUAL' && <Alert type="info" showIcon title="当前使用手动工具路径" description="请在下方高级设置中确认应用服务器可访问的可执行文件路径。" />}
 
+          <Divider titlePlacement="start" plain>存储位置</Divider>
+          <Form.Item label="备份文件保存到" name="storageProfileId" getValueProps={(value?: number) => ({ value: value || 0 })}
+            normalize={(value: number) => value || undefined}
+            extra="远端备份会先在本地生成，再上传到文件服务；上传成功后删除本地暂存文件。">
+            <Select options={storageOptions} />
+          </Form.Item>
+          {storageProfiles.length === 0 && <Alert type="info" showIcon title="尚未配置文件服务" description="可在“文件服务”页签中新建 SMB、NFS、FTP/FTPS 或 SFTP 配置。" />}
+
           <Divider titlePlacement="start" plain>执行计划</Divider>
           <Form.Item label="执行频率" name="scheduleKind" rules={[{ required: true, message: '请选择执行频率' }]}>
             <Select
@@ -923,6 +981,7 @@ function BackupTasksPanel({
                     </Space>
                     <Space orientation="vertical" size={2} className="full-width">
                       {history.fileSize ? <Text type="secondary">文件大小：{formatFileSize(history.fileSize)}</Text> : null}
+                      <Text type="secondary">存储位置：{history.storageProfileName || history.storageType && history.storageType !== 'LOCAL' ? `${history.storageProfileName || `文件服务 #${history.storageProfileId}`} · ${history.storageType}` : '应用服务器本地目录'}</Text>
                       {history.message ? <Text type="secondary" className="backup-history-message">{history.message}</Text> : null}
                     </Space>
                   </div>
@@ -938,12 +997,15 @@ function BackupTasksPanel({
                         <Tooltip title="取消本次备份"><Button size="small" type="text" danger icon={<PauseCircleOutlined />} aria-label="取消本次备份" loading={cancellingHistoryId === history.id} disabled={cancellingHistoryId !== null || deletingHistoryId !== null} /></Tooltip>
                       </Popconfirm>
                     )}
-                    <Tooltip title={history.filePath ? '下载备份文件' : '没有可下载的备份文件'}>
-                      <Button size="small" type="text" icon={<DownloadOutlined />} aria-label="下载备份文件" disabled={!history.filePath || loading || deletingHistoryId !== null} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />
+                    {history.phase === 'UPLOAD_FAILED' && history.stagingAvailable && <Tooltip title="使用本地暂存文件重新上传到文件服务">
+                      <Button size="small" type="text" icon={<ReloadOutlined />} aria-label="重试上传" loading={retryingHistoryId === history.id} disabled={retryingHistoryId !== null || deletingHistoryId !== null} onClick={() => void retryUpload(history.id)} />
+                    </Tooltip>}
+                    <Tooltip title={(history.fileAvailable ?? Boolean(history.filePath)) ? '下载备份文件' : '没有可下载的备份文件'}>
+                      <Button size="small" type="text" icon={<DownloadOutlined />} aria-label="下载备份文件" disabled={!(history.fileAvailable ?? Boolean(history.filePath)) || loading || deletingHistoryId !== null} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />
                     </Tooltip>
                     <Popconfirm
                       title="删除备份历史"
-                      description={<Checkbox checked={Boolean(deleteHistoryFiles[history.id])} disabled={!history.filePath} onChange={(event) => setDeleteHistoryFiles((current) => ({ ...current, [history.id]: event.target.checked }))}>同时删除备份文件</Checkbox>}
+                      description={<Checkbox checked={Boolean(deleteHistoryFiles[history.id])} disabled={!(history.fileAvailable ?? Boolean(history.filePath)) && !history.stagingAvailable} onChange={(event) => setDeleteHistoryFiles((current) => ({ ...current, [history.id]: event.target.checked }))}>同时删除备份文件</Checkbox>}
                       okText="删除"
                       cancelText="取消"
                       okButtonProps={{ danger: true }}

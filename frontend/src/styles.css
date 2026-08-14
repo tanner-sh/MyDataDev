@@ -3146,6 +3146,24 @@ body.is-resizing-column * {
   width: 100%;
 }
 
+.storage-profile-panel > .ant-alert {
+  margin-bottom: 12px;
+}
+
+.storage-profile-form-row > .ant-space-item:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.storage-profile-form-row > .ant-space-item:last-child {
+  flex: 0 0 180px;
+}
+
+.storage-profile-form-row .ant-form-item,
+.storage-profile-form-row .ant-input-number {
+  width: 100%;
+}
+
 .restore-center {
   display: grid;
   gap: 14px;
@@ -3207,6 +3225,11 @@ body.is-resizing-column * {
   }
 
   .backup-retention-fields {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .storage-profile-form-row {
     display: grid;
     grid-template-columns: 1fr;
   }

@@ -29,7 +29,13 @@ public record BackupTask(
         Long lastFileSize,
         Instant lastRunAt,
         Integer retentionDays,
-        Integer retentionCount
+        Integer retentionCount,
+        Long storageProfileId,
+        String storageProfileName,
+        String storageType,
+        String lastStorageType,
+        Long lastStorageProfileId,
+        String lastStorageObjectKey
 ) {
     public BackupTask {
         String normalizedScope = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
@@ -67,7 +73,8 @@ public record BackupTask(
             Instant lastRunAt
     ) {
         this(id, name, connectionId, scope, schemaName, tableName, tableNames, backupMethod, toolPath, extraArgs,
-                nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
+                nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
+                null, null, null, null, null, null, null, null);
     }
 
     public BackupTask(
@@ -89,7 +96,9 @@ public record BackupTask(
             Long lastFileSize,
             Instant lastRunAt
     ) {
-        this(id, name, connectionId, scope, schemaName, tableName, null, backupMethod, toolPath, extraArgs, nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
+        this(id, name, connectionId, scope, schemaName, tableName, null, backupMethod, toolPath, extraArgs, nativeConnectName,
+                cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
+                null, null, null, null, null, null, null, null);
     }
 
     public BackupTask(
@@ -107,7 +116,22 @@ public record BackupTask(
             Long lastFileSize,
             Instant lastRunAt
     ) {
-        this(id, name, connectionId, scope, schemaName, tableName, null, "SQL", null, null, null, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt, null, null);
+        this(id, name, connectionId, scope, schemaName, tableName, null, "SQL", null, null, null, cron, enabled,
+                lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
+                null, null, null, null, null, null, null, null);
+    }
+
+    public BackupTask withStorageProfile(String profileName, String profileType) {
+        return new BackupTask(id, name, connectionId, scope, schemaName, tableName, tableNames, backupMethod, toolPath,
+                extraArgs, nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize,
+                lastRunAt, retentionDays, retentionCount, storageProfileId, profileName, profileType,
+                lastStorageType, lastStorageProfileId, lastStorageObjectKey);
+    }
+
+    @JsonProperty("lastFileAvailable")
+    public boolean lastFileAvailable() {
+        return "SUCCESS".equals(lastStatus) && (lastFilePath != null && !lastFilePath.isBlank()
+                || lastStorageObjectKey != null && !lastStorageObjectKey.isBlank());
     }
 
     @JsonProperty("zoneId")

@@ -44,7 +44,13 @@ public class BackupTaskRepository {
             rs.getObject("last_file_size", Long.class),
             toInstant(rs.getTimestamp("last_run_at")),
             rs.getObject("retention_days", Integer.class),
-            rs.getObject("retention_count", Integer.class)
+            rs.getObject("retention_count", Integer.class),
+            rs.getObject("storage_profile_id", Long.class),
+            null,
+            null,
+            rs.getString("last_storage_type"),
+            rs.getObject("last_storage_profile_id", Long.class),
+            rs.getString("last_storage_object_key")
     );
 
     public BackupTaskRepository(JdbcTemplate jdbc) {
@@ -95,8 +101,8 @@ public class BackupTaskRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled, retention_days, retention_count)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled, retention_days, retention_count, storage_profile_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, task.name());
             ps.setLong(2, task.connectionId());
@@ -111,6 +117,7 @@ public class BackupTaskRepository {
             ps.setBoolean(11, task.enabled());
             ps.setObject(12, task.retentionDays());
             ps.setObject(13, task.retentionCount());
+            ps.setObject(14, task.storageProfileId());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -127,10 +134,10 @@ public class BackupTaskRepository {
     public void update(long id, BackupTask task) {
         jdbc.update("""
                         UPDATE backup_task
-                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?, retention_days = ?, retention_count = ?
+                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?, retention_days = ?, retention_count = ?, storage_profile_id = ?
                         WHERE id = ?
                         """,
-                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), task.retentionDays(), task.retentionCount(), id);
+                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), task.retentionDays(), task.retentionCount(), task.storageProfileId(), id);
         writeTargets(id, task.tableNames());
     }
 
@@ -147,25 +154,37 @@ public class BackupTaskRepository {
     }
 
     public void updateStatus(long id, String status, String message) {
-        updateStatus(id, status, message, null, null);
+        updateStatus(id, status, message, null, null, null, null, null);
     }
 
     public void updateStatus(long id, String status, String message, String filePath, Long fileSize) {
+        updateStatus(id, status, message, filePath, fileSize, filePath == null ? null : "LOCAL", null, null);
+    }
+
+    public void updateStatus(long id, String status, String message, String filePath, Long fileSize,
+                             String storageType, Long storageProfileId, String storageObjectKey) {
         jdbc.update("""
-                        UPDATE backup_task
-                        SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?, last_run_at = CURRENT_TIMESTAMP
+                        UPDATE backup_task SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?,
+                          last_storage_type = ?, last_storage_profile_id = ?, last_storage_object_key = ?, last_run_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                         """,
-                status, message, filePath, fileSize, id);
+                status, message, filePath, fileSize, storageType, storageProfileId, storageObjectKey, id);
     }
 
     public void updateSummary(long id, String status, String message, String filePath, Long fileSize, Instant runAt) {
+        updateSummary(id, status, message, filePath, fileSize, runAt, filePath == null ? null : "LOCAL", null, null);
+    }
+
+    public void updateSummary(long id, String status, String message, String filePath, Long fileSize, Instant runAt,
+                              String storageType, Long storageProfileId, String storageObjectKey) {
         jdbc.update("""
                         UPDATE backup_task
-                        SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?, last_run_at = ?
+                        SET last_status = ?, last_message = ?, last_file_path = ?, last_file_size = ?, last_run_at = ?,
+                          last_storage_type = ?, last_storage_profile_id = ?, last_storage_object_key = ?
                         WHERE id = ?
                         """,
-                status, message, filePath, fileSize, runAt == null ? null : Timestamp.from(runAt), id);
+                status, message, filePath, fileSize, runAt == null ? null : Timestamp.from(runAt), storageType,
+                storageProfileId, storageObjectKey, id);
     }
 
     @Transactional
@@ -206,7 +225,8 @@ public class BackupTaskRepository {
                 task.id(), task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), tableNames,
                 task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(),
                 task.lastStatus(), task.lastMessage(), task.lastFilePath(), task.lastFileSize(), task.lastRunAt(),
-                task.retentionDays(), task.retentionCount()
+                task.retentionDays(), task.retentionCount(), task.storageProfileId(), task.storageProfileName(),
+                task.storageType(), task.lastStorageType(), task.lastStorageProfileId(), task.lastStorageObjectKey()
         );
     }
 
