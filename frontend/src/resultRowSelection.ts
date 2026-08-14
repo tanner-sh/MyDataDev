@@ -4,7 +4,6 @@ export type ResultRowSelectionInput = {
   displayed: string[];
   displayedIndex?: ReadonlyMap<string, number>;
   anchor?: string;
-  toggle?: boolean;
   range?: boolean;
 };
 
@@ -48,21 +47,16 @@ export function updateResultRowSelection(input: ResultRowSelectionInput): Result
     const clickedIndex = displayedIndex.get(input.clicked);
     if (anchorIndex !== undefined && clickedIndex !== undefined) {
       const range = input.displayed.slice(Math.min(anchorIndex, clickedIndex), Math.max(anchorIndex, clickedIndex) + 1);
-      if (!input.toggle) return { selected: range, anchor: input.anchor };
       const current = new Set(input.current);
       range.forEach((key) => current.add(key));
       return { selected: orderSelectedKeys(current, displayedIndex), anchor: input.anchor };
     }
   }
-  if (input.toggle) {
-    const current = new Set(input.current);
-    if (current.has(input.clicked)) {
-      return { selected: input.current.filter((key) => key !== input.clicked), anchor: input.clicked };
-    }
-    current.add(input.clicked);
-    return { selected: orderSelectedKeys(current, displayedIndex), anchor: input.clicked };
-  }
-  return { selected: [input.clicked], anchor: input.clicked };
+  const current = new Set(input.current);
+  if (current.has(input.clicked)) current.delete(input.clicked);
+  else current.add(input.clicked);
+  const selected = orderSelectedKeys(current, displayedIndex);
+  return { selected, anchor: selected.length > 0 ? input.clicked : undefined };
 }
 
 function orderSelectedKeys(keys: ReadonlySet<string>, displayedIndex: ReadonlyMap<string, number>): string[] {

@@ -1,7 +1,7 @@
 import { Button } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType, KeyboardEvent } from 'react';
-import { resolveSqlEditorShortcut, shouldLoadSqlEditor } from '../sqlEditorSurfaceModel';
+import { resolveSqlEditorShortcut, shouldLoadSqlEditor, toggleSqlLineComment } from '../sqlEditorSurfaceModel';
 import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 
 type SqlEditorComponent = ComponentType<SqlEditorProps>;
@@ -34,6 +34,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
   const componentRef = useRef<SqlEditorComponent | undefined>(undefined);
   const fallbackRef = useRef<HTMLTextAreaElement | null>(null);
   const focusEditorRef = useRef(false);
+  const pendingSelectionRef = useRef<{ start: number; end: number } | undefined>(undefined);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -71,7 +72,17 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     if (!shortcut) return;
     if (shortcut === 'execute' && executeDisabled) return;
     event.preventDefault();
-    if (shortcut === 'format') onFormat();
+    if (shortcut === 'comment') {
+      const result = toggleSqlLineComment(value, event.currentTarget.selectionStart, event.currentTarget.selectionEnd);
+      pendingSelectionRef.current = { start: result.selectionStart, end: result.selectionEnd };
+      onChange(result.value);
+      window.requestAnimationFrame(() => {
+        const fallback = fallbackRef.current;
+        if (fallback && document.activeElement === fallback) {
+          fallback.setSelectionRange(result.selectionStart, result.selectionEnd);
+        }
+      });
+    } else if (shortcut === 'format') onFormat();
     else onExecute();
   }
 
@@ -87,7 +98,20 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
           if (!focusEditorRef.current) return;
           editor.focus();
           const model = editor.getModel();
-          if (model) editor.setPosition(model.getPositionAt(value.length));
+          const pendingSelection = pendingSelectionRef.current;
+          if (model && pendingSelection) {
+            const start = model.getPositionAt(Math.min(pendingSelection.start, model.getValueLength()));
+            const end = model.getPositionAt(Math.min(pendingSelection.end, model.getValueLength()));
+            editor.setSelection({
+              startLineNumber: start.lineNumber,
+              startColumn: start.column,
+              endLineNumber: end.lineNumber,
+              endColumn: end.column
+            });
+          } else if (model) {
+            editor.setPosition(model.getPositionAt(value.length));
+          }
+          pendingSelectionRef.current = undefined;
           focusEditorRef.current = false;
         }}
         onChange={(next) => onChange(next || '')}

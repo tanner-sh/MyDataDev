@@ -109,6 +109,8 @@ const RESERVED_ALIAS_KEYWORDS = new Set([
 
 const TABLE_MODIFIERS = new Set(['ONLY', 'LATERAL']);
 
+const CONDITION_COLUMN_TRIGGER_KEYWORDS = new Set(['WHERE', 'ON', 'HAVING', 'AND', 'OR']);
+
 const TWO_CHARACTER_SYMBOLS = new Set([
   '<=', '>=', '<>', '!=', '||', '&&', '::', ':=', '=>', '->', '<<', '>>'
 ]);
@@ -314,6 +316,25 @@ export function analyzeSqlCompletion(sql: string, cursorPosition: number): SqlCo
 /** Monaco must ask the provider again as a table prefix grows instead of fuzzy-filtering a capped list. */
 export function isSqlCompletionListIncomplete(context: SqlCompletionContext): boolean {
   return context.mode === 'table';
+}
+
+/** Returns true for the first space after a condition keyword when table columns are available. */
+export function shouldTriggerSqlConditionColumnCompletion(context: SqlCompletionContext): boolean {
+  if (context.insideCommentOrString || context.mode !== 'column' || context.replacement.prefix) return false;
+  let previous: SqlToken | undefined;
+  for (let index = context.significantTokens.length - 1; index >= 0; index -= 1) {
+    if (context.significantTokens[index].end <= context.statement.cursor) {
+      previous = context.significantTokens[index];
+      break;
+    }
+  }
+  if (previous?.kind !== 'identifier' || previous.quoteStyle !== 'none'
+    || !CONDITION_COLUMN_TRIGGER_KEYWORDS.has(previous.value.toUpperCase())) return false;
+  const whitespace = context.statement.text.slice(
+    previous.end - context.statement.start,
+    context.statement.cursorInStatement
+  );
+  return whitespace === ' ';
 }
 
 /** Parses FROM/JOIN/UPDATE/INTO table names and their explicit or implicit aliases. */

@@ -10,7 +10,7 @@ import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletio
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
-import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, sqlTableQualifier } from './sqlCompletion';
+import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
 import type { SqlEditorOnMount } from './sqlEditorTypes';
@@ -1528,14 +1528,17 @@ export default function App() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
     completionProviderRef.current?.dispose();
     const provider = monaco.languages.registerCompletionItemProvider('sql', {
-      triggerCharacters: ['.'],
+      triggerCharacters: ['.', ' '],
       provideCompletionItems: async (
         model: Monaco.editor.ITextModel,
         position: Monaco.Position,
-        _context: Monaco.languages.CompletionContext,
+        providerContext: Monaco.languages.CompletionContext,
         token: Monaco.CancellationToken
       ) => {
         const completionContext = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
+        if (providerContext.triggerCharacter === ' ' && !shouldTriggerSqlConditionColumnCompletion(completionContext)) {
+          return { suggestions: [] };
+        }
         return {
           suggestions: await sqlCompletionItems(model, position, monaco, token, completionContext),
           incomplete: isSqlCompletionListIncomplete(completionContext)

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
-import { analyzeSqlCompletion, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences } from './sqlCompletion';
+import { analyzeSqlCompletion, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion } from './sqlCompletion';
 
 describe('SQL completion context', () => {
   it('only analyzes the statement containing the cursor', () => {
@@ -62,6 +62,35 @@ describe('SQL completion context', () => {
 
     expect(analyzeSqlCompletion(stringSql, stringSql.indexOf('users')).mode).toBe('none');
     expect(analyzeSqlCompletion(commentSql, commentSql.length).mode).toBe('none');
+  });
+
+  it('automatically triggers column completion after condition keywords', () => {
+    const statements = [
+      'select * from users where ',
+      'select * from users where active = 1 and ',
+      'select * from users where active = 1 or ',
+      'select role_id, count(*) from users group by role_id having ',
+      'select * from orders o join customers c on '
+    ];
+
+    statements.forEach((sql) => {
+      expect(shouldTriggerSqlConditionColumnCompletion(analyzeSqlCompletion(sql, sql.length))).toBe(true);
+    });
+  });
+
+  it('does not automatically trigger columns after unrelated or repeated spaces', () => {
+    const statements = [
+      'select * from users ',
+      'select * from users where  ',
+      'select * where ',
+      "select * from users where 'unfinished ",
+      "select * from users where status = 'OR' ",
+      'select * from users "WHERE" '
+    ];
+
+    statements.forEach((sql) => {
+      expect(shouldTriggerSqlConditionColumnCompletion(analyzeSqlCompletion(sql, sql.length))).toBe(false);
+    });
   });
 });
 

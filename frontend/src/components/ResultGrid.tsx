@@ -299,7 +299,6 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       displayed: current.displayed,
       displayedIndex: current.displayedIndex,
       anchor: current.anchor,
-      toggle: event.ctrlKey || event.metaKey,
       range: event.shiftKey
     });
     commitResultRowSelection(next);
