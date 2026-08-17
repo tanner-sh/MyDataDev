@@ -1390,7 +1390,8 @@ public class BackupService {
         String qualified = table(table.schema(), table.name(), quoteString);
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
-        String schemaPattern = scope.schemaPattern() == null ? null : metadataExactPattern(meta, scope.schemaPattern());
+        String schema = scope.schemaPattern();
+        String schemaPattern = schema == null ? null : metadataExactPattern(meta, schema);
         List<String> definitions = new ArrayList<>();
         try (ResultSet columns = meta.getColumns(scope.catalog(), schemaPattern, table.name(), "%")) {
             while (columns.next()) {
@@ -1409,7 +1410,7 @@ public class BackupService {
             }
         }
         List<String> primaryKeys = new ArrayList<>();
-        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schemaPattern, table.name())) {
+        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schema, table.name())) {
             java.util.TreeMap<Short, String> ordered = new java.util.TreeMap<>();
             while (keys.next()) ordered.put(keys.getShort("KEY_SEQ"), keys.getString("COLUMN_NAME"));
             primaryKeys.addAll(ordered.values());
@@ -1424,16 +1425,16 @@ public class BackupService {
         String qualified = table(table.schema(), table.name(), quoteString);
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
-        String schemaPattern = scope.schemaPattern() == null ? null : metadataExactPattern(meta, scope.schemaPattern());
+        String schema = scope.schemaPattern();
         Set<String> primaryIndexNames = new HashSet<>();
-        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schemaPattern, table.name())) {
+        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schema, table.name())) {
             while (keys.next()) {
                 String name = keys.getString("PK_NAME");
                 if (name != null) primaryIndexNames.add(name);
             }
         }
         Map<String, IndexBackup> indexes = new LinkedHashMap<>();
-        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schemaPattern, table.name(), false, false)) {
+        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schema, table.name(), false, false)) {
             while (rows.next()) {
                 String name = rows.getString("INDEX_NAME");
                 String column = rows.getString("COLUMN_NAME");
@@ -1451,7 +1452,7 @@ public class BackupService {
                     + entry.getValue().columns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
         }
         Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
-        try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schemaPattern, table.name())) {
+        try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schema, table.name())) {
             while (rows.next()) {
                 String name = rows.getString("FK_NAME");
                 String pkSchema = rows.getString("PKTABLE_SCHEM");

@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -59,13 +60,32 @@ public class SftpBackupStorage implements BackupStorage {
                 throw error;
             }
             try {
-                sftp.rename(temporary, target, SftpClient.CopyMode.Overwrite);
+                moveIntoPlace(sftp, temporary, target);
             } catch (Exception error) {
                 try { sftp.remove(temporary); } catch (Exception ignored) { }
                 throw error;
             }
             return null;
         });
+    }
+
+    static void moveIntoPlace(SftpClient sftp, String temporary, String target) throws IOException {
+        if (sftp.getVersion() >= SftpConstants.SFTP_V5) {
+            sftp.rename(temporary, target, SftpClient.CopyMode.Overwrite);
+            return;
+        }
+        removeIfExists(sftp, target);
+        sftp.rename(temporary, target);
+    }
+
+    private static void removeIfExists(SftpClient sftp, String path) throws IOException {
+        try {
+            sftp.stat(path);
+            sftp.remove(path);
+        } catch (SftpException error) {
+            if (error.getStatus() != SftpConstants.SSH_FX_NO_SUCH_FILE
+                    && error.getStatus() != SftpConstants.SSH_FX_NO_SUCH_PATH) throw error;
+        }
     }
 
     @Override

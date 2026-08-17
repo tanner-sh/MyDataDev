@@ -338,6 +338,36 @@ class BackupServiceTest {
     }
 
     @Test
+    void keepsExactSchemaNameForKeysAndIndexesWhenSchemaContainsUnderscore() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE SCHEMA app_data");
+            connection.createStatement().execute("""
+                    CREATE TABLE app_data.users(
+                        id INT PRIMARY KEY,
+                        name VARCHAR(40),
+                        manager_id INT,
+                        CONSTRAINT fk_users_manager FOREIGN KEY(manager_id) REFERENCES app_data.users(id)
+                    )
+                    """);
+            connection.createStatement().execute("CREATE INDEX idx_users_name ON app_data.users(name)");
+        }
+
+        BackupTaskRepository repository = mock(BackupTaskRepository.class);
+        when(repository.findById(1L)).thenReturn(Optional.of(task("TABLE", "APP_DATA", "USERS")));
+        BackupService service = service(url, repository);
+
+        service.run(1L, "admin");
+
+        ArgumentCaptor<String> pathCaptor = ArgumentCaptor.forClass(String.class);
+        verify(repository).updateStatus(eq(1L), eq("SUCCESS"), anyString(), pathCaptor.capture(), anyLong());
+        String sql = Files.readString(Path.of(pathCaptor.getValue()));
+        assertThat(sql).contains("PRIMARY KEY (\"ID\")");
+        assertThat(sql).contains("CREATE INDEX \"IDX_USERS_NAME\" ON \"APP_DATA\".\"USERS\" (\"NAME\")");
+        assertThat(sql).contains("ADD CONSTRAINT \"FK_USERS_MANAGER\" FOREIGN KEY (\"MANAGER_ID\") REFERENCES \"APP_DATA\".\"USERS\" (\"ID\")");
+    }
+
+    @Test
     void recordsSuccessfulBackupHistory() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
