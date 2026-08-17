@@ -10,7 +10,7 @@ import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletio
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
-import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier } from './sqlCompletion';
+import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier, type SqlTableReference } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
 import type { SqlEditorOnMount } from './sqlEditorTypes';
@@ -119,6 +119,7 @@ export default function App() {
   const objectDesignDirtyRef = useRef(false);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
+  const objectDefinitionNavigationRef = useRef<(reference: SqlTableReference) => void>(() => undefined);
   const executeRef = useRef<() => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
   const sqlTabSeqRef = useRef(1);
@@ -1522,6 +1523,16 @@ export default function App() {
     return columnItems.length > 0 ? [...columnItems, ...keywords] : [...tableItems, ...keywords];
   }
 
+  objectDefinitionNavigationRef.current = (reference) => {
+    openObjectDetail({
+      schemaName: reference.schemaName || activeSqlSchema,
+      name: reference.name,
+      type: 'TABLE',
+      columns: [],
+      indexes: []
+    });
+  };
+
   const handleEditorMount: SqlEditorOnMount = (editor, monaco) => {
     editorRef.current = editor;
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
@@ -1546,8 +1557,72 @@ export default function App() {
       }
     });
     completionProviderRef.current = provider;
+    const definitionLink = editor.createDecorationsCollection();
+    let hoveredPosition: Monaco.Position | null = null;
+
+    const objectReferenceAt = (position: Monaco.Position | null) => {
+      const model = editor.getModel();
+      if (!model || !position) return undefined;
+      return findSqlObjectReferenceAtOffset(model.getValue(), model.getOffsetAt(position));
+    };
+    const updateDefinitionLink = (position: Monaco.Position | null, modifierPressed: boolean) => {
+      if (!modifierPressed) {
+        definitionLink.clear();
+        return;
+      }
+      const model = editor.getModel();
+      const reference = objectReferenceAt(position);
+      if (!model || !reference) {
+        definitionLink.clear();
+        return;
+      }
+      const objectName = reference.parts[reference.parts.length - 1];
+      const start = model.getPositionAt(objectName.start);
+      const end = model.getPositionAt(objectName.end);
+      definitionLink.set([{
+        range: {
+          startLineNumber: start.lineNumber,
+          startColumn: start.column,
+          endLineNumber: end.lineNumber,
+          endColumn: end.column
+        },
+        options: { inlineClassName: 'sql-object-definition-link' }
+      }]);
+    };
+    const mouseMoveListener = editor.onMouseMove((event) => {
+      hoveredPosition = event.target.position;
+      updateDefinitionLink(hoveredPosition, event.event.ctrlKey || event.event.metaKey);
+    });
+    const mouseLeaveListener = editor.onMouseLeave(() => {
+      hoveredPosition = null;
+      definitionLink.clear();
+    });
+    const mouseDownListener = editor.onMouseDown((event) => {
+      if (!event.event.leftButton || (!event.event.ctrlKey && !event.event.metaKey)) return;
+      const reference = objectReferenceAt(event.target.position);
+      if (!reference) return;
+      event.event.preventDefault();
+      event.event.stopPropagation();
+      definitionLink.clear();
+      objectDefinitionNavigationRef.current(reference);
+    });
+    const contentListener = editor.onDidChangeModelContent(() => definitionLink.clear());
+    const handleModifierChange = (event: KeyboardEvent) => {
+      updateDefinitionLink(hoveredPosition, event.ctrlKey || event.metaKey);
+    };
+    const clearDefinitionLink = () => definitionLink.clear();
+    window.addEventListener('keydown', handleModifierChange);
+    window.addEventListener('keyup', handleModifierChange);
+    window.addEventListener('blur', clearDefinitionLink);
     editor.onDidDispose(() => {
       provider.dispose();
+      mouseMoveListener.dispose();
+      mouseLeaveListener.dispose();
+      mouseDownListener.dispose();
+      contentListener.dispose();
+      window.removeEventListener('keydown', handleModifierChange);
+      window.removeEventListener('keyup', handleModifierChange);
+      window.removeEventListener('blur', clearDefinitionLink);
       if (completionProviderRef.current === provider) completionProviderRef.current = null;
       if (editorRef.current === editor) editorRef.current = null;
     });

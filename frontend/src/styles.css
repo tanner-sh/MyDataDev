@@ -2529,6 +2529,12 @@ body.is-resizing-column * {
   flex: 1 1 auto;
 }
 
+.monaco-editor .sql-object-definition-link {
+  cursor: pointer !important;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .sql-editor-fallback {
   position: relative;
   width: 100%;

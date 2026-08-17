@@ -390,6 +390,24 @@ export function parseSqlTableReferences(tokensOrSql: SqlToken[] | string): SqlTa
   return references.sort((left, right) => left.start - right.start);
 }
 
+/**
+ * Returns the physical table/view reference whose object-name segment contains
+ * the supplied offset. Schema segments, aliases, CTEs, strings and comments do
+ * not resolve to database objects.
+ */
+export function findSqlObjectReferenceAtOffset(sql: string, offset: number): SqlTableReference | undefined {
+  const statement = getCurrentSqlStatement(sql, offset);
+  const tokens = tokenizeSql(statement.text, statement.start).filter(isSignificantToken);
+  const reference = parseSqlTableReferences(tokens).find((candidate) => {
+    const objectName = candidate.parts[candidate.parts.length - 1];
+    return objectName.start <= statement.cursor && statement.cursor < objectName.end;
+  });
+  if (!reference || reference.parts.length > 1) return reference;
+
+  const cteNames = sqlCteNames(tokens);
+  return cteNames.has(reference.normalizedName) ? undefined : reference;
+}
+
 /** Resolves an alias, table name, or qualified table name against parsed sources. */
 export function resolveSqlTableReference(
   tablesOrContext: SqlTableReference[] | Pick<SqlCompletionContext, 'tables' | 'qualifierParts'>,
@@ -669,6 +687,50 @@ function parseTableAt(
     },
     nextIndex: index
   };
+}
+
+function sqlCteNames(tokens: SqlToken[]): Set<string> {
+  const names = new Set<string>();
+  let index = 0;
+  if (!isKeyword(tokens[index], 'WITH')) return names;
+  index += 1;
+  if (isKeyword(tokens[index], 'RECURSIVE')) index += 1;
+
+  while (tokens[index]?.kind === 'identifier') {
+    const name = tokens[index];
+    index += 1;
+
+    // Optional CTE column list: WITH report(id, total) AS (...)
+    if (tokens[index]?.text === '(') {
+      index = indexAfterBalancedParentheses(tokens, index);
+    }
+    if (!isKeyword(tokens[index], 'AS')) break;
+    index += 1;
+
+    // PostgreSQL allows AS [NOT] MATERIALIZED before the CTE query.
+    if (isKeyword(tokens[index], 'NOT') && isKeyword(tokens[index + 1], 'MATERIALIZED')) index += 2;
+    else if (isKeyword(tokens[index], 'MATERIALIZED')) index += 1;
+    if (tokens[index]?.text !== '(') break;
+
+    names.add(normalizeIdentifier(name.value));
+    index = indexAfterBalancedParentheses(tokens, index);
+    if (tokens[index]?.text !== ',') break;
+    index += 1;
+  }
+  return names;
+}
+
+function indexAfterBalancedParentheses(tokens: SqlToken[], startIndex: number): number {
+  if (tokens[startIndex]?.text !== '(') return startIndex;
+  let depth = 0;
+  for (let index = startIndex; index < tokens.length; index += 1) {
+    if (tokens[index].text === '(') depth += 1;
+    else if (tokens[index].text === ')') {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  return tokens.length;
 }
 
 function identifierPart(token: SqlToken): SqlIdentifierPart {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
-import { analyzeSqlCompletion, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion } from './sqlCompletion';
+import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion } from './sqlCompletion';
 
 describe('SQL completion context', () => {
   it('only analyzes the statement containing the cursor', () => {
@@ -91,6 +91,58 @@ describe('SQL completion context', () => {
     statements.forEach((sql) => {
       expect(shouldTriggerSqlConditionColumnCompletion(analyzeSqlCompletion(sql, sql.length))).toBe(false);
     });
+  });
+});
+
+describe('SQL object definition navigation', () => {
+  it('resolves table and view names in query and mutation sources', () => {
+    const statements = [
+      'select * from SM_USER',
+      'select * from account_view',
+      'update users set active = 1',
+      "insert into audit_log(message) values ('ok')",
+      'delete from old_sessions where expired = 1'
+    ];
+
+    expect(statements.map((sql) => {
+      const expected = ['SM_USER', 'account_view', 'users', 'audit_log', 'old_sessions']
+        .find((name) => sql.includes(name))!;
+      return findSqlObjectReferenceAtOffset(sql, sql.indexOf(expected) + 1)?.name;
+    })).toEqual(['SM_USER', 'account_view', 'users', 'audit_log', 'old_sessions']);
+  });
+
+  it('resolves only the object segment of qualified and quoted names', () => {
+    const sql = 'select * from "Trade"."Order" o join [dbo].[User] u on u.id = o.user_id';
+    const order = findSqlObjectReferenceAtOffset(sql, sql.indexOf('Order') + 1);
+    const user = findSqlObjectReferenceAtOffset(sql, sql.indexOf('User') + 1);
+
+    expect(order).toMatchObject({ schemaName: 'Trade', name: 'Order' });
+    expect(user).toMatchObject({ schemaName: 'dbo', name: 'User' });
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('Trade') + 1)).toBeUndefined();
+  });
+
+  it('uses only the statement containing the clicked object', () => {
+    const sql = 'select * from old_table; select * from current_table';
+    const current = findSqlObjectReferenceAtOffset(sql, sql.indexOf('current_table') + 2);
+
+    expect(current?.name).toBe('current_table');
+  });
+
+  it('does not resolve fields, aliases, strings, comments, CTEs or derived tables', () => {
+    const sql = [
+      'with recent as (select * from audit_log)',
+      'select r.id, recent_text',
+      "from recent r join (select * from users) u on u.id = r.user_id -- from ignored_table",
+      "where r.note = 'from string_table'"
+    ].join('\n');
+
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('audit_log') + 1)?.name).toBe('audit_log');
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('users') + 1)?.name).toBe('users');
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('recent r') + 1)).toBeUndefined();
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('r.id'))).toBeUndefined();
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('recent_text') + 1)).toBeUndefined();
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('ignored_table') + 1)).toBeUndefined();
+    expect(findSqlObjectReferenceAtOffset(sql, sql.indexOf('string_table') + 1)).toBeUndefined();
   });
 });
 
