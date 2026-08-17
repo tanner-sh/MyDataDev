@@ -971,6 +971,21 @@ body.is-resizing-column * {
   background: var(--surface);
 }
 
+.object-detail-placeholder {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 24px;
+  overflow: auto;
+}
+
+.object-detail-placeholder > .ant-alert {
+  width: min(640px, 100%);
+}
+
 .object-title-line {
   min-width: 0;
   max-width: 100%;
@@ -1262,7 +1277,8 @@ body.is-resizing-column * {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   scrollbar-color: #9aa6b7 #eef2f7;
-  overscroll-behavior: contain;
+  overscroll-behavior-x: contain;
+  overscroll-behavior-y: auto;
 }
 
 .designer-grid .ant-table-body::-webkit-scrollbar {

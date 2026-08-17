@@ -46,6 +46,7 @@ export type ResourceExplorerProps = {
   onSearch: (keyword: string, kind: ExplorerObjectKind) => void;
   onLoadMore: () => void;
   onLoadStructure: (object: DbObject) => Promise<DbObject | null>;
+  onPrefetchDetail?: (object: DbObject) => void;
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
   onBackupTable: (object: DbObject) => void;
@@ -76,6 +77,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onSearch,
   onLoadMore,
   onLoadStructure,
+  onPrefetchDetail,
   onOpenDetail,
   onOpenTable,
   onBackupTable,
@@ -369,6 +371,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             loadingMore={objectView === 'all' && metadataLoading && !metadataBlockingLoading}
             onLoadMore={objectView === 'all' ? onLoadMore : undefined}
             onLoadStructure={onLoadStructure}
+            onPrefetchDetail={onPrefetchDetail}
             onOpenDetail={openObjectDetail}
             onOpenTable={openTableData}
             onBackupTable={onBackupTable}

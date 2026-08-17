@@ -370,6 +370,44 @@ class MetadataServiceTest {
     }
 
     @Test
+    void detailPopulatesStructureCacheForLaterConsumers() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY, name VARCHAR(40))");
+        }
+        MetadataService service = service(url);
+
+        service.detail(1L, "PUBLIC", "USERS");
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("ALTER TABLE users ADD COLUMN external_value VARCHAR(20)");
+        }
+
+        assertThat(service.structure(1L, "PUBLIC", "USERS").columns()).extracting("name")
+                .containsExactly("ID", "NAME");
+        assertThat(service.structure(1L, "PUBLIC", "USERS", true).columns()).extracting("name")
+                .containsExactly("ID", "NAME", "EXTERNAL_VALUE");
+    }
+
+    @Test
+    void detailReusesCachedStructureUntilExplicitRefresh() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY, name VARCHAR(40))");
+        }
+        MetadataService service = service(url);
+
+        service.structure(1L, "PUBLIC", "USERS");
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("ALTER TABLE users ADD COLUMN external_value VARCHAR(20)");
+        }
+
+        assertThat(service.detail(1L, "PUBLIC", "USERS").columns()).extracting("name")
+                .containsExactly("ID", "NAME");
+        assertThat(service.detail(1L, "PUBLIC", "USERS", true).columns()).extracting("name")
+                .containsExactly("ID", "NAME", "EXTERNAL_VALUE");
+    }
+
+    @Test
     void returnsViewDetailWithoutRunningCountAndLoadsDdlOnDemand() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

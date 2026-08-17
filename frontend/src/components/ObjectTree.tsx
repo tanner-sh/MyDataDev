@@ -45,6 +45,7 @@ export type ObjectTreeProps = {
   loadingMore?: boolean;
   onLoadMore?: () => void;
   onLoadStructure: (object: DbObject) => Promise<DbObject | null>;
+  onPrefetchDetail?: (object: DbObject) => void;
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
   onBackupTable?: (object: DbObject) => void;
@@ -66,6 +67,7 @@ type FlatRow =
 
 const ROW_HEIGHT = 30;
 const OVERSCAN = 10;
+const DETAIL_PREFETCH_DELAY_MS = 250;
 
 function objectIcon(object: DbObject) {
   return object.type.toUpperCase().includes('VIEW') ? <EyeOutlined /> : <TableOutlined />;
@@ -126,6 +128,7 @@ export const ObjectTree = memo(function ObjectTree({
   loadingMore,
   onLoadMore,
   onLoadStructure,
+  onPrefetchDetail,
   onOpenDetail,
   onOpenTable,
   onBackupTable,
@@ -144,6 +147,7 @@ export const ObjectTree = memo(function ObjectTree({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(400);
   const scrollFrameRef = useRef<number | null>(null);
+  const detailPrefetchTimerRef = useRef<number | null>(null);
   const latestScrollRef = useRef({ top: 0, height: 0, clientHeight: 0 });
   const scrollPositionsRef = useRef(new Map<string, number>());
   const activeScrollScopeRef = useRef(scrollScopeKey);
@@ -166,7 +170,13 @@ export const ObjectTree = memo(function ObjectTree({
 
   useEffect(() => () => {
     if (scrollFrameRef.current != null) cancelAnimationFrame(scrollFrameRef.current);
+    if (detailPrefetchTimerRef.current != null) window.clearTimeout(detailPrefetchTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (detailPrefetchTimerRef.current != null) window.clearTimeout(detailPrefetchTimerRef.current);
+    detailPrefetchTimerRef.current = null;
+  }, [objects, scrollScopeKey]);
 
   useEffect(() => {
     if (!loadingMore) loadMoreRequestedRef.current = false;
@@ -290,6 +300,20 @@ export const ObjectTree = memo(function ObjectTree({
     });
   }
 
+  function scheduleDetailPrefetch(object: DbObject) {
+    if (!onPrefetchDetail) return;
+    if (detailPrefetchTimerRef.current != null) window.clearTimeout(detailPrefetchTimerRef.current);
+    detailPrefetchTimerRef.current = window.setTimeout(() => {
+      detailPrefetchTimerRef.current = null;
+      onPrefetchDetail(object);
+    }, DETAIL_PREFETCH_DELAY_MS);
+  }
+
+  function cancelDetailPrefetch() {
+    if (detailPrefetchTimerRef.current != null) window.clearTimeout(detailPrefetchTimerRef.current);
+    detailPrefetchTimerRef.current = null;
+  }
+
   function objectMenuItems(object: DbObject, expanded: boolean): MenuProps['items'] {
     const isView = object.type.toUpperCase().includes('VIEW');
     return [
@@ -349,7 +373,16 @@ export const ObjectTree = memo(function ObjectTree({
         <div className={`object-tree-row object-tree-object-row${row.selected ? ' is-selected' : ''}${row.keyboardSelected ? ' is-keyboard-selected' : ''}`} style={rowStyle(row.level)} role="treeitem" aria-expanded={row.expanded} aria-selected={row.selected}>
           <TreeSwitcher expanded={row.expanded} label={`${row.expanded ? '收起' : '展开'} ${displayName} 的结构`} onClick={() => setObjectExpanded(row.object, row.key, !row.expanded)} />
           <TreeIcon>{objectIcon(row.object)}</TreeIcon>
-          <button className="object-tree-row-main object-tree-object-trigger" type="button" title={`${displayName} · 查看详情`} onClick={() => onOpenDetail(row.object)}>
+          <button
+            className="object-tree-row-main object-tree-object-trigger"
+            type="button"
+            title={`${displayName} · 查看详情`}
+            onPointerEnter={() => scheduleDetailPrefetch(row.object)}
+            onPointerLeave={cancelDetailPrefetch}
+            onFocus={() => scheduleDetailPrefetch(row.object)}
+            onBlur={cancelDetailPrefetch}
+            onClick={() => onOpenDetail(row.object)}
+          >
             <span className="object-tree-object-name"><HighlightedName name={row.object.name} keyword={keyword} /></span>
           </button>
           <span className="object-tree-actions">

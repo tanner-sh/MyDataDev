@@ -30,6 +30,7 @@ export interface ObjectDetailWorkspaceProps {
   readonlyConnection?: boolean;
   capabilities?: DatabaseCapabilities;
   productionConfirmationText?: string;
+  target: DbObject | null;
   detail: ObjectDetail | null;
   status: WorkspaceStatus;
   loading: boolean;
@@ -47,6 +48,7 @@ export function ObjectDetailWorkspace({
   readonlyConnection,
   capabilities,
   productionConfirmationText,
+  target,
   detail,
   status,
   loading,
@@ -60,7 +62,8 @@ export function ObjectDetailWorkspace({
 }: ObjectDetailWorkspaceProps) {
   const [activeTabKey, setActiveTabKey] = useState('columns');
   const [designerDirty, setDesignerDirty] = useState(false);
-  const objectName = detail ? fullObjectName(detail) : '未选择对象';
+  const displayObject = detail || target;
+  const objectName = displayObject ? fullObjectName(displayObject) : '未选择对象';
   const isView = detail?.type.toUpperCase().includes('VIEW') || false;
   const isPhysicalTable = Boolean(detail && detail.type.toUpperCase().includes('TABLE') && !isView);
   const tableBrowseSupported = capabilities?.tableBrowse ?? true;
@@ -105,11 +108,15 @@ export function ObjectDetailWorkspace({
           <Space size={8} className="object-title-line">
             <Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label="返回查询工作台" onClick={onBackToSql} />
             <Text strong>{objectName}</Text>
-            {detail && <Tag color="blue">{objectTypeLabel(detail.type)}</Tag>}
-            {detail?.schemaName && <Tag>{detail.schemaName}</Tag>}
+            {displayObject && <Tag color="blue">{objectTypeLabel(displayObject.type)}</Tag>}
+            {displayObject?.schemaName && <Tag>{displayObject.schemaName}</Tag>}
             {readonlyConnection && <Tag color="orange">只读连接</Tag>}
           </Space>
-          <Text type="secondary">{detail ? `${detail.columns.length} 个字段 · ${new Set(detail.indexes.map((index) => index.name)).size} 个索引` : '从资源管理器中选择数据库对象'}</Text>
+          <Text type="secondary">{detail
+            ? `${detail.columns.length} 个字段 · ${new Set(detail.indexes.map((index) => index.name)).size} 个索引`
+            : target
+              ? loading ? '正在加载对象定义…' : '对象定义尚未加载'
+              : '从资源管理器中选择数据库对象'}</Text>
         </div>
         <Space size={8} className="object-toolbar-actions">
           <Dropdown trigger={['click']} menu={secondaryMenu}>
@@ -135,7 +142,23 @@ export function ObjectDetailWorkspace({
         </Space>
       </Header>
       {!detail ? (
-        <Empty className="empty-state" description="点击左侧对象查看详情。" />
+        target ? (
+          <div className="object-detail-placeholder">
+            {loading ? (
+              <><Spin size="large" /><Text type="secondary">正在读取 {objectName} 的字段、索引和主键信息…</Text></>
+            ) : status.kind === 'error' ? (
+              <Alert
+                type="error"
+                showIcon
+                title="对象定义加载失败"
+                description={status.text}
+                action={<Button size="small" onClick={onReloadDetail}>重试</Button>}
+              />
+            ) : (
+              <Empty className="empty-state" description="对象定义尚未加载。" />
+            )}
+          </div>
+        ) : <Empty className="empty-state" description="点击左侧对象查看详情。" />
       ) : (
         <div className="object-detail-content">
           <ObjectSummary connectionId={connectionId} detail={detail} />

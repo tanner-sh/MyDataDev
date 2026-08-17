@@ -41,14 +41,17 @@ const { Text } = Typography;
 const OBJECT_PAGE_SIZE = 200;
 const MAX_TABLE_CHANGES = 1_000;
 const MAX_STRUCTURE_CACHE_ENTRIES = 500;
+const MAX_OBJECT_DETAIL_CACHE_ENTRIES = 200;
 const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const METADATA_SEARCH_DEBOUNCE_MS = 500;
+const OBJECT_DETAIL_PREFETCH_DELAY_MS = 250;
 const MAX_SQL_TABS = 20;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
-const ObjectDetailWorkspace = lazy(() => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace })));
+const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
+const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
@@ -88,6 +91,7 @@ export default function App() {
   const [connectionEditor, setConnectionEditor] = useState(CLOSED_CONNECTION_EDITOR);
   const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
+  const [activeObjectTarget, setActiveObjectTarget] = useState<DbObject | null>(null);
   const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
   const [tableData, setTableData] = useState<TableData | null>(null);
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
@@ -111,6 +115,7 @@ export default function App() {
   const metadataRef = useRef<Metadata | null>(null);
   const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: 300 }));
   const objectStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
+  const objectDetailCacheRef = useRef(new AsyncResourceCache<string, ObjectDetail>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_OBJECT_DETAIL_CACHE_ENTRIES }));
   const metadataRequestSeqRef = useRef(0);
   const structureRequestSeqRef = useRef(0);
   const objectDetailRequestSeqRef = useRef(0);
@@ -128,7 +133,8 @@ export default function App() {
   const metadataSearchTimerRef = useRef<number | null>(null);
   const metadataAbortRef = useRef<AbortController | null>(null);
   const tableAbortRef = useRef<AbortController | null>(null);
-  const objectDetailAbortRef = useRef<AbortController | null>(null);
+  const objectDetailPrefetchTimerRef = useRef<number | null>(null);
+  const objectDetailPrefetchCandidateRef = useRef('');
   const sqlExecutionIdRef = useRef<string | null>(null);
   const sqlBusyRef = useRef(false);
   const sqlTabsRef = useRef(sqlTabs);
@@ -173,6 +179,10 @@ export default function App() {
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
+
+  useEffect(() => {
+    if (selected) void loadObjectDetailWorkspace().catch(() => undefined);
+  }, [selected?.id]);
 
   useEffect(() => () => completionProviderRef.current?.dispose(), []);
 
@@ -245,7 +255,7 @@ export default function App() {
   useEffect(() => () => {
     metadataAbortRef.current?.abort();
     tableAbortRef.current?.abort();
-    objectDetailAbortRef.current?.abort();
+    clearObjectDetailPrefetchTimer();
   }, []);
 
   useEffect(() => {
@@ -593,7 +603,9 @@ export default function App() {
           setMetadataQuery({ schema: '', keyword: '' });
           setMetadataAppliedKeyword('');
           clearObjectStructureCache();
+          objectDetailCacheRef.current.clear();
           setStructureLoadingKey(null);
+          setActiveObjectTarget(null);
           setActiveObjectDetail(null);
           clearTableWorkspace();
           setMode('sql');
@@ -621,7 +633,9 @@ export default function App() {
     setMetadataAppliedKeyword('');
     clearObjectStructureCache();
     completionCatalogCacheRef.current.clear();
+    objectDetailCacheRef.current.clear();
     setStructureLoadingKey(null);
+    setActiveObjectTarget(null);
     setActiveObjectDetail(null);
     updateObjectDesignDirty(false);
     clearTableWorkspace();
@@ -632,7 +646,7 @@ export default function App() {
   function invalidateConnectionRequests() {
     metadataAbortRef.current?.abort();
     tableAbortRef.current?.abort();
-    objectDetailAbortRef.current?.abort();
+    clearObjectDetailPrefetchTimer();
     metadataRequestSeqRef.current += 1;
     structureRequestSeqRef.current += 1;
     objectDetailRequestSeqRef.current += 1;
@@ -640,7 +654,6 @@ export default function App() {
     backupRequestSeqRef.current += 1;
     metadataAbortRef.current = null;
     tableAbortRef.current = null;
-    objectDetailAbortRef.current = null;
     setMetadataLoading(false);
     setMetadataBlockingLoading(false);
     setTableLoading(false);
@@ -758,6 +771,7 @@ export default function App() {
         structureRequestSeqRef.current += 1;
         clearObjectStructureCache();
         completionCatalogCacheRef.current.clear();
+        objectDetailCacheRef.current.clear();
         setStructureLoadingKey(null);
       }
       const schema = options.schema ?? metadataQuery.schema;
@@ -841,8 +855,8 @@ export default function App() {
     if (!selected) return;
     clearMetadataSearchTimer();
     await loadMetadata(selected, { schema: metadataQuery.schema, page: 0, refresh: true, background: true });
-    if (mode === 'object' && activeObjectDetail) {
-      await loadObjectDetail(activeObjectDetail, { refresh: true });
+    if (mode === 'object' && activeObjectTarget) {
+      await loadObjectDetail(activeObjectTarget, { refresh: true });
     }
     if (mode === 'table' && activeTable) {
       await loadTable(activeTable, { page: tablePage });
@@ -851,6 +865,52 @@ export default function App() {
 
   function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
     return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
+  }
+
+  function objectDetailRequest(connectionId: number, object: DbObject, refresh = false) {
+    const cacheKey = objectCacheKey(connectionId, object);
+    if (refresh) objectDetailCacheRef.current.delete(cacheKey);
+    return objectDetailCacheRef.current.load(cacheKey, async () => {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      if (refresh) params.set('refresh', 'true');
+      return api<ObjectDetail>(`/metadata/${connectionId}/objects/detail?${params.toString()}`);
+    });
+  }
+
+  function prefetchObjectDetail(object: DbObject) {
+    const connectionId = selectedIdRef.current;
+    if (!connectionId) return;
+    void loadObjectDetailWorkspace().catch(() => undefined);
+    const cacheKey = objectCacheKey(connectionId, object);
+    if (objectDetailCacheRef.current.peek(cacheKey) || objectDetailCacheRef.current.pendingCount > 0) return;
+    void objectDetailRequest(connectionId, object).catch(() => undefined);
+  }
+
+  function clearObjectDetailPrefetchTimer() {
+    if (objectDetailPrefetchTimerRef.current != null) window.clearTimeout(objectDetailPrefetchTimerRef.current);
+    objectDetailPrefetchTimerRef.current = null;
+    objectDetailPrefetchCandidateRef.current = '';
+  }
+
+  function queueSqlObjectDetailPrefetch(reference: SqlTableReference) {
+    const connectionId = selectedIdRef.current;
+    if (!connectionId) return;
+    const object = findCompletionObject(metadataRef.current?.objects || [], reference.schemaName, reference.name) || {
+      schemaName: reference.schemaName || metadataRef.current?.selectedSchema || metadataRef.current?.currentSchema,
+      name: reference.name,
+      type: 'TABLE',
+      columns: [],
+      indexes: []
+    };
+    const candidate = objectCacheKey(connectionId, object);
+    if (objectDetailPrefetchCandidateRef.current === candidate) return;
+    clearObjectDetailPrefetchTimer();
+    objectDetailPrefetchCandidateRef.current = candidate;
+    objectDetailPrefetchTimerRef.current = window.setTimeout(() => {
+      objectDetailPrefetchTimerRef.current = null;
+      prefetchObjectDetail(object);
+    }, OBJECT_DETAIL_PREFETCH_DELAY_MS);
   }
 
   function clearObjectStructureCache() {
@@ -1524,7 +1584,8 @@ export default function App() {
   }
 
   objectDefinitionNavigationRef.current = (reference) => {
-    openObjectDetail({
+    const knownObject = findCompletionObject(metadataRef.current?.objects || [], reference.schemaName, reference.name);
+    openObjectDetail(knownObject || {
       schemaName: reference.schemaName || activeSqlSchema,
       name: reference.name,
       type: 'TABLE',
@@ -1568,12 +1629,14 @@ export default function App() {
     const updateDefinitionLink = (position: Monaco.Position | null, modifierPressed: boolean) => {
       if (!modifierPressed) {
         definitionLink.clear();
+        clearObjectDetailPrefetchTimer();
         return;
       }
       const model = editor.getModel();
       const reference = objectReferenceAt(position);
       if (!model || !reference) {
         definitionLink.clear();
+        clearObjectDetailPrefetchTimer();
         return;
       }
       const objectName = reference.parts[reference.parts.length - 1];
@@ -1588,6 +1651,7 @@ export default function App() {
         },
         options: { inlineClassName: 'sql-object-definition-link' }
       }]);
+      queueSqlObjectDetailPrefetch(reference);
     };
     const mouseMoveListener = editor.onMouseMove((event) => {
       hoveredPosition = event.target.position;
@@ -1596,6 +1660,7 @@ export default function App() {
     const mouseLeaveListener = editor.onMouseLeave(() => {
       hoveredPosition = null;
       definitionLink.clear();
+      clearObjectDetailPrefetchTimer();
     });
     const mouseDownListener = editor.onMouseDown((event) => {
       if (!event.event.leftButton || (!event.event.ctrlKey && !event.event.metaKey)) return;
@@ -1606,11 +1671,17 @@ export default function App() {
       definitionLink.clear();
       objectDefinitionNavigationRef.current(reference);
     });
-    const contentListener = editor.onDidChangeModelContent(() => definitionLink.clear());
+    const contentListener = editor.onDidChangeModelContent(() => {
+      definitionLink.clear();
+      clearObjectDetailPrefetchTimer();
+    });
     const handleModifierChange = (event: KeyboardEvent) => {
       updateDefinitionLink(hoveredPosition, event.ctrlKey || event.metaKey);
     };
-    const clearDefinitionLink = () => definitionLink.clear();
+    const clearDefinitionLink = () => {
+      definitionLink.clear();
+      clearObjectDetailPrefetchTimer();
+    };
     window.addEventListener('keydown', handleModifierChange);
     window.addEventListener('keyup', handleModifierChange);
     window.addEventListener('blur', clearDefinitionLink);
@@ -1620,6 +1691,7 @@ export default function App() {
       mouseLeaveListener.dispose();
       mouseDownListener.dispose();
       contentListener.dispose();
+      clearObjectDetailPrefetchTimer();
       window.removeEventListener('keydown', handleModifierChange);
       window.removeEventListener('keyup', handleModifierChange);
       window.removeEventListener('blur', clearDefinitionLink);
@@ -1711,6 +1783,7 @@ export default function App() {
     if (mode === 'object' && activeObjectDetail && sameTable(activeObjectDetail, object) && objectDesignDirtyRef.current) {
       confirmDiscardObjectDesign(() => {
         updateObjectDesignDirty(false);
+        setActiveObjectTarget(null);
         setActiveObjectDetail(null);
         setMode('sql');
         begin();
@@ -1723,12 +1796,13 @@ export default function App() {
   async function tableLifecycleCompleted(operation: 'CREATE' | 'RENAME' | 'DROP', source: DbObject | null, newTableName?: string) {
     if (!selected) return;
     const activeTableMatched = Boolean(source && activeTable && sameTable(activeTable, source));
-    const activeObjectMatched = Boolean(source && activeObjectDetail && sameTable(activeObjectDetail, source));
+    const activeObjectMatched = Boolean(source && activeObjectTarget && sameTable(activeObjectTarget, source));
     if (operation === 'DROP' && activeTableMatched) {
       discardTableChanges();
       setMode('sql');
     }
     if (operation === 'DROP' && activeObjectMatched) {
+      setActiveObjectTarget(null);
       setActiveObjectDetail(null);
       updateObjectDesignDirty(false);
       setMode('sql');
@@ -1749,28 +1823,28 @@ export default function App() {
 
   async function loadObjectDetail(object: DbObject, options: { refresh?: boolean } = {}) {
     if (!selected) return;
-    objectDetailAbortRef.current?.abort();
-    const controller = new AbortController();
-    objectDetailAbortRef.current = controller;
     const connectionId = selected.id;
     const requestId = ++objectDetailRequestSeqRef.current;
-    setObjectDetailLoading(true);
+    const cached = options.refresh ? undefined : objectDetailCacheRef.current.get(objectCacheKey(connectionId, object));
+    const retainedDetail = options.refresh && activeObjectDetail && sameTable(activeObjectDetail, object)
+      ? activeObjectDetail
+      : cached || null;
+    setActiveObjectTarget(object);
+    setActiveObjectDetail(retainedDetail);
+    setMobileExplorerOpen(false);
+    setMode('object');
+    setObjectDetailLoading(Boolean(options.refresh || !cached));
     try {
-      const params = new URLSearchParams({ objectName: object.name });
-      if (object.schemaName) params.set('schemaName', object.schemaName);
-      if (options.refresh) params.set('refresh', 'true');
-      const detail = await api<ObjectDetail>(`/metadata/${connectionId}/objects/detail?${params.toString()}`, { signal: controller.signal });
+      const detail = await objectDetailRequest(connectionId, object, options.refresh);
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setActiveObjectDetail(detail);
+      setActiveObjectTarget(detail);
       updateObjectDesignDirty(false);
-      setMode('object');
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {
-      if ((e as Error).name === 'AbortError') return;
       if (requestId === objectDetailRequestSeqRef.current) showError(localizeMessage((e as Error).message));
     } finally {
       if (requestId === objectDetailRequestSeqRef.current) setObjectDetailLoading(false);
-      if (objectDetailAbortRef.current === controller) objectDetailAbortRef.current = null;
     }
   }
 
@@ -2123,11 +2197,11 @@ export default function App() {
   const objectStatus = useMemo<WorkspaceStatus>(() => objectDetailLoading
     ? { kind: 'loading', text: '正在加载对象详情…' }
     : workspaceStatus, [objectDetailLoading, workspaceStatus]);
-  const explorerActiveObject = useMemo(() => mode === 'object' && activeObjectDetail
-    ? { schemaName: activeObjectDetail.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeObjectDetail.name }
+  const explorerActiveObject = useMemo(() => mode === 'object' && activeObjectTarget
+    ? { schemaName: activeObjectTarget.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeObjectTarget.name }
     : mode === 'table' && activeTable
       ? { schemaName: activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeTable.tableName }
-      : null, [activeObjectDetail, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
+      : null, [activeObjectTarget, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
   const refreshExplorer = useStableEvent(() => requestRefreshDatabaseObjects());
   const closeMobileExplorer = useStableEvent(() => setMobileExplorerOpen(false));
   const openConnectionsFromExplorer = useStableEvent(() => setActiveDrawer('connections'));
@@ -2147,6 +2221,7 @@ export default function App() {
     if (metadata?.hasMore && !metadataLoading) void loadMetadata(selected, { page: metadata.page + 1, append: true, background: true });
   });
   const loadExplorerObjectStructure = useStableEvent((object: DbObject) => loadObjectStructure(object));
+  const prefetchExplorerObjectDetail = useStableEvent((object: DbObject) => prefetchObjectDetail(object));
   const openExplorerObjectDetail = useStableEvent((object: DbObject) => openObjectDetail(object));
   const openExplorerTable = useStableEvent((object: DbObject) => openTable(object));
   const backupExplorerTable = useStableEvent((object: DbObject) => openBackupTaskEditor({ schemaName: object.schemaName, tableName: object.name }));
@@ -2212,7 +2287,9 @@ export default function App() {
   const discardTableChangesEvent = useStableEvent(() => discardTableChanges());
   const commitTableChangesEvent = useStableEvent(() => commitChanges());
   const returnFromObjectEvent = useStableEvent(() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台'));
-  const reloadObjectDetailEvent = useStableEvent(() => requestRefreshDatabaseObjects());
+  const reloadObjectDetailEvent = useStableEvent(() => {
+    if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
+  });
   const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
   const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory, mode: 'new-tab' | 'replace-current') => {
     if (mode === 'new-tab') {
@@ -2297,6 +2374,7 @@ export default function App() {
       onSearch={searchExplorer}
       onLoadMore={loadMoreExplorerObjects}
       onLoadStructure={loadExplorerObjectStructure}
+      onPrefetchDetail={prefetchExplorerObjectDetail}
       onOpenDetail={openExplorerObjectDetail}
       onOpenTable={openExplorerTable}
       onBackupTable={backupExplorerTable}
@@ -2428,6 +2506,7 @@ export default function App() {
                 readonlyConnection={selected?.readonly}
                 capabilities={selected?.capabilities}
                 productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
+                target={activeObjectTarget}
                 detail={activeObjectDetail}
                 status={objectStatus}
                 loading={objectDetailLoading}

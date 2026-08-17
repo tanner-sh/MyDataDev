@@ -584,6 +584,7 @@ public class MetadataService {
     }
 
     public ObjectDetail detail(long connectionId, String schemaName, String objectName, boolean refresh) throws Exception {
+        ObjectStructure cachedStructure = null;
         if (refresh) {
             // An explicit object refresh means every dependent panel (DDL,
             // relations, structure and row identity) must observe the same
@@ -594,21 +595,37 @@ public class MetadataService {
             if (cached.isPresent()) {
                 return cached.get();
             }
+            cachedStructure = cache.structure(connectionId, schemaName, objectName).orElse(null);
         }
         try (Connection connection = connections.open(connectionId)) {
             DatabaseMetaData meta = connection.getMetaData();
             DbConnection dbConnection = connections.require(connectionId);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-            DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
-            DbObject object = findObject(meta, scope, dialect, objectName);
+            DbObject object;
+            List<ColumnInfo> cols;
+            List<IndexInfo> idx;
+            if (cachedStructure == null) {
+                DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
+                object = findObject(meta, scope, dialect, objectName);
+                DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
+                cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+                idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+            } else {
+                object = new DbObject(
+                        cachedStructure.schemaName(), cachedStructure.name(), cachedStructure.type(),
+                        cachedStructure.columns(), cachedStructure.indexes()
+                );
+                cols = cachedStructure.columns();
+                idx = cachedStructure.indexes();
+            }
             DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
-            List<ColumnInfo> cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
-            List<IndexInfo> idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             PrimaryKeyInfo pk = primaryKeyInfo(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             ObjectDetail detail = new ObjectDetail(
                     object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(),
                     structureVersion(object.schemaName(), object.name(), object.type(), cols, idx, pk)
             );
+            cache.putStructure(connectionId, object.schemaName(), object.name(),
+                    new ObjectStructure(object.schemaName(), object.name(), object.type(), cols, idx));
             cache.putDetail(connectionId, object.schemaName(), object.name(), detail);
             return detail;
         }
