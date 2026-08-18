@@ -19,6 +19,7 @@ import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
+import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -46,6 +47,7 @@ const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const METADATA_SEARCH_DEBOUNCE_MS = 500;
 const OBJECT_DETAIL_PREFETCH_DELAY_MS = 250;
 const MAX_SQL_TABS = 20;
+type ProductionConfirmationRequest = { action: string; expected: string };
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -70,6 +72,8 @@ export default function App() {
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [sqlSessionRevision, setSqlSessionRevision] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({ kind: 'idle', text: '就绪' });
+  const [productionConfirmationRequest, setProductionConfirmationRequest] = useState<ProductionConfirmationRequest | null>(null);
+  const [productionConfirmationInput, setProductionConfirmationInput] = useState('');
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataBlockingLoading, setMetadataBlockingLoading] = useState(false);
@@ -140,6 +144,7 @@ export default function App() {
   const sqlTabsRef = useRef(sqlTabs);
   const activeSqlTabIdRef = useRef(activeSqlTabId);
   const sqlSessionConnectionIdRef = useRef<number | null>(null);
+  const productionConfirmationResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
@@ -312,29 +317,35 @@ export default function App() {
 
   function requestProductionConfirmation(action: string): Promise<string | undefined> {
     if (!selected || selected.environment !== 'prod') return Promise.resolve(undefined);
-    let input = '';
+    const request = { action, expected: selected.name };
     return new Promise((resolve) => {
-      modalApi.confirm({
-        title: `确认在生产连接上${action}`,
-        content: (
-          <TypedConfirmationFields
-            autoFocus="production"
-            production={{ expected: selected.name, ariaLabel: '输入生产连接名确认操作', onChange: (value) => { input = value; } }}
-          />
-        ),
-        okText: '确认执行',
-        cancelText: '取消',
-        okButtonProps: { danger: true },
-        onOk: () => {
-          if (input !== selected.name) {
-            toastApi.error('连接名不匹配');
-            return Promise.reject(new Error('连接名不匹配'));
-          }
-          resolve(input);
-        },
-        onCancel: () => resolve(undefined)
-      });
+      productionConfirmationResolverRef.current?.(undefined);
+      productionConfirmationResolverRef.current = resolve;
+      setProductionConfirmationInput('');
+      setProductionConfirmationRequest(request);
     });
+  }
+
+  function cancelProductionConfirmation() {
+    const resolve = productionConfirmationResolverRef.current;
+    productionConfirmationResolverRef.current = null;
+    setProductionConfirmationRequest(null);
+    setProductionConfirmationInput('');
+    resolve?.(undefined);
+  }
+
+  function confirmProductionConfirmation() {
+    if (!productionConfirmationRequest) return;
+    const input = normalizeProductionConfirmation(productionConfirmationInput);
+    if (!matchesProductionConnectionName(input, productionConfirmationRequest.expected)) {
+      toastApi.error('连接名不匹配');
+      return;
+    }
+    const resolve = productionConfirmationResolverRef.current;
+    productionConfirmationResolverRef.current = null;
+    setProductionConfirmationRequest(null);
+    setProductionConfirmationInput('');
+    resolve?.(input);
   }
 
   function requestUnscopedMutationConfirmation(statements: Array<{ index: number; sql: string }>): Promise<boolean> {
@@ -2392,6 +2403,31 @@ export default function App() {
     >
       {toastContextHolder}
       {modalContextHolder}
+      <Modal
+        open={Boolean(productionConfirmationRequest)}
+        title={productionConfirmationRequest ? `确认在生产连接上${productionConfirmationRequest.action}` : undefined}
+        okText="确认执行"
+        cancelText="取消"
+        okButtonProps={{
+          danger: true,
+          disabled: !productionConfirmationRequest || !matchesProductionConnectionName(productionConfirmationInput, productionConfirmationRequest.expected)
+        }}
+        onOk={confirmProductionConfirmation}
+        onCancel={cancelProductionConfirmation}
+        destroyOnHidden
+      >
+        {productionConfirmationRequest && (
+          <TypedConfirmationFields
+            autoFocus="production"
+            production={{
+              expected: productionConfirmationRequest.expected,
+              value: productionConfirmationInput,
+              ariaLabel: '输入生产连接名确认操作',
+              onChange: setProductionConfirmationInput
+            }}
+          />
+        )}
+      </Modal>
       <div className="app-shell" data-theme={layoutPreferences.themeMode}>
         <AppHeader
           connections={connections}
