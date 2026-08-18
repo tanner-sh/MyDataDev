@@ -20,6 +20,7 @@ import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
+import { createUuid } from './createUuid';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -998,7 +999,7 @@ export default function App() {
         }
         productionConfirmation = confirmation;
       }
-      const executionId = crypto.randomUUID();
+      const executionId = createUuid();
       sqlExecutionIdRef.current = executionId;
       setMode('sql');
       setSqlCancellable(path !== '/sql/explain');
@@ -1097,7 +1098,7 @@ export default function App() {
     }
     const tabId = activeSqlTab.id;
     const resultKey = statementResultKey(statementResult)!;
-    const executionId = crypto.randomUUID();
+    const executionId = createUuid();
     sqlBusyRef.current = true;
     sqlExecutionIdRef.current = executionId;
     setSqlPagingResultKey(`${tabId}:${resultKey}`);
@@ -1947,7 +1948,7 @@ export default function App() {
       showInfo(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更，请先提交当前修改。`);
       return;
     }
-    setTableRows((rows) => [{ id: `new-${crypto.randomUUID()}`, values: {}, touchedColumns: [], inserted: true }, ...rows]);
+    setTableRows((rows) => [{ id: `new-${createUuid()}`, values: {}, touchedColumns: [], inserted: true }, ...rows]);
     setPreviewSql([]);
   }
 
