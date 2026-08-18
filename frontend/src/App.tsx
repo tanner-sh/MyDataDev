@@ -337,8 +337,12 @@ export default function App() {
   function confirmProductionConfirmation() {
     if (!productionConfirmationRequest) return;
     const input = normalizeProductionConfirmation(productionConfirmationInput);
+    if (!input) {
+      toastApi.error(`请输入生产连接名：${productionConfirmationRequest.expected}`);
+      return;
+    }
     if (!matchesProductionConnectionName(input, productionConfirmationRequest.expected)) {
-      toastApi.error('连接名不匹配');
+      toastApi.error(`连接名不匹配，请输入：${productionConfirmationRequest.expected}`);
       return;
     }
     const resolve = productionConfirmationResolverRef.current;
@@ -2408,10 +2412,7 @@ export default function App() {
         title={productionConfirmationRequest ? `确认在生产连接上${productionConfirmationRequest.action}` : undefined}
         okText="确认执行"
         cancelText="取消"
-        okButtonProps={{
-          danger: true,
-          disabled: !productionConfirmationRequest || !matchesProductionConnectionName(productionConfirmationInput, productionConfirmationRequest.expected)
-        }}
+        okButtonProps={{ danger: true }}
         onOk={confirmProductionConfirmation}
         onCancel={cancelProductionConfirmation}
         destroyOnHidden
