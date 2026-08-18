@@ -29,9 +29,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     ...init,
     headers: { ...(!isFormData ? { 'Content-Type': 'application/json' } : {}), 'X-User': 'admin', ...(init?.headers || {}) }
-  });
+  });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText })) as Record<string, unknown>;
+    const responseText = await res.text();
+    let err: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(responseText) as unknown;
+      err = parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : { message: responseText };
+    } catch {
+      err = { message: responseText.trim() || res.statusText };
+    }
     throw new ApiError(typeof err.message === 'string' ? err.message : res.statusText, res.status, err);
   }
   if (res.status === 204) return undefined as T;

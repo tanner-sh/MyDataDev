@@ -27,9 +27,11 @@ class CorsIntegrationTest {
     @ParameterizedTest
     @ValueSource(strings = {
             "http://localhost:5173",
-            "http://127.0.0.1:5173"
+            "http://127.0.0.1:5173",
+            "http://192.168.99.171",
+            "http://tangjja.top:18888"
     })
-    void allowsLocalViteDevelopmentOrigins(String origin) throws Exception {
+    void allowsConfiguredBrowserOrigins(String origin) throws Exception {
         mvc.perform(options("/api/sql/execute-script")
                         .header(HttpHeaders.ORIGIN, origin)
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")

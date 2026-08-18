@@ -16,6 +16,7 @@ public class AppProperties {
     private final BackgroundTasks backgroundTasks = new BackgroundTasks();
     private final Maintenance maintenance = new Maintenance();
     private final RemotePool remotePool = new RemotePool();
+    private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
 
     public String getCryptoKey() {
@@ -56,6 +57,10 @@ public class AppProperties {
 
     public RemotePool getRemotePool() {
         return remotePool;
+    }
+
+    public Cors getCors() {
+        return cors;
     }
 
     public Mcp getMcp() {
@@ -245,6 +250,20 @@ public class AppProperties {
         public void setIdleTimeoutMs(long idleTimeoutMs) { this.idleTimeoutMs = idleTimeoutMs; }
         public long getMaxLifetimeMs() { return maxLifetimeMs; }
         public void setMaxLifetimeMs(long maxLifetimeMs) { this.maxLifetimeMs = maxLifetimeMs; }
+    }
+
+    public static class Cors {
+        private List<String> allowedOriginPatterns = new ArrayList<>(List.of(
+                "http://localhost:5173",
+                "http://127.0.0.1:5173"
+        ));
+
+        public List<String> getAllowedOriginPatterns() { return allowedOriginPatterns; }
+        public void setAllowedOriginPatterns(List<String> allowedOriginPatterns) {
+            this.allowedOriginPatterns = allowedOriginPatterns == null
+                    ? new ArrayList<>()
+                    : new ArrayList<>(allowedOriginPatterns);
+        }
     }
 
     public static class Mcp {

@@ -64,6 +64,15 @@ spring:
 
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
+  cors:
+    # Keep the browser UI same-origin in production, while retaining Vite's
+    # two local development origins. Override this list for another deployment.
+    allowed-origin-patterns:
+      - http://localhost:5173
+      - http://127.0.0.1:5173
+      - http://192.168.99.171
+      - http://192.168.99.171:*
+      - http://tangjja.top:*
   sql:
     max-rows: 10000
     max-page-offset: 1000000

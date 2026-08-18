@@ -16,6 +16,12 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Configuration
 @EnableConfigurationProperties(AppProperties.class)
 public class WebConfig implements WebMvcConfigurer {
+    private final AppProperties properties;
+
+    public WebConfig(AppProperties properties) {
+        this.properties = properties;
+    }
+
     @Bean
     public ThreadPoolTaskExecutor mvcStreamingExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -36,10 +42,7 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins(
-                        "http://localhost:5173",
-                        "http://127.0.0.1:5173"
-                )
+                .allowedOriginPatterns(properties.getCors().getAllowedOriginPatterns().toArray(String[]::new))
                 .allowedMethods("*")
                 .allowedHeaders("*");
     }

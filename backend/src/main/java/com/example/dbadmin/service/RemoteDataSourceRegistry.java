@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
@@ -94,9 +95,18 @@ public class RemoteDataSourceRegistry {
     }
 
     public void test(String jdbcUrl, String username, String password) throws Exception {
-        try (HikariDataSource dataSource = create(jdbcUrl, username, password, false, "connection-test");
-             Connection ignored = dataSource.getConnection()) {
-            // Obtaining a connection is the test.
+        try {
+            try (HikariDataSource dataSource = create(jdbcUrl, username, password, false, "connection-test", true);
+                 Connection ignored = dataSource.getConnection()) {
+                // Obtaining a connection is the test.
+            }
+        } catch (RuntimeException error) {
+            // Hikari wraps authentication and database-selection failures in a
+            // pool timeout when initialization is deferred. Return the JDBC
+            // exception so the API can tell the user what actually failed.
+            SQLException jdbcError = findSqlException(error);
+            if (jdbcError != null) throw jdbcError;
+            throw error;
         }
     }
 
@@ -137,6 +147,10 @@ public class RemoteDataSourceRegistry {
     }
 
     private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName) {
+        return create(jdbcUrl, username, password, readonly, poolName, false);
+    }
+
+    private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName, boolean failFast) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(jdbcUrl);
         config.setUsername(username);
@@ -150,7 +164,7 @@ public class RemoteDataSourceRegistry {
         config.setMaxLifetime(maxLifetimeMs);
         // Pool construction happens under the registry lock; defer the first
         // network attempt so one unreachable database cannot block every pool.
-        config.setInitializationFailTimeout(-1);
+        config.setInitializationFailTimeout(failFast ? 1 : -1);
         config.setPoolName("dbadmin-" + poolName + "-" + Integer.toUnsignedString(System.identityHashCode(config)));
 
         // Enable batch rewrite for MySQL/MariaDB
@@ -162,6 +176,13 @@ public class RemoteDataSourceRegistry {
 
         if (meterRegistry != null) config.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(meterRegistry));
         return new HikariDataSource(config);
+    }
+
+    private SQLException findSqlException(Throwable error) {
+        for (Throwable current = error; current != null && current != current.getCause(); current = current.getCause()) {
+            if (current instanceof SQLException sqlException) return sqlException;
+        }
+        return error instanceof SQLException sqlException ? sqlException : null;
     }
 
     String fingerprint(DbConnection connection, String password) {
