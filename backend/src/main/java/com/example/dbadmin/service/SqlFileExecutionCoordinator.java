@@ -11,14 +11,13 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 @Component
 public class SqlFileExecutionCoordinator {
-    private final Map<Long, Future<?>> futures = new ConcurrentHashMap<>();
+    private final Map<Long, BackgroundJobHandle> handles = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
 
     @Autowired
@@ -47,17 +46,33 @@ public class SqlFileExecutionCoordinator {
     }
 
     public void submit(long id, Runnable task) {
-        Future<?> future = executor.submit(() -> {
-            try { task.run(); }
-            finally { futures.remove(id); }
-        });
-        futures.put(id, future);
-        if (future.isDone()) futures.remove(id, future);
+        BackgroundJobHandle handle = new BackgroundJobHandle();
+        handles.put(id, handle);
+        try {
+            // execute() rather than submit(), so the wrapper still runs when the
+            // job is cancelled while queued and the bookkeeping is cleared by
+            // exactly one path: the worker, once it has genuinely stopped.
+            executor.execute(() -> {
+                try {
+                    if (handle.begin()) task.run();
+                } finally {
+                    handle.finish();
+                    handles.remove(id, handle);
+                }
+            });
+        } catch (RuntimeException e) {
+            handles.remove(id, handle);
+            throw e;
+        }
     }
 
+    /**
+     * Requests cancellation without claiming the job has stopped; the worker
+     * clears its own registration once it actually exits.
+     */
     public boolean cancel(long id) {
-        Future<?> future = futures.remove(id);
-        return future != null && future.cancel(true);
+        BackgroundJobHandle handle = handles.get(id);
+        return handle != null && handle.cancel();
     }
 
     @PreDestroy

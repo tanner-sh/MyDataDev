@@ -41,6 +41,15 @@ public class BackgroundTaskControl {
         }
     }
 
+    /**
+     * Releases the connection permit only.
+     *
+     * <p>The cancellation marker is deliberately left in place: a cancel request
+     * and the permit have different lifetimes. Cancelling asks a worker to stop,
+     * but the worker keeps holding the permit until it actually stops, and it
+     * still needs to observe the marker on its next {@link #isCancelled} check.
+     * Use {@link #releaseCompleted} once the work has genuinely finished.</p>
+     */
     public void release(long connectionId, String operationKey) {
         synchronized (connectionOwners) {
             Set<String> owners = connectionOwners.get(connectionId);
@@ -49,6 +58,15 @@ public class BackgroundTaskControl {
                 if (owners.isEmpty()) connectionOwners.remove(connectionId);
             }
         }
+    }
+
+    /**
+     * Releases the permit and forgets the cancellation marker. Only the worker
+     * that owns the operation may call this, from its terminal {@code finally},
+     * or a caller that knows no worker will ever start.
+     */
+    public void releaseCompleted(long connectionId, String operationKey) {
+        release(connectionId, operationKey);
         clear(operationKey);
     }
 

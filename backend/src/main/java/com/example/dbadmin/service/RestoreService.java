@@ -253,20 +253,20 @@ public class RestoreService {
                 try {
                     run(id, plan.resolvedToolPath(), request.extraArgs());
                 } finally {
-                    taskControl.release(target.id(), operationKey);
+                    taskControl.releaseCompleted(target.id(), operationKey);
                     preparedTables.remove(id);
                     verifiedSources.remove(id);
                 }
             });
             if (!accepted) throw new ApiProblemException(HttpStatus.CONFLICT, "RESTORE_ALREADY_RUNNING", "该恢复任务正在执行，请勿重复启动。");
         } catch (RejectedExecutionException error) {
-            taskControl.release(target.id(), operationKey);
+            taskControl.releaseCompleted(target.id(), operationKey);
             preparedTables.remove(id);
             verifiedSources.remove(id);
             jobs.updateProgress(id, "FAILED", "FAILED", 0, plan.statementCount(), "恢复执行队列已满，任务未启动。", null, Instant.now());
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "RESTORE_QUEUE_FULL", "恢复执行队列已满，请稍后重试。");
         } catch (RuntimeException error) {
-            taskControl.release(target.id(), operationKey);
+            taskControl.releaseCompleted(target.id(), operationKey);
             preparedTables.remove(id);
             verifiedSources.remove(id);
             throw error;
@@ -300,7 +300,8 @@ public class RestoreService {
         if (statement != null) statement.cancel();
         Process process = runningProcesses.get(id);
         if (process != null) process.destroyForcibly();
-        taskControl.release(job.targetConnectionId(), restoreOperationKey(id));
+        // The permit stays with the worker until it actually stops; its finally
+        // block releases it and clears the cancellation marker.
         jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(job.progressCurrent()), job.progressTotal(), "恢复已取消。", null, Instant.now());
         audit.log(actor, "RESTORE_CANCEL", job.sourceName(), "job=" + id);
         return get(id);

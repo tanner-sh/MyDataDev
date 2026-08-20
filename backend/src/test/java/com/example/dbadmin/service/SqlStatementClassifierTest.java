@@ -26,6 +26,28 @@ class SqlStatementClassifierTest {
                 .isEqualTo(MUTATION);
         assertThat(classifier.classify("EXPLAIN ANALYZE UPDATE users SET name = 'x'"))
                 .isEqualTo(MUTATION);
+        assertThat(classifier.classify("WITH t AS (INSERT INTO audit(id) VALUES (1) RETURNING *) SELECT * FROM t"))
+                .isEqualTo(MUTATION);
+        assertThat(classifier.classify("WITH a AS (SELECT 1), b AS (UPDATE users SET active = TRUE RETURNING id) SELECT * FROM b"))
+                .isEqualTo(MUTATION);
+        assertThat(classifier.classify("WITH t AS ((DELETE FROM users RETURNING *)) SELECT * FROM t"))
+                .isEqualTo(MUTATION);
+    }
+
+    @Test
+    void doesNotTreatFunctionsThatShareKeywordNamesInsideCtesAsWrites() {
+        // REPLACE, TRUNCATE, LOAD, ANALYZE and friends are ordinary functions in
+        // several dialects. Only statement position may mark a CTE as writing.
+        assertThat(classifier.classify("WITH t AS (SELECT REPLACE(name, 'a', 'b') AS n FROM users) SELECT * FROM t"))
+                .isEqualTo(QUERY);
+        assertThat(classifier.classify("WITH t AS (SELECT TRUNCATE(price, 2) AS p FROM orders) SELECT * FROM t"))
+                .isEqualTo(QUERY);
+        assertThat(classifier.classify("WITH t AS (SELECT id, COMMENT AS c FROM notes) SELECT * FROM t"))
+                .isEqualTo(QUERY);
+        assertThat(classifier.classify("WITH t AS (SELECT LOAD(payload) FROM jobs) SELECT * FROM t"))
+                .isEqualTo(QUERY);
+        assertThat(classifier.isQuery("WITH t AS (SELECT REPLACE(name, 'a', 'b') AS n FROM users) SELECT * FROM t"))
+                .isTrue();
     }
 
     @Test

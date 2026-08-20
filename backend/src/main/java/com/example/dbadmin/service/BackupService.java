@@ -422,23 +422,24 @@ public class BackupService {
                             } catch (Exception ignored) {
                                 // run records the failed history and task status.
                             } finally {
-                                taskControl.release(connectionId, operationKey);
+                                taskControl.releaseCompleted(connectionId, operationKey);
                             }
                         }
                 );
                 if (!accepted) {
-                    taskControl.release(connectionId, operationKey);
+                    // The task is already running; that run owns the permit and
+                    // must keep it, so nothing is released here.
                     throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请勿重复启动。");
                 }
             } catch (RejectedExecutionException e) {
-                taskControl.release(connectionId, operationKey);
+                taskControl.releaseCompleted(connectionId, operationKey);
                 repository.updateStatus(id, "FAILED", "备份执行队列已满，任务未启动。");
                 if (executionId > 0) {
                     historyRepository.updateExecution(executionId, "FAILED", "FAILED", 0, 1L, "备份执行队列已满，任务未启动。", null, null, null, Instant.now());
                 }
                 throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
             } catch (RuntimeException error) {
-                taskControl.release(connectionId, operationKey);
+                taskControl.releaseCompleted(connectionId, operationKey);
                 throw error;
             }
             return new BackupRunResponse(repository.findById(task.id()).orElseThrow(), historyRepository.findById(executionId).orElseThrow());
@@ -453,7 +454,8 @@ public class BackupService {
             historyRepository.requestCancel(historyId);
             taskControl.requestCancel(backupOperationKey(taskId));
             coordinator.cancel(taskId);
-            taskControl.release(history.connectionId(), backupOperationKey(taskId));
+            // The permit stays with the worker until it actually stops; its
+            // finally block releases it and clears the cancellation marker.
             boolean uploadRetry = Set.of("UPLOAD_RETRY_QUEUED", "UPLOADING").contains(history.phase()) && history.filePath() != null;
             if (uploadRetry) {
                 historyRepository.updateExecution(historyId, "FAILED", "UPLOAD_FAILED", value(history.progressCurrent()), history.fileSize(),

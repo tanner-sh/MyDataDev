@@ -15,12 +15,11 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.Future;
 
 @Component
 public class BackupExecutionCoordinator {
     private final Set<Long> running = ConcurrentHashMap.newKeySet();
-    private final java.util.Map<Long, Future<?>> futures = new ConcurrentHashMap<>();
+    private final java.util.Map<Long, BackgroundJobHandle> handles = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
 
     @Autowired
@@ -50,21 +49,27 @@ public class BackupExecutionCoordinator {
 
     public boolean submit(long taskId, Runnable beforeStart, Runnable task) {
         if (!running.add(taskId)) return false;
+        BackgroundJobHandle handle = new BackgroundJobHandle();
+        handles.put(taskId, handle);
         try {
             beforeStart.run();
-            Future<?> future = executor.submit(() -> {
+            // execute() rather than submit(): the wrapper must run even when the
+            // job was cancelled while still queued, so that exactly one path —
+            // the worker's own finally — clears the bookkeeping once the job has
+            // genuinely stopped.
+            executor.execute(() -> {
                 try {
-                    task.run();
+                    if (handle.begin()) task.run();
                 } finally {
+                    handle.finish();
                     running.remove(taskId);
-                    futures.remove(taskId);
+                    handles.remove(taskId, handle);
                 }
             });
-            futures.put(taskId, future);
-            if (future.isDone()) futures.remove(taskId, future);
             return true;
         } catch (RuntimeException e) {
             running.remove(taskId);
+            handles.remove(taskId, handle);
             throw e;
         }
     }
@@ -73,11 +78,14 @@ public class BackupExecutionCoordinator {
         return running.contains(taskId);
     }
 
+    /**
+     * Requests cancellation. The task stays registered as running until the
+     * worker actually stops, so a cancelled job cannot be resubmitted while its
+     * predecessor is still draining.
+     */
     public boolean cancel(long taskId) {
-        Future<?> future = futures.remove(taskId);
-        boolean cancelled = future != null && future.cancel(true);
-        if (cancelled) running.remove(taskId);
-        return cancelled;
+        BackgroundJobHandle handle = handles.get(taskId);
+        return handle != null && handle.cancel();
     }
 
     @PreDestroy

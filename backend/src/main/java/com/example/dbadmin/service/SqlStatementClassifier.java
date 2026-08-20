@@ -84,9 +84,21 @@ public class SqlStatementClassifier {
         return null;
     }
 
+    /**
+     * Detects a data-modifying CTE, e.g.
+     * {@code WITH t AS (DELETE FROM a RETURNING *) ...}.
+     *
+     * <p>Only a keyword in statement position counts — the first token inside
+     * its parenthesised group. Many of these keywords double as ordinary
+     * function names ({@code REPLACE}, {@code TRUNCATE}, {@code LOAD},
+     * {@code ANALYZE}), so matching anywhere inside the group would classify a
+     * plain read such as
+     * {@code WITH t AS (SELECT REPLACE(name,'a','b') FROM users) SELECT * FROM t}
+     * as a write, and get it rejected on read-only connections.</p>
+     */
     private Kind nestedCteWrite(List<Token> tokens) {
         for (Token token : tokens) {
-            if (token.depth() <= 0) continue;
+            if (token.depth() <= 0 || !token.groupStart()) continue;
             if (MUTATION.contains(token.word())) return Kind.MUTATION;
             if (DDL.contains(token.word())) return Kind.DDL;
         }
@@ -123,6 +135,7 @@ public class SqlStatementClassifier {
     private List<Token> tokens(String sql) {
         List<Token> tokens = new ArrayList<>();
         int depth = 0;
+        boolean atGroupStart = true;
         for (int index = 0; index < sql.length();) {
             char ch = sql.charAt(index);
             char next = index + 1 < sql.length() ? sql.charAt(index + 1) : '\0';
@@ -167,18 +180,21 @@ public class SqlStatementClassifier {
             }
             if (ch == '(') {
                 depth++;
+                atGroupStart = true;
                 index++;
                 continue;
             }
             if (ch == ')') {
                 depth = Math.max(0, depth - 1);
+                atGroupStart = false;
                 index++;
                 continue;
             }
             if (Character.isLetter(ch) || ch == '_') {
                 int end = index + 1;
                 while (end < sql.length() && (Character.isLetterOrDigit(sql.charAt(end)) || sql.charAt(end) == '_' || sql.charAt(end) == '$')) end++;
-                tokens.add(new Token(sql.substring(index, end).toUpperCase(Locale.ROOT), depth));
+                tokens.add(new Token(sql.substring(index, end).toUpperCase(Locale.ROOT), depth, atGroupStart));
+                atGroupStart = false;
                 index = end;
                 continue;
             }
@@ -266,7 +282,13 @@ public class SqlStatementClassifier {
         return Set.copyOf(values);
     }
 
-    private record Token(String word, int depth) {
+    /**
+     * @param groupStart whether this token is the first one inside the
+     *                   parenthesised group it belongs to, i.e. it sits in
+     *                   statement position rather than being an operand or a
+     *                   function name.
+     */
+    private record Token(String word, int depth, boolean groupStart) {
     }
 
     private record Operation(String word, int index) {

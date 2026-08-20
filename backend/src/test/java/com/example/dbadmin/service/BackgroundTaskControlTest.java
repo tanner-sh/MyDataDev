@@ -21,6 +21,30 @@ class BackgroundTaskControlTest {
     }
 
     @Test
+    void keepsTheCancellationMarkerWhenOnlyThePermitIsReleased() {
+        BackgroundTaskControl control = new BackgroundTaskControl(new AppProperties());
+        control.tryAcquire(7, "restore:1");
+        control.requestCancel("restore:1");
+
+        control.release(7, "restore:1");
+
+        // A worker that is still draining must keep seeing the cancel request.
+        assertThat(control.isCancelled("restore:1", () -> false)).isTrue();
+    }
+
+    @Test
+    void forgetsTheCancellationMarkerOnlyOnceTheWorkerReportsCompletion() {
+        BackgroundTaskControl control = new BackgroundTaskControl(new AppProperties());
+        control.tryAcquire(7, "restore:1");
+        control.requestCancel("restore:1");
+
+        control.releaseCompleted(7, "restore:1");
+
+        assertThat(control.isCancelled("restore:1", () -> false)).isFalse();
+        assertThat(control.tryAcquire(7, "backup:2")).isTrue();
+    }
+
+    @Test
     void throttlesPersistentCancellationPollingAndHonorsMemorySignalImmediately() {
         AppProperties properties = new AppProperties();
         properties.getBackgroundTasks().setCancelPollIntervalMs(10_000);

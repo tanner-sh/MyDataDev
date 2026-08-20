@@ -171,7 +171,7 @@ public class SqlFileExecutionService {
             throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。");
         }
         if (!jobs.queue(id)) {
-            taskControl.release(connection.id(), operationKey);
+            taskControl.releaseCompleted(connection.id(), operationKey);
             throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_NOT_READY", "SQL 文件任务状态已发生变化。");
         }
         try {
@@ -179,11 +179,11 @@ public class SqlFileExecutionService {
                 try {
                     execute(id);
                 } finally {
-                    taskControl.release(connection.id(), operationKey);
+                    taskControl.releaseCompleted(connection.id(), operationKey);
                 }
             });
         } catch (RejectedExecutionException error) {
-            taskControl.release(connection.id(), operationKey);
+            taskControl.releaseCompleted(connection.id(), operationKey);
             jobs.markTerminal(id, "FAILED", "QUEUE_FULL", 0, 0, 0, null, null, "SQL 文件执行队列已满，任务未启动。");
             deleteFileQuietly(job);
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "SQL_FILE_QUEUE_FULL", "SQL 文件执行队列已满，请稍后重试。");
@@ -200,9 +200,8 @@ public class SqlFileExecutionService {
         Statement statement = runningStatements.get(id);
         if (statement != null) try { statement.cancel(); } catch (Exception ignored) { }
         coordinator.cancel(id);
-        if (Set.of("QUEUED", "RUNNING").contains(job.status())) {
-            taskControl.release(job.connectionId(), sqlFileOperationKey(id));
-        }
+        // The permit stays with the worker until it actually stops; its finally
+        // block releases it and clears the cancellation marker.
         jobs.markTerminal(id, "CANCELLED", "CANCELLED", job.statementCurrent(), job.successCount(), job.queryRowCount(),
                 null, null, "SQL 文件任务已取消。");
         deleteFileQuietly(job);

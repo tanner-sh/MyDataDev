@@ -100,10 +100,15 @@ public class RestoreJobRepository {
         return count == null ? 0 : count;
     }
 
+    /**
+     * Writes progress or a terminal result. The status guard makes the first
+     * terminal write win: a worker that is still draining after a cancel cannot
+     * resurrect the job back to RUNNING or overwrite CANCELLED with SUCCESS.
+     */
     public void updateProgress(long id, String status, String phase, long current, Long total, String message, Instant startedAt, Instant finishedAt) {
         jdbc.update("""
                 UPDATE restore_job SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ?,
-                    started_at = COALESCE(started_at, ?), finished_at = ? WHERE id = ?
+                    started_at = COALESCE(started_at, ?), finished_at = ? WHERE id = ? AND status IN ('QUEUED','RUNNING')
                 """, status, phase, current, total, message, timestamp(startedAt), timestamp(finishedAt), id);
     }
 
