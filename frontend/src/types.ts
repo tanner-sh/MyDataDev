@@ -1,10 +1,10 @@
 export type Connection = {
-  id: number;
-  name: string;
-  dbType: string;
-  jdbcUrl: string;
-  username?: string;
-  environment: string;
+  id: number;
+  name: string;
+  dbType: string;
+  jdbcUrl: string;
+  username?: string;
+  environment: string;
   readonly: boolean;
   capabilities: DatabaseCapabilities;
 };
@@ -73,7 +73,7 @@ export type RoutineArgumentInput = { position: number; name?: string; value?: st
 export type RoutineOutParameter = { name?: string; typeName?: string; value: unknown };
 export type RoutineResultItem = { kind: 'RESULT_SET' | 'UPDATE_COUNT'; result?: SqlResult; updateCount?: number };
 export type RoutineInvokeResponse = { status: string; elapsedMs: number; returnValue?: unknown; outParameters: RoutineOutParameter[]; results: RoutineResultItem[]; truncated: boolean };
-
+
 export type DbObject = {
   schemaName?: string;
   name: string;
@@ -356,7 +356,7 @@ export type TableRow = { id: string; values: Record<string, unknown>; original?:
 export type TableData = { columns: TableColumn[]; rows: Record<string, unknown>[]; rowKeyTokens?: string[]; keyColumns: string[]; editable: boolean; navigationMode: 'KEYSET' | 'OFFSET'; nextCursor?: string | null; hasMore: boolean };
 export type CompletionCatalog = { namespaceKind?: 'SCHEMA' | 'CATALOG'; selectedSchema?: string; objects: DbObject[]; hasMore?: boolean };
 export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; keyToken?: string; values?: Record<string, unknown>; originalValues?: Record<string, unknown> };
-export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
+export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = { id: string; title: string; sql: string; dirty: boolean; results: SqlStatementResult[]; activeResultKey?: string; message: string; statusKind?: WorkspaceStatusKind };
@@ -401,7 +401,7 @@ export type ResultCopyFormat = 'sql' | 'pipe';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };
 export type ResultRow = { key: string; values: unknown[] };
-export type EditableRow = TableRow;
+export type EditableRow = TableRow;
 export type RefreshConnectionsOptions = { retry?: boolean; preferredConnectionId?: number };
 
 export type McpLimits = {

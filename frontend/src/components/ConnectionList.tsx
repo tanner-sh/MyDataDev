@@ -11,14 +11,14 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   connections: Connection[];
   favoriteConnectionIds: number[];
   selectedId?: number;
-  connectionsLoading: boolean;
+  connectionsLoading: boolean;
   connectionsError: string;
   connectionsReady: boolean;
   testingConnectionId: number | null;
   onSwitch: (connection: Connection) => void;
   onEdit: (connection: Connection) => void;
-  onTest: (connection: Connection) => void;
-  onDuplicate: (connection: Connection) => void;
+  onTest: (connection: Connection) => void;
+  onDuplicate: (connection: Connection) => void;
   onDelete: (connection: Connection) => void;
   onToggleFavorite: (connectionId: number) => void;
 }) {
@@ -46,22 +46,22 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
       .map(({ connection }) => connection);
   }, [connections, dbType, environment, favoriteIds, favoriteOnly, keyword, selectedId]);
 
-  if (connectionsLoading && connections.length === 0) {
-    return (
-      <Card size="small">
-        <Skeleton active paragraph={{ rows: 4 }} title={{ width: '60%' }} />
-      </Card>
-    );
-  }
-  if (connectionsError && connections.length === 0) {
+  if (connectionsLoading && connections.length === 0) {
+    return (
+      <Card size="small">
+        <Skeleton active paragraph={{ rows: 4 }} title={{ width: '60%' }} />
+      </Card>
+    );
+  }
+  if (connectionsError && connections.length === 0) {
     return <Alert type="warning" showIcon title={connectionsError} />;
-  }
-  if (!connectionsReady) {
-    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在准备连接列表" /></Card>;
-  }
-  if (connections.length === 0) {
-    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /></Card>;
-  }
+  }
+  if (!connectionsReady) {
+    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在准备连接列表" /></Card>;
+  }
+  if (connections.length === 0) {
+    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /></Card>;
+  }
   return (
     <Space orientation="vertical" size={8} className="full-width">
       {connectionsError && <Alert type="warning" showIcon title={connectionsError} />}
@@ -109,9 +109,9 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                   {selectedId === connection.id && <Tag color="processing">当前使用</Tag>}
                   {connection.readonly && <Tag color="orange">只读</Tag>}
                 </div>
-                <Space size={4} wrap className="connection-tags">
-                  <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
-                  <Tag>{environmentLabel(connection.environment)}</Tag>
+                <Space size={4} wrap className="connection-tags">
+                  <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
+                  <Tag>{environmentLabel(connection.environment)}</Tag>
                 </Space>
                 <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
               </div>

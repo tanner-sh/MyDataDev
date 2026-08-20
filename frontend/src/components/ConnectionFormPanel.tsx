@@ -27,29 +27,29 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
       <Form layout="vertical" size="small" className="compact-form" disabled={loading}>
         <Form.Item label="连接名称" required validateStatus={touched.name && nameInvalid ? 'error' : undefined} help={touched.name && nameInvalid ? '请输入便于识别的连接名称' : undefined}>
           <Input value={form.name} maxLength={80} placeholder="例如：生产只读库" onBlur={() => setTouched((current) => ({ ...current, name: true }))} onChange={(event) => onChange({ ...form, name: event.target.value })} />
-        </Form.Item>
-        <Form.Item label="数据库类型">
-          <Select value={form.dbType} options={DB_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={onDbTypeChange} />
-        </Form.Item>
+        </Form.Item>
+        <Form.Item label="数据库类型">
+          <Select value={form.dbType} options={DB_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={onDbTypeChange} />
+        </Form.Item>
         <Form.Item label="数据库地址" required validateStatus={touched.jdbcUrl && jdbcUrlInvalid ? 'error' : undefined} help={touched.jdbcUrl && jdbcUrlInvalid ? '请输入以 jdbc: 开头的数据库地址' : undefined}>
           <Input value={form.jdbcUrl} placeholder="jdbc:数据库类型://主机:端口/数据库" onBlur={() => setTouched((current) => ({ ...current, jdbcUrl: true }))} onChange={(event) => onChange({ ...form, jdbcUrl: event.target.value })} />
-        </Form.Item>
-        <Form.Item label="用户名">
-          <Input value={form.username} onChange={(event) => onChange({ ...form, username: event.target.value })} />
-        </Form.Item>
-        <Form.Item label="密码">
-          <Input.Password value={form.password} onChange={(event) => onChange({ ...form, password: event.target.value })} />
-        </Form.Item>
-        <Form.Item label="环境">
-          <Select value={normalizeEnvironment(form.environment)} options={ENVIRONMENT_OPTIONS} onChange={(value) => onChange({ ...form, environment: value })} />
-        </Form.Item>
-        <Form.Item>
-          <Checkbox checked={form.readonly} onChange={(event) => onChange({ ...form, readonly: event.target.checked })}>只读连接</Checkbox>
-        </Form.Item>
+        </Form.Item>
+        <Form.Item label="用户名">
+          <Input value={form.username} onChange={(event) => onChange({ ...form, username: event.target.value })} />
+        </Form.Item>
+        <Form.Item label="密码">
+          <Input.Password value={form.password} onChange={(event) => onChange({ ...form, password: event.target.value })} />
+        </Form.Item>
+        <Form.Item label="环境">
+          <Select value={normalizeEnvironment(form.environment)} options={ENVIRONMENT_OPTIONS} onChange={(value) => onChange({ ...form, environment: value })} />
+        </Form.Item>
+        <Form.Item>
+          <Checkbox checked={form.readonly} onChange={(event) => onChange({ ...form, readonly: event.target.checked })}>只读连接</Checkbox>
+        </Form.Item>
         {form.dbType === 'oracle' && (
-          <Text type="secondary" className="form-hint-text">
-            Oracle 示例：Service Name 使用 jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID 使用 jdbc:oracle:thin:@localhost:1521:ORCL。
-          </Text>
+          <Text type="secondary" className="form-hint-text">
+            Oracle 示例：Service Name 使用 jdbc:oracle:thin:@//localhost:1521/ORCLPDB1；SID 使用 jdbc:oracle:thin:@localhost:1521:ORCL。
+          </Text>
         )}
         {form.dbType === 'dm' && (
           <Text type="secondary" className="form-hint-text">
@@ -67,7 +67,7 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
           <Button block onClick={onTest} loading={loading} disabled={jdbcUrlInvalid}>测试连接</Button>
           <Button block type="primary" icon={<SaveOutlined />} onClick={onSave} loading={loading} disabled={!canSubmit}>{editing ? '保存修改' : '保存连接'}</Button>
         </Space>
-      </Form>
-    </section>
-  );
+      </Form>
+    </section>
+  );
 }
