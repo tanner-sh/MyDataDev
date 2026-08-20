@@ -13,6 +13,7 @@ import type { ExplorerObjectCount, ExplorerObjectKind } from '../schemaObjectMod
 import type { Connection, DbObject, Metadata, SchemaObjectKind } from '../types';
 import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
+import { useStableEvent } from '../hooks/useStableEvent';
 import type { SchemaObjectListSummary } from './SchemaObjectManager';
 import {
   objectPreferenceKey,
@@ -207,6 +208,19 @@ export const ResourceExplorer = memo(function ResourceExplorer({
     });
   }
 
+  // Typing in the object search box updates metadataQuery on every keystroke,
+  // re-rendering ResourceExplorer without changing ObjectTree's `key` (that
+  // only tracks the debounced applied keyword). Without stable identities here,
+  // ObjectTree's own memo() was defeated on every keystroke, re-rendering every
+  // visible row — each one carrying a Dropdown, Tooltip and Button.
+  const openObjectDetailEvent = useStableEvent(openObjectDetail);
+  const openTableDataEvent = useStableEvent(openTableData);
+  const onBackupTableEvent = useStableEvent(onBackupTable);
+  const toggleFavoriteObjectEvent = useStableEvent(toggleFavoriteObject);
+  const isObjectFavoriteEvent = useStableEvent(
+    (object: DbObject) => Boolean(selected && favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)))
+  );
+
   function handleObjectSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (activeKind !== 'TABLE' || visibleTableObjects.length === 0) return;
     if (event.key === 'ArrowDown') {
@@ -372,11 +386,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             onLoadMore={objectView === 'all' ? onLoadMore : undefined}
             onLoadStructure={onLoadStructure}
             onPrefetchDetail={onPrefetchDetail}
-            onOpenDetail={openObjectDetail}
-            onOpenTable={openTableData}
-            onBackupTable={onBackupTable}
-            isObjectFavorite={(object) => Boolean(selected && favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)))}
-            onToggleFavorite={toggleFavoriteObject}
+            onOpenDetail={openObjectDetailEvent}
+            onOpenTable={openTableDataEvent}
+            onBackupTable={onBackupTableEvent}
+            isObjectFavorite={isObjectFavoriteEvent}
+            onToggleFavorite={toggleFavoriteObjectEvent}
             tableLifecycleEnabled={tableLifecycleEnabled}
             onRenameTable={onRenameTable}
             onDropTable={onDropTable}

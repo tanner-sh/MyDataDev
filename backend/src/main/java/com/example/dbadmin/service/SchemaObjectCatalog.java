@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.SchemaObjectKind;
 import com.example.dbadmin.core.SchemaObjectOperation;
@@ -13,6 +14,7 @@ import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -23,6 +25,11 @@ import java.util.Locale;
 public class SchemaObjectCatalog {
     private static final int MAX_QUERY_ROWS = 20_001;
     private static final long MAX_PAGE_OFFSET = 1_000_000;
+    private final int defaultQueryTimeoutSeconds;
+
+    public SchemaObjectCatalog(AppProperties properties) {
+        this.defaultQueryTimeoutSeconds = Math.max(1, properties.getSql().getTimeoutSeconds());
+    }
 
     public record CatalogObject(String schemaName, String name, String specificName, String subtype, String status) {
     }
@@ -669,6 +676,15 @@ public class SchemaObjectCatalog {
     private <T> List<T> query(Connection connection, String sql, RowReader<T> reader, Object... parameters) throws Exception {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setMaxRows(MAX_QUERY_ROWS);
+            try {
+                // Every list/dependency/source lookup ends up here; without a
+                // timeout a stuck catalog query (e.g. pg_get_functiondef on a
+                // huge function, or the pg_depend join in dependencies()) could
+                // hold the request thread and a pool connection indefinitely.
+                statement.setQueryTimeout(defaultQueryTimeoutSeconds);
+            } catch (SQLFeatureNotSupportedException ignored) {
+                // Some otherwise usable JDBC drivers do not implement timeouts.
+            }
             for (int index = 0; index < parameters.length; index++) statement.setObject(index + 1, parameters[index]);
             try (ResultSet rs = statement.executeQuery()) {
                 List<T> values = new ArrayList<>();

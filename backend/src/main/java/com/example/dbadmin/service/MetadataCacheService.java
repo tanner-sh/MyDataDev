@@ -165,6 +165,17 @@ public class MetadataCacheService {
         return value;
     }
 
+    /**
+     * Drops the cached detail for one schema object without touching any
+     * generation counter, so refreshing a single view's source or a single
+     * routine's signature does not invalidate every other schema-object page
+     * listing and every classic table/DDL cache entry for the connection —
+     * the collateral damage {@link #evictConnection} would otherwise cause.
+     */
+    public void evictSchemaObjectDetail(long connectionId, String objectKey) {
+        schemaObjectDetails.invalidate(schemaObjectDetailKey(connectionId, objectKey));
+    }
+
     public void evictConnection(long connectionId) {
         generation(connectionGenerations, connectionId).incrementAndGet();
         generation(directoryGenerations, connectionId).incrementAndGet();

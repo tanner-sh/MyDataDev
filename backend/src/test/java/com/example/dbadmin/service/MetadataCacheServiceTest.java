@@ -2,9 +2,12 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectDetail;
+import com.example.dbadmin.dto.ApiDtos.SchemaObjectSummary;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -36,5 +39,31 @@ class MetadataCacheServiceTest {
 
         assertThat(cache.schemaCatalog(1L)).isEmpty();
         assertThat(cache.detail(1L, "PUBLIC", "USERS")).isEmpty();
+    }
+
+    @Test
+    void refreshingOneSchemaObjectDetailLeavesOtherCachesIntact() {
+        MetadataCacheService cache = new MetadataCacheService();
+        SchemaObjectSummary summary = new SchemaObjectSummary("view:PUBLIC.V1", "PUBLIC", "V1", "V1", "VIEW", null, null);
+        SchemaObjectDetail detail = new SchemaObjectDetail(
+                summary, "SELECT 1", true, null, List.of(), List.of(), true, null, "v1", List.of(), Map.of()
+        );
+        cache.putSchemaObjectDetail(1L, "view:PUBLIC.V1", detail);
+        cache.putDetail(1L, "PUBLIC", "USERS",
+                new ObjectDetail("PUBLIC", "USERS", "TABLE", List.of(), List.of(), List.of(), null));
+        MetadataCacheService.SchemaObjectPageValue page = new MetadataCacheService.SchemaObjectPageValue(
+                List.of(summary), 1, true, false
+        );
+        cache.putSchemaObjectPage(1L, "PUBLIC", "VIEW", "", 0, 100, page);
+
+        // A plain refresh of one object's detail must not behave like
+        // evictConnection: it should drop only that object's cached detail,
+        // not every schema-object page listing or classic metadata cache
+        // entry for the whole connection.
+        cache.evictSchemaObjectDetail(1L, "view:PUBLIC.V1");
+
+        assertThat(cache.schemaObjectDetail(1L, "view:PUBLIC.V1")).isEmpty();
+        assertThat(cache.detail(1L, "PUBLIC", "USERS")).isPresent();
+        assertThat(cache.schemaObjectPage(1L, "PUBLIC", "VIEW", "", 0, 100)).isPresent();
     }
 }

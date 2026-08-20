@@ -119,8 +119,15 @@ const TWO_CHARACTER_SYMBOLS = new Set([
  * Tokenizes SQL without treating delimiters inside strings, quoted identifiers,
  * or comments as syntax. Token offsets are absolute and include `baseOffset`.
  */
-export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
-  const tokens: SqlToken[] = [];
+/**
+ * Lazily yields tokens one at a time. Scanning SQL requires state carried from
+ * the start of the string (are we inside a string/comment at this offset?),
+ * so a bounded-range scan is not possible, but a caller that only needs a
+ * prefix of the tokens — {@link getCurrentSqlStatement} scanning for the
+ * nearest top-level semicolons around the cursor — can stop pulling from this
+ * generator instead of paying for the rest of a large document.
+ */
+export function* tokenizeSqlIter(sql: string, baseOffset = 0): Generator<SqlToken> {
   let index = 0;
 
   while (index < sql.length) {
@@ -131,7 +138,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
     if (isWhitespace(char)) {
       index += 1;
       while (index < sql.length && isWhitespace(sql[index])) index += 1;
-      pushToken(tokens, 'whitespace', sql, start, index, baseOffset);
+      yield makeToken('whitespace', sql, start, index, baseOffset);
       continue;
     }
 
@@ -140,7 +147,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
       while (index < sql.length && sql[index] !== '\n' && sql[index] !== '\r') index += 1;
       // A line comment has no closing delimiter. Keeping `closed` false means a
       // cursor at its final character is still correctly treated as commented.
-      pushToken(tokens, 'comment', sql, start, index, baseOffset, 'none', false);
+      yield makeToken('comment', sql, start, index, baseOffset, 'none', false);
       continue;
     }
 
@@ -158,7 +165,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
           index += 1;
         }
       }
-      pushToken(tokens, 'comment', sql, start, index, baseOffset, 'none', depth === 0);
+      yield makeToken('comment', sql, start, index, baseOffset, 'none', depth === 0);
       continue;
     }
 
@@ -166,7 +173,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
       const quoted = readQuoted(sql, index, '\'', '\'', true);
       index = quoted.end;
       const text = sql.slice(start, index);
-      tokens.push({
+      yield {
         kind: 'string',
         text,
         value: decodeDelimited(text, '\'', '\'', quoted.closed),
@@ -174,7 +181,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
         end: baseOffset + index,
         quoteStyle: 'none',
         closed: quoted.closed
-      });
+      };
       continue;
     }
 
@@ -183,7 +190,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
       const quoted = readQuoted(sql, index, char, char, true);
       index = quoted.end;
       const text = sql.slice(start, index);
-      tokens.push({
+      yield {
         kind: 'identifier',
         text,
         value: decodeDelimited(text, char, char, quoted.closed),
@@ -191,7 +198,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
         end: baseOffset + index,
         quoteStyle: style,
         closed: quoted.closed
-      });
+      };
       continue;
     }
 
@@ -199,7 +206,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
       const quoted = readQuoted(sql, index, '[', ']', false);
       index = quoted.end;
       const text = sql.slice(start, index);
-      tokens.push({
+      yield {
         kind: 'identifier',
         text,
         value: decodeDelimited(text, '[', ']', quoted.closed),
@@ -207,39 +214,44 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
         end: baseOffset + index,
         quoteStyle: 'bracket',
         closed: quoted.closed
-      });
+      };
       continue;
     }
 
     if (isIdentifierStart(char)) {
       index += 1;
       while (index < sql.length && isIdentifierContinue(sql[index])) index += 1;
-      pushToken(tokens, 'identifier', sql, start, index, baseOffset);
+      yield makeToken('identifier', sql, start, index, baseOffset);
       continue;
     }
 
     if (isDigit(char)) {
       index = readNumber(sql, index);
-      pushToken(tokens, 'number', sql, start, index, baseOffset);
+      yield makeToken('number', sql, start, index, baseOffset);
       continue;
     }
 
     const twoCharacters = sql.slice(index, index + 2);
     index += TWO_CHARACTER_SYMBOLS.has(twoCharacters) ? 2 : 1;
-    pushToken(tokens, 'symbol', sql, start, index, baseOffset);
+    yield makeToken('symbol', sql, start, index, baseOffset);
   }
+}
 
-  return tokens;
+export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
+  return Array.from(tokenizeSqlIter(sql, baseOffset));
 }
 
 /** Returns the semicolon-delimited statement containing the cursor. */
 export function getCurrentSqlStatement(sql: string, cursorPosition: number): SqlStatementSlice {
   const cursor = clamp(cursorPosition, 0, sql.length);
-  const tokens = tokenizeSql(sql);
   let start = 0;
   let end = sql.length;
 
-  for (const token of tokens) {
+  // Iterating the generator directly (rather than materializing tokenizeSql's
+  // full array first) means scanning stops at the closing semicolon instead
+  // of tokenizing the rest of the document — the difference between O(statement)
+  // and O(document) on every completion request and every Ctrl+mouse-move.
+  for (const token of tokenizeSqlIter(sql)) {
     if (token.kind !== 'symbol' || token.text !== ';') continue;
     if (token.end <= cursor) {
       start = token.end;
@@ -840,8 +852,7 @@ function readNumber(sql: string, start: number): number {
   return index;
 }
 
-function pushToken(
-  tokens: SqlToken[],
+function makeToken(
   kind: SqlTokenKind,
   source: string,
   start: number,
@@ -849,9 +860,9 @@ function pushToken(
   baseOffset: number,
   quoteStyle: SqlQuoteStyle = 'none',
   closed = true
-): void {
+): SqlToken {
   const text = source.slice(start, end);
-  tokens.push({
+  return {
     kind,
     text,
     value: text,
@@ -859,7 +870,7 @@ function pushToken(
     end: baseOffset + end,
     quoteStyle,
     closed
-  });
+  };
 }
 
 function normalizeIdentifier(value: string): string {

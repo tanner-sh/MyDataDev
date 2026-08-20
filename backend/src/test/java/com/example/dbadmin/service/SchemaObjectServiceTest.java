@@ -176,7 +176,7 @@ class SchemaObjectServiceTest {
         SchemaObjectService service = new SchemaObjectService(
                 connections,
                 new DialectRegistry(),
-                new SchemaObjectCatalog(),
+                new SchemaObjectCatalog(new AppProperties()),
                 new MetadataCacheService(),
                 new ExecutionGuard(),
                 mock(AuditRepository.class),

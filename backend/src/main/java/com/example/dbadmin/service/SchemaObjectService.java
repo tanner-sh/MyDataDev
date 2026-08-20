@@ -125,7 +125,13 @@ public class SchemaObjectService {
             var cached = cache.schemaObjectDetail(connectionId, objectKey);
             if (cached.isPresent()) return cached.get().value();
         } else {
-            cache.evictConnection(connectionId);
+            // A plain refresh of one object's detail is a read; it must not
+            // invalidate every other schema-object page listing and every
+            // classic table/DDL cache entry for the connection the way
+            // evictConnection would. DDL execution and routine invocation
+            // still call evictConnection in their own finally blocks below,
+            // since those really can change database-wide state.
+            cache.evictSchemaObjectDetail(connectionId, objectKey);
         }
         DbConnection configured = connections.require(connectionId);
         ObjectRef reference = decodeKey(objectKey);

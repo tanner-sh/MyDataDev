@@ -10,6 +10,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
+import { useStableEvent } from '../hooks/useStableEvent';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -134,6 +135,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
     }
     onSqlChangeRef.current(sessionConnectionId, activeTabId, draftRef.current);
   }
+
+  // A plain function declaration gets a new identity every render, which
+  // defeats SqlEditorSurface's memo() even when `value` itself has not
+  // changed — e.g. the 250ms elapsed-time ticker below re-renders this
+  // component 4x/sec while a query runs, and without a stable identity that
+  // used to re-render the editor surface (and Monaco) on every tick too.
+  const editorChangeEvent = useStableEvent(updateDraft);
+  const editorFormatEvent = useStableEvent(() => { commitDraft(); onFormat(draftRef.current); });
+  const editorExecuteEvent = useStableEvent(() => { commitDraft(); onExecute(draftRef.current); });
 
   function appendSelectTemplate() {
     const template = selectSqlTemplate(selected?.dbType);
@@ -315,9 +325,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             options={EDITOR_OPTIONS}
             executeDisabled={!selected || loading}
             onMount={onEditorMount}
-            onChange={updateDraft}
-            onFormat={() => { commitDraft(); onFormat(draftRef.current); }}
-            onExecute={() => { commitDraft(); onExecute(draftRef.current); }}
+            onChange={editorChangeEvent}
+            onFormat={editorFormatEvent}
+            onExecute={editorExecuteEvent}
           />
         </div>}
         {resultPaneMode === 'normal' && <PaneResizer

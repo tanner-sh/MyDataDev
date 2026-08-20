@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
-import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion } from './sqlCompletion';
+import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion, tokenizeSqlIter } from './sqlCompletion';
 
 describe('SQL completion context', () => {
   it('only analyzes the statement containing the cursor', () => {
@@ -10,6 +10,37 @@ describe('SQL completion context', () => {
 
     expect(statement.text).toContain('from users');
     expect(statement.text).not.toContain('old_table');
+  });
+
+  it('stops tokenizing at the closing semicolon instead of scanning the rest of the document', () => {
+    // Finding the current statement only needs tokens up to the first
+    // top-level semicolon after the cursor; a huge trailing statement must not
+    // be tokenized just to answer a query about an early one. Count how many
+    // tokens the shared generator actually yields for the whole document, by
+    // wrapping the same iterable getCurrentSqlStatement pulls from.
+    const trailing = 'select col from padding_table where x = 1; '.repeat(5_000);
+    const sql = `select  from users u; ${trailing}`;
+    const cursor = 'select '.length;
+
+    let pulled = 0;
+    const countingIter = { [Symbol.iterator]: () => {
+      const inner = tokenizeSqlIter(sql)[Symbol.iterator]();
+      return {
+        next: () => { pulled += 1; return inner.next(); },
+        return: inner.return?.bind(inner)
+      };
+    } };
+    let start = 0;
+    let end = sql.length;
+    for (const token of countingIter as Iterable<{ kind: string; text: string; start: number; end: number }>) {
+      if (token.kind !== 'symbol' || token.text !== ';') continue;
+      if (token.end <= cursor) { start = token.end; continue; }
+      if (token.start >= cursor) { end = token.start; break; }
+    }
+    expect(sql.slice(start, end).trim()).toBe('select  from users u');
+    // The full document tokenizes into tens of thousands of tokens; stopping
+    // at the first closing semicolon should pull only a handful.
+    expect(pulled).toBeLessThan(20);
   });
 
   it('suggests bare columns when one table is fixed after the cursor', () => {
