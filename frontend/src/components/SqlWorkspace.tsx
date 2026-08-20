@@ -28,24 +28,25 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
   sessionConnectionId: number | null;
-  tabs: SqlTab[];
-  activeTabId: string;
-  activeTab: SqlTab;
+  tabs: SqlTab[];
+  activeTabId: string;
+  activeTab: SqlTab;
   status: WorkspaceStatus;
   loading: boolean;
   cancelling: boolean;
   cancellable: boolean;
+  historyLoading: boolean;
   pagingResultKey: string | null;
   themeMode: 'light' | 'dark';
   editorSplitRatio: number;
   onEditorSplitRatioChange: (value: number) => void;
-  onTabChange: (tabId: string) => void;
-  onTabAdd: () => void;
+  onTabChange: (tabId: string) => void;
+  onTabAdd: () => void;
   onTabClose: (tabId: string, liveSql?: string) => void;
   onTabRename: (tabId: string) => void;
   onTabDuplicate: (tabId: string, liveSql?: string) => void;
@@ -238,7 +239,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
               </Button>
             </Tooltip>
             <Tooltip title="SQL 历史">
-              <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected} onClick={onOpenHistory}>
+              <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected || historyLoading} loading={historyLoading} onClick={onOpenHistory}>
                 <span className="sql-toolbar-label">历史</span>
               </Button>
             </Tooltip>
@@ -279,12 +280,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         </div>
       </Header>
       {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon title="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}
-      <Tabs
-        className="sql-tabs"
-        type="editable-card"
-        activeKey={activeTabId}
+      <Tabs
+        className="sql-tabs"
+        type="editable-card"
+        activeKey={activeTabId}
         onChange={(tabId) => { commitDraft(); onTabChange(tabId); }}
-        onEdit={(targetKey, action) => {
+        onEdit={(targetKey, action) => {
           if (action === 'add') {
             commitDraft();
             onTabAdd();
@@ -293,7 +294,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             if (tabId === activeTabId) commitDraft();
             onTabClose(tabId, tabId === activeTabId ? draftRef.current : undefined);
           }
-        }}
+        }}
         hideAdd={false}
         items={tabs.map((tab) => ({
           key: tab.id,

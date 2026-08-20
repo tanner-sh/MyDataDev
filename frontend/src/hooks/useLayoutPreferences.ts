@@ -28,6 +28,13 @@ export const EXPLORER_WIDTH_MAX = 480;
 export const EDITOR_SPLIT_RATIO_MIN = 0.2;
 export const EDITOR_SPLIT_RATIO_MAX = 0.8;
 
+/**
+ * Upper bound for the SQL result page size, matching the backend's
+ * `app.sql.max-rows` default. The value is persisted and reused for every later
+ * execution, so an accidental 500000 would otherwise keep freezing the grid.
+ */
+export const MAX_SQL_PAGE_SIZE = 10_000;
+
 export const DEFAULT_LAYOUT_PREFERENCES: Readonly<LayoutPreferences> = {
   themeMode: 'light',
   explorerWidth: 300,
@@ -179,7 +186,7 @@ function normalizePageSize(value: number) {
 }
 
 function normalizeSqlPageSize(value: number) {
-  return Math.round(clamp(value, 1, 2_147_483_647));
+  return Math.round(clamp(value, 1, MAX_SQL_PAGE_SIZE));
 }
 
 function resolveUpdate<T>(update: PreferenceUpdate<T>, current: T): T {

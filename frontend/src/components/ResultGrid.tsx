@@ -5,6 +5,7 @@ import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFill
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
+import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
 import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
@@ -16,6 +17,8 @@ import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResul
 const { Text } = Typography;
 type ResultRowClassName = (record: ResultRow, index: number, indent: number) => string;
 const RESULT_SELECTION_COLUMN_WIDTH = 38;
+// A very wide SELECT * would otherwise render hundreds of columns on load.
+const DEFAULT_VISIBLE_COLUMNS = 50;
 
 export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, onPageChange }: {
   result: SqlResult | null;
@@ -58,27 +61,39 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
   const columnSignature = result?.resultSet ? result.columns.map((column) => `${column.key}:${column.label}:${column.typeName}`).join('|') : '';
+  // Wide results are capped at DEFAULT_VISIBLE_COLUMNS on load; say so, because
+  // export and copy still cover every column.
+  const hiddenColumnCount = result?.resultSet ? Math.max(0, result.columns.length - visibleColumnKeys.length) : 0;
 
   useEffect(() => {
     if (result?.page?.requestedPageSize) setPageSizeDraft(result.page.requestedPageSize);
   }, [result?.page?.requestedPageSize]);
 
+  // Row selection refers to the rows currently on screen, so it cannot survive
+  // a page turn.
   useEffect(() => {
-    setColumnFilters({});
-    setSortState(undefined);
     setSelectedRowKeys([]);
     setSelectionAnchor(undefined);
-    setManualTargetParts(undefined);
     setTargetDialogOpen(false);
     pendingTargetActionRef.current = null;
   }, [result?.rows]);
+
+  // Sorting and filtering describe columns, not rows. Like the column widths
+  // below they survive paging and reset only for a new SQL or column structure —
+  // dropping them on every "下一批" click silently discarded the user's view.
+  useEffect(() => {
+    setColumnFilters({});
+    setSortState(undefined);
+    setManualTargetParts(undefined);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourceSql, columnSignature, result?.resultSet]);
 
   useEffect(() => {
     if (!result?.resultSet) {
       setVisibleColumnKeys([]);
       return;
     }
-    setVisibleColumnKeys(result.columns.slice(0, 50).map((column) => column.key));
+    setVisibleColumnKeys(result.columns.slice(0, DEFAULT_VISIBLE_COLUMNS).map((column) => column.key));
   }, [result?.columns, result?.resultSet]);
 
   useEffect(() => {
@@ -496,6 +511,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           </Space.Compact>
           {selectedRowKeys.length > 0 && <Tag className="result-selection-tag">已选 {selectedRowKeys.length} 行</Tag>}
           <Tag className="result-scope-tag" color="blue">本地操作 · 当前批次</Tag>
+          {hiddenColumnCount > 0 && (
+            <Tooltip title={`结果共 ${result.columns.length} 列，当前显示 ${visibleColumnKeys.length} 列。导出与复制仍包含全部列，可在右侧选择要显示的列。`}>
+              <Tag className="result-hidden-columns-tag" color="orange">已隐藏 {hiddenColumnCount} 列</Tag>
+            </Tooltip>
+          )}
           {result.columns.length > 20 && (
             <Select
               mode="multiple"
@@ -503,6 +523,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               maxTagCount="responsive"
               className="result-column-selector"
               aria-label="选择结果列"
+              placeholder="显示的列"
               value={visibleColumnKeys}
               options={result.columns.map((column) => ({ value: column.key, label: column.label }))}
               onChange={(keys) => setVisibleColumnKeys(keys.length > 0 ? keys : [result.columns[0].key])}
@@ -554,14 +575,17 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
                   <InputNumber
                     size="small"
                     min={1}
+                    max={MAX_SQL_PAGE_SIZE}
                     step={100}
                     value={pageSizeDraft}
                     disabled={pagingLoading || !pagingEnabled}
                     aria-label="SQL 结果单页行数"
+                    title={`单页最多 ${MAX_SQL_PAGE_SIZE} 行`}
                     onChange={(value) => setPageSizeDraft(value || 500)}
                     onPressEnter={(event) => event.currentTarget.blur()}
                     onBlur={() => {
-                      const nextSize = Math.max(1, Math.round(pageSizeDraft || 500));
+                      const nextSize = Math.min(MAX_SQL_PAGE_SIZE, Math.max(1, Math.round(pageSizeDraft || 500)));
+                      if (nextSize !== pageSizeDraft) setPageSizeDraft(nextSize);
                       if (nextSize !== result.page?.requestedPageSize) onPageChange?.(resizedSqlPage(nextSize));
                     }}
                   />

@@ -154,7 +154,36 @@ export function objectTypeLabel(type: string) {
   return type;
 }
 
-export function localizeMessage(message: string) {
+/**
+ * Chinese text for the error codes the backend attaches to a problem response.
+ * Codes are the reliable channel; the substring matching below only exists for
+ * responses that predate a code.
+ */
+const ERROR_CODE_MESSAGES: Record<string, string> = {
+  INTERNAL_ERROR: '服务器内部错误，请稍后重试。',
+  TARGET_DATABASE_UNAVAILABLE: '无法连接目标数据库，请检查数据库状态与网络后重试。',
+  READONLY_CONNECTION: '当前连接为只读连接，不允许执行写入或结构变更。',
+  CONNECTION_HAS_BACKUP_TASKS: '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。',
+  CONNECTION_RESTORE_RUNNING: '该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。',
+  CONNECTION_BACKGROUND_BUSY: '该连接已有后台重任务正在执行，请等待完成后重试。',
+  BACKUP_ALREADY_RUNNING: '该备份任务正在执行，请勿重复启动。',
+  BACKUP_QUEUE_FULL: '备份执行队列已满，请稍后重试。',
+  RESTORE_ALREADY_RUNNING: '该恢复任务正在执行，请勿重复启动。',
+  RESTORE_QUEUE_FULL: '恢复执行队列已满，请稍后重试。',
+  SQL_FILE_QUEUE_FULL: 'SQL 文件执行队列已满，请稍后重试。',
+  SQL_FILE_NOT_READY: 'SQL 文件尚未完成解析或状态已变化，请重新选择文件。',
+  SQL_FILE_EXPIRED: 'SQL 文件已过期，请重新选择文件。',
+  SQL_FILE_ALREADY_RUNNING: '该连接已有 SQL 文件任务正在执行。'
+};
+
+/**
+ * Turns a backend error into Chinese UI text.
+ *
+ * Always pass the `code` when one is available: without it an unmapped backend
+ * message (raw JDBC driver text, Spring internals) reaches the user verbatim.
+ */
+export function localizeMessage(message: string, code?: string) {
+  if (code && ERROR_CODE_MESSAGES[code]) return ERROR_CODE_MESSAGES[code];
   if (!message) return '';
   if (message.includes('Backup framework executed')) return '备份任务已执行。当前数据库类型暂未实现物理备份适配器。';
   if (message.includes('Physical backup adapter is not implemented')) return '当前数据库类型暂未实现物理备份适配器。';
@@ -164,4 +193,10 @@ export function localizeMessage(message: string) {
   if (message.includes('connection ok')) return '连接测试成功。';
   if (message.includes('No pending changes')) return '没有待提交的变更。';
   return message;
-}
+}
+
+/** Localizes a caught error, preferring the `code` carried by an ApiError. */
+export function localizeError(error: unknown) {
+  const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : undefined;
+  return localizeMessage((error as Error)?.message || '', code);
+}

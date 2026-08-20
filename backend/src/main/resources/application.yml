@@ -65,14 +65,12 @@ spring:
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
   cors:
-    # Keep the browser UI same-origin in production, while retaining Vite's
-    # two local development origins. Override this list for another deployment.
-    allowed-origin-patterns:
-      - http://localhost:5173
-      - http://127.0.0.1:5173
-      - http://192.168.99.171
-      - http://192.168.99.171:*
-      - http://tangjja.top:*
+    # Keep the browser UI same-origin in production; only Vite's two local
+    # development origins are allowed by default. Deployments that serve the UI
+    # from another host must supply their own origins, for example:
+    #   APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://db.example.com
+    # Prefer exact origins over port wildcards such as https://example.com:*.
+    allowed-origin-patterns: ${APP_CORS_ALLOWED_ORIGIN_PATTERNS:http://localhost:5173,http://127.0.0.1:5173}
   sql:
     max-rows: 10000
     max-page-offset: 1000000

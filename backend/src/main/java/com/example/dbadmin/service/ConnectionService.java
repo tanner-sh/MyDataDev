@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.dto.ApiDtos.ConnectionRequest;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
@@ -10,6 +11,7 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -76,10 +78,12 @@ public class ConnectionService {
         DbConnection c = require(id);
         int refs = backupTasks.countByConnectionId(id);
         if (refs > 0) {
-            throw new IllegalArgumentException("Connection is referenced by " + refs + " backup task(s). Delete related backup tasks first.");
+            throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_HAS_BACKUP_TASKS",
+                    "该连接存在 " + refs + " 个关联备份任务，请先删除相关备份任务后再删除连接。");
         }
         if (restoreJobs.countActiveByConnectionId(id) > 0) {
-            throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
+            throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_RESTORE_RUNNING",
+                    "该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
         }
         repository.delete(id);
         dataSources.evict(id);

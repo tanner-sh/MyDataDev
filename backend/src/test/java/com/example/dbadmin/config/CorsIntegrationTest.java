@@ -1,5 +1,6 @@
 package com.example.dbadmin.config;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "app.crypto-key=cors-test-crypto-key",
-        "app.backup.directory=${java.io.tmpdir}/mydatadev-cors-test-backups"
+        "app.backup.directory=${java.io.tmpdir}/mydatadev-cors-test-backups",
+        // Deployment origins are supplied per environment, so the test states
+        // its own instead of depending on whatever ships in application.yml.
+        "app.cors.allowed-origin-patterns=http://localhost:5173,http://127.0.0.1:5173,https://db.example.com"
 })
 @AutoConfigureMockMvc
 class CorsIntegrationTest {
@@ -28,15 +32,25 @@ class CorsIntegrationTest {
     @ValueSource(strings = {
             "http://localhost:5173",
             "http://127.0.0.1:5173",
-            "http://192.168.99.171",
-            "http://tangjja.top:18888"
+            "https://db.example.com"
     })
     void allowsConfiguredBrowserOrigins(String origin) throws Exception {
-        mvc.perform(options("/api/sql/execute-script")
-                        .header(HttpHeaders.ORIGIN, origin)
-                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
-                        .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, HttpHeaders.CONTENT_TYPE))
+        preflight(origin)
                 .andExpect(status().isOk())
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, origin));
+    }
+
+    @Test
+    void rejectsOriginsThatAreNotConfigured() throws Exception {
+        preflight("https://attacker.example.net")
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions preflight(String origin) throws Exception {
+        return mvc.perform(options("/api/sql/execute-script")
+                .header(HttpHeaders.ORIGIN, origin)
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, HttpHeaders.CONTENT_TYPE));
     }
 }

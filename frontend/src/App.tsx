@@ -6,7 +6,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
 import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, createSqlTab, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
@@ -105,6 +105,7 @@ export default function App() {
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyFeatureLoaded, setHistoryFeatureLoaded] = useState(false);
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
@@ -141,6 +142,7 @@ export default function App() {
   const objectDetailPrefetchTimerRef = useRef<number | null>(null);
   const objectDetailPrefetchCandidateRef = useRef('');
   const sqlExecutionIdRef = useRef<string | null>(null);
+  const exportAbortRef = useRef<AbortController | null>(null);
   const sqlBusyRef = useRef(false);
   const sqlTabsRef = useRef(sqlTabs);
   const activeSqlTabIdRef = useRef(activeSqlTabId);
@@ -261,6 +263,7 @@ export default function App() {
   useEffect(() => () => {
     metadataAbortRef.current?.abort();
     tableAbortRef.current?.abort();
+    exportAbortRef.current?.abort();
     clearObjectDetailPrefetchTimer();
   }, []);
 
@@ -629,10 +632,7 @@ export default function App() {
       }
       await refreshConnections();
     } catch (e) {
-      const rawMessage = (e as Error).message;
-      const blockedByBackups = rawMessage.includes('backup task');
-      showError(blockedByBackups ? '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。' : localizeMessage(rawMessage));
-      await refreshSqlHistoryQuietly(selected);
+      showError(localizeError(e));
     } finally {
       setConnectionActionLoading(false);
     }
@@ -1070,12 +1070,14 @@ export default function App() {
           void loadMetadata(selected, { page: 0, refresh: true, background: true });
         }
         }
-        await refreshSqlHistoryQuietly(selected);
+        // The history drawer refreshes itself when opened, so an unconditional
+        // fetch here would only lengthen the perceived execution time.
+        if (historyOpen) await refreshSqlHistoryQuietly(selected);
       } catch (e) {
-        const errorMessage = localizeMessage((e as Error).message);
+        const errorMessage = localizeError(e);
         updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
         toastApi.error(errorMessage);
-        await refreshSqlHistoryQuietly(selected);
+        if (historyOpen) await refreshSqlHistoryQuietly(selected);
       } finally {
         if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
         setSqlCancellable(false);
@@ -1204,28 +1206,44 @@ export default function App() {
   }
 
   async function cancelSqlExecution() {
+    if (sqlCancelling) return;
+    // An export has no server-side execution id; it is aborted client-side,
+    // which also frees the workspace and lets the user switch connections.
+    const exportController = exportAbortRef.current;
+    if (exportController) {
+      setSqlCancelling(true);
+      exportController.abort();
+      return;
+    }
     const executionId = sqlExecutionIdRef.current;
-    if (!executionId || sqlCancelling) return;
+    if (!executionId) return;
     setSqlCancelling(true);
     try {
       const result = await api<{ ok: boolean; message: string }>(`/sql/executions/${executionId}/cancel`, { method: 'POST' });
       showInfo(result.message);
     } catch (e) {
-      showError(`取消 SQL 失败：${localizeMessage((e as Error).message)}`);
+      showError(`取消 SQL 失败：${localizeError(e)}`);
     } finally {
       setSqlCancelling(false);
     }
   }
 
   async function openSqlHistory() {
+    // The drawer only opens once the first page has loaded, so without an
+    // in-flight guard the button looks dead and repeated clicks pile up
+    // duplicate /sql/history requests.
+    if (historyLoading) return;
+    setHistoryLoading(true);
     try {
       await refreshSqlHistory();
       setHistoryFeatureLoaded(true);
       setHistoryOpen(true);
     } catch (e) {
-      const errorMessage = `历史记录加载失败：${localizeMessage((e as Error).message)}`;
+      const errorMessage = `历史记录加载失败：${localizeError(e)}`;
       updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
       toastApi.error(errorMessage);
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -1260,11 +1278,16 @@ export default function App() {
           }
         }
       }
+      // Exporting a large table can run for minutes and blocks connection
+      // switching, so it must be interruptible like a normal execution.
+      const controller = new AbortController();
+      exportAbortRef.current = controller;
       setSqlLoading(true);
-      setSqlCancellable(false);
+      setSqlCancellable(true);
       try {
       const response = await fetch(`${API}/sql/export`, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           'X-User': 'admin',
@@ -1284,10 +1307,18 @@ export default function App() {
       updateActiveSqlTab({ message: nextMessage, statusKind: 'success' });
       toastApi.success(nextMessage);
       } catch (e) {
-        const errorMessage = `导出失败：${localizeMessage((e as Error).message)}`;
-        updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
-        toastApi.error(errorMessage);
+        if ((e as Error).name === 'AbortError') {
+          updateActiveSqlTab({ message: '已取消导出', statusKind: 'info' });
+          showInfo('已取消导出');
+        } else {
+          const errorMessage = `导出失败：${localizeError(e)}`;
+          updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
+          toastApi.error(errorMessage);
+        }
       } finally {
+        if (exportAbortRef.current === controller) exportAbortRef.current = null;
+        setSqlCancellable(false);
+        setSqlCancelling(false);
         setSqlLoading(false);
       }
     } finally {
@@ -2489,6 +2520,7 @@ export default function App() {
                 loading={sqlLoading}
                 cancelling={sqlCancelling}
                 cancellable={sqlCancellable}
+                historyLoading={historyLoading}
                 pagingResultKey={sqlPagingResultKey}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
