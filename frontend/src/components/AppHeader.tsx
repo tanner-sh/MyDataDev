@@ -15,6 +15,7 @@ import {
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
 import { backgroundTaskLabel, type BackgroundTaskSummary } from '../backgroundTasks';
+import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { memo, useMemo } from 'react';
 
 const { Text } = Typography;
@@ -68,7 +69,7 @@ export const AppHeader = memo(function AppHeader({
   return (
     <header className="app-header">
       <div className="app-header-brand">
-        <Tooltip title={`${explorerCollapsed ? '展开' : '收起'}资源管理器（Ctrl/Cmd+B）`}>
+        <Tooltip title={`${explorerCollapsed ? '展开' : '收起'}资源管理器（${SHORTCUT_HINTS.toggleExplorer}）`}>
           <Button
             type="text"
             className="header-icon-button"

@@ -11,6 +11,7 @@ import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
+import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -306,6 +307,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           }
         }}
         hideAdd={false}
+        addIcon={<Tooltip title={`新建 SQL 标签页（${SHORTCUT_HINTS.newSqlTab}），${SHORTCUT_HINTS.selectSqlTab} 切换标签页`}><span aria-hidden="true">+</span></Tooltip>}
         items={tabs.map((tab) => ({
           key: tab.id,
           label: (

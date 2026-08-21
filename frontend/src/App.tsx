@@ -28,6 +28,7 @@ import {
 } from './backgroundTasks';
 import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
 import { createUuid } from './createUuid';
+import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -141,6 +142,7 @@ export default function App() {
   const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
   const objectDefinitionNavigationRef = useRef<(reference: SqlTableReference) => void>(() => undefined);
   const executeRef = useRef<() => void>(() => undefined);
+  const shortcutHandlerRef = useRef<(shortcut: AppShortcut, event: KeyboardEvent) => void>(() => undefined);
   const formatRef = useRef<() => void>(() => undefined);
   const sqlTabSeqRef = useRef(1);
   const sqlFileRequestSeqRef = useRef(0);
@@ -235,20 +237,16 @@ export default function App() {
     return () => window.removeEventListener('pagehide', persist);
   }, []);
 
+  // The listener is registered once and dispatches through a ref, so every
+  // handler below sees current state without re-binding on each render.
   useEffect(() => {
-    const handleShortcut = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
-        event.preventDefault();
-        if (compactLayout) {
-          setMobileExplorerOpen((current) => !current);
-        } else {
-          layoutPreferences.toggleExplorer();
-        }
-      }
+    const listener = (event: KeyboardEvent) => {
+      const shortcut = resolveAppShortcut(event);
+      if (shortcut) shortcutHandlerRef.current(shortcut, event);
     };
-    window.addEventListener('keydown', handleShortcut);
-    return () => window.removeEventListener('keydown', handleShortcut);
-  }, [compactLayout, layoutPreferences.toggleExplorer]);
+    window.addEventListener('keydown', listener);
+    return () => window.removeEventListener('keydown', listener);
+  }, []);
 
   useEffect(() => {
     if (pendingChanges.length === 0 && !objectDesignDirty) return;
@@ -1676,6 +1674,49 @@ export default function App() {
       columns: [],
       indexes: []
     });
+  };
+
+  // A dialog or drawer has focus of its own; acting on the workspace behind it
+  // would be surprising. The explorer toggle is exempt because it is also how a
+  // user closes the mobile explorer drawer.
+  const overlayOpen = Boolean(productionConfirmationRequest)
+    || activeDrawer !== null
+    || connectionEditor.mode !== 'closed'
+    || tableCreateOpen
+    || Boolean(tableLifecycleAction)
+    || historyOpen
+    || sqlFileTasksOpen;
+
+  shortcutHandlerRef.current = (shortcut: AppShortcut, event: KeyboardEvent) => {
+    if (shortcut.kind === 'toggle-explorer') {
+      event.preventDefault();
+      if (compactLayout) setMobileExplorerOpen((current) => !current);
+      else layoutPreferences.toggleExplorer();
+      return;
+    }
+    if (overlayOpen) return;
+    if (shortcut.kind === 'new-sql-tab') {
+      if (mode !== 'sql' || !selected) return;
+      event.preventDefault();
+      addSqlTab();
+      return;
+    }
+    if (shortcut.kind === 'select-sql-tab') {
+      if (mode !== 'sql' || !selected) return;
+      const target = sqlTabs[shortcut.index];
+      if (!target) return;
+      event.preventDefault();
+      setActiveSqlTabId(target.id);
+      return;
+    }
+    if (shortcut.kind === 'commit-table-changes') {
+      // Outside the table workspace Ctrl/Cmd+S is left to the browser rather
+      // than silently swallowed.
+      if (mode !== 'table' || !activeTable || pendingChanges.length === 0) return;
+      if (tableLoading || selected?.readonly || !selected?.capabilities?.tableEdit) return;
+      event.preventDefault();
+      void commitChanges();
+    }
   };
 
   const handleEditorMount: SqlEditorOnMount = (editor, monaco) => {

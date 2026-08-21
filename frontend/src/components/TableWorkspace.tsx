@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Typography, Upload } from 'antd';
+import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Tooltip, Typography, Upload } from 'antd';
 import type { MenuProps } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -19,6 +19,7 @@ import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { summarizeRowChanges } from '../utils';
+import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -167,7 +168,9 @@ export const TableWorkspace = memo(function TableWorkspace({
             >
               预览 {pendingCount || ''}
             </Button>
-            <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount || ''}</Button>
+            <Tooltip title={`提交待处理的表数据变更（${SHORTCUT_HINTS.commitTableChanges}）`}>
+              <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount || ''}</Button>
+            </Tooltip>
           </Space>
           <input
             ref={importInputRef}
