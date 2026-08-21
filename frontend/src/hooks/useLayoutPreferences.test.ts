@@ -35,4 +35,9 @@ describe('theme bootstrap in index.html', () => {
     expect(indexHtml).toContain('documentElement.dataset.theme');
     expect(indexHtml).toContain('documentElement.style.colorScheme');
   });
+
+  it('gives the boot placeholder a dark variant, so it cannot flash white either', () => {
+    expect(indexHtml).toContain('id="app-boot"');
+    expect(indexHtml).toContain(':root[data-theme="dark"] #app-boot');
+  });
 });

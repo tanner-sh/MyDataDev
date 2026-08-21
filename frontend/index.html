@@ -24,9 +24,103 @@
         }
       })();
     </script>
+    <style>
+      /* Placeholder shown until the app bundle has parsed and React has mounted;
+         main.tsx clears it. Kept self-contained rather than reusing the app's
+         tokens, because in dev the stylesheet is injected by that same bundle
+         and would not be available yet. Mirrors the real shell: a 48px header,
+         a 300px explorer and the workspace. */
+      #app-boot {
+        --boot-bg: #eef2f7;
+        --boot-surface: #ffffff;
+        --boot-border: #d8dee8;
+        --boot-line: #e3e9f1;
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--boot-bg);
+      }
+
+      :root[data-theme="dark"] #app-boot {
+        --boot-bg: #0b0f15;
+        --boot-surface: #111720;
+        --boot-border: #2c3645;
+        --boot-line: #1b2331;
+      }
+
+      #app-boot .boot-header {
+        flex: 0 0 auto;
+        height: 48px;
+        border-bottom: 1px solid var(--boot-border);
+        background: var(--boot-surface);
+      }
+
+      #app-boot .boot-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: flex;
+      }
+
+      #app-boot .boot-sider {
+        flex: 0 0 300px;
+        border-right: 1px solid var(--boot-border);
+        background: var(--boot-surface);
+      }
+
+      #app-boot .boot-main {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      #app-boot .boot-line {
+        height: 10px;
+        margin: 14px 16px;
+        border-radius: 5px;
+        background: var(--boot-line);
+        animation: boot-pulse 1.4s ease-in-out infinite;
+      }
+
+      #app-boot .boot-line-short {
+        width: 42%;
+      }
+
+      @keyframes boot-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.45; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #app-boot .boot-line {
+          animation: none;
+        }
+      }
+
+      @media (max-width: 1199px) {
+        #app-boot .boot-sider {
+          display: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-boot" role="status" aria-live="polite" aria-label="正在加载 MyDataDev 数据库工作台">
+        <div class="boot-header"><div class="boot-line boot-line-short"></div></div>
+        <div class="boot-body">
+          <div class="boot-sider">
+            <div class="boot-line"></div>
+            <div class="boot-line boot-line-short"></div>
+            <div class="boot-line"></div>
+            <div class="boot-line boot-line-short"></div>
+          </div>
+          <div class="boot-main">
+            <div class="boot-line"></div>
+            <div class="boot-line boot-line-short"></div>
+          </div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
