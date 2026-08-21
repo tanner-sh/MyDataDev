@@ -32,6 +32,10 @@ public class SqlStatementClassifier {
     private static final Set<String> SELECT_SIDE_EFFECT_TOKENS = Set.of("NEXTVAL", "SETVAL", "UPDLOCK", "XLOCK");
     private static final Set<String> TOP_LEVEL_PAGING_TOKENS = Set.of("LIMIT", "OFFSET", "FETCH", "TOP");
     private static final Set<String> UNSCOPED_MUTATIONS = Set.of("UPDATE", "DELETE");
+    // Words that may sit between EXPLAIN and the verb of the statement it explains.
+    private static final Set<String> EXPLAIN_MODIFIERS = Set.of(
+            "ANALYZE", "ANALYSE", "VERBOSE", "EXTENDED", "PARTITIONS", "FORMAT", "PLAN", "FOR", "QUERY"
+    );
 
     public Kind classify(String sql) {
         if (sql == null || sql.isBlank()) return Kind.UNKNOWN;
@@ -136,12 +140,7 @@ public class SqlStatementClassifier {
     }
 
     private boolean hasQuerySideEffect(List<Token> tokens, Operation operation) {
-        if ("EXPLAIN".equals(operation.word())) {
-            for (int index = operation.index() + 1; index < tokens.size(); index++) {
-                String token = tokens.get(index).word();
-                if (MUTATION.contains(token) || DDL.contains(token)) return true;
-            }
-        }
+        if ("EXPLAIN".equals(operation.word()) && explainExecutesWrite(tokens, operation)) return true;
         for (int index = operation.index() + 1; index < tokens.size(); index++) {
             String token = tokens.get(index).word();
             if ("INTO".equals(token) || SELECT_SIDE_EFFECT_TOKENS.contains(token)) return true;
@@ -151,6 +150,38 @@ public class SqlStatementClassifier {
                     && "IN".equals(tokens.get(index + 1).word())
                     && "SHARE".equals(tokens.get(index + 2).word())
                     && "MODE".equals(tokens.get(index + 3).word())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reports whether an EXPLAIN would carry out a write.
+     *
+     * <p>Only the verb of the statement being explained decides this. Scanning
+     * every following token instead would classify ordinary reads as writes,
+     * because many keywords in {@link #MUTATION} and {@link #DDL} are also
+     * perfectly ordinary column names: {@code EXPLAIN SELECT comment FROM posts}
+     * and {@code EXPLAIN SELECT start FROM events} were both reported as
+     * mutations, which made them fail on read-only connections and get rejected
+     * by {@code SqlService.explain} as "not a query".</p>
+     *
+     * <p>Dialect modifiers may sit between EXPLAIN and that verb — PostgreSQL
+     * {@code ANALYZE VERBOSE} and its parenthesised option list, MySQL
+     * {@code FORMAT=JSON}, Oracle {@code PLAN FOR}, SQLite {@code QUERY PLAN} —
+     * so they are skipped, along with anything nested inside parentheses.</p>
+     */
+    private boolean explainExecutesWrite(List<Token> tokens, Operation operation) {
+        int statementDepth = tokens.get(operation.index()).depth();
+        for (int index = operation.index() + 1; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.depth() != statementDepth) continue;
+            if (EXPLAIN_MODIFIERS.contains(token.word())) continue;
+            // A WITH prefix can hide the write in a data-modifying CTE, which the
+            // depth filter above steps over. Defer to the same check classify()
+            // uses for a bare WITH statement.
+            if ("WITH".equals(token.word())) return nestedCteWrite(tokens) != null;
+            if (!OPERATIONS.contains(token.word())) continue;
+            return MUTATION.contains(token.word()) || DDL.contains(token.word());
         }
         return false;
     }

@@ -104,6 +104,33 @@ class SqlStatementClassifierTest {
     }
 
     @Test
+    void keepsExplainOfPlainQueryAsQuery() {
+        // These column names collide with keywords in the mutation/DDL sets.
+        assertThat(classifier.classify("EXPLAIN SELECT comment FROM posts")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN SELECT start FROM events")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN SELECT id FROM users ORDER BY grant_id")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN ANALYZE SELECT comment FROM posts")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN (ANALYZE, BUFFERS) SELECT comment FROM posts")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN PLAN FOR SELECT comment FROM posts")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("EXPLAIN QUERY PLAN SELECT comment FROM posts")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.isQuery("EXPLAIN SELECT comment FROM posts")).isTrue();
+    }
+
+    @Test
+    void treatsExplainOfWriteAsMutation() {
+        assertThat(classifier.classify("EXPLAIN DELETE FROM users")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("EXPLAIN UPDATE users SET active = FALSE")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("EXPLAIN ANALYZE DELETE FROM users")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("EXPLAIN FORMAT=JSON DELETE FROM users")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        // hasQuerySideEffect only ever escalates to MUTATION; ExecutionGuard treats
+        // anything that is not QUERY the same way, so DDL vs MUTATION is not observable here.
+        assertThat(classifier.classify("EXPLAIN TRUNCATE TABLE users")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("EXPLAIN WITH removed AS (DELETE FROM users RETURNING *) SELECT * FROM removed"))
+                .isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("EXPLAIN SELECT * INTO archive FROM users")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+    }
+
+    @Test
     void requiresConfirmationForUnscopedWriteInsideDataModifyingCte() {
         assertThat(classifier.requiresUnscopedMutationConfirmation(
                 "WITH removed AS (DELETE FROM users RETURNING *) SELECT count(*) FROM removed")).isTrue();
