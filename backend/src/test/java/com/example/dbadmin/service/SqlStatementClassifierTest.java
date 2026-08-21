@@ -100,5 +100,25 @@ class SqlStatementClassifierTest {
         assertThat(classifier.requiresUnscopedMutationConfirmation("DELETE FROM users WHERE active = FALSE")).isFalse();
         assertThat(classifier.requiresUnscopedMutationConfirmation("SELECT * FROM users")).isFalse();
         assertThat(classifier.requiresUnscopedMutationConfirmation("INSERT INTO users(id) VALUES (1)")).isFalse();
+        assertThat(classifier.requiresUnscopedMutationConfirmation("SELECT * FROM orders FOR UPDATE")).isFalse();
+    }
+
+    @Test
+    void requiresConfirmationForUnscopedWriteInsideDataModifyingCte() {
+        assertThat(classifier.requiresUnscopedMutationConfirmation(
+                "WITH removed AS (DELETE FROM users RETURNING *) SELECT count(*) FROM removed")).isTrue();
+        assertThat(classifier.requiresUnscopedMutationConfirmation(
+                "WITH bumped AS (UPDATE users SET active = FALSE RETURNING id) SELECT * FROM bumped")).isTrue();
+        // A sibling CTE's WHERE scopes only that sibling, never the write.
+        assertThat(classifier.requiresUnscopedMutationConfirmation(
+                "WITH a AS (DELETE FROM audit RETURNING id), b AS (SELECT id FROM users WHERE active) SELECT * FROM a")).isTrue();
+    }
+
+    @Test
+    void acceptsScopedWriteInsideDataModifyingCte() {
+        assertThat(classifier.requiresUnscopedMutationConfirmation(
+                "WITH removed AS (DELETE FROM users WHERE active = FALSE RETURNING *) SELECT count(*) FROM removed")).isFalse();
+        assertThat(classifier.requiresUnscopedMutationConfirmation(
+                "WITH stale AS (SELECT id FROM users WHERE active = FALSE) SELECT * FROM stale")).isFalse();
     }
 }

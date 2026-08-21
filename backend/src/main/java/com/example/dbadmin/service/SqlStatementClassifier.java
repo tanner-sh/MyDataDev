@@ -2,7 +2,9 @@ package com.example.dbadmin.service;
 
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -29,6 +31,7 @@ public class SqlStatementClassifier {
     private static final Set<String> OPERATIONS = union(QUERY, MUTATION, DDL);
     private static final Set<String> SELECT_SIDE_EFFECT_TOKENS = Set.of("NEXTVAL", "SETVAL", "UPDLOCK", "XLOCK");
     private static final Set<String> TOP_LEVEL_PAGING_TOKENS = Set.of("LIMIT", "OFFSET", "FETCH", "TOP");
+    private static final Set<String> UNSCOPED_MUTATIONS = Set.of("UPDATE", "DELETE");
 
     public Kind classify(String sql) {
         if (sql == null || sql.isBlank()) return Kind.UNKNOWN;
@@ -63,15 +66,42 @@ public class SqlStatementClassifier {
         return operation != null && SESSION.contains(operation.word());
     }
 
+    /**
+     * Reports whether the statement contains an UPDATE or DELETE that has no
+     * WHERE of its own, and therefore may rewrite an entire table.
+     *
+     * <p>The check runs per statement position rather than only on the leading
+     * verb, because a data-modifying CTE hides the write inside a parenthesised
+     * group: in {@code WITH removed AS (DELETE FROM users RETURNING *) SELECT
+     * ... FROM removed} the leading verb is SELECT even though the statement
+     * deletes every row. A WHERE only counts when it belongs to the same
+     * parenthesised group as the write it is meant to scope, so neither a
+     * subquery's WHERE nor a sibling CTE's WHERE can suppress the prompt.</p>
+     */
     public boolean requiresUnscopedMutationConfirmation(String sql) {
         List<Token> tokens = tokens(sql);
-        Operation operation = tokens.isEmpty() ? null : operation(tokens);
-        if (operation == null || !Set.of("UPDATE", "DELETE").contains(operation.word())) return false;
-        for (int index = operation.index() + 1; index < tokens.size(); index++) {
+        if (tokens.isEmpty()) return false;
+        Operation operation = operation(tokens);
+        // Nested statement positions are only considered for a WITH prefix, so
+        // that this stays aligned with what nestedCteWrite() treats as a write.
+        boolean withPrefix = "WITH".equals(tokens.get(0).word());
+        for (int index = 0; index < tokens.size(); index++) {
             Token token = tokens.get(index);
-            if (token.depth() == 0 && "WHERE".equals(token.word())) return false;
+            if (!UNSCOPED_MUTATIONS.contains(token.word())) continue;
+            boolean statementPosition = (operation != null && index == operation.index())
+                    || (withPrefix && token.groupStart() && token.depth() > 0);
+            if (!statementPosition) continue;
+            if (!hasScopingWhere(tokens, index, token.group())) return true;
         }
-        return true;
+        return false;
+    }
+
+    private boolean hasScopingWhere(List<Token> tokens, int statementIndex, int group) {
+        for (int index = statementIndex + 1; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.group() == group && "WHERE".equals(token.word())) return true;
+        }
+        return false;
     }
 
     private Operation operation(List<Token> tokens) {
@@ -136,6 +166,13 @@ public class SqlStatementClassifier {
         List<Token> tokens = new ArrayList<>();
         int depth = 0;
         boolean atGroupStart = true;
+        // Depth alone cannot tell two sibling groups apart, so every '(' gets a
+        // fresh id that is never reused. It lets a scan stay inside the one
+        // parenthesised statement it started in, e.g. the DELETE branch of
+        // "WITH a AS (DELETE FROM t1), b AS (SELECT ... WHERE ...) ...".
+        int nextGroup = 0;
+        Deque<Integer> groups = new ArrayDeque<>();
+        groups.push(0);
         for (int index = 0; index < sql.length();) {
             char ch = sql.charAt(index);
             char next = index + 1 < sql.length() ? sql.charAt(index + 1) : '\0';
@@ -180,12 +217,14 @@ public class SqlStatementClassifier {
             }
             if (ch == '(') {
                 depth++;
+                groups.push(++nextGroup);
                 atGroupStart = true;
                 index++;
                 continue;
             }
             if (ch == ')') {
                 depth = Math.max(0, depth - 1);
+                if (groups.size() > 1) groups.pop();
                 atGroupStart = false;
                 index++;
                 continue;
@@ -193,7 +232,7 @@ public class SqlStatementClassifier {
             if (Character.isLetter(ch) || ch == '_') {
                 int end = index + 1;
                 while (end < sql.length() && (Character.isLetterOrDigit(sql.charAt(end)) || sql.charAt(end) == '_' || sql.charAt(end) == '$')) end++;
-                tokens.add(new Token(sql.substring(index, end).toUpperCase(Locale.ROOT), depth, atGroupStart));
+                tokens.add(new Token(sql.substring(index, end).toUpperCase(Locale.ROOT), depth, atGroupStart, groups.peek()));
                 atGroupStart = false;
                 index = end;
                 continue;
@@ -287,8 +326,11 @@ public class SqlStatementClassifier {
      *                   parenthesised group it belongs to, i.e. it sits in
      *                   statement position rather than being an operand or a
      *                   function name.
+     * @param group      identifies the parenthesised group this token belongs
+     *                   to. Ids are unique per '(' occurrence, so two sibling
+     *                   groups at the same depth never share one.
      */
-    private record Token(String word, int depth, boolean groupStart) {
+    private record Token(String word, int depth, boolean groupStart, int group) {
     }
 
     private record Operation(String word, int index) {
