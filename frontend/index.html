@@ -5,6 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>MyDataDev - 数据库工作台</title>
+    <script>
+      // The theme lives in localStorage and is applied by React, which cannot run
+      // before the ~300 KiB of app JavaScript has parsed. Without this the
+      // stylesheet paints the light :root palette first, so every reload flashes
+      // a full white screen at dark-theme users. Keep STORAGE_KEY and the shape
+      // in sync with src/hooks/useLayoutPreferences.ts.
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('db-admin:layout-preferences:v1');
+          var mode = stored ? JSON.parse(stored).themeMode : null;
+          if (mode !== 'light' && mode !== 'dark') return;
+          document.documentElement.dataset.theme = mode;
+          document.documentElement.style.colorScheme = mode;
+        } catch (error) {
+          // Storage can be unavailable in private browsing or a restricted iframe;
+          // the light default below stays correct in that case.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

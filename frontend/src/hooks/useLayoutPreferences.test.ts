@@ -1,5 +1,7 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LAYOUT_PREFERENCES, MAX_SQL_PAGE_SIZE, normalizeLayoutPreferences } from './useLayoutPreferences';
+import { DEFAULT_LAYOUT_PREFERENCES, MAX_SQL_PAGE_SIZE, normalizeLayoutPreferences, STORAGE_KEY } from './useLayoutPreferences';
 
 describe('layout preference migration', () => {
   it('uses 500 rows for new SQL result pages', () => {
@@ -20,5 +22,20 @@ describe('layout preference migration', () => {
     // The value is reused for every later execution, so an accidental 500000
     // would keep freezing the result grid on each query.
     expect(normalizeLayoutPreferences({ sqlPageSize: 500_000 }).sqlPageSize).toBe(MAX_SQL_PAGE_SIZE);
+  });
+});
+
+describe('theme bootstrap in index.html', () => {
+  // index.html applies the stored theme before the app bundle parses, so a
+  // renamed storage key here would silently bring the white flash back.
+  const html = readFileSync(resolve(__dirname, '../../index.html'), 'utf8');
+
+  it('reads the same storage entry the hook writes', () => {
+    expect(html).toContain(STORAGE_KEY);
+  });
+
+  it('sets both the theme attribute and the browser color scheme', () => {
+    expect(html).toContain('documentElement.dataset.theme');
+    expect(html).toContain('documentElement.style.colorScheme');
   });
 });

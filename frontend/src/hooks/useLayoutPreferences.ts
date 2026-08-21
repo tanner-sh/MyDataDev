@@ -44,7 +44,11 @@ export const DEFAULT_LAYOUT_PREFERENCES: Readonly<LayoutPreferences> = {
   tablePageSize: 100
 };
 
-const STORAGE_KEY = 'db-admin:layout-preferences:v1';
+/**
+ * Exported because index.html reads the same entry in an inline script to apply
+ * the stored theme before the app bundle parses. The two must stay in sync.
+ */
+export const STORAGE_KEY = 'db-admin:layout-preferences:v1';
 
 export function useLayoutPreferences(): LayoutPreferencesController {
   const [preferences, setPreferences] = useState<LayoutPreferences>(readStoredPreferences);
