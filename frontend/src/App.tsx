@@ -29,6 +29,7 @@ import {
 import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
+import { IDLE_TABLE_ROW_COUNT, type TableRowCountState } from './tableRowCount';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -126,6 +127,7 @@ export default function App() {
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
+  const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const selectedIdRef = useRef<number | null>(null);
   const backgroundTasksRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const metadataRef = useRef<Metadata | null>(null);
@@ -136,6 +138,7 @@ export default function App() {
   const structureRequestSeqRef = useRef(0);
   const objectDetailRequestSeqRef = useRef(0);
   const tableRequestSeqRef = useRef(0);
+  const tableRowCountSeqRef = useRef(0);
   const backupRequestSeqRef = useRef(0);
   const objectDesignDirtyRef = useRef(false);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -772,6 +775,40 @@ export default function App() {
     setTablePage(0);
     setTableCursorStack([null]);
     setPreviewSql([]);
+    resetTableRowCount();
+  }
+
+  /**
+   * A count belongs to one table at one moment. Paging keeps it (the data has
+   * not changed), while opening another table or committing changes drops it.
+   */
+  function resetTableRowCount() {
+    tableRowCountSeqRef.current += 1;
+    setTableRowCount(IDLE_TABLE_ROW_COUNT);
+  }
+
+  async function countTableRows() {
+    if (!selected || !activeTable) return;
+    const connectionId = selected.id;
+    const requestId = ++tableRowCountSeqRef.current;
+    setTableRowCount({ status: 'loading' });
+    try {
+      const params = new URLSearchParams({ objectName: activeTable.tableName });
+      if (activeTable.schemaName) params.set('schemaName', activeTable.schemaName);
+      const data = await api<{ value: number | null; exact: boolean; elapsedMs: number }>(
+        `/metadata/${connectionId}/objects/row-count?${params.toString()}`
+      );
+      if (requestId !== tableRowCountSeqRef.current || selectedIdRef.current !== connectionId) return;
+      if (data.value == null) {
+        setTableRowCount({ status: 'failed' });
+        return;
+      }
+      setTableRowCount({ status: 'ready', total: data.value, elapsedMs: data.elapsedMs });
+    } catch (e) {
+      if (requestId !== tableRowCountSeqRef.current) return;
+      setTableRowCount({ status: 'failed' });
+      showError(`统计总行数失败：${localizeError(e)}`);
+    }
   }
 
   function confirmDiscardTableChanges(action: () => void, nextAction = '离开当前数据表') {
@@ -1854,6 +1891,7 @@ export default function App() {
 
   async function applyOpenTable(object: DbObject) {
     const next = { schemaName: object.schemaName, tableName: object.name };
+    resetTableRowCount();
     // Never leave rows from the previous table visible under a new table name
     // if the new request fails.
     setTableData(null);
@@ -2160,6 +2198,7 @@ export default function App() {
       });
       setPreviewSql(data.sql);
       showSuccess(`已提交，影响 ${data.affectedRows} 行`);
+      resetTableRowCount();
       await loadTable(activeTable, { page: tablePage });
     } catch (e) {
       showError(localizeMessage((e as Error).message));
@@ -2412,6 +2451,7 @@ export default function App() {
   const previewTableChangesEvent = useStableEvent(() => previewChanges());
   const discardTableChangesEvent = useStableEvent(() => discardTableChanges());
   const commitTableChangesEvent = useStableEvent(() => commitChanges());
+  const countTableRowsEvent = useStableEvent(() => void countTableRows());
   const returnFromObjectEvent = useStableEvent(() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台'));
   const reloadObjectDetailEvent = useStableEvent(() => {
     if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
@@ -2633,6 +2673,8 @@ export default function App() {
                 page={tablePage}
                 pageSize={layoutPreferences.tablePageSize}
                 hasMore={tableData?.hasMore ?? false}
+                rowCount={tableRowCount}
+                onCountRows={countTableRowsEvent}
                 status={tableStatus}
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}

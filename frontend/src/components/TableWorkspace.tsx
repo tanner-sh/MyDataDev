@@ -3,6 +3,7 @@ import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Too
 import type { MenuProps } from 'antd';
 import {
   ArrowLeftOutlined,
+  CalculatorOutlined,
   CloudServerOutlined,
   EyeOutlined,
   LeftOutlined,
@@ -20,6 +21,7 @@ import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { summarizeRowChanges } from '../utils';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
+import { canCountTableRows, IDLE_TABLE_ROW_COUNT, tablePageSummary, type TableRowCountState } from '../tableRowCount';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -38,6 +40,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   page = 0,
   pageSize = 100,
   hasMore = false,
+  rowCount = IDLE_TABLE_ROW_COUNT,
+  onCountRows,
   onBackToSql,
   onBackupTable,
   onReload,
@@ -63,6 +67,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   page?: number;
   pageSize?: number;
   hasMore?: boolean;
+  rowCount?: TableRowCountState;
+  onCountRows?: () => void;
   onBackToSql: () => void;
   onBackupTable?: () => void;
   onReload: () => void;
@@ -190,7 +196,23 @@ export const TableWorkspace = memo(function TableWorkspace({
         <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} onEdit={onEdit} onDelete={onDelete} />
       </div>
       <div className="grid-pagination table-pagination">
-        <Text type="secondary" className="grid-pagination-summary">第 {page + 1} 页 · 本页 {tableRows.length} 行</Text>
+        <Space size={8} className="grid-pagination-summary">
+          <Text type="secondary">{tablePageSummary(page, tableRows.length, rowCount)}</Text>
+          {rowCount.status !== 'ready' && onCountRows && (
+            <Tooltip title="对当前表执行 COUNT(*)。大表可能较慢，因此不随翻页自动统计。">
+              <Button
+                size="small"
+                type="link"
+                icon={<CalculatorOutlined />}
+                loading={rowCount.status === 'loading'}
+                disabled={!canCountTableRows(rowCount, Boolean(tableData), loading)}
+                onClick={onCountRows}
+              >
+                统计总行数
+              </Button>
+            </Tooltip>
+          )}
+        </Space>
         <Space size={8} wrap={false} className="table-pagination-actions">
           <Text type="secondary">每页</Text>
           <Select

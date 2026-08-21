@@ -634,6 +634,9 @@ body {
 
 .grid-pagination-summary {
   min-width: 0;
+  /* Holds the page summary next to the on-demand row-count action; both must be
+     able to drop to a second line on a narrow pagination bar. */
+  flex-wrap: wrap;
 }
 
 .result-column-selector {
