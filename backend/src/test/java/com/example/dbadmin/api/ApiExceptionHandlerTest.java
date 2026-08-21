@@ -3,6 +3,8 @@ package com.example.dbadmin.api;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpMethod;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.sql.SQLException;
 import java.util.Map;
@@ -44,6 +46,16 @@ class ApiExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).containsEntry("code", "SQL_ERROR");
         assertThat(String.valueOf(response.getBody().get("message"))).contains("Unknown column");
+    }
+
+    @Test
+    void reportsAnUnknownPathAsNotFoundInsteadOfAnInternalError() {
+        ResponseEntity<Map<String, Object>> response =
+                handler.notFound(new NoResourceFoundException(HttpMethod.GET, "/h2-console"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(response.getBody()).containsEntry("code", "NOT_FOUND");
+        assertThat(response.getBody()).doesNotContainKey("traceId");
     }
 
     @Test

@@ -15,7 +15,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><strong>下载桌面版</strong></a>
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><strong>下载发行包</strong></a>
     · <a href="#快速开始">快速开始</a>
     · <a href="#核心能力">核心能力</a>
     · <a href="#文档">文档</a>
@@ -65,6 +65,19 @@ MyDataDev 内置以下数据库类型及对应 JDBC 驱动：
 | Linux | x64，DEB / RPM |
 
 桌面版无需额外安装 Java，也无需分别启动前端和后端。应用会在本机启动内置服务，数据、备份和日志保存在操作系统应用数据目录中。当前 macOS 发行版未使用 Apple Developer ID 公证，首次打开方式见[桌面版开发与发行说明](docs/desktop.md#无-apple-开发者账号的发布策略)。
+
+### Web 服务端
+
+从 [GitHub Releases](https://github.com/tanner-sh/MyDataDev/releases/latest) 下载 `MyDataDev-<version>-web.jar`，它内置前端，只需要 Java 17+：
+
+```bash
+export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
+java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
+```
+
+打开 <http://localhost:8080>，同一个端口同时提供界面、`/api` 和 `/mcp`。数据写入启动目录下的 `data`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。前后端分离部署可使用同一 Release 中的 `MyDataDev-<version>-frontend-dist.tar.gz`，配置见[Web 发行包部署说明](docs/web-deploy.md)。
+
+`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改；`/api` 没有用户认证，Web 模式必须部署在可信网络中并由反向代理承担鉴权。
 
 ### Web 开发模式
 
@@ -125,8 +138,9 @@ MyDataDev/
 ├── frontend/       React 页面、公共类型、客户端逻辑与 Vitest 测试
 ├── desktop/        Electron 主进程、资源准备、打包与发行脚本
 ├── database/       示例数据库与初始化脚本
-├── docs/           MCP、桌面版和发行说明
-└── .github/        桌面版多平台构建与 Release 工作流
+├── docs/           MCP、桌面版、Web 部署和发行说明
+├── scripts/        Web 发行包构建脚本
+└── .github/        多平台桌面安装包、Web 发行包与 Release 工作流
 ```
 
 ## 构建与验证
@@ -165,6 +179,12 @@ npm run make
 
 桌面安装包需要在对应操作系统上原生构建；完整的开发、签名和发行流程参见[桌面版开发与发行说明](docs/desktop.md)。
 
+生成 Web 发行包（内置前端的可执行 JAR 与前端静态资源包，输出到 `release-assets/`）：
+
+```bash
+node scripts/build-web-bundle.mjs
+```
+
 ## 配置与安全
 
 主要配置位于 `backend/src/main/resources/application.yml`：
@@ -194,6 +214,7 @@ npm run make
 
 ## 文档
 
+- [Web 发行包部署、反向代理与升级说明](docs/web-deploy.md)
 - [桌面版开发、数据目录与发行说明](docs/desktop.md)
 - [MCP Server 配置、客户端接入与安全边界](docs/mcp-server.md)
 - [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md)
@@ -201,4 +222,4 @@ npm run make
 
 ## 当前状态
 
-MyDataDev 当前版本为 `0.2.0`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。
+MyDataDev 当前版本为 `0.3.0`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。

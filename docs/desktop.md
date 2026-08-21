@@ -110,16 +110,16 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 ## GitHub Actions 发布
 
-`.github/workflows/desktop-release.yml` 在四种原生 runner 上并行构建。每个平台都会运行后端、前端和桌面端测试，生成安装包后启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。
+`.github/workflows/release.yml` 在四种原生 runner 上并行构建。每个平台都会运行后端、前端和桌面端测试，生成安装包后启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。同一个工作流还有一个 `web` 作业构建 Web 发行包，详见 [Web 部署说明](web-deploy.md)。
 
-项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.2.0` 时：
+项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.3.0` 时：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
-标签构建成功后会发布四个平台的安装包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
+标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
 
 ## 无 Apple 开发者账号的发布策略
 

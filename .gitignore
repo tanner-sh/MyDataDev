@@ -14,3 +14,6 @@ desktop/out/
 desktop/resources/
 desktop/release-assets/
 desktop/.dev-data/
+
+/release-assets/
+/build/

@@ -7,6 +7,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.sql.SQLException;
 import java.util.Map;
@@ -36,6 +37,17 @@ public class ApiExceptionHandler {
     public ResponseEntity<Map<String, Object>> badRequest(Exception e) {
         log.debug("Rejected request", e);
         return ResponseEntity.badRequest().body(Map.of("ok", false, "code", "BAD_REQUEST", "message", safeMessage(e)));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> notFound(NoResourceFoundException e) {
+        // A wrong URL is the caller's mistake, not a server failure. Without this
+        // the generic handler turns every unknown path into a 500 plus an ERROR
+        // log line, which the Web bundle hits constantly because it also serves
+        // the static UI.
+        log.debug("No handler for {}", e.getResourcePath());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of("ok", false, "code", "NOT_FOUND", "message", "请求的地址不存在。"));
     }
 
     @ExceptionHandler(SQLException.class)

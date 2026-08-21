@@ -1,0 +1,33 @@
+# Web 发行包（mydatadev-web.jar）使用的运行配置，通过
+# --spring.profiles.active=web 激活。默认配置面向本地开发，这里只覆盖
+# 独立部署时必须收紧或补齐的部分，数据目录仍相对于 JAR 的工作目录。
+server:
+  shutdown: graceful
+
+spring:
+  h2:
+    console:
+      # 元数据库控制台在 /api 无用户认证的前提下等同于免密后台，发行包一律关闭。
+      enabled: false
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          # index.html 每次回源校验，指纹化的 /assets/** 由 WebConfig 单独设置长缓存。
+          max-age: 0
+          must-revalidate: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  file:
+    name: ./logs/mydatadev.log

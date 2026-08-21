@@ -1,4 +1,4 @@
-name: 桌面版构建与发布
+name: 构建与发布
 
 on:
   workflow_dispatch:
@@ -145,10 +145,70 @@ jobs:
           path: desktop/release-assets/*
           if-no-files-found: error
 
+  web:
+    name: Web 发行包
+    runs-on: ubuntu-24.04
+    env:
+      MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 构建 Web 发行包
+        run: node scripts/build-web-bundle.mjs
+
+      - name: Web 发行包烟测
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar=$(find release-assets -name '*-web.jar' -type f -print -quit)
+          test -n "$jar"
+
+          workdir=$(mktemp -d "$RUNNER_TEMP/mydatadev-web.XXXXXX")
+          cd "$workdir"
+          DB_ADMIN_CRYPTO_KEY=smoke-key-smoke-key-smoke-key-32 \
+            java -jar "$GITHUB_WORKSPACE/$jar" \
+            --spring.profiles.active=web --server.port=8099 > server.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8099/actuator/health > /dev/null 2>&1; then break; fi
+            kill -0 "$pid" 2>/dev/null || { cat server.log; exit 1; }
+            sleep 2
+          done
+
+          # 同源提供 UI 与 API 是 Web 发行包的全部意义，两条路径都要真的可用。
+          curl -fsS http://127.0.0.1:8099/ | grep -q '<div id="root">'
+          curl -fsS -H 'X-User: admin' http://127.0.0.1:8099/api/connections > /dev/null
+          # 元数据库控制台在发行包中必须是关闭的。
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/h2-console)" = "404"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mydatadev-web
+          path: release-assets/*
+          if-no-files-found: error
+
   release:
     name: 创建 GitHub Release
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, web]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -174,6 +234,6 @@ jobs:
           else
             gh release create "${{ github.ref_name }}" release-assets/* \
               --generate-notes \
-              --notes-file docs/macos-unsigned-release-notes.md \
+              --notes-file docs/release-notes.md \
               --title "MyDataDev ${{ github.ref_name }}"
           fi

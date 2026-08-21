@@ -5,7 +5,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>web-db-admin</artifactId>
-    <version>0.2.0</version>
+    <version>0.3.0</version>
     <packaging>jar</packaging>
 
     <parent>
@@ -171,6 +171,26 @@
     </build>
 
     <profiles>
+        <profile>
+            <!-- Web 发行包：把构建好的前端塞进 JAR 的 static/，同源提供 UI、/api 与 /mcp。 -->
+            <id>web</id>
+            <build>
+                <finalName>mydatadev-web</finalName>
+                <resources>
+                    <resource>
+                        <directory>src/main/resources</directory>
+                    </resource>
+                    <resource>
+                        <directory>../frontend/dist</directory>
+                        <targetPath>static</targetPath>
+                        <excludes>
+                            <!-- 构建预算脚本用的产物清单，运行时用不到，不随发行包分发。 -->
+                            <exclude>.vite/**</exclude>
+                        </excludes>
+                    </resource>
+                </resources>
+            </build>
+        </profile>
         <profile>
             <id>desktop</id>
             <build>

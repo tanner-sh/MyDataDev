@@ -19,6 +19,9 @@ cd frontend && npm test                     # vitest run
 cd frontend && npm test -- src/utils.test.ts
 cd frontend && npm run build                # tsc + vite build + 打包体积预算校验
 
+# Web 发行包（内置前端的可执行 JAR + 前端 dist 包，输出到 release-assets/）
+node scripts/build-web-bundle.mjs
+
 # 桌面端
 cd desktop && npm run dev                   # 编排 Spring Boot + Vite + Electron
 cd desktop && npm test
@@ -78,6 +81,10 @@ Electron 主进程（`desktop/src/main.ts`、`backend.ts`、`paths.ts`、`secret
 
 **桌面模式与 Web 模式使用完全独立的元数据库和文件目录，连接、密码、Agent、备份都不共享。** 开发时桌面数据写入 `desktop/.dev-data`。
 
+### Web 发行模式
+
+`mvn -Pweb package` 与 `desktop` profile 用同一套机制把 `frontend/dist` 拷进 JAR 的 `static/`，产出 `mydatadev-web.jar`：单进程在 8080 上同源提供 UI、`/api` 和 `/mcp`，前端默认的 `/api` 基址因此无需改动，也不涉及 CORS。发行 JAR 必须以 `--spring.profiles.active=web` 启动，`application-web.yml` 在这个 profile 下关闭 H2 控制台、启用优雅停机并落地日志文件；数据目录相对于进程工作目录。`.github/workflows/release.yml` 的 `web` 作业构建并烟测该 JAR，与桌面安装包发布到同一个 Release，部署细节见 `docs/web-deploy.md`。
+
 ## 约定
 
 - 提交信息用中文，尽量详细。多模块改动用「中文标题 + 多条中文说明」，说明改了什么、为什么改、影响哪些功能。格式示例见 `AGENTS.md`。
@@ -89,4 +96,5 @@ Electron 主进程（`desktop/src/main.ts`、`backend.ts`、`paths.ts`、`secret
 
 - `AGENTS.md` — 仓库结构、编码与提交规范
 - `docs/desktop.md` — 桌面开发、数据目录、打包与 GitHub Actions 发行
+- `docs/web-deploy.md` — Web 发行包部署、反向代理、安全边界与升级
 - `docs/mcp-server.md` — MCP 配置、客户端接入与安全边界
