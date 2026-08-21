@@ -19,10 +19,25 @@ import java.sql.Connection;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ConnectionService {
     public static final String PASSWORD_MASK = "******";
+
+    /**
+     * Connection rows resolved by id.
+     *
+     * <p>Nearly every API call needs the row at least once, and several need it
+     * twice — {@code open(id)} looks it up and the caller then looks it up again
+     * for its dialect — so an H2 round trip and an AES decrypt were paying for
+     * the same immutable snapshot repeatedly. {@link ConnectionRepository} is
+     * only reachable through this service, so eviction on update and delete
+     * covers every writer.</p>
+     */
+    private final Map<Long, DbConnection> cachedConnections = new ConcurrentHashMap<>();
+    private final Map<Long, String> cachedPasswords = new ConcurrentHashMap<>();
 
     private final ConnectionRepository repository;
     private final CryptoService crypto;
@@ -68,7 +83,7 @@ public class ConnectionService {
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
         repository.update(id, toModel(id, request, secret));
-        dataSources.evict(id);
+        evictConnection(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
@@ -86,7 +101,7 @@ public class ConnectionService {
                     "该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
         }
         repository.delete(id);
-        dataSources.evict(id);
+        evictConnection(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
     }
@@ -113,13 +128,12 @@ public class ConnectionService {
     }
 
     public Connection open(long id) throws Exception {
-        DbConnection c = require(id);
-        return dataSources.open(c, crypto.decrypt(c.encryptedPassword()));
+        return dataSources.open(require(id), password(id));
     }
 
     public Connection open(long id, String schemaName) throws Exception {
         DbConnection configured = require(id);
-        Connection connection = dataSources.open(configured, crypto.decrypt(configured.encryptedPassword()));
+        Connection connection = dataSources.open(configured, password(id));
         var dialect = dialectRegistry.dialectFor(configured);
         try {
             dialect.activateNamespace(connection, schemaName);
@@ -138,15 +152,34 @@ public class ConnectionService {
     }
 
     public DbConnection require(long id) {
-        return repository.findById(id).orElseThrow(() -> new IllegalArgumentException("Connection not found: " + id));
+        DbConnection cached = cachedConnections.get(id);
+        if (cached != null) return cached;
+        DbConnection loaded = repository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Connection not found: " + id));
+        cachedConnections.put(id, loaded);
+        return loaded;
     }
 
     public String password(long id) {
         DbConnection c = require(id);
-        return crypto.decrypt(c.encryptedPassword());
+        String cached = cachedPasswords.get(id);
+        if (cached != null) return cached;
+        String decrypted = crypto.decrypt(c.encryptedPassword());
+        cachedPasswords.put(id, decrypted);
+        return decrypted;
     }
 
     void resetRemoteSession(long id) {
+        dataSources.evict(id);
+    }
+
+    /**
+     * Drops every cached view of one connection. Always paired with the pool
+     * eviction, because a changed row means the existing pool is stale too.
+     */
+    private void evictConnection(long id) {
+        cachedConnections.remove(id);
+        cachedPasswords.remove(id);
         dataSources.evict(id);
     }
 

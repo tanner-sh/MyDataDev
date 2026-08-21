@@ -77,7 +77,16 @@ public class ExportService {
         stream(connectionId, sql, format, actor, null, null, null, output);
     }
 
-    public void validate(long connectionId, String sql, String format, String productionConfirmation) {
+    /**
+     * Checks the request and returns the single statement it will run.
+     *
+     * <p>The controller calls this before opening the response stream so a
+     * rejection still becomes an HTTP status rather than a truncated download;
+     * {@link #stream} calls it again because it is a public entry point in its
+     * own right, and reuses the returned statement instead of splitting the SQL
+     * a second time.</p>
+     */
+    public String validate(long connectionId, String sql, String format, String productionConfirmation) {
         String normalizedFormat = normalizeFormat(format);
         var statements = splitter.split(sql);
         if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
@@ -86,6 +95,7 @@ public class ExportService {
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statements.get(0).sql()), productionConfirmation);
         if (normalizedFormat.isBlank()) throw new IllegalArgumentException("导出格式不能为空。");
+        return statements.get(0).sql();
     }
 
     public void stream(long connectionId, String sql, String format, String actor,
@@ -100,10 +110,9 @@ public class ExportService {
 
     public void stream(long connectionId, String sql, String format, String actor,
                        String productionConfirmation, String schemaName, List<String> targetTableParts, OutputStream rawOutput) throws Exception {
-        validate(connectionId, sql, format, productionConfirmation);
-        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizeFormat(format));
+        String statementSql = validate(connectionId, sql, format, productionConfirmation);
         String normalizedFormat = normalizeFormat(format);
-        String statementSql = splitter.split(sql).get(0).sql();
+        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         long started = System.nanoTime();

@@ -607,18 +607,22 @@ public class MetadataService {
             if (cachedStructure == null) {
                 DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, schemaName);
                 object = findObject(meta, scope, dialect, objectName);
-                DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
-                cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
-                idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             } else {
                 object = new DbObject(
                         cachedStructure.schemaName(), cachedStructure.name(), cachedStructure.type(),
                         cachedStructure.columns(), cachedStructure.indexes()
                 );
+            }
+            // Resolving the scope can cost a driver round trip, so do it once for
+            // the object rather than separately per metadata lookup below.
+            DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
+            if (cachedStructure == null) {
+                cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+                idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+            } else {
                 cols = cachedStructure.columns();
                 idx = cachedStructure.indexes();
             }
-            DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
             PrimaryKeyInfo pk = primaryKeyInfo(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             ObjectDetail detail = new ObjectDetail(
                     object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(),
