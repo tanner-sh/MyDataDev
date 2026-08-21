@@ -1182,6 +1182,11 @@ export default function App() {
     try {
       const data = await api<SqlResult>('/sql/query-page', {
         method: 'POST',
+        // Deliberately auto-filled rather than prompted: paging re-runs a SELECT
+        // the user already confirmed for this connection, and the backend
+        // requires the header on every request. Do NOT copy this to anything
+        // that mutates — the DDL and table-lifecycle panels each make the user
+        // type the connection name, which is what the guard is for.
         headers: selected.environment === 'prod' ? { 'X-Production-Confirmation': selected.name } : undefined,
         body: JSON.stringify({
           connectionId: page.connectionId,
