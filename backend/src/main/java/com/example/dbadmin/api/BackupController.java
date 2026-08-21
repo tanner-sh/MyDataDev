@@ -65,7 +65,7 @@ public class BackupController {
 
     @PostMapping("/schedule/preview")
     public CronPreviewResponse previewSchedule(@Valid @RequestBody CronPreviewRequest request) {
-        return service.previewSchedule(request.cron());
+        return service.previewSchedule(request.cron(), request.zoneId());
     }
 
     @PatchMapping("/{id}/enabled")

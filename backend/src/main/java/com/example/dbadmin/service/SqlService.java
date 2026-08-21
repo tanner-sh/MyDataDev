@@ -38,8 +38,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Service
 public class SqlService {
@@ -492,173 +490,10 @@ public class SqlService {
         return items.stream().limit(200).toList();
     }
 
-    // Multi-word clauses must run before their suffixes (for example JOIN),
-    // otherwise formatting LEFT JOIN would split the phrase too early. The
-    // keyword list is fixed, so the pattern it builds is compiled once rather
-    // than on every format() call.
-    private static final String[] FORMAT_CLAUSE_KEYWORDS = {
-            "left outer join", "right outer join", "full outer join",
-            "left join", "right join", "inner join", "full join", "cross join",
-            "group by", "order by", "union all",
-            "select", "from", "where", "join", "having", "limit", "offset",
-            "union", "insert", "update", "delete", "merge", "values", "set"
-    };
-    private static final Pattern FORMAT_CLAUSES = Pattern.compile(
-            "(?i)\\b(?:" + String.join("|", FORMAT_CLAUSE_KEYWORDS).replace(" ", "\\s+") + ")\\b"
-    );
-    private static final Pattern FORMAT_WHITESPACE = Pattern.compile("\\s+");
-    private static final Pattern FORMAT_LINE_INDENT = Pattern.compile("[ \\t]*\\n[ \\t]*");
+    private static final SqlFormatter FORMATTER = new SqlFormatter();
 
     public String format(String sql) {
-        if (sql == null || sql.isBlank()) return "";
-        ProtectedSql protectedSql = protectFormatLiterals(sql);
-        String formatted = FORMAT_WHITESPACE.matcher(protectedSql.masked().trim()).replaceAll(" ");
-        Matcher matcher = FORMAT_CLAUSES.matcher(formatted);
-        StringBuffer clauseFormatted = new StringBuffer(formatted.length() + 64);
-        while (matcher.find()) {
-            String clause = FORMAT_WHITESPACE.matcher(matcher.group()).replaceAll(" ").toUpperCase(Locale.ROOT);
-            matcher.appendReplacement(clauseFormatted, Matcher.quoteReplacement("\n" + clause));
-        }
-        matcher.appendTail(clauseFormatted);
-        formatted = FORMAT_LINE_INDENT.matcher(clauseFormatted).replaceAll("\n");
-        return restoreFormatLiterals(formatted, protectedSql).trim();
-    }
-
-    /**
-     * Substitutes every marker back to its original literal/comment in one
-     * linear pass. The previous implementation ran one {@code String.replace}
-     * per marker, each rescanning and reallocating the whole document — O(N·L)
-     * for N literals in a document of length L, which is hundreds of millions
-     * of character copies for a script with a few thousand string literals.
-     */
-    private String restoreFormatLiterals(String formatted, ProtectedSql protectedSql) {
-        if (protectedSql.values().isEmpty()) return formatted;
-        Pattern markers = Pattern.compile(Pattern.quote(protectedSql.markerPrefix()) + "(\\d+)");
-        Matcher matcher = markers.matcher(formatted);
-        StringBuilder restored = new StringBuilder(formatted.length());
-        int cursor = 0;
-        while (matcher.find()) {
-            restored.append(formatted, cursor, matcher.start());
-            restored.append(protectedSql.values().get(Integer.parseInt(matcher.group(1))));
-            cursor = matcher.end();
-        }
-        restored.append(formatted, cursor, formatted.length());
-        return restored.toString();
-    }
-
-    private ProtectedSql protectFormatLiterals(String sql) {
-        String markerPrefix = "\uE000";
-        while (sql.contains(markerPrefix)) markerPrefix += "\uE000";
-        List<String> values = new ArrayList<>();
-        StringBuilder masked = new StringBuilder(sql.length());
-        for (int index = 0; index < sql.length();) {
-            int end = protectedFormatSegmentEnd(sql, index);
-            if (end <= index) {
-                masked.append(sql.charAt(index++));
-                continue;
-            }
-            values.add(sql.substring(index, end));
-            masked.append(markerPrefix).append(values.size() - 1).append('\uE001');
-            index = end;
-        }
-        return new ProtectedSql(masked.toString(), markerPrefix, values);
-    }
-
-    private int protectedFormatSegmentEnd(String sql, int index) {
-        char current = sql.charAt(index);
-        char next = index + 1 < sql.length() ? sql.charAt(index + 1) : '\0';
-        if (current == '-' && next == '-') return lineCommentEnd(sql, index + 2);
-        if (current == '/' && next == '*') return blockCommentEnd(sql, index + 2);
-        if ((current == 'q' || current == 'Q') && next == '\'' && index + 2 < sql.length()) {
-            return oracleQuoteEnd(sql, index);
-        }
-        if (current == '$') {
-            String delimiter = dollarQuoteDelimiter(sql, index);
-            if (delimiter != null) {
-                int closing = sql.indexOf(delimiter, index + delimiter.length());
-                return closing < 0 ? sql.length() : closing + delimiter.length();
-            }
-        }
-        return switch (current) {
-            case '\'', '"', '`' -> quotedSegmentEnd(sql, index + 1, current);
-            case '[' -> bracketSegmentEnd(sql, index + 1);
-            default -> index;
-        };
-    }
-
-    private int lineCommentEnd(String sql, int index) {
-        while (index < sql.length() && sql.charAt(index) != '\n' && sql.charAt(index) != '\r') index++;
-        if (index < sql.length() && sql.charAt(index) == '\r') index++;
-        if (index < sql.length() && sql.charAt(index) == '\n') index++;
-        return index;
-    }
-
-    private int blockCommentEnd(String sql, int index) {
-        int depth = 1;
-        while (index < sql.length()) {
-            if (index + 1 < sql.length() && sql.charAt(index) == '/' && sql.charAt(index + 1) == '*') {
-                depth++;
-                index += 2;
-            } else if (index + 1 < sql.length() && sql.charAt(index) == '*' && sql.charAt(index + 1) == '/') {
-                depth--;
-                index += 2;
-                if (depth == 0) return index;
-            } else {
-                index++;
-            }
-        }
-        return sql.length();
-    }
-
-    private int quotedSegmentEnd(String sql, int index, char quote) {
-        while (index < sql.length()) {
-            char current = sql.charAt(index);
-            if (current == quote) {
-                if (index + 1 < sql.length() && sql.charAt(index + 1) == quote) {
-                    index += 2;
-                    continue;
-                }
-                return index + 1;
-            }
-            if (current == '\\' && index + 1 < sql.length()) index += 2;
-            else index++;
-        }
-        return sql.length();
-    }
-
-    private int bracketSegmentEnd(String sql, int index) {
-        while (index < sql.length()) {
-            if (sql.charAt(index) == ']') {
-                if (index + 1 < sql.length() && sql.charAt(index + 1) == ']') {
-                    index += 2;
-                    continue;
-                }
-                return index + 1;
-            }
-            index++;
-        }
-        return sql.length();
-    }
-
-    private int oracleQuoteEnd(String sql, int index) {
-        char opening = sql.charAt(index + 2);
-        char closing = switch (opening) {
-            case '[' -> ']';
-            case '(' -> ')';
-            case '{' -> '}';
-            case '<' -> '>';
-            default -> opening;
-        };
-        int closingIndex = sql.indexOf(String.valueOf(closing) + '\'', index + 3);
-        return closingIndex < 0 ? sql.length() : closingIndex + 2;
-    }
-
-    private String dollarQuoteDelimiter(String sql, int index) {
-        int end = sql.indexOf('$', index + 1);
-        if (end < 0) return null;
-        String tag = sql.substring(index + 1, end);
-        if (!tag.isEmpty() && !tag.matches("[A-Za-z_][A-Za-z0-9_]*")) return null;
-        return sql.substring(index, end + 1);
+        return FORMATTER.format(sql);
     }
 
     private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
@@ -899,9 +734,4 @@ public class SqlService {
         return type != null && type.toUpperCase(Locale.ROOT).contains("VIEW") ? "视图" : "表";
     }
 
-    private record ProtectedSql(String masked, String markerPrefix, List<String> values) {
-        private String marker(int index) {
-            return markerPrefix + index + '\uE001';
-        }
-    }
 }

@@ -50,7 +50,8 @@ public class BackupTaskRepository {
             null,
             rs.getString("last_storage_type"),
             rs.getObject("last_storage_profile_id", Long.class),
-            rs.getString("last_storage_object_key")
+            rs.getString("last_storage_object_key"),
+            rs.getString("schedule_zone")
     );
 
     public BackupTaskRepository(JdbcTemplate jdbc) {
@@ -101,8 +102,8 @@ public class BackupTaskRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, enabled, retention_days, retention_count, storage_profile_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO backup_task(name, connection_id, scope, schema_name, table_name, backup_method, tool_path, extra_args, native_connect_name, cron, schedule_zone, enabled, retention_days, retention_count, storage_profile_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, task.name());
             ps.setLong(2, task.connectionId());
@@ -114,10 +115,11 @@ public class BackupTaskRepository {
             ps.setString(8, task.extraArgs());
             ps.setString(9, task.nativeConnectName());
             ps.setString(10, task.cron());
-            ps.setBoolean(11, task.enabled());
-            ps.setObject(12, task.retentionDays());
-            ps.setObject(13, task.retentionCount());
-            ps.setObject(14, task.storageProfileId());
+            ps.setString(11, task.scheduleZone());
+            ps.setBoolean(12, task.enabled());
+            ps.setObject(13, task.retentionDays());
+            ps.setObject(14, task.retentionCount());
+            ps.setObject(15, task.storageProfileId());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -134,10 +136,10 @@ public class BackupTaskRepository {
     public void update(long id, BackupTask task) {
         jdbc.update("""
                         UPDATE backup_task
-                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, enabled = ?, retention_days = ?, retention_count = ?, storage_profile_id = ?
+                        SET name = ?, connection_id = ?, scope = ?, schema_name = ?, table_name = ?, backup_method = ?, tool_path = ?, extra_args = ?, native_connect_name = ?, cron = ?, schedule_zone = ?, enabled = ?, retention_days = ?, retention_count = ?, storage_profile_id = ?
                         WHERE id = ?
                         """,
-                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(), task.retentionDays(), task.retentionCount(), task.storageProfileId(), id);
+                task.name(), task.connectionId(), task.scope(), task.schemaName(), task.tableName(), task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.scheduleZone(), task.enabled(), task.retentionDays(), task.retentionCount(), task.storageProfileId(), id);
         writeTargets(id, task.tableNames());
     }
 
@@ -226,7 +228,8 @@ public class BackupTaskRepository {
                 task.backupMethod(), task.toolPath(), task.extraArgs(), task.nativeConnectName(), task.cron(), task.enabled(),
                 task.lastStatus(), task.lastMessage(), task.lastFilePath(), task.lastFileSize(), task.lastRunAt(),
                 task.retentionDays(), task.retentionCount(), task.storageProfileId(), task.storageProfileName(),
-                task.storageType(), task.lastStorageType(), task.lastStorageProfileId(), task.lastStorageObjectKey()
+                task.storageType(), task.lastStorageType(), task.lastStorageProfileId(), task.lastStorageObjectKey(),
+                task.scheduleZone()
         );
     }
 

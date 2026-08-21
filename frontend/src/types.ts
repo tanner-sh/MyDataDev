@@ -182,6 +182,9 @@ export type BackupTask = {
   lastFilePath?: string;
   lastFileSize?: number;
   lastRunAt?: string;
+  /** 任务上保存的执行时区；为空表示是旧任务，实际按服务端默认时区触发。 */
+  scheduleZone?: string;
+  /** 后端计算出的生效时区，旧任务会回落到服务端默认时区。 */
   zoneId?: string;
   nextRunAt?: string;
   retentionDays?: number;
@@ -233,6 +236,7 @@ export type BackupTaskForm = {
   extraArgs?: string;
   nativeConnectName?: string;
   cron?: string;
+  scheduleZone?: string;
   enabled: boolean;
   retentionDays?: number;
   retentionCount?: number;

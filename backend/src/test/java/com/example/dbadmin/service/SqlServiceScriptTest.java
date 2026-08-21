@@ -325,7 +325,7 @@ class SqlServiceScriptTest {
                 .contains("$tag$select  from$tag$")
                 .contains("q'[left  join]'")
                 .contains("-- where  join\n")
-                .contains("\nLEFT JOIN roles")
+                .contains("\n    LEFT JOIN roles")
                 .contains("\nWHERE users.name")
                 .contains("'A  B'");
     }

@@ -57,10 +57,13 @@ import type {
 } from '../types';
 import { api } from '../api';
 import {
+  browserTimeZone,
   cronFromSchedule,
   describeBackupSchedule,
   isSixFieldCron,
+  legacyScheduleZoneHint,
   scheduleFieldsFromCron,
+  timeZoneOptions,
   WEEKDAY_OPTIONS
 } from '../backupSchedule';
 import type { BackupScheduleFields, BackupScheduleKind, CronWeekday } from '../backupSchedule';
@@ -95,7 +98,7 @@ export type BackupPanelProps = {
   editorRequest?: BackupEditorRequest | null;
   onLoadNamespaces?: (query: BackupTargetQuery) => Promise<BackupTargetPage>;
   onLoadTables?: (query: BackupTableTargetQuery) => Promise<BackupTargetPage>;
-  onPreviewSchedule?: (cron: string) => Promise<BackupSchedulePreview>;
+  onPreviewSchedule?: (cron: string, zoneId?: string) => Promise<BackupSchedulePreview>;
   onSave: (id: number | null, form: BackupTaskForm) => Promise<void>;
   onToggle: (id: number, enabled: boolean) => Promise<void>;
   onDelete: (id: number, deleteFile: boolean) => Promise<void>;
@@ -110,6 +113,7 @@ export type BackupPanelProps = {
 
 type BackupTaskEditorValues = BackupScheduleFields & {
   name: string;
+  scheduleZone: string;
   scope: BackupScope;
   schemaName?: string;
   tableNames?: string[];
@@ -239,6 +243,9 @@ function BackupTasksPanel({
   const weeklyDays = Form.useWatch('weeklyDays', form);
   const monthlyDay = Form.useWatch('monthlyDay', form);
   const advancedCron = Form.useWatch('advancedCron', form);
+  const scheduleZone = Form.useWatch('scheduleZone', form) || browserTimeZone();
+  // 时区列表有几百项，只在所选时区变化时重建。
+  const scheduleZoneOptions = useMemo(() => timeZoneOptions(scheduleZone), [scheduleZone]);
   const nativeBackup = backupMethod !== 'SQL';
   const effectiveNamespaceKind = detectedNamespaceKind || namespaceKind;
   const namespaceLabel = effectiveNamespaceKind === 'CATALOG' ? '数据库' : 'Schema';
@@ -341,7 +348,7 @@ function BackupTasksPanel({
     const timer = window.setTimeout(async () => {
       setSchedulePreviewLoading(true);
       try {
-        const preview = await onPreviewSchedule(generatedCron);
+        const preview = await onPreviewSchedule(generatedCron, scheduleZone);
         if (!cancelled) setSchedulePreview(preview);
       } catch (error) {
         if (!cancelled) setSchedulePreviewError((error as Error).message || '无法预览后续执行时间');
@@ -353,7 +360,7 @@ function BackupTasksPanel({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [editorOpen, generatedCron, onPreviewSchedule, scheduleKind]);
+  }, [editorOpen, generatedCron, onPreviewSchedule, scheduleKind, scheduleZone]);
 
   function currentDraft() {
     return JSON.stringify(form.getFieldsValue(true));
@@ -413,6 +420,9 @@ function BackupTasksPanel({
       retentionDays: task.retentionDays,
       retentionCount: task.retentionCount,
       storageProfileId: task.storageProfileId,
+      // 旧任务没有记录时区，一直按服务端默认时区触发；编辑时改用浏览器时区，
+      // 保存后设置的 02:00 才真的是本地 02:00。
+      scheduleZone: task.scheduleZone || browserTimeZone(),
       enabled: Boolean(task.cron?.trim()) && task.enabled
     }, task.id);
   }
@@ -456,6 +466,7 @@ function BackupTasksPanel({
       extraArgs: values.extraArgs?.trim(),
       nativeConnectName: values.nativeConnectName?.trim(),
       cron: cron || undefined,
+      scheduleZone: cron ? values.scheduleZone || browserTimeZone() : undefined,
       enabled: Boolean(cron) && values.enabled,
       retentionDays: values.retentionDays,
       retentionCount: values.retentionCount,
@@ -629,6 +640,7 @@ function BackupTasksPanel({
             const taskSchedulePreview = backup.cron ? listSchedulePreviews[backup.cron.trim()] : undefined;
             const taskZoneId = backup.zoneId || taskSchedulePreview?.zoneId;
             const nextRunAt = backup.nextRunAt || taskSchedulePreview?.nextRuns[0];
+            const legacyZoneHint = legacyScheduleZoneHint({ cron: backup.cron, scheduleZone: backup.scheduleZone, zoneId: taskZoneId });
             const recentDetails = [
               backup.lastRunAt ? `最近执行：${formatHistoryTime(backup.lastRunAt)}` : '',
               backup.lastFileSize ? `文件大小：${formatFileSize(backup.lastFileSize)}` : '',
@@ -649,6 +661,7 @@ function BackupTasksPanel({
                     <Text type="secondary">{backupTargetLabel(backup, effectiveNamespaceKind)} · {describeBackupSchedule(backup.cron)}{taskZoneId ? `（${taskZoneId}）` : ''}</Text>
                     <Text type="secondary">存储位置：{configuredStorage ? `${configuredStorage.name} · ${configuredStorage.type}` : backup.storageProfileId ? `文件服务 #${backup.storageProfileId}` : '应用服务器本地目录'}</Text>
                     {recentDetails && <Text type="secondary">{recentDetails}</Text>}
+                    {legacyZoneHint && <Text type="warning">{legacyZoneHint}</Text>}
                   </Space>
                 </div>
                 <Space size={4} className="backup-task-actions">
@@ -900,6 +913,14 @@ function BackupTasksPanel({
           )}
           {scheduleKind !== 'MANUAL' && (
             <>
+              <Form.Item
+                label="执行时区"
+                name="scheduleZone"
+                rules={[{ required: true, message: '请选择执行时区' }]}
+                extra="执行计划按所选时区触发，与应用服务器所在时区无关。"
+              >
+                <Select showSearch options={scheduleZoneOptions} />
+              </Form.Item>
               <Form.Item name="enabled" valuePropName="checked">
                 <Checkbox>保存后启用该执行计划</Checkbox>
               </Form.Item>
@@ -1142,10 +1163,10 @@ function SchedulePreview({ cron, preview, loading, error, previewAvailable }: { 
       title={<Space wrap><span>生成的 Cron</span><Text code>{cron}</Text>{loading && <Spin size="small" />}</Space>}
       description={preview ? (
         <Space orientation="vertical" size={2}>
-          <Text>服务端时区：{preview.zoneId}</Text>
+          <Text>执行时区：{preview.zoneId}</Text>
           {preview.nextRuns.slice(0, 3).map((run, index) => <Text key={`${run}-${index}`}>第 {index + 1} 次：{formatHistoryTime(run)}</Text>)}
         </Space>
-      ) : previewAvailable ? '正在根据服务端时区计算后续执行时间。' : '保存后将由服务端时区计算实际执行时间。'}
+      ) : previewAvailable ? '正在按所选时区计算后续执行时间。' : '保存后将按所选时区计算实际执行时间。'}
     />
   );
 }
@@ -1162,6 +1183,7 @@ function emptyEditorDraft(): BackupTaskEditorValues {
     extraArgs: '',
     nativeConnectName: '',
     scheduleKind: 'MANUAL',
+    scheduleZone: browserTimeZone(),
     scheduleTime: '02:00',
     weeklyDays: ['MON'] as CronWeekday[],
     monthlyDay: '1',

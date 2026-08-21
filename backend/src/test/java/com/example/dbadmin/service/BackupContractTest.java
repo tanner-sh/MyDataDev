@@ -29,7 +29,7 @@ class BackupContractTest {
     }
 
     @Test
-    void previewsThreeRunsInSchedulerTimeZone() {
+    void previewsThreeRunsInTheRequestedTimeZone() {
         BackupService service = BackupServiceTestFixture.create(
                 mock(BackupTaskRepository.class),
                 mock(BackupHistoryRepository.class),
@@ -38,13 +38,21 @@ class BackupContractTest {
                 new AppProperties()
         );
 
-        CronPreviewResponse preview = service.previewSchedule("0 30 2 * * *");
+        CronPreviewResponse preview = service.previewSchedule("0 30 2 * * *", null);
 
         assertThat(preview.cron()).isEqualTo("0 30 2 * * *");
         assertThat(preview.zoneId()).isNotBlank();
         assertThat(preview.nextRuns()).hasSize(3).isSorted();
-        assertThatThrownBy(() -> service.previewSchedule("invalid"))
+        assertThatThrownBy(() -> service.previewSchedule("invalid", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cron 表达式不合法");
+
+        CronPreviewResponse zoned = service.previewSchedule("0 30 2 * * *", "Asia/Shanghai");
+
+        assertThat(zoned.zoneId()).isEqualTo("Asia/Shanghai");
+        assertThat(zoned.nextRuns()).allMatch(run -> run.contains("T02:30"));
+        assertThatThrownBy(() -> service.previewSchedule("0 30 2 * * *", "Mars/Olympus"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("无法识别的时区");
     }
 }

@@ -55,6 +55,7 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.Instant;
+import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -161,7 +162,7 @@ public class BackupService {
         }
     }
 
-    public CronPreviewResponse previewSchedule(String cronValue) {
+    public CronPreviewResponse previewSchedule(String cronValue, String zoneValue) {
         String cron = blankToNull(cronValue);
         if (cron == null) {
             throw new IllegalArgumentException("cron 表达式不能为空。");
@@ -172,7 +173,8 @@ public class BackupService {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("cron 表达式不合法：" + cron);
         }
-        ZoneId zone = ZoneId.systemDefault();
+        String scheduleZone = validateScheduleZone(zoneValue);
+        ZoneId zone = scheduleZone == null ? ZoneId.systemDefault() : ZoneId.of(scheduleZone);
         ZonedDateTime cursor = ZonedDateTime.now(zone);
         List<String> nextRuns = new ArrayList<>(3);
         for (int index = 0; index < 3; index++) {
@@ -734,6 +736,7 @@ public class BackupService {
         validateRequestTargetShape(rawScope, request.schemaName(), requestedTables);
         String cron = blankToNull(request.cron());
         validateCron(cron, request.enabled());
+        String scheduleZone = validateScheduleZone(request.scheduleZone());
         String backupMethod = validateBackupMethod(request.backupMethod(), connection);
         String toolPath = blankToNull(request.toolPath());
         String extraArgs = validateExtraArgs(request.extraArgs());
@@ -767,8 +770,24 @@ public class BackupService {
                 backupMethod, toolPath, extraArgs, nativeConnectName, cron, request.enabled(), lastStatus, lastMessage,
                 lastFilePath, lastFileSize, lastRunAt, retentionDays, retentionCount,
                 storageProfile == null ? null : storageProfile.id(), storageProfile == null ? null : storageProfile.name(),
-                storageProfile == null ? "LOCAL" : storageProfile.type(), null, null, null
+                storageProfile == null ? "LOCAL" : storageProfile.type(), null, null, null, scheduleZone
         );
+    }
+
+    /**
+     * 执行计划的时区由前端按浏览器所在时区提交。服务端与用户不在同一时区时（例如容器跑在
+     * UTC），沿用服务端默认时区会让 02:00 的计划在用户本地的 10:00 才触发。
+     */
+    private String validateScheduleZone(String value) {
+        String zone = blankToNull(value);
+        if (zone == null) {
+            return null;
+        }
+        try {
+            return ZoneId.of(zone.trim()).getId();
+        } catch (DateTimeException e) {
+            throw new IllegalArgumentException("无法识别的时区：" + zone);
+        }
     }
 
     private Integer validateRetention(Integer value, String label, int max) {

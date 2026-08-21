@@ -3,6 +3,7 @@ package com.example.dbadmin.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import org.springframework.scheduling.support.CronExpression;
 
+import java.time.DateTimeException;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -35,7 +36,8 @@ public record BackupTask(
         String storageType,
         String lastStorageType,
         Long lastStorageProfileId,
-        String lastStorageObjectKey
+        String lastStorageObjectKey,
+        String scheduleZone
 ) {
     public BackupTask {
         String normalizedScope = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
@@ -74,7 +76,7 @@ public record BackupTask(
     ) {
         this(id, name, connectionId, scope, schemaName, tableName, tableNames, backupMethod, toolPath, extraArgs,
                 nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
     }
 
     public BackupTask(
@@ -98,7 +100,7 @@ public record BackupTask(
     ) {
         this(id, name, connectionId, scope, schemaName, tableName, null, backupMethod, toolPath, extraArgs, nativeConnectName,
                 cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
     }
 
     public BackupTask(
@@ -118,14 +120,14 @@ public record BackupTask(
     ) {
         this(id, name, connectionId, scope, schemaName, tableName, null, "SQL", null, null, null, cron, enabled,
                 lastStatus, lastMessage, lastFilePath, lastFileSize, lastRunAt,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
     }
 
     public BackupTask withStorageProfile(String profileName, String profileType) {
         return new BackupTask(id, name, connectionId, scope, schemaName, tableName, tableNames, backupMethod, toolPath,
                 extraArgs, nativeConnectName, cron, enabled, lastStatus, lastMessage, lastFilePath, lastFileSize,
                 lastRunAt, retentionDays, retentionCount, storageProfileId, profileName, profileType,
-                lastStorageType, lastStorageProfileId, lastStorageObjectKey);
+                lastStorageType, lastStorageProfileId, lastStorageObjectKey, scheduleZone);
     }
 
     @JsonProperty("lastFileAvailable")
@@ -134,9 +136,24 @@ public record BackupTask(
                 || lastStorageObjectKey != null && !lastStorageObjectKey.isBlank());
     }
 
+    /**
+     * 执行计划所用的时区。任务上没有记录时区（旧数据）才回落到服务端默认时区，
+     * 否则 02:00 这样的计划会被按服务器时区解释，用户看到的却是本地时间。
+     */
+    public ZoneId scheduleZoneId() {
+        if (scheduleZone == null || scheduleZone.isBlank()) {
+            return ZoneId.systemDefault();
+        }
+        try {
+            return ZoneId.of(scheduleZone.trim());
+        } catch (DateTimeException ignored) {
+            return ZoneId.systemDefault();
+        }
+    }
+
     @JsonProperty("zoneId")
     public String zoneId() {
-        return ZoneId.systemDefault().getId();
+        return scheduleZoneId().getId();
     }
 
     @JsonProperty("nextRunAt")
@@ -145,7 +162,7 @@ public record BackupTask(
             return null;
         }
         try {
-            ZoneId zone = ZoneId.systemDefault();
+            ZoneId zone = scheduleZoneId();
             ZonedDateTime next = CronExpression.parse(cron).next(ZonedDateTime.now(zone));
             return next == null ? null : next.toInstant();
         } catch (IllegalArgumentException ignored) {

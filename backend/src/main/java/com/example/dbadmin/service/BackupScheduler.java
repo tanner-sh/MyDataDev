@@ -6,7 +6,6 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -42,7 +41,7 @@ public class BackupScheduler {
         CronExpression cron = CronExpression.parse(task.cron());
         Instant last = lastTriggered.getOrDefault(task.id(), task.lastRunAt());
         Instant baseline = last == null ? now.minusSeconds(60) : last;
-        ZonedDateTime next = cron.next(ZonedDateTime.ofInstant(baseline, ZoneId.systemDefault()));
+        ZonedDateTime next = cron.next(ZonedDateTime.ofInstant(baseline, task.scheduleZoneId()));
         return next != null && !next.toInstant().isAfter(now);
     }
 }

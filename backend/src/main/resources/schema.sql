@@ -83,6 +83,7 @@ ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS storage_profile_id BIGINT;
 ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS last_storage_type VARCHAR(20);
 ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS last_storage_profile_id BIGINT;
 ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS last_storage_object_key VARCHAR(2000);
+ALTER TABLE backup_task ADD COLUMN IF NOT EXISTS schedule_zone VARCHAR(80);
 
 CREATE INDEX IF NOT EXISTS idx_backup_task_connection_id ON backup_task(connection_id);
 

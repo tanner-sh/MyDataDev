@@ -480,10 +480,10 @@ export default function App() {
     return api<BackupTargetPage>(`/metadata/${selected.id}/backup-targets/tables?${params.toString()}`);
   }
 
-  async function previewBackupSchedule(cron: string): Promise<BackupSchedulePreview> {
+  async function previewBackupSchedule(cron: string, zoneId?: string): Promise<BackupSchedulePreview> {
     return api<BackupSchedulePreview>('/backups/schedule/preview', {
       method: 'POST',
-      body: JSON.stringify({ cron })
+      body: JSON.stringify({ cron, zoneId })
     });
   }
 
@@ -2132,6 +2132,7 @@ export default function App() {
         extraArgs: form.extraArgs,
         nativeConnectName: form.nativeConnectName,
         cron: form.cron,
+        scheduleZone: form.scheduleZone,
         enabled: form.enabled,
         retentionDays: form.retentionDays,
         retentionCount: form.retentionCount,

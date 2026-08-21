@@ -651,7 +651,7 @@ class BackupServiceTest {
     private BackupTask remoteTask() {
         return new BackupTask(1, "remote", 1, "TABLES", "PUBLIC", "USERS", List.of("USERS"), "SQL", null,
                 null, null, null, false, null, null, null, null, null, null, null,
-                7L, "SFTP 备份", "SFTP", null, null, null);
+                7L, "SFTP 备份", "SFTP", null, null, null, null);
     }
 
     private StorageProfile storageProfile() {

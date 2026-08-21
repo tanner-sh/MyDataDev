@@ -422,7 +422,11 @@ public final class ApiDtos {
         }
     }
 
-    public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName, Integer retentionDays, Integer retentionCount, Long storageProfileId) {
+    public record BackupTaskRequest(@NotBlank @Size(max = 120) String name, @NotNull Long connectionId, @NotBlank @Size(max = 20) String scope, @Size(max = 240) String schemaName, @Size(max = 240) String tableName, List<@Size(max = 240) String> tableNames, @Size(max = 120) String cron, boolean enabled, @Size(max = 40) String backupMethod, @Size(max = 1000) String toolPath, @Size(max = 100_000) String extraArgs, @Size(max = 1000) String nativeConnectName, Integer retentionDays, Integer retentionCount, Long storageProfileId, @Size(max = 80) String scheduleZone) {
+        public BackupTaskRequest(String name, Long connectionId, String scope, String schemaName, String tableName, List<String> tableNames, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName, Integer retentionDays, Integer retentionCount, Long storageProfileId) {
+            this(name, connectionId, scope, schemaName, tableName, tableNames, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName, retentionDays, retentionCount, storageProfileId, null);
+        }
+
         public BackupTaskRequest(String name, Long connectionId, String scope, String schemaName, String tableName, List<String> tableNames, String cron, boolean enabled, String backupMethod, String toolPath, String extraArgs, String nativeConnectName, Integer retentionDays, Integer retentionCount) {
             this(name, connectionId, scope, schemaName, tableName, tableNames, cron, enabled, backupMethod, toolPath, extraArgs, nativeConnectName, retentionDays, retentionCount, null);
         }
@@ -468,7 +472,11 @@ public final class ApiDtos {
         }
     }
 
-    public record CronPreviewRequest(@NotBlank String cron) {
+    public record CronPreviewRequest(@NotBlank String cron, @Size(max = 80) String zoneId) {
+        public CronPreviewRequest(String cron) {
+            this(cron, null);
+        }
+
     }
 
     public record CronPreviewResponse(String cron, String zoneId, List<String> nextRuns) {

@@ -44,6 +44,36 @@ class BackupSchedulerTest {
         org.mockito.Mockito.verify(service).enqueue(due.id(), "scheduler");
     }
 
+    @Test
+    void firesDailyCronAtTheTaskTimeZoneNotTheServerZone() {
+        BackupService service = mock(BackupService.class);
+        BackupScheduler scheduler = new BackupScheduler(service);
+        // 每天 02:00（Asia/Shanghai）= 前一天 18:00 UTC。
+        BackupTask task = zonedTask("0 0 2 * * *", Instant.parse("2026-07-02T18:00:30Z"), "Asia/Shanghai");
+
+        assertThat(scheduler.isDue(task, Instant.parse("2026-07-03T18:00:30Z"))).isTrue();
+        assertThat(scheduler.isDue(task, Instant.parse("2026-07-03T02:00:30Z"))).isFalse();
+    }
+
+    @Test
+    void fallsBackToTheServerZoneForTasksWithoutOne() {
+        BackupService service = mock(BackupService.class);
+        BackupScheduler scheduler = new BackupScheduler(service);
+        BackupTask task = task("0 0 2 * * *", Instant.parse("2026-07-02T02:00:30Z"));
+        Instant due = java.time.ZonedDateTime.of(2026, 7, 3, 2, 0, 30, 0, java.time.ZoneId.systemDefault()).toInstant();
+
+        assertThat(scheduler.isDue(task, due)).isTrue();
+    }
+
+    private BackupTask zonedTask(String cron, Instant lastRunAt, String zone) {
+        BackupTask base = task(cron, lastRunAt);
+        return new BackupTask(base.id(), base.name(), base.connectionId(), base.scope(), base.schemaName(),
+                base.tableName(), base.tableNames(), base.backupMethod(), base.toolPath(), base.extraArgs(),
+                base.nativeConnectName(), base.cron(), base.enabled(), base.lastStatus(), base.lastMessage(),
+                base.lastFilePath(), base.lastFileSize(), base.lastRunAt(), null, null, null, null, null,
+                null, null, null, zone);
+    }
+
     private BackupTask task(String cron, Instant lastRunAt) {
         return new BackupTask(1, "backup", 1, "DATABASE", null, null, cron, true, null, null, null, null, lastRunAt);
     }
