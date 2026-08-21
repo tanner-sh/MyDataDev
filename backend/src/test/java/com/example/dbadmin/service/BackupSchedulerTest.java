@@ -1,7 +1,9 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.model.BackupTask;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
 import java.util.List;
@@ -42,6 +44,47 @@ class BackupSchedulerTest {
         scheduler.runDueBackups();
 
         org.mockito.Mockito.verify(service).enqueue(due.id(), "scheduler");
+    }
+
+    @Test
+    void retriesTransientEnqueueFailureOnTheNextSweep() {
+        BackupService service = mock(BackupService.class);
+        BackupTask due = task("0/1 * * * * *", null);
+        when(service.list()).thenReturn(List.of(due));
+        when(service.enqueue(due.id(), "scheduler")).thenThrow(new ApiProblemException(
+                HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。"));
+        BackupScheduler scheduler = new BackupScheduler(service);
+
+        scheduler.runDueBackups();
+
+        // The marker was rolled back, so the very same cron window is still due.
+        assertThat(scheduler.isDue(due, Instant.now())).isTrue();
+    }
+
+    @Test
+    void doesNotRetryPermanentEnqueueFailureWithinTheSameWindow() {
+        BackupService service = mock(BackupService.class);
+        BackupTask due = task("0 0 2 * * *", null);
+        when(service.list()).thenReturn(List.of(due));
+        when(service.enqueue(due.id(), "scheduler")).thenThrow(new IllegalArgumentException("Backup task not found: 1"));
+        BackupScheduler scheduler = new BackupScheduler(service);
+
+        scheduler.runDueBackups();
+
+        assertThat(scheduler.isDue(due, Instant.now())).isFalse();
+    }
+
+    @Test
+    void forgetsTriggerMarkersOfDeletedTasks() {
+        BackupService service = mock(BackupService.class);
+        BackupTask due = task("0/1 * * * * *", null);
+        when(service.list()).thenReturn(List.of(due), List.of());
+        BackupScheduler scheduler = new BackupScheduler(service);
+
+        scheduler.runDueBackups();
+        scheduler.runDueBackups();
+
+        assertThat(scheduler.trackedTaskCount()).isZero();
     }
 
     @Test
