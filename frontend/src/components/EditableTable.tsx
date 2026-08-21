@@ -4,8 +4,14 @@ import { Button, Empty, Input, Spin, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
-import type { EditableRow, TableColumn, TableData, TableRow } from '../types';
-import { sameCellValue } from '../utils';
+import type { TableColumn, TableData, TableRow } from '../types';
+import {
+  buildEditableDisplayRows,
+  editableCellKey,
+  isEditableCellDisabled,
+  shouldEditableCellUpdate,
+  type EditableDisplayRow
+} from '../editableTableRows';
 
 type EditableTableProps = {
   data: TableData | null;
@@ -28,7 +34,17 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
     setColumnWidths({});
   }, [data]);
 
+  // Everything a cell renders from is folded onto the record here, so
+  // shouldEditableCellUpdate can skip untouched cells even though antd rebuilds
+  // the column definitions on every activation and every resize pointer move.
+  const displayRows = useMemo(
+    () => buildEditableDisplayRows({ rows, data, readonly, loading, activeCell }),
+    [activeCell, data, loading, readonly, rows]
+  );
   const suggestedWidths = useMemo(() => new Map((data?.columns || []).map((column) => [column.name, suggestedColumnWidth(column, data?.rows || [])])), [data]);
+  // Precomputed on the record, so antd does not re-diff every row's values on
+  // each render just to decide a class name.
+  const rowClassName = useCallback((row: EditableDisplayRow) => row.rowClassName, []);
   const setColumnWidth = useCallback((columnName: string, width: number) => {
     setColumnWidths((current) => ({ ...current, [columnName]: Math.max(88, Math.min(520, width)) }));
   }, []);
@@ -45,7 +61,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
     document.addEventListener('mouseup', stop);
   }, [setColumnWidth]);
 
-  const columns = useMemo<ColumnsType<EditableRow>>(() => {
+  const columns = useMemo<ColumnsType<EditableDisplayRow>>(() => {
     if (!data) return [];
     return [
       {
@@ -54,6 +70,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
         fixed: 'left',
         width: 58,
         align: 'center',
+        shouldCellUpdate: shouldEditableCellUpdate,
         render: (_, row, rowIndex) => (
           <Tooltip title={row.deleted ? '撤销删除' : row.inserted ? '移除新增行' : '标记为删除'}>
             <Button
@@ -61,7 +78,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
               type="text"
               danger={!row.deleted}
               icon={row.deleted ? <UndoOutlined /> : <DeleteOutlined />}
-              disabled={readonly || loading || (!data.editable && !row.inserted)}
+              disabled={row.rowDisabled}
               aria-label={row.deleted ? `撤销删除第 ${rowIndex + 1} 行` : row.inserted ? `移除新增的第 ${rowIndex + 1} 行` : `标记删除第 ${rowIndex + 1} 行`}
               onClick={() => onDelete(row.id)}
             />
@@ -96,8 +113,9 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
         key: column.name,
         width: columnWidths[column.name] || suggestedWidths.get(column.name),
         ellipsis: true,
-        render: (_: unknown, row: EditableRow, rowIndex: number) => {
-          const cellKey = `${row.id}\u0000${column.name}`;
+        shouldCellUpdate: shouldEditableCellUpdate,
+        render: (_: unknown, row: EditableDisplayRow, rowIndex: number) => {
+          const cellKey = editableCellKey(row.id, column.name);
           return (
             <EditableCell
               rowId={row.id}
@@ -106,8 +124,8 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
               value={row.values[column.name]}
               inserted={Boolean(row.inserted)}
               touched={!row.inserted || Boolean(row.touchedColumns?.includes(column.name))}
-              disabled={readonly || loading || row.deleted || column.editable === false || (!data.editable && !row.inserted)}
-              editing={activeCell === cellKey}
+              disabled={isEditableCellDisabled(row, column)}
+              editing={row.editingColumn === column.name}
               onActivate={() => setActiveCell(cellKey)}
               onDeactivate={() => setActiveCell((current) => current === cellKey ? null : current)}
               onCommit={onEdit}
@@ -116,7 +134,10 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
         }
       }))
     ];
-  }, [activeCell, beginResize, columnWidths, data, loading, onDelete, onEdit, readonly, setColumnWidth, suggestedWidths]);
+  // activeCell, readonly and loading are deliberately absent: they reach the
+  // cells through the record, which is what shouldCellUpdate compares.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beginResize, columnWidths, data, onDelete, onEdit, setColumnWidth, suggestedWidths]);
 
   useLayoutEffect(() => {
     if (!data || scrollY === undefined || !tableRef.current) return;
@@ -133,17 +154,17 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
       {scrollY === undefined ? (
         <div className="table-viewport-loading"><Spin size="small" /><Typography.Text type="secondary">正在准备表格…</Typography.Text></div>
       ) : (
-        <Table<EditableRow>
+        <Table<EditableDisplayRow>
           ref={tableRef}
           size="small"
           className="data-grid data-grid-fill editable-grid"
           columns={columns}
-          dataSource={rows}
+          dataSource={displayRows}
           loading={loading}
           rowKey="id"
           pagination={false}
           virtual
-          rowClassName={(row) => row.deleted ? 'deleted-row' : row.inserted ? 'inserted-row' : isUpdated(row) ? 'updated-row' : ''}
+          rowClassName={rowClassName}
           scroll={{ x: Math.max(800, scrollX), y: scrollY }}
         />
       )}
@@ -252,7 +273,3 @@ function suggestedColumnWidth(column: TableColumn, rows: Record<string, unknown>
   return Math.min(300, Math.max(base, longest * 8 + 32));
 }
 
-function isUpdated(row: TableRow) {
-  if (!row.original) return false;
-  return Object.keys(row.values).some((column) => !sameCellValue(row.values[column], row.original?.[column]));
-}
