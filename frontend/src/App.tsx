@@ -19,6 +19,13 @@ import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
+import {
+  backgroundTaskCompletionMessage,
+  EMPTY_BACKGROUND_TASK_SUMMARY,
+  sameBackgroundTaskSummary,
+  summarizeBackgroundTasks,
+  type BackgroundTaskSummary
+} from './backgroundTasks';
 import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import { AppHeader } from './components/AppHeader';
@@ -117,7 +124,9 @@ export default function App() {
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const selectedIdRef = useRef<number | null>(null);
+  const backgroundTasksRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const metadataRef = useRef<Metadata | null>(null);
   const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: 300 }));
   const objectStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
@@ -272,16 +281,26 @@ export default function App() {
     refreshBackups(selected, 0).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [activeDrawer, selected?.id]);
 
+  // One poll drives both the header indicator and the live rows in the backup
+  // drawer. Background work outlives the drawer that started it — and scheduled
+  // backups start with no drawer open at all — so this must keep running
+  // whenever a connection is selected, not only while a panel is visible.
+  // useVisiblePolling already pauses it on a hidden tab.
   useVisiblePolling({
-    enabled: activeDrawer === 'backups' && Boolean(selected) && backups.some((task) => task.lastStatus === 'RUNNING'),
-    intervalMs: 2_000,
+    enabled: Boolean(selected),
+    intervalMs: activeDrawer === 'backups' || backgroundTasks.total > 0 ? 2_000 : 20_000,
     resetKey: selected?.id,
+    immediate: true,
     task: async () => {
-      if (!selected) return;
+      const connection = selected;
+      if (!connection) return;
       try {
-        const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${selected.id}`);
+        const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${connection.id}`);
+        if (selectedIdRef.current !== connection.id) return;
+        applyBackgroundTaskSummary(summarizeBackgroundTasks(active));
+        if (activeDrawer !== 'backups') return;
         if (active.backups.length === 0) {
-          await refreshBackups(selected).catch(() => undefined);
+          await refreshBackups(connection).catch(() => undefined);
           return;
         }
         setBackups((current) => current.map((task) => {
@@ -303,6 +322,20 @@ export default function App() {
   useEffect(() => {
     metadataRef.current = metadata;
   }, [metadata]);
+
+  /**
+   * Records the latest counts and announces jobs that just left the active set.
+   * A job leaving it only means it stopped, so the toast points at the drawer
+   * rather than claiming success.
+   */
+  function applyBackgroundTaskSummary(next: BackgroundTaskSummary) {
+    const previous = backgroundTasksRef.current;
+    if (sameBackgroundTaskSummary(previous, next)) return;
+    backgroundTasksRef.current = next;
+    setBackgroundTasks(next);
+    const completion = backgroundTaskCompletionMessage(previous, next);
+    if (completion) toastApi.info(completion);
+  }
 
   function showSuccess(text: string) {
     setWorkspaceStatus({ kind: 'success', text });
@@ -639,6 +672,10 @@ export default function App() {
   }
 
   function applyConnectionSelection(connection: Connection) {
+    // Counts belong to one connection; carrying them over would announce the
+    // previous connection's jobs as finished on the very first poll here.
+    backgroundTasksRef.current = EMPTY_BACKGROUND_TASK_SUMMARY;
+    setBackgroundTasks(EMPTY_BACKGROUND_TASK_SUMMARY);
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
     activateSqlSession(connection.id, true);
@@ -2468,6 +2505,7 @@ export default function App() {
           favoriteConnectionIds={favoriteConnectionIds}
           selected={selected}
           connectionsLoading={connectionsLoading}
+          backgroundTasks={backgroundTasks}
           explorerCollapsed={compactLayout ? !mobileExplorerOpen : layoutPreferences.explorerCollapsed}
           themeMode={layoutPreferences.themeMode}
           onToggleExplorer={toggleExplorerFromHeader}

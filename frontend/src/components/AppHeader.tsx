@@ -9,10 +9,12 @@ import {
   ReloadOutlined,
   SettingOutlined,
   StarFilled,
-  SunOutlined
+  SunOutlined,
+  SyncOutlined
 } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
+import { backgroundTaskLabel, type BackgroundTaskSummary } from '../backgroundTasks';
 import { memo, useMemo } from 'react';
 
 const { Text } = Typography;
@@ -22,6 +24,7 @@ type AppHeaderProps = {
   favoriteConnectionIds: number[];
   selected: Connection | null;
   connectionsLoading: boolean;
+  backgroundTasks: BackgroundTaskSummary;
   explorerCollapsed: boolean;
   themeMode: 'light' | 'dark';
   onToggleExplorer: () => void;
@@ -38,6 +41,7 @@ export const AppHeader = memo(function AppHeader({
   favoriteConnectionIds,
   selected,
   connectionsLoading,
+  backgroundTasks,
   explorerCollapsed,
   themeMode,
   onToggleExplorer,
@@ -119,6 +123,21 @@ export const AppHeader = memo(function AppHeader({
       </div>
 
       <Space size={4} className="app-header-actions">
+        {backgroundTasks.total > 0 && (
+          <Tooltip title={`${backgroundTaskLabel(backgroundTasks)}，点击查看`}>
+            <Badge count={backgroundTasks.total} size="small" offset={[-4, 4]}>
+              <Button
+                type="text"
+                className="header-background-tasks"
+                icon={<SyncOutlined spin />}
+                aria-label={backgroundTaskLabel(backgroundTasks)}
+                onClick={onOpenBackups}
+              >
+                后台任务
+              </Button>
+            </Badge>
+          </Tooltip>
+        )}
         <Tooltip title="刷新连接">
           <Button
             type="text"

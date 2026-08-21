@@ -307,8 +307,12 @@ public class RestoreService {
         return get(id);
     }
 
-    public ActiveOperations active(Long connectionId, List<BackupHistory> backupOperations) {
-        return new ActiveOperations(backupOperations, jobs.findActive(connectionId));
+    public ActiveOperations active(
+            Long connectionId,
+            List<BackupHistory> backupOperations,
+            List<com.example.dbadmin.model.SqlFileExecution> sqlFileOperations
+    ) {
+        return new ActiveOperations(backupOperations, jobs.findActive(connectionId), sqlFileOperations);
     }
 
     private void run(long id, String toolPath, String extraArgs) {

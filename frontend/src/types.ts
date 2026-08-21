@@ -343,7 +343,7 @@ export type RestoreJob = {
   createdAt: string;
 };
 export type RestoreJobPage = { items: RestoreJob[]; page: number; pageSize: number; hasMore: boolean };
-export type ActiveOperations = { backups: BackupHistory[]; restores: RestoreJob[] };
+export type ActiveOperations = { backups: BackupHistory[]; restores: RestoreJob[]; sqlFiles: SqlFileExecution[] };
 export type NativeToolStatus = {
   tool: 'MYSQLDUMP' | 'MYSQL' | 'ORACLE_EXP' | 'ORACLE_IMP';
   displayName: string;

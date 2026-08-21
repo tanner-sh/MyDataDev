@@ -1567,6 +1567,17 @@ body.is-resizing-column * {
   flex: 0 0 auto;
 }
 
+/* The indicator only renders while work is in flight, so it must not shift the
+   surrounding actions around when it appears. */
+.app-header-actions .ant-badge {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+
+.header-background-tasks {
+  color: var(--primary);
+}
+
 .app-body {
   width: 100%;
   min-width: 0;

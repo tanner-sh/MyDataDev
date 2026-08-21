@@ -8,6 +8,7 @@ import com.example.dbadmin.dto.ApiDtos.RestoreStartRequest;
 import com.example.dbadmin.model.RestoreJob;
 import com.example.dbadmin.model.RestoreUpload;
 import com.example.dbadmin.repo.BackupHistoryRepository;
+import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import com.example.dbadmin.service.RestoreService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -28,10 +29,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class RestoreController {
     private final RestoreService service;
     private final BackupHistoryRepository histories;
+    private final SqlFileExecutionRepository sqlFiles;
 
-    public RestoreController(RestoreService service, BackupHistoryRepository histories) {
+    public RestoreController(RestoreService service, BackupHistoryRepository histories, SqlFileExecutionRepository sqlFiles) {
         this.service = service;
         this.histories = histories;
+        this.sqlFiles = sqlFiles;
     }
 
     @PostMapping(value = "/uploads", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
@@ -71,8 +74,13 @@ public class RestoreController {
         return service.cancel(id, actor);
     }
 
+    /**
+     * Reports every background job still in flight for one connection. The
+     * header's background-task indicator polls this, so it covers SQL-file
+     * executions too rather than only backups and restores.
+     */
     @GetMapping("/operations/active")
     public ActiveOperations active(@RequestParam(required = false) Long connectionId) {
-        return service.active(connectionId, histories.findActive(connectionId));
+        return service.active(connectionId, histories.findActive(connectionId), sqlFiles.findActive(connectionId));
     }
 }

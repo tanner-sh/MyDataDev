@@ -77,6 +77,14 @@ public class SqlFileExecutionRepository {
         return jdbc.query("SELECT * FROM sql_file_execution WHERE status IN ('ANALYZING','QUEUED','RUNNING')", mapper);
     }
 
+    public List<SqlFileExecution> findActive(Long connectionId) {
+        return connectionId == null
+                ? findActive()
+                : jdbc.query(
+                        "SELECT * FROM sql_file_execution WHERE connection_id = ? AND status IN ('ANALYZING','QUEUED','RUNNING') ORDER BY id",
+                        mapper, connectionId);
+    }
+
     public void updateAnalysisProgress(long id, long bytes) {
         jdbc.update("UPDATE sql_file_execution SET processed_bytes = ? WHERE id = ? AND status = 'ANALYZING'", bytes, id);
     }

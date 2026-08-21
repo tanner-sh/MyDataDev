@@ -540,7 +540,16 @@ public final class ApiDtos {
     public record RestoreJobPage(List<com.example.dbadmin.model.RestoreJob> items, int page, int pageSize, boolean hasMore) {
     }
 
-    public record ActiveOperations(List<com.example.dbadmin.model.BackupHistory> backups, List<com.example.dbadmin.model.RestoreJob> restores) {
+    /**
+     * Every background job still in flight for one connection. The three kinds
+     * are returned together so a client that only needs "is anything running"
+     * — such as the header indicator — costs a single request.
+     */
+    public record ActiveOperations(
+            List<com.example.dbadmin.model.BackupHistory> backups,
+            List<com.example.dbadmin.model.RestoreJob> restores,
+            List<com.example.dbadmin.model.SqlFileExecution> sqlFiles
+    ) {
     }
 
     public record NativeToolStatus(
