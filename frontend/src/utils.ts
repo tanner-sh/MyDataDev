@@ -46,6 +46,25 @@ export function buildChanges(rows: TableRow[], _keyColumns: string[]): RowChange
   return changes;
 }
 
+export type RowChangeSummary = { inserts: number; updates: number; deletes: number };
+
+/**
+ * Counts pending changes by kind in one pass.
+ *
+ * buildChanges walks every row and diffs every column, so it must run once per
+ * edit at most. Callers that need both the changes and a breakdown pass the
+ * already-computed list here instead of rebuilding it.
+ */
+export function summarizeRowChanges(changes: RowChange[]): RowChangeSummary {
+  const summary: RowChangeSummary = { inserts: 0, updates: 0, deletes: 0 };
+  for (const change of changes) {
+    if (change.type === 'INSERT') summary.inserts++;
+    else if (change.type === 'UPDATE') summary.updates++;
+    else if (change.type === 'DELETE') summary.deletes++;
+  }
+  return summary;
+}
+
 export function diff(original: Record<string, unknown>, values: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(values).filter(([column, value]) => !sameCellValue(original[column], value)));
 }

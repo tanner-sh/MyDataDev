@@ -2588,7 +2588,7 @@ export default function App() {
                 tableData={tableData}
                 tableRows={tableRows}
                 previewSql={previewSql}
-                pendingCount={pendingChanges.length}
+                pendingChanges={pendingChanges}
                 page={tablePage}
                 pageSize={layoutPreferences.tablePageSize}
                 hasMore={tableData?.hasMore ?? false}

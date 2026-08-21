@@ -14,11 +14,11 @@ import {
   UndoOutlined,
   UploadOutlined
 } from '@ant-design/icons';
-import type { ActiveTable, TableData, TableRow, WorkspaceStatus } from '../types';
+import type { ActiveTable, RowChange, TableData, TableRow, WorkspaceStatus } from '../types';
 import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
-import { buildChanges } from '../utils';
+import { summarizeRowChanges } from '../utils';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -29,7 +29,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   tableData,
   tableRows,
   previewSql,
-  pendingCount,
+  pendingChanges,
   status,
   loading,
   readonlyConnection = false,
@@ -54,7 +54,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   tableData: TableData | null;
   tableRows: TableRow[];
   previewSql: string[];
-  pendingCount: number;
+  pendingChanges: RowChange[];
   status: WorkspaceStatus;
   loading: boolean;
   readonlyConnection?: boolean;
@@ -80,14 +80,10 @@ export const TableWorkspace = memo(function TableWorkspace({
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
   const editingDisabled = readonlyConnection || !editingSupported;
-  const changeSummary = useMemo(() => {
-    const changes = buildChanges(tableRows, tableData?.keyColumns || []);
-    return {
-      inserts: changes.filter((change) => change.type === 'INSERT').length,
-      updates: changes.filter((change) => change.type === 'UPDATE').length,
-      deletes: changes.filter((change) => change.type === 'DELETE').length
-    };
-  }, [tableData?.keyColumns, tableRows]);
+  const pendingCount = pendingChanges.length;
+  // App already ran buildChanges over every row to produce this list; recomputing
+  // it here meant diffing the whole table twice on each keystroke.
+  const changeSummary = useMemo(() => summarizeRowChanges(pendingChanges), [pendingChanges]);
   const secondaryMenu: MenuProps = {
     items: [
       { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading || !onBackupTable },

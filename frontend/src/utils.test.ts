@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChanges, localizeError, localizeMessage, sameCellValue } from './utils';
+import { buildChanges, localizeError, localizeMessage, sameCellValue, summarizeRowChanges } from './utils';
 import type { TableRow } from './types';
 
 describe('error localization', () => {
@@ -62,5 +62,20 @@ describe('table data changes', () => {
   it('does not confuse numeric display strings with changed numeric values', () => {
     expect(sameCellValue(10, '10')).toBe(true);
     expect(sameCellValue(null, '')).toBe(false);
+  });
+});
+
+describe('summarizeRowChanges', () => {
+  it('counts each kind in one pass', () => {
+    expect(summarizeRowChanges([
+      { type: 'INSERT', values: { a: 1 } },
+      { type: 'UPDATE', keyToken: 't', values: { a: 2 } },
+      { type: 'UPDATE', keyToken: 'u', values: { a: 3 } },
+      { type: 'DELETE', keyToken: 'v' }
+    ])).toEqual({ inserts: 1, updates: 2, deletes: 1 });
+  });
+
+  it('returns zeroes for an empty change list', () => {
+    expect(summarizeRowChanges([])).toEqual({ inserts: 0, updates: 0, deletes: 0 });
   });
 });
