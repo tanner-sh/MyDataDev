@@ -104,23 +104,38 @@ export const ResourceExplorer = memo(function ResourceExplorer({
     [managesViews, objects]
   );
   const favoriteObjectKeySet = useMemo(() => new Set(favoriteObjectKeys), [favoriteObjectKeys]);
+  // The preference key is derived once per object here. "Load more" grows the
+  // object list into the thousands, and recentCount used to rebuild a key for
+  // every (recent object, loaded object) pair on each render.
+  const keyedTableObjects = useMemo(
+    () => selected ? tableObjects.map((object) => ({ key: objectPreferenceKey(selected.id, object), object })) : [],
+    [selected, tableObjects]
+  );
+  const tableObjectsByKey = useMemo(
+    () => new Map(keyedTableObjects.map((entry) => [entry.key, entry.object])),
+    [keyedTableObjects]
+  );
   const visibleTableObjects = useMemo(() => {
     if (!selected || objectView === 'all') return tableObjects;
     if (objectView === 'favorites') {
-      return tableObjects.filter((object) => favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)));
+      return keyedTableObjects.filter((entry) => favoriteObjectKeySet.has(entry.key)).map((entry) => entry.object);
     }
-    const byKey = new Map(tableObjects.map((object) => [objectPreferenceKey(selected.id, object), object]));
     return recentObjects
       .filter((entry) => entry.connectionId === selected.id)
-      .map((entry) => byKey.get(entry.key))
+      .map((entry) => tableObjectsByKey.get(entry.key))
       .filter((object): object is DbObject => Boolean(object));
-  }, [favoriteObjectKeySet, objectView, recentObjects, selected, tableObjects]);
-  const favoriteCount = useMemo(() => selected
-    ? tableObjects.filter((object) => favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object))).length
-    : 0, [favoriteObjectKeySet, selected, tableObjects]);
-  const recentCount = useMemo(() => selected
-    ? recentObjects.filter((entry) => entry.connectionId === selected.id && tableObjects.some((object) => objectPreferenceKey(selected.id, object) === entry.key)).length
-    : 0, [recentObjects, selected, tableObjects]);
+  }, [favoriteObjectKeySet, keyedTableObjects, objectView, recentObjects, selected, tableObjects, tableObjectsByKey]);
+  const favoriteCount = useMemo(
+    () => keyedTableObjects.reduce((count, entry) => count + (favoriteObjectKeySet.has(entry.key) ? 1 : 0), 0),
+    [favoriteObjectKeySet, keyedTableObjects]
+  );
+  const recentCount = useMemo(
+    () => recentObjects.reduce(
+      (count, entry) => count + (entry.connectionId === selected?.id && tableObjectsByKey.has(entry.key) ? 1 : 0),
+      0
+    ),
+    [recentObjects, selected?.id, tableObjectsByKey]
+  );
   const activeSchemaKind = activeKind === 'TABLE' ? undefined : activeKind;
   const activeCapability = activeSchemaKind
     ? schemaCapabilities.find((capability) => capability.kind === activeSchemaKind)
