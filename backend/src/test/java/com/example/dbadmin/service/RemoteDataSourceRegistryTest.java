@@ -1,12 +1,17 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.DbConnection;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.HttpStatus;
 
 import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RemoteDataSourceRegistryTest {
     @Test
@@ -52,6 +57,27 @@ class RemoteDataSourceRegistryTest {
     }
 
     @Test
+    void reportsAnExhaustedPoolBudgetAsServiceUnavailable() throws Exception {
+        AppProperties properties = new AppProperties();
+        properties.getRemotePool().setMaxPools(1);
+        RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry(properties, new EmptyObjectProvider<>());
+        try {
+            DbConnection busy = connection(1L, "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+            DbConnection blocked = connection(2L, "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+            try (var held = registry.open(busy, "")) {
+                assertThat(held.isClosed()).isFalse();
+                assertThatThrownBy(() -> registry.open(blocked, ""))
+                        .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                            assertThat(problem.status()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                            assertThat(problem.code()).isEqualTo("REMOTE_POOL_EXHAUSTED");
+                        });
+            }
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
     void fingerprintDistinguishesNullFromLiteralNullCredentials() {
         RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();
         String url = "jdbc:h2:mem:" + UUID.randomUUID();
@@ -63,6 +89,29 @@ class RemoteDataSourceRegistryTest {
                 .isNotEqualTo(registry.fingerprint(literalNullUsername, null));
         assertThat(registry.fingerprint(nullUsername, null))
                 .isNotEqualTo(registry.fingerprint(nullUsername, "null"));
+    }
+
+    /** 注册表只用 ObjectProvider 取可选的 MeterRegistry，测试里不需要指标。 */
+    private static final class EmptyObjectProvider<T> implements ObjectProvider<T> {
+        @Override
+        public T getObject() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public T getObject(Object... args) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public T getIfAvailable() {
+            return null;
+        }
+
+        @Override
+        public T getIfUnique() {
+            return null;
+        }
     }
 
     private DbConnection connection(long id, String url) {

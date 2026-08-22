@@ -19,10 +19,13 @@ import java.util.Optional;
 import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.ToIntFunction;
 
 @Service
 public class MetadataCacheService {
     private static final Duration TTL = Duration.ofMinutes(10);
+    /** 一条列/索引/关系记录的粗略常驻开销，仅用于缓存权重估算。 */
+    private static final int ESTIMATED_ENTRY_BYTES = 256;
     private final ConcurrentHashMap<Long, AtomicLong> connectionGenerations = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, AtomicLong> directoryGenerations = new ConcurrentHashMap<>();
     private final Cache<SchemaCatalogKey, SchemaCatalogSnapshot> schemaCatalogs = Caffeine.newBuilder()
@@ -42,11 +45,16 @@ public class MetadataCacheService {
             .weigher((ObjectCatalogKey ignored, CachedValue<List<DbObject>> value) -> 10 + value.value().size())
             .expireAfterAccess(TTL)
             .build();
-    private final Cache<ObjectKey, CachedValue<ObjectStructure>> structures = detailCache();
-    private final Cache<ObjectKey, CachedValue<ObjectDetail>> details = detailCache();
-    private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache();
-    private final Cache<ObjectKey, CachedValue<ObjectDdlResponse>> ddls = detailCache();
-    private final Cache<ObjectKey, CachedValue<RowIdentity>> rowIdentities = detailCache();
+    private final Cache<ObjectKey, CachedValue<ObjectStructure>> structures =
+            detailCache(value -> approximateKilobytes(value.columns().size() + value.indexes().size(), 0));
+    private final Cache<ObjectKey, CachedValue<ObjectDetail>> details = detailCache(value ->
+            approximateKilobytes(value.columns().size() + value.indexes().size() + value.primaryKeys().size(), 0));
+    private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache(value ->
+            approximateKilobytes(value.importedKeys().size() + value.exportedKeys().size(), 0));
+    private final Cache<ObjectKey, CachedValue<ObjectDdlResponse>> ddls =
+            detailCache(value -> approximateKilobytes(0, textLength(value.ddl())));
+    private final Cache<ObjectKey, CachedValue<RowIdentity>> rowIdentities =
+            detailCache(value -> approximateKilobytes(value.columns().size(), 0));
     private final Cache<SchemaObjectPageKey, CachedValue<SchemaObjectPageValue>> schemaObjectPages = Caffeine.newBuilder()
             .maximumWeight(100_000)
             .weigher((SchemaObjectPageKey ignored, CachedValue<SchemaObjectPageValue> value) -> 10 + value.value().items().size())
@@ -54,8 +62,11 @@ public class MetadataCacheService {
             .build();
     private final Cache<SchemaObjectDetailKey, CachedValue<SchemaObjectDetail>> schemaObjectDetails = Caffeine.newBuilder()
             .maximumWeight(50_000)
-            .weigher((SchemaObjectDetailKey ignored, CachedValue<SchemaObjectDetail> value) ->
-                    Math.min(2_000, 1 + String.valueOf(value.value()).length() / 1_024))
+            .weigher((SchemaObjectDetailKey ignored, CachedValue<SchemaObjectDetail> value) -> Math.min(2_000,
+                    approximateKilobytes(
+                            value.value().parameters().size() + value.value().dependencies().size(),
+                            textLength(value.value().source())
+                    )))
             .expireAfterAccess(TTL)
             .build();
 
@@ -262,13 +273,28 @@ public class MetadataCacheService {
         return value == null ? "" : value.toLowerCase(Locale.ROOT);
     }
 
-    private static <T> Cache<ObjectKey, CachedValue<T>> detailCache() {
+    private static <T> Cache<ObjectKey, CachedValue<T>> detailCache(ToIntFunction<T> weigher) {
         return Caffeine.newBuilder()
                 .maximumWeight(50_000)
                 .weigher((ObjectKey ignored, CachedValue<T> value) ->
-                        Math.min(1_000, 1 + String.valueOf(value.value()).length() / 1_024))
+                        Math.min(1_000, Math.max(1, weigher.applyAsInt(value.value()))))
                 .expireAfterAccess(TTL)
                 .build();
+    }
+
+    /**
+     * 估算一条缓存记录的体积，单位约为 1 KiB。
+     *
+     * <p>Caffeine 每次写入都会调用 weigher。之前的实现为了拿到一个长度会把整条 record
+     * {@code toString()} 成字符串 —— 一张几百列的表要临时构造几十 KB 的字符串，只为算出一个
+     * 数字。这里改成按条目数与文本长度估算，量级与旧实现保持一致，成本降到常数级。</p>
+     */
+    private static int approximateKilobytes(int entries, int textChars) {
+        return 1 + (entries * ESTIMATED_ENTRY_BYTES + textChars * 2) / 1_024;
+    }
+
+    private static int textLength(String value) {
+        return value == null ? 0 : value.length();
     }
 
     public record SchemaCatalogSnapshot(List<String> schemas, String currentSchema, boolean currentIsCatalog, Instant cachedAt) {

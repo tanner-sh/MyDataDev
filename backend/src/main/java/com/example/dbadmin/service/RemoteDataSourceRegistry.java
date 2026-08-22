@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.DbConnection;
 import com.zaxxer.hikari.HikariConfig;
@@ -9,6 +10,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
@@ -141,7 +143,13 @@ public class RemoteDataSourceRegistry {
                 .filter(entry -> entry.getValue().dataSource().getHikariPoolMXBean() == null
                         || entry.getValue().dataSource().getHikariPoolMXBean().getActiveConnections() == 0)
                 .min(Comparator.comparingLong(entry -> entry.getValue().lastAccessNanos()))
-                .orElseThrow(() -> new IllegalStateException("远程数据库连接池已达到上限，请等待正在执行的操作完成。"));
+                // 这是服务端容量问题而不是调用方输入错误：走 IllegalStateException 会被统一
+                // 异常处理器映射成 400 BAD_REQUEST，前端只能提示「请检查输入」。
+                .orElseThrow(() -> new ApiProblemException(
+                        HttpStatus.SERVICE_UNAVAILABLE,
+                        "REMOTE_POOL_EXHAUSTED",
+                        "同时活跃的数据库连接已达到上限（" + maxPools + " 个），请等待正在执行的操作完成后重试。"
+                ));
         pools.remove(idle.getKey());
         idle.getValue().dataSource().close();
     }

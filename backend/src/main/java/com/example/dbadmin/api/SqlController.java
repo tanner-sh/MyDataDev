@@ -79,8 +79,12 @@ public class SqlController {
     }
 
     @GetMapping("/history")
-    public java.util.List<SqlHistoryResponse> history(@RequestParam long connectionId, @RequestParam(required = false) Integer limit) {
-        return sqlService.history(connectionId, limit);
+    public java.util.List<SqlHistoryResponse> history(
+            @RequestParam long connectionId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return sqlService.history(connectionId, keyword, limit);
     }
 
     @PostMapping("/completions")

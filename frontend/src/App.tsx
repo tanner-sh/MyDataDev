@@ -20,6 +20,14 @@ import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import {
+  hasMoreSqlHistory,
+  INITIAL_SQL_HISTORY_QUERY,
+  isSqlHistoryAtLimit,
+  nextSqlHistoryLimit,
+  sqlHistoryRequestParams,
+  type SqlHistoryQuery
+} from './sqlHistoryQuery';
+import {
   backgroundTaskCompletionMessage,
   EMPTY_BACKGROUND_TASK_SUMMARY,
   sameBackgroundTaskSummary,
@@ -28,8 +36,9 @@ import {
 } from './backgroundTasks';
 import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
 import { createUuid } from './createUuid';
+import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
-import { IDLE_TABLE_ROW_COUNT, type TableRowCountState } from './tableRowCount';
+import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -66,7 +75,11 @@ const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspa
 const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
-const SqlWorkspace = lazy(() => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace })));
+const loadSqlWorkspace = () => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace }));
+const SqlWorkspace = lazy(loadSqlWorkspace);
+// Monaco 是全站最大的块。SqlEditorSurface 只在用户点进编辑器时才 import 它，所以不预取的话
+// 那次点击要等 600+ KiB 下载完；这里在首屏空闲时先取回来。
+const loadSqlEditor = () => import('./components/SqlEditor');
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
@@ -113,6 +126,7 @@ export default function App() {
   const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
+  const [sqlHistoryQuery, setSqlHistoryQuery] = useState<SqlHistoryQuery>(INITIAL_SQL_HISTORY_QUERY);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyFeatureLoaded, setHistoryFeatureLoaded] = useState(false);
@@ -140,6 +154,8 @@ export default function App() {
   const tableRequestSeqRef = useRef(0);
   const tableRowCountSeqRef = useRef(0);
   const backupRequestSeqRef = useRef(0);
+  const sqlHistoryRequestSeqRef = useRef(0);
+  const historyInFlightRef = useRef(0);
   const objectDesignDirtyRef = useRef(false);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
@@ -201,6 +217,9 @@ export default function App() {
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
+
+  // 首屏只有连接列表，用户挑连接、点进编辑器之前的这段空闲足够把重型块下完。
+  useEffect(() => prefetchAllWhenIdle([loadSqlWorkspace, loadSqlEditor], window), []);
 
   useEffect(() => {
     if (selected) void loadObjectDetailWorkspace().catch(() => undefined);
@@ -521,13 +540,18 @@ export default function App() {
     });
   }
 
-  async function refreshSqlHistory(conn = selected) {
+  async function refreshSqlHistory(conn = selected, query = sqlHistoryQuery) {
     if (!conn) {
       setSqlHistory([]);
+      setSqlHistoryQuery(INITIAL_SQL_HISTORY_QUERY);
       return;
     }
-    const rows = await api<SqlHistory[]>(`/sql/history?connectionId=${conn.id}&limit=50`);
+    const requestId = ++sqlHistoryRequestSeqRef.current;
+    const rows = await api<SqlHistory[]>(`/sql/history?${sqlHistoryRequestParams(conn.id, query)}`);
+    // 输入关键字时会连续发多个请求，只有最后一个的结果才作数。
+    if (requestId !== sqlHistoryRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
     setSqlHistory(rows);
+    setSqlHistoryQuery(query);
   }
 
   async function refreshSqlHistoryQuietly(conn = selected) {
@@ -535,6 +559,24 @@ export default function App() {
       await refreshSqlHistory(conn);
     } catch {
       toastApi.warning('SQL 已处理，但历史记录刷新失败，可稍后重新打开历史。');
+    }
+  }
+
+  /** 关键字搜索与「加载更多」共用同一条取数路径，只是 query 不同。 */
+  async function loadSqlHistory(query: SqlHistoryQuery): Promise<boolean> {
+    // 不能用「已在加载就直接返回」来去重：搜索是去抖触发的，丢掉的那一次正好是用户
+    // 最新输入的关键字。改成让请求都发出去，由 refreshSqlHistory 的序号丢弃过期响应。
+    historyInFlightRef.current += 1;
+    setHistoryLoading(true);
+    try {
+      await refreshSqlHistory(selected, query);
+      return true;
+    } catch (e) {
+      toastApi.error(`历史记录加载失败：${localizeError(e)}`);
+      return false;
+    } finally {
+      historyInFlightRef.current -= 1;
+      if (historyInFlightRef.current === 0) setHistoryLoading(false);
     }
   }
 
@@ -688,6 +730,10 @@ export default function App() {
     clearObjectStructureCache();
     completionCatalogCacheRef.current.clear();
     objectDetailCacheRef.current.clear();
+    // 历史属于某一条连接，切换后必须重新取，不能把上一条连接的记录留在抽屉里。
+    sqlHistoryRequestSeqRef.current += 1;
+    setSqlHistory([]);
+    setSqlHistoryQuery(INITIAL_SQL_HISTORY_QUERY);
     setStructureLoadingKey(null);
     setActiveObjectTarget(null);
     setActiveObjectDetail(null);
@@ -717,7 +763,9 @@ export default function App() {
   function selectConnection(connection: Connection, onSelected?: () => void) {
     if (selected?.id === connection.id) return;
     if (sqlLoading || tableLoading || objectDetailLoading) {
-      showInfo('请等待当前操作完成后再切换连接');
+      showInfo(sqlCancellable
+        ? '请等待当前操作完成后再切换连接，或先点击工具栏的「取消」终止本次执行'
+        : '请等待当前操作完成后再切换连接');
       return;
     }
     confirmDiscardObjectDesign(() => {
@@ -806,8 +854,9 @@ export default function App() {
       setTableRowCount({ status: 'ready', total: data.value, elapsedMs: data.elapsedMs });
     } catch (e) {
       if (requestId !== tableRowCountSeqRef.current) return;
-      setTableRowCount({ status: 'failed' });
-      showError(`统计总行数失败：${localizeError(e)}`);
+      const code = e instanceof ApiError ? e.code : undefined;
+      setTableRowCount(rowCountFailure(code));
+      showError(rowCountErrorMessage(localizeError(e), code));
     }
   }
 
@@ -1187,6 +1236,11 @@ export default function App() {
         // requires the header on every request. Do NOT copy this to anything
         // that mutates — the DDL and table-lifecycle panels each make the user
         // type the connection name, which is what the guard is for.
+        //
+        // 残留风险，改动前请先读完：ExecutionGuard 之所以对自由 SQL 也要求确认，正是因为
+        // SELECT 可能调用带副作用的函数。翻页会把同一条 SELECT 重新执行一遍，也就会把那些
+        // 副作用再触发一次，而用户只在首次执行时确认过。这里接受这个权衡（否则每翻一页都要
+        // 重新输入连接名），但它不是「翻页一定安全」。
         headers: selected.environment === 'prod' ? { 'X-Production-Confirmation': selected.name } : undefined,
         body: JSON.stringify({
           connectionId: page.connectionId,
@@ -1310,18 +1364,14 @@ export default function App() {
     // in-flight guard the button looks dead and repeated clicks pile up
     // duplicate /sql/history requests.
     if (historyLoading) return;
-    setHistoryLoading(true);
-    try {
-      await refreshSqlHistory();
-      setHistoryFeatureLoaded(true);
-      setHistoryOpen(true);
-    } catch (e) {
-      const errorMessage = `历史记录加载失败：${localizeError(e)}`;
-      updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
-      toastApi.error(errorMessage);
-    } finally {
-      setHistoryLoading(false);
+    // 每次打开都回到「最近一页、无关键字」，而不是沿用上次的搜索条件。
+    if (!await loadSqlHistory(INITIAL_SQL_HISTORY_QUERY)) {
+      // 具体原因已经由 loadSqlHistory 弹出，这里只让状态栏留下痕迹。
+      updateActiveSqlTab({ message: '历史记录加载失败', statusKind: 'error' });
+      return;
     }
+    setHistoryFeatureLoaded(true);
+    setHistoryOpen(true);
   }
 
   async function exportSql(format: ExportFormat, liveSql?: string) {
@@ -1787,22 +1837,39 @@ export default function App() {
     completionProviderRef.current = provider;
     const definitionLink = editor.createDecorationsCollection();
     let hoveredPosition: Monaco.Position | null = null;
+    // Ctrl/Cmd+悬停的定义跳转装饰挂在两个高频事件上：window 级别的 keydown/keyup（编辑器里
+    // 每敲一个字符就是两次）和 onMouseMove。没有下面这三个状态位时，每一次事件都会跑一遍
+    // deltaDecorations，命中时还要把整篇 SQL 重新词法扫描一遍。
+    let definitionLinkActive = false;
+    let linkedRange: { start: number; end: number } | null = null;
+    let modifierPressed = false;
 
+    const clearDefinitionLinkDecoration = () => {
+      if (!definitionLinkActive) return;
+      definitionLink.clear();
+      definitionLinkActive = false;
+      linkedRange = null;
+    };
     const objectReferenceAt = (position: Monaco.Position | null) => {
       const model = editor.getModel();
       if (!model || !position) return undefined;
       return findSqlObjectReferenceAtOffset(model.getValue(), model.getOffsetAt(position));
     };
-    const updateDefinitionLink = (position: Monaco.Position | null, modifierPressed: boolean) => {
+    const updateDefinitionLink = (position: Monaco.Position | null) => {
       if (!modifierPressed) {
-        definitionLink.clear();
+        clearDefinitionLinkDecoration();
         clearObjectDetailPrefetchTimer();
         return;
       }
       const model = editor.getModel();
+      // 指针还停在已经高亮的那个对象名上时，结果不会变，无需重新扫描。
+      if (model && position && linkedRange) {
+        const offset = model.getOffsetAt(position);
+        if (offset >= linkedRange.start && offset < linkedRange.end) return;
+      }
       const reference = objectReferenceAt(position);
       if (!model || !reference) {
-        definitionLink.clear();
+        clearDefinitionLinkDecoration();
         clearObjectDetailPrefetchTimer();
         return;
       }
@@ -1818,15 +1885,18 @@ export default function App() {
         },
         options: { inlineClassName: 'sql-object-definition-link' }
       }]);
+      definitionLinkActive = true;
+      linkedRange = { start: objectName.start, end: objectName.end };
       queueSqlObjectDetailPrefetch(reference);
     };
     const mouseMoveListener = editor.onMouseMove((event) => {
       hoveredPosition = event.target.position;
-      updateDefinitionLink(hoveredPosition, event.event.ctrlKey || event.event.metaKey);
+      modifierPressed = event.event.ctrlKey || event.event.metaKey;
+      updateDefinitionLink(hoveredPosition);
     });
     const mouseLeaveListener = editor.onMouseLeave(() => {
       hoveredPosition = null;
-      definitionLink.clear();
+      clearDefinitionLinkDecoration();
       clearObjectDetailPrefetchTimer();
     });
     const mouseDownListener = editor.onMouseDown((event) => {
@@ -1835,18 +1905,24 @@ export default function App() {
       if (!reference) return;
       event.event.preventDefault();
       event.event.stopPropagation();
-      definitionLink.clear();
+      clearDefinitionLinkDecoration();
       objectDefinitionNavigationRef.current(reference);
     });
     const contentListener = editor.onDidChangeModelContent(() => {
-      definitionLink.clear();
+      // 内容一变，记下来的偏移量就失效了。
+      clearDefinitionLinkDecoration();
       clearObjectDetailPrefetchTimer();
     });
     const handleModifierChange = (event: KeyboardEvent) => {
-      updateDefinitionLink(hoveredPosition, event.ctrlKey || event.metaKey);
+      const pressed = event.ctrlKey || event.metaKey;
+      // 普通输入的 keydown/keyup 不改变修饰键状态，直接返回。
+      if (pressed === modifierPressed) return;
+      modifierPressed = pressed;
+      updateDefinitionLink(hoveredPosition);
     };
     const clearDefinitionLink = () => {
-      definitionLink.clear();
+      modifierPressed = false;
+      clearDefinitionLinkDecoration();
       clearObjectDetailPrefetchTimer();
     };
     window.addEventListener('keydown', handleModifierChange);
@@ -2462,6 +2538,14 @@ export default function App() {
     if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
   });
   const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
+  const searchSqlHistoryEvent = useStableEvent((keyword: string) => {
+    void loadSqlHistory({ keyword, limit: INITIAL_SQL_HISTORY_QUERY.limit });
+  });
+  const loadMoreSqlHistoryEvent = useStableEvent(() => {
+    const limit = nextSqlHistoryLimit(sqlHistoryQuery.limit);
+    if (limit === sqlHistoryQuery.limit) return;
+    void loadSqlHistory({ ...sqlHistoryQuery, limit });
+  });
   const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory, mode: 'new-tab' | 'replace-current') => {
     if (mode === 'new-tab') {
       if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
@@ -2862,8 +2946,14 @@ export default function App() {
           <SqlHistoryDrawer
             open={historyOpen}
             history={sqlHistory}
+            keyword={sqlHistoryQuery.keyword}
+            loading={historyLoading}
+            hasMore={hasMoreSqlHistory(sqlHistory.length, sqlHistoryQuery.limit)}
+            atLimit={isSqlHistoryAtLimit(sqlHistory.length, sqlHistoryQuery.limit)}
             onClose={closeSqlHistoryEvent}
             onPick={pickSqlHistoryEvent}
+            onSearch={searchSqlHistoryEvent}
+            onLoadMore={loadMoreSqlHistoryEvent}
           />
         </Suspense>
       )}

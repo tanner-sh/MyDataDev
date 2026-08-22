@@ -136,8 +136,13 @@ public class ConnectionService {
         Connection connection = dataSources.open(configured, password(id));
         var dialect = dialectRegistry.dialectFor(configured);
         try {
+            // 池化连接上的 setCatalog/setSchema 不会被 Hikari 归还时重置，必须自己还原，
+            // 否则下一个借用者（表浏览、元数据、备份、MCP 查询）会静默继承这个命名空间。
+            String original = NamespaceScopedConnection.readNamespace(connection, dialect.namespaceKind());
             dialect.activateNamespace(connection, schemaName);
-            return connection;
+            return NamespaceScopedConnection.wrap(
+                    connection, dialect.namespaceKind(), original, () -> dataSources.evict(id)
+            );
         } catch (Exception error) {
             try {
                 connection.close();
