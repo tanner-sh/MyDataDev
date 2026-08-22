@@ -49,6 +49,19 @@ class ExecutionGuardTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void acceptsThePercentEncodedConfirmationTheBrowserIsForcedToSend() {
+        // HTTP 头值只能是 ISO-8859-1，中文连接名必须先 encodeURIComponent 才能发出去。
+        DbConnection connection = connection("生产订单库", "prod", false);
+
+        assertThatCode(() -> guard.requireMutationAllowed(
+                connection, "%E7%94%9F%E4%BA%A7%E8%AE%A2%E5%8D%95%E5%BA%93"
+        )).doesNotThrowAnyException();
+        assertThatThrownBy(() -> guard.requireMutationAllowed(
+                connection, "%E7%94%9F%E4%BA%A7%E5%BA%93"
+        )).isInstanceOf(ApiProblemException.class);
+    }
+
     private DbConnection connection(String name, String environment, boolean readonly) {
         return new DbConnection(1L, name, "h2", "jdbc:h2:mem:test", "sa", "", environment, readonly, Instant.now(), Instant.now());
     }

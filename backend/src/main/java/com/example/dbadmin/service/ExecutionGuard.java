@@ -30,7 +30,11 @@ public class ExecutionGuard {
         // side effects. Require the exact production confirmation for every
         // free-form SQL operation; generated table-browse queries do not pass
         // through this guard.
-        if ("prod".equalsIgnoreCase(connection.environment()) && !connection.name().equals(productionConfirmation)) {
+        //
+        // 确认串通过请求头传输，而 HTTP 头值只能是 ISO-8859-1，所以前端会先做
+        // encodeURIComponent；这里统一还原后再比较。详见 ProductionConfirmationCodec。
+        String confirmation = ProductionConfirmationCodec.decode(productionConfirmation);
+        if ("prod".equalsIgnoreCase(connection.environment()) && !connection.name().equals(confirmation)) {
             throw new ApiProblemException(
                     HttpStatus.CONFLICT,
                     "PRODUCTION_CONFIRMATION_REQUIRED",
