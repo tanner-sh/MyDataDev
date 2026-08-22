@@ -153,7 +153,7 @@ export type SqlStatementResult = { index: number; sql: string; startOffset: numb
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
 export type LegacyBackupScope = BackupScope | 'TABLE';
-export type BackupMethod = 'SQL' | 'MYSQLDUMP' | 'ORACLE_EXP';
+export type BackupMethod = 'SQL' | 'MYSQLDUMP' | 'ORACLE_EXP' | 'PG_DUMP';
 export type BackupTargetItem = { name: string; current?: boolean };
 export type BackupTargetPage = {
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -308,7 +308,7 @@ export type StorageProfileRequest = {
 export type StorageTestResponse = { ok: boolean; message: string };
 export type BackupRunResponse = { task: BackupTask; execution: BackupHistory };
 export type BackupTaskPage = { items: BackupTask[]; page: number; pageSize: number; hasMore: boolean };
-export type RestoreFileFormat = 'SQL' | 'MYSQLDUMP' | 'ORACLE_DMP';
+export type RestoreFileFormat = 'SQL' | 'MYSQLDUMP' | 'ORACLE_DMP' | 'PG_DUMP';
 export type RestoreConflictMode = 'SAFE' | 'OVERWRITE' | 'APPEND';
 export type RestoreSourceRef = { kind: 'HISTORY' | 'UPLOAD'; id: number };
 export type RestoreUpload = {
@@ -357,7 +357,7 @@ export type RestoreJob = {
 export type RestoreJobPage = { items: RestoreJob[]; page: number; pageSize: number; hasMore: boolean };
 export type ActiveOperations = { backups: BackupHistory[]; restores: RestoreJob[]; sqlFiles: SqlFileExecution[] };
 export type NativeToolStatus = {
-  tool: 'MYSQLDUMP' | 'MYSQL' | 'ORACLE_EXP' | 'ORACLE_IMP';
+  tool: 'MYSQLDUMP' | 'MYSQL' | 'ORACLE_EXP' | 'ORACLE_IMP' | 'PG_DUMP' | 'PG_RESTORE';
   displayName: string;
   available: boolean;
   resolvedPath?: string;

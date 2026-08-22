@@ -405,6 +405,24 @@ public class RestoreService {
             builder.redirectInput(Path.of(job.sourceFilePath()).toFile());
             String password = connections.password(target.id());
             if (password != null) builder.environment().put("MYSQL_PWD", password);
+        } else if ("PG_DUMP".equals(job.fileFormat())) {
+            // custom 格式必须用 pg_restore；--clean 只在 OVERWRITE 模式下加，避免默默删掉已有对象。
+            PostgresTarget postgres = postgresTarget(target.jdbcUrl());
+            command.add(toolPath);
+            command.add("--host=" + postgres.host());
+            command.add("--port=" + postgres.port());
+            if (target.username() != null && !target.username().isBlank()) command.add("--username=" + target.username());
+            command.add("--no-password");
+            if (postgres.database() != null) command.add("--dbname=" + postgres.database());
+            if ("OVERWRITE".equals(job.conflictMode())) {
+                command.add("--clean");
+                command.add("--if-exists");
+            }
+            command.addAll(extraArgs(extraArgs));
+            command.add(Path.of(job.sourceFilePath()).toAbsolutePath().toString());
+            builder = new ProcessBuilder(command);
+            String password = connections.password(target.id());
+            if (password != null) builder.environment().put("PGPASSWORD", password);
         } else {
             String password = connections.password(target.id());
             String connect = oracleConnectName(target.jdbcUrl());
@@ -555,6 +573,7 @@ public class RestoreService {
         String target = family(targetDbType);
         if ("MYSQLDUMP".equals(format) && !("MYSQL".equals(source) && "MYSQL".equals(target))) errors.add("MySQL dump 只能恢复到 MySQL 兼容连接。");
         if ("ORACLE_DMP".equals(format) && !("ORACLE".equals(source) && "ORACLE".equals(target))) errors.add("Oracle dmp 只能恢复到 Oracle 兼容连接。");
+        if ("PG_DUMP".equals(format) && !("POSTGRESQL".equals(source) && "POSTGRESQL".equals(target))) errors.add("pg_dump 备份只能恢复到 PostgreSQL 连接。");
         try {
             nativeTools.validateOverrideName(restoreTool(format), toolPath);
         } catch (IllegalArgumentException error) {
@@ -693,8 +712,14 @@ public class RestoreService {
 
     private String normalizeFormat(String format, String filename) {
         String normalized = format == null ? "" : format.trim().toUpperCase(Locale.ROOT);
-        if (normalized.isBlank()) normalized = filename != null && filename.toLowerCase(Locale.ROOT).endsWith(".dmp") ? "ORACLE_DMP" : "SQL";
-        if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_DMP").contains(normalized)) throw new IllegalArgumentException("不支持的恢复文件格式：" + format);
+        if (normalized.isBlank()) {
+            String lower = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+            // pg_dump 的 custom 格式约定用 .dump 后缀，与 Oracle 的 .dmp 区分开。
+            normalized = lower.endsWith(".dmp") ? "ORACLE_DMP" : lower.endsWith(".dump") ? "PG_DUMP" : "SQL";
+        }
+        if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_DMP", "PG_DUMP").contains(normalized)) {
+            throw new IllegalArgumentException("不支持的恢复文件格式：" + format);
+        }
         return normalized;
     }
 
@@ -707,6 +732,7 @@ public class RestoreService {
     private String formatFromMethod(String method, String fallback) {
         if ("MYSQLDUMP".equalsIgnoreCase(method)) return "MYSQLDUMP";
         if ("ORACLE_EXP".equalsIgnoreCase(method)) return "ORACLE_DMP";
+        if ("PG_DUMP".equalsIgnoreCase(method)) return "PG_DUMP";
         return normalizeFormat(fallback, null);
     }
 
@@ -714,6 +740,7 @@ public class RestoreService {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
         if (Set.of("mysql", "mariadb", "oceanbase-mysql").contains(type)) return "MYSQL";
         if (Set.of("oracle", "oceanbase-oracle", "dm").contains(type)) return "ORACLE";
+        if (Set.of("postgresql", "postgres", "pg").contains(type)) return "POSTGRESQL";
         return type.toUpperCase(Locale.ROOT);
     }
 
@@ -724,6 +751,16 @@ public class RestoreService {
             return new MysqlTarget(uri.getHost() == null ? "localhost" : uri.getHost(), uri.getPort() < 0 ? 3306 : uri.getPort(), blankToNull(database));
         } catch (Exception error) {
             throw new IllegalArgumentException("无法解析 MySQL JDBC URL。");
+        }
+    }
+
+    private PostgresTarget postgresTarget(String jdbcUrl) {
+        try {
+            URI uri = URI.create(jdbcUrl.replaceFirst("^jdbc:", ""));
+            String database = uri.getPath() == null ? null : uri.getPath().replaceFirst("^/", "");
+            return new PostgresTarget(uri.getHost() == null ? "localhost" : uri.getHost(), uri.getPort() < 0 ? 5432 : uri.getPort(), blankToNull(database));
+        } catch (Exception error) {
+            throw new IllegalArgumentException("无法解析 PostgreSQL JDBC URL。");
         }
     }
 
@@ -759,7 +796,11 @@ public class RestoreService {
     }
 
     private NativeToolLocator.Tool restoreTool(String format) {
-        return "MYSQLDUMP".equals(format) ? NativeToolLocator.Tool.MYSQL : NativeToolLocator.Tool.ORACLE_IMP;
+        return switch (format) {
+            case "MYSQLDUMP" -> NativeToolLocator.Tool.MYSQL;
+            case "PG_DUMP" -> NativeToolLocator.Tool.PG_RESTORE;
+            default -> NativeToolLocator.Tool.ORACLE_IMP;
+        };
     }
 
     private TableName tableName(String qualified) {
@@ -781,5 +822,6 @@ public class RestoreService {
     private record FileFingerprint(long size, long modifiedMillis, String fileKey) { }
     private record TableName(String namespace, String name) { }
     private record MysqlTarget(String host, int port, String database) { }
+    private record PostgresTarget(String host, int port, String database) { }
     private static final class CancelledException extends RuntimeException { }
 }

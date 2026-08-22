@@ -211,6 +211,8 @@ public class NativeToolLocator {
             case MYSQL -> tools.getMysqlPath();
             case ORACLE_EXP -> tools.getOracleExpPath();
             case ORACLE_IMP -> tools.getOracleImpPath();
+            case PG_DUMP -> tools.getPgDumpPath();
+            case PG_RESTORE -> tools.getPgRestorePath();
         };
     }
 
@@ -229,7 +231,9 @@ public class NativeToolLocator {
         MYSQLDUMP("MySQL mysqldump", true, List.of("--version")),
         MYSQL("MySQL mysql", true, List.of("--version")),
         ORACLE_EXP("Oracle exp", false, List.of("help=y")),
-        ORACLE_IMP("Oracle imp", false, List.of("help=y"));
+        ORACLE_IMP("Oracle imp", false, List.of("help=y")),
+        PG_DUMP("PostgreSQL pg_dump", false, List.of("--version")),
+        PG_RESTORE("PostgreSQL pg_restore", false, List.of("--version"));
 
         private final String displayName;
         private final boolean mysqlFamily;
@@ -250,6 +254,8 @@ public class NativeToolLocator {
                 case MYSQL -> "mysql";
                 case ORACLE_EXP -> "exp";
                 case ORACLE_IMP -> "imp";
+                case PG_DUMP -> "pg_dump";
+                case PG_RESTORE -> "pg_restore";
             };
             return windows ? Set.of(base + ".exe") : Set.of(base);
         }

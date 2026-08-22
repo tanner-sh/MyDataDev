@@ -348,6 +348,7 @@ public class BackupService {
     private String fileFormat(String method) {
         return switch (normalizeBackupMethod(method)) {
             case "MYSQLDUMP" -> "MYSQLDUMP";
+            case "PG_DUMP" -> "PG_DUMP";
             case "ORACLE_EXP" -> "ORACLE_DMP";
             default -> "SQL";
         };
@@ -836,6 +837,7 @@ public class BackupService {
         String method = validateBackupMethod(task.backupMethod(), connection);
         return switch (method) {
             case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.MYSQLDUMP, task.toolPath()).path().toString());
+            case "PG_DUMP" -> runPgDump(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.PG_DUMP, task.toolPath()).path().toString());
             case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.ORACLE_EXP, task.toolPath()).path().toString());
             default -> writeSqlBackup(task, connection);
         };
@@ -867,6 +869,48 @@ public class BackupService {
             builder.environment().put("MYSQL_PWD", password);
         }
         runNativeProcess(builder, file, "mysqldump", password);
+        return new BackupFile(file, Files.size(file));
+    }
+
+    /**
+     * pg_dump 备份。
+     *
+     * <p>用 custom 格式（-Fc）而不是纯 SQL：它是 pg_restore 唯一能做选择性恢复的格式，也自带
+     * 压缩。密码通过 PGPASSWORD 环境变量传，不会出现在进程命令行里。</p>
+     */
+    private BackupFile runPgDump(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
+        PostgresJdbcTarget target = postgresTarget(connection.jdbcUrl());
+        String database = "DATABASE".equals(resolved.scope()) ? target.database() : target.database();
+        if (database == null || database.isBlank()) {
+            throw new IllegalArgumentException("pg_dump 备份需要 JDBC URL 中包含数据库名。");
+        }
+        Path file = backupPath(task, "pg-dump", ".dump");
+        List<String> command = new ArrayList<>();
+        command.add(toolPath);
+        command.add("--host=" + target.host());
+        command.add("--port=" + target.port());
+        if (connection.username() != null && !connection.username().isBlank()) {
+            command.add("--username=" + connection.username());
+        }
+        command.add("--no-password");
+        command.add("--format=custom");
+        command.add("--file=" + file.toAbsolutePath().normalize());
+        if ("SCHEMA".equals(resolved.scope()) && resolved.namespace() != null) {
+            command.add("--schema=" + resolved.namespace());
+        }
+        if ("TABLES".equals(resolved.scope())) {
+            for (TableRef table : resolved.tables()) {
+                command.add("--table=" + (resolved.namespace() == null ? table.name() : resolved.namespace() + "." + table.name()));
+            }
+        }
+        command.addAll(extraArgs(task.extraArgs()));
+        command.add(database);
+        ProcessBuilder builder = new ProcessBuilder(command);
+        String password = connections.password(connection.id());
+        if (password != null) {
+            builder.environment().put("PGPASSWORD", password);
+        }
+        runNativeProcess(builder, file, "pg_dump", password);
         return new BackupFile(file, Files.size(file));
     }
 
@@ -1002,12 +1046,15 @@ public class BackupService {
 
     private String validateBackupMethod(String method, DbConnection connection) {
         String normalized = normalizeBackupMethod(method);
-        if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_EXP").contains(normalized)) {
+        if (!Set.of("SQL", "MYSQLDUMP", "ORACLE_EXP", "PG_DUMP").contains(normalized)) {
             throw new IllegalArgumentException("不支持的备份方式：" + method);
         }
         List<String> supportedNativeMethods = dialectRegistry.dialectFor(connection).capabilities().nativeBackupMethods();
         if ("MYSQLDUMP".equals(normalized) && !supportedNativeMethods.contains("MYSQLDUMP")) {
             throw new IllegalArgumentException("mysqldump 备份仅支持 MySQL/MariaDB 连接。");
+        }
+        if ("PG_DUMP".equals(normalized) && !supportedNativeMethods.contains("PG_DUMP")) {
+            throw new IllegalArgumentException("当前连接的数据库类型不支持 pg_dump 备份。");
         }
         if ("ORACLE_EXP".equals(normalized) && !supportedNativeMethods.contains("ORACLE_EXP")) {
             throw new IllegalArgumentException("Oracle exp 备份仅支持 Oracle 连接。");
@@ -1038,6 +1085,7 @@ public class BackupService {
     private String methodLabel(String method) {
         return switch (normalizeBackupMethod(method)) {
             case "MYSQLDUMP" -> "mysqldump";
+            case "PG_DUMP" -> "pg_dump";
             case "ORACLE_EXP" -> "Oracle exp";
             default -> "SQL";
         };
@@ -1049,7 +1097,11 @@ public class BackupService {
     }
 
     private NativeToolLocator.Tool backupTool(String backupMethod) {
-        return "MYSQLDUMP".equals(backupMethod) ? NativeToolLocator.Tool.MYSQLDUMP : NativeToolLocator.Tool.ORACLE_EXP;
+        return switch (backupMethod) {
+            case "MYSQLDUMP" -> NativeToolLocator.Tool.MYSQLDUMP;
+            case "PG_DUMP" -> NativeToolLocator.Tool.PG_DUMP;
+            default -> NativeToolLocator.Tool.ORACLE_EXP;
+        };
     }
 
     private List<String> extraArgs(String extraArgs) {
@@ -1103,6 +1155,22 @@ public class BackupService {
             return new MysqlJdbcTarget(uri.getHost() == null ? "localhost" : uri.getHost(), uri.getPort() == -1 ? 3306 : uri.getPort(), database == null || database.isBlank() ? null : database);
         } catch (Exception e) {
             throw new IllegalArgumentException("无法解析 MySQL JDBC URL：" + jdbcUrl);
+        }
+    }
+
+    /** jdbc:postgresql://host:port/database?params */
+    private PostgresJdbcTarget postgresTarget(String jdbcUrl) {
+        try {
+            URI uri = URI.create(jdbcUrl.replaceFirst("^jdbc:", ""));
+            String database = uri.getPath() == null ? null : uri.getPath().replaceFirst("^/", "");
+            if (database != null && database.contains("/")) database = database.substring(0, database.indexOf('/'));
+            return new PostgresJdbcTarget(
+                    uri.getHost() == null ? "localhost" : uri.getHost(),
+                    uri.getPort() == -1 ? 5432 : uri.getPort(),
+                    database == null || database.isBlank() ? null : database
+            );
+        } catch (Exception e) {
+            throw new IllegalArgumentException("无法解析 PostgreSQL JDBC URL：" + jdbcUrl);
         }
     }
 
@@ -1874,5 +1942,8 @@ public class BackupService {
     }
 
     private record MysqlJdbcTarget(String host, int port, String database) {
+    }
+
+    private record PostgresJdbcTarget(String host, int port, String database) {
     }
 }

@@ -18,7 +18,7 @@ public class PostgreSqlDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, true, true, List.of(), List.of(), SchemaObjectCapabilities.postgresql());
+        return new DatabaseCapabilities(true, true, true, true, List.of("PG_DUMP"), List.of("PG_RESTORE"), SchemaObjectCapabilities.postgresql());
     }
 
     @Override

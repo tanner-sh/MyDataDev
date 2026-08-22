@@ -116,6 +116,7 @@ export function backupMethodLabel(method?: string) {
   if (!method || method === 'SQL') return 'SQL 数据备份';
   if (method === 'MYSQLDUMP') return 'MySQL mysqldump';
   if (method === 'ORACLE_EXP') return 'Oracle exp';
+  if (method === 'PG_DUMP') return 'PostgreSQL pg_dump';
   return method;
 }
 

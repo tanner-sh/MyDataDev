@@ -339,6 +339,8 @@ public class AppProperties {
         private String mysqldumpPath;
         private String mysqlPath;
         private String oracleExpPath;
+        private String pgDumpPath;
+        private String pgRestorePath;
         private String oracleImpPath;
         private List<String> extraSearchPaths = new ArrayList<>();
         private int probeTimeoutSeconds = 3;
@@ -351,6 +353,10 @@ public class AppProperties {
         public void setOracleExpPath(String oracleExpPath) { this.oracleExpPath = oracleExpPath; }
         public String getOracleImpPath() { return oracleImpPath; }
         public void setOracleImpPath(String oracleImpPath) { this.oracleImpPath = oracleImpPath; }
+        public String getPgDumpPath() { return pgDumpPath; }
+        public void setPgDumpPath(String pgDumpPath) { this.pgDumpPath = pgDumpPath; }
+        public String getPgRestorePath() { return pgRestorePath; }
+        public void setPgRestorePath(String pgRestorePath) { this.pgRestorePath = pgRestorePath; }
         public List<String> getExtraSearchPaths() { return extraSearchPaths; }
         public void setExtraSearchPaths(List<String> extraSearchPaths) { this.extraSearchPaths = extraSearchPaths == null ? new ArrayList<>() : new ArrayList<>(extraSearchPaths); }
         public int getProbeTimeoutSeconds() { return probeTimeoutSeconds; }

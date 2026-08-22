@@ -955,7 +955,7 @@ function BackupTasksPanel({
                   </Form.Item>
                   {toolMode === 'MANUAL' && (
                     <Form.Item label="工具路径" name="toolPath" rules={[{ required: true, whitespace: true, message: '请输入原生备份工具路径' }]}>
-                      <Input placeholder={backupMethod === 'ORACLE_EXP' ? '/opt/oracle/bin/exp' : '/usr/local/bin/mysqldump'} />
+                      <Input placeholder={backupMethod === 'ORACLE_EXP' ? '/opt/oracle/bin/exp' : backupMethod === 'PG_DUMP' ? '/usr/local/bin/pg_dump' : '/usr/local/bin/mysqldump'} />
                     </Form.Item>
                   )}
                   {backupMethod === 'ORACLE_EXP' && (
@@ -1208,6 +1208,7 @@ function backupMethodOptions(connection: Connection | null, currentMethod?: stri
   const nativeMethods = connection?.capabilities?.nativeBackupMethods || [];
   if (nativeMethods.includes('MYSQLDUMP')) options.push({ value: 'MYSQLDUMP', label: 'MySQL mysqldump' });
   if (nativeMethods.includes('ORACLE_EXP')) options.push({ value: 'ORACLE_EXP', label: 'Oracle exp' });
+  if (nativeMethods.includes('PG_DUMP')) options.push({ value: 'PG_DUMP', label: 'PostgreSQL pg_dump' });
   if (currentMethod && !options.some((option) => option.value === currentMethod)) {
     options.push({ value: currentMethod, label: `${backupMethodLabel(currentMethod)}（现有配置）` });
   }
@@ -1218,6 +1219,7 @@ function defaultBackupMethod(connection: Connection | null): BackupMethod {
   const nativeMethods = connection?.capabilities?.nativeBackupMethods || [];
   if (nativeMethods.includes('MYSQLDUMP')) return 'MYSQLDUMP';
   if (nativeMethods.includes('ORACLE_EXP')) return 'ORACLE_EXP';
+  if (nativeMethods.includes('PG_DUMP')) return 'PG_DUMP';
   return 'SQL';
 }
 
