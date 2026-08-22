@@ -5,7 +5,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -39,6 +39,13 @@ import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
 import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
 import type { ResultEditCommit } from './resultEditing';
+import {
+  canJumpToRelation,
+  foreignKeyColumns,
+  relationJumpSql,
+  relationTarget,
+  type RelationTarget
+} from './relationNavigation';
 import {
   IDLE_SQL_TRANSACTION,
   transactionExecutePath,
@@ -159,6 +166,7 @@ export default function App() {
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [transactionState, setTransactionState] = useState<SqlTransactionState>(IDLE_SQL_TRANSACTION);
+  const [activeTableRelations, setActiveTableRelations] = useState<ObjectRelations | null>(null);
   const [snippetDraft, setSnippetDraft] = useState<{ draft: SqlSnippetDraft; token: number }>();
   const [explorerRequestedView, setExplorerRequestedView] = useState<{ kind: ExplorerObjectKind; keyword: string; token: number }>();
   const selectedIdRef = useRef<number | null>(null);
@@ -1050,6 +1058,42 @@ export default function App() {
     }
     setExplorerRequestedView({ kind: hit.kind as ExplorerObjectKind, keyword: hit.name, token: Date.now() });
     if (compactLayout) setMobileExplorerOpen(true);
+  }
+
+  /**
+   * 跟着外键跳到关联记录。
+   *
+   * 生成一条 SELECT 放进新的 SQL 标签页而不是直接打开表数据：表数据工作区没有按任意列筛选的
+   * 入口，而且让用户看得见自己将要执行什么。
+   */
+  function followRelation(target: RelationTarget, value: unknown) {
+    if (!canJumpToRelation(value)) return;
+    openSqlInNewTab(relationJumpSql(target, value), `关联 ${target.tableName}`);
+  }
+
+  function openRelationTarget(relation: ObjectRelation, direction: 'imported' | 'exported') {
+    const target = relationTarget(relation, direction);
+    openObjectDetail({
+      schemaName: target.schemaName,
+      name: target.tableName,
+      type: 'TABLE',
+      columns: [],
+      indexes: []
+    });
+  }
+
+  /** 在新标签页里打开一段 SQL，保留当前标签的草稿。 */
+  function openSqlInNewTab(sql: string, title: string) {
+    if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
+      toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
+      return;
+    }
+    const nextIndex = sqlTabSeqRef.current + 1;
+    sqlTabSeqRef.current = nextIndex;
+    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true };
+    setSqlTabs((tabs) => [...tabs, tab]);
+    setActiveSqlTabId(tab.id);
+    setMode('sql');
   }
 
   function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
@@ -2105,6 +2149,17 @@ export default function App() {
     setTablePage(0);
     setTableCursorStack([null]);
     setMode('table');
+    setActiveTableRelations(null);
+    // 外键关系用于数据网格里的跳转；拿不到就只是没有跳转按钮，不影响浏览。
+    if (selected) {
+      const params = new URLSearchParams({ objectName: object.name });
+      if (object.schemaName) params.set('schemaName', object.schemaName);
+      api<ObjectRelations>(`/metadata/${selected.id}/objects/relations?${params.toString()}`)
+        .then((relations) => {
+          if (selectedIdRef.current === selected.id) setActiveTableRelations(relations);
+        })
+        .catch(() => undefined);
+    }
     await loadTable(next, { page: 0, reset: true });
   }
 
@@ -2659,6 +2714,9 @@ export default function App() {
   const changeSqlResultTabEvent = useStableEvent((key: string) => updateActiveSqlTab({ activeResultKey: key }));
   const changeSqlResultPageEvent = useStableEvent((result: SqlStatementResult, navigation: SqlPageNavigation) => loadSqlResultPage(result, navigation));
   /** 结果就地编辑的提交：复用表数据的 /data/commit，生产连接照样要确认。 */
+  const tableForeignKeys = useMemo(() => foreignKeyColumns(activeTableRelations), [activeTableRelations]);
+  const followRelationEvent = useStableEvent((target: RelationTarget, value: unknown) => followRelation(target, value));
+  const openRelationEvent = useStableEvent((relation: ObjectRelation, direction: 'imported' | 'exported') => openRelationTarget(relation, direction));
   const beginTransactionEvent = useStableEvent(() => void beginSqlTransaction());
   const finishTransactionEvent = useStableEvent((commit: boolean) => finishSqlTransaction(commit));
   const commitResultEditsEvent = useStableEvent(async (request: ResultEditCommit) => {
@@ -2947,6 +3005,8 @@ export default function App() {
                 onCommit={commitTableChangesEvent}
                 onEdit={editCell}
                 onDelete={deleteRow}
+                foreignKeys={tableForeignKeys}
+                onFollowRelation={followRelationEvent}
               />
             ) : (
               <ObjectDetailWorkspace
@@ -2965,6 +3025,7 @@ export default function App() {
                 onRenameTable={renameTableEvent}
                 onDropTable={dropTableEvent}
                 onDesignDirtyChange={updateObjectDesignDirty}
+                onOpenRelation={openRelationEvent}
               />
             )}
             </Suspense>

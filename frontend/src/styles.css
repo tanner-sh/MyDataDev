@@ -971,6 +971,34 @@ body.is-resizing-column * {
   margin-bottom: 8px;
 }
 
+/* 外键跳转按钮只在悬停该格时浮现，避免每行都挂一个图标。 */
+.editable-cell-relation {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--primary);
+  cursor: pointer;
+  opacity: 0;
+  font-size: 12px;
+}
+
+.editable-cell-display:hover .editable-cell-relation,
+.editable-cell-display:focus-within .editable-cell-relation {
+  opacity: 1;
+}
+
+.editable-cell-relation:disabled {
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+.relation-card-open {
+  padding-inline: 0;
+  align-self: flex-start;
+}
+
 /* 事务状态必须一直可见：一个开着的事务独占一条池化连接。 */
 .sql-toolbar-transaction-group .ant-btn:disabled .sql-transaction-badge {
   color: var(--warning);

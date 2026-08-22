@@ -20,6 +20,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
 import { productionConfirmationHeaders } from '../productionConfirmation';
 import { compactColumnType } from '../columnTypeLabel';
+import { relationTarget, relationTargetLabel } from '../relationNavigation';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -43,6 +44,8 @@ export interface ObjectDetailWorkspaceProps {
   onRenameTable?: (object: DbObject) => void;
   onDropTable?: (object: DbObject) => void;
   onDesignDirtyChange?: (dirty: boolean) => void;
+  /** 点开一条外键的另一端，见 relationNavigation.ts。 */
+  onOpenRelation?: (relation: ObjectRelation, direction: 'imported' | 'exported') => void;
 }
 
 export function ObjectDetailWorkspace({
@@ -60,7 +63,8 @@ export function ObjectDetailWorkspace({
   onBackupTable,
   onRenameTable,
   onDropTable,
-  onDesignDirtyChange
+  onDesignDirtyChange,
+  onOpenRelation
 }: ObjectDetailWorkspaceProps) {
   const [activeTabKey, setActiveTabKey] = useState('columns');
   const [designerDirty, setDesignerDirty] = useState(false);
@@ -171,7 +175,7 @@ export function ObjectDetailWorkspace({
             items={[
               { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} active={activeTabKey === 'columns'} /> },
               { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} active={activeTabKey === 'indexes'} /> },
-              { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'relations'} /> },
+              { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'relations'} onOpenRelation={onOpenRelation} /> },
               { key: 'ddl', label: 'DDL', children: <DdlPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'ddl'} /> },
               {
                 key: 'designer',
@@ -383,7 +387,12 @@ function TableViewportLoading() {
   return <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备表格…</Text></div>;
 }
 
-function RelationsPanel({ connectionId, detail, active }: { connectionId?: number; detail: ObjectDetail; active: boolean }) {
+function RelationsPanel({ connectionId, detail, active, onOpenRelation }: {
+  connectionId?: number;
+  detail: ObjectDetail;
+  active: boolean;
+  onOpenRelation?: (relation: ObjectRelation, direction: 'imported' | 'exported') => void;
+}) {
   const [relations, setRelations] = useState<ObjectRelations | null>(null);
   const [error, setError] = useState('');
 
@@ -417,13 +426,18 @@ function RelationsPanel({ connectionId, detail, active }: { connectionId?: numbe
   if (!relations) return <Empty className="empty-state" description="正在加载关系..." />;
   return (
     <div className="object-tab-scroll relations-panel">
-      <RelationCards title="引用的对象" rows={relations.importedKeys} direction="imported" />
-      <RelationCards title="引用当前对象" rows={relations.exportedKeys} direction="exported" />
+      <RelationCards title="引用的对象" rows={relations.importedKeys} direction="imported" onOpen={onOpenRelation} />
+      <RelationCards title="引用当前对象" rows={relations.exportedKeys} direction="exported" onOpen={onOpenRelation} />
     </div>
   );
 }
 
-function RelationCards({ title, rows, direction }: { title: string; rows: ObjectRelation[]; direction: 'imported' | 'exported' }) {
+function RelationCards({ title, rows, direction, onOpen }: {
+  title: string;
+  rows: ObjectRelation[];
+  direction: 'imported' | 'exported';
+  onOpen?: (relation: ObjectRelation, direction: 'imported' | 'exported') => void;
+}) {
   return (
     <div className="relation-section">
       <div className="relation-section-title">
@@ -448,6 +462,16 @@ function RelationCards({ title, rows, direction }: { title: string; rows: Object
                   <ArrowRightOutlined />
                   <Text code title={target}>{target}</Text>
                 </div>
+                {onOpen && (
+                  <Button
+                    size="small"
+                    type="link"
+                    className="relation-card-open"
+                    onClick={() => onOpen(row, direction)}
+                  >
+                    打开 {relationTargetLabel(relationTarget(row, direction))}
+                  </Button>
+                )}
               </div>
             );
           })}

@@ -23,6 +23,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { summarizeRowChanges } from '../utils';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { canCountTableRows, IDLE_TABLE_ROW_COUNT, tablePageSummary, type TableRowCountState } from '../tableRowCount';
+import type { RelationTarget } from '../relationNavigation';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -53,6 +54,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCommit,
   onEdit,
   onDelete,
+  foreignKeys,
+  onFollowRelation,
   onPageChange,
   onPageSizeChange
 }: {
@@ -80,6 +83,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCommit: () => void;
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
+  foreignKeys?: Map<string, RelationTarget>;
+  onFollowRelation?: (target: RelationTarget, value: unknown) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
 }) {
@@ -194,7 +199,7 @@ export const TableWorkspace = memo(function TableWorkspace({
         </div>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} onEdit={onEdit} onDelete={onDelete} />
+        <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
       </div>
       <div className="grid-pagination table-pagination">
         <Space size={8} className="grid-pagination-summary">

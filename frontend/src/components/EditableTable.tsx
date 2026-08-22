@@ -2,9 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button, Empty, Input, Spin, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
-import { DeleteOutlined, UndoOutlined } from '@ant-design/icons';
+import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { TableColumn, TableData, TableRow } from '../types';
+import { canJumpToRelation, relationJumpTooltip, type RelationTarget } from '../relationNavigation';
 import {
   buildEditableDisplayRows,
   editableCellKey,
@@ -18,11 +19,14 @@ type EditableTableProps = {
   rows: TableRow[];
   readonly?: boolean;
   loading?: boolean;
+  /** 外键列 → 目标表，见 relationNavigation.ts。 */
+  foreignKeys?: Map<string, RelationTarget>;
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
+  onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 };
 
-export const EditableTable = memo(function EditableTable({ data, rows, readonly = false, loading = false, onEdit, onDelete }: EditableTableProps) {
+export const EditableTable = memo(function EditableTable({ data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
   const tableRef = useRef<TableRef>(null);
   const lastScrolledDataRef = useRef<TableData | null>(null);
   const [activeCell, setActiveCell] = useState<string | null>(null);
@@ -118,8 +122,11 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
         shouldCellUpdate: shouldEditableCellUpdate,
         render: (_: unknown, row: EditableDisplayRow, rowIndex: number) => {
           const cellKey = editableCellKey(row.id, column.name);
+          const relation = foreignKeys?.get(column.name);
           return (
             <EditableCell
+              relation={relation}
+              onFollowRelation={onFollowRelation}
               rowId={row.id}
               rowNumber={rowIndex + 1}
               column={column}
@@ -139,7 +146,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
   // activeCell, readonly and loading are deliberately absent: they reach the
   // cells through the record, which is what shouldCellUpdate compares.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beginResize, columnWidths, data, onDelete, onEdit, setColumnWidth, suggestedWidths]);
+  }, [beginResize, columnWidths, data, foreignKeys, onDelete, onEdit, onFollowRelation, setColumnWidth, suggestedWidths]);
 
   useLayoutEffect(() => {
     if (!data || scrollY === undefined || !tableRef.current) return;
@@ -174,7 +181,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
   );
 });
 
-const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, value, inserted, touched, disabled, editing, onActivate, onDeactivate, onCommit }: {
+const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, value, inserted, touched, disabled, editing, relation, onActivate, onDeactivate, onCommit, onFollowRelation }: {
   rowId: string;
   rowNumber: number;
   column: TableColumn;
@@ -183,9 +190,11 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
   touched: boolean;
   disabled: boolean;
   editing: boolean;
+  relation?: RelationTarget;
   onActivate: () => void;
   onDeactivate: () => void;
   onCommit: (rowId: string, column: string, value: unknown) => void;
+  onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 }) {
   const normalizedValue = String(value ?? '');
   const [draft, setDraft] = useState(normalizedValue);
@@ -228,6 +237,22 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
         {mode === 'null' || mode === 'default'
           ? <span className="editable-cell-state">{displayValue}</span>
           : <span className="editable-cell-value">{normalizedValue || <span className="editable-cell-empty">空字符串</span>}</span>}
+        {relation && onFollowRelation && (
+          <Tooltip title={relationJumpTooltip(relation, value)}>
+            <button
+              type="button"
+              className="editable-cell-relation"
+              aria-label={relationJumpTooltip(relation, value)}
+              disabled={!canJumpToRelation(value)}
+              onClick={(event) => {
+                event.stopPropagation();
+                onFollowRelation(relation, value);
+              }}
+            >
+              <LinkOutlined />
+            </button>
+          </Tooltip>
+        )}
       </div>
     );
   }
