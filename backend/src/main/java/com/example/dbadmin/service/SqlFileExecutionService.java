@@ -15,7 +15,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedWriter;
+import java.io.FilterOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
@@ -24,6 +30,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -129,9 +136,57 @@ public class SqlFileExecutionService {
             throw new IllegalArgumentException("SQL 文件不能为空。");
         }
 
+        return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
+                actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size);
+    }
+
+    /** 由服务端生成脚本内容的回调；写入的字符会直接落到最终的脚本文件里。 */
+    public interface ScriptWriter {
+        void write(Writer out) throws Exception;
+    }
+
+    /**
+     * 把服务端生成的 SQL 脚本注册成一个待执行任务。
+     *
+     * <p>与 {@link #upload} 的区别只在于内容来源：不是客户端上传的字节流，而是调用方现场写出的
+     * 文本（例如 CSV 转成的批量 INSERT）。落盘、摘要、分析、排队全部复用同一套逻辑，因此生成的
+     * 导入任务天然具备进度、取消与并发闸门。</p>
+     */
+    public SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, ScriptWriter writer,
+                                                 String actor, String auditAction, String auditDetail) throws Exception {
+        DbConnection connection = connections.require(connectionId);
+        String fileName = safeFileName(rawFileName);
+        long maximum = properties.getSqlFile().getMaxUploadBytes();
+        Path root = root();
+        Files.createDirectories(root);
+        Path target = root.resolve("sql-" + UUID.randomUUID() + ".sql").normalize();
+        if (!target.startsWith(root)) throw new IllegalArgumentException("SQL 文件路径不安全。");
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        long size;
+        try (OutputStream file = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW);
+             BoundedOutputStream bounded = new BoundedOutputStream(file, maximum);
+             DigestOutputStream digested = new DigestOutputStream(bounded, digest);
+             Writer out = new BufferedWriter(new OutputStreamWriter(digested, StandardCharsets.UTF_8), 128 * 1024)) {
+            writer.write(out);
+            out.flush();
+            size = bounded.written();
+        } catch (Exception error) {
+            Files.deleteIfExists(target);
+            throw error;
+        }
+        if (size == 0) {
+            Files.deleteIfExists(target);
+            throw new IllegalArgumentException("生成的 SQL 脚本为空。");
+        }
+        return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
+                actor, auditAction, auditDetail);
+    }
+
+    private SqlFileExecutionResponse register(DbConnection connection, String fileName, Path target, long size,
+                                              String checksum, String actor, String auditAction, String auditDetail) throws Exception {
         Instant expiresAt = Instant.now().plus(Math.max(1, properties.getSqlFile().getReadyTtlHours()), ChronoUnit.HOURS);
         SqlFileExecution draft = new SqlFileExecution(0, connection.id(), connection.name(), connection.dbType(), fileName,
-                target.toString(), size, HexFormat.of().formatHex(digest.digest()), null, "ANALYZING", "DETECTING_ENCODING",
+                target.toString(), size, checksum, null, "ANALYZING", "DETECTING_ENCODING",
                 0, null, 0, 0, 0, 0, 0, 0, 0, null, null, "正在分析 SQL 文件。", false, false,
                 false, actor, expiresAt, null, null, Instant.now());
         long id;
@@ -150,8 +205,38 @@ public class SqlFileExecutionService {
             Files.deleteIfExists(target);
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "SQL_FILE_QUEUE_FULL", "SQL 文件任务队列已满，请稍后重试。");
         }
-        audit.log(actor, "SQL_FILE_UPLOAD", "connection:" + connectionId, fileName + "; size=" + size);
+        audit.log(actor, auditAction, "connection:" + connection.id(), auditDetail);
         return response(require(id));
+    }
+
+    /** 统计写出字节并在超限时立刻中断，避免生成脚本把磁盘写满。 */
+    private static final class BoundedOutputStream extends FilterOutputStream {
+        private final long maximum;
+        private long written;
+
+        BoundedOutputStream(OutputStream delegate, long maximum) {
+            super(delegate);
+            this.maximum = maximum;
+        }
+
+        long written() { return written; }
+
+        @Override
+        public void write(int value) throws IOException {
+            grow(1);
+            out.write(value);
+        }
+
+        @Override
+        public void write(byte[] buffer, int offset, int length) throws IOException {
+            grow(length);
+            out.write(buffer, offset, length);
+        }
+
+        private void grow(int length) throws IOException {
+            written += length;
+            if (written > maximum) throw new IOException("生成的 SQL 脚本超过允许大小。");
+        }
     }
 
     public SqlFileExecutionResponse start(long id, String productionConfirmation, String actor) throws Exception {

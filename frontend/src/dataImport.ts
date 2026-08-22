@@ -1,0 +1,83 @@
+/**
+ * 导入路径选择。
+ *
+ * <p>浏览器里解析导入文件有硬性上限：整份文件要读进内存，行还要变成待提交变更留在表格里，
+ * 所以 10 MB / 1000 行是合理的天花板 —— 在这个量级内，先看到数据再提交是更好的体验。</p>
+ *
+ * <p>超过这个量级的 CSV 改走后端的大文件管线：服务端流式转成批量 INSERT，复用 SQL 文件执行
+ * 的进度、取消与每连接并发闸门。这里只负责判断走哪条路，以及把原因讲清楚。</p>
+ */
+
+export const INLINE_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
+
+export type ImportFileInfo = { name: string; size: number };
+
+export type ImportRoute =
+  /** 浏览器内解析，落到待提交变更里，用户可以逐行核对后再提交。 */
+  | { kind: 'inline' }
+  /** 交给后端转成 INSERT 脚本后台执行。 */
+  | { kind: 'background'; reason: string }
+  | { kind: 'unsupported'; message: string };
+
+export function importFileExtension(name: string): string {
+  const dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
+}
+
+export function formatImportSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+/**
+ * 决定一份文件走哪条导入路径。
+ *
+ * @param pendingChanges 当前待提交变更数：已经堆了很多修改时，再往里塞导入行只会撞上提交上限，
+ *   不如直接走后台。
+ */
+export function importRoute(file: ImportFileInfo, pendingChanges: number, maxChanges: number): ImportRoute {
+  const extension = importFileExtension(file.name);
+  if (extension !== 'csv' && extension !== 'json' && extension !== 'sql') {
+    return { kind: 'unsupported', message: '仅支持导入 CSV、JSON、SQL 文件。' };
+  }
+  const tooLarge = file.size > INLINE_IMPORT_MAX_BYTES;
+  if (extension === 'csv') {
+    if (tooLarge) {
+      return { kind: 'background', reason: `文件 ${formatImportSize(file.size)}，超过浏览器内解析的 ${formatImportSize(INLINE_IMPORT_MAX_BYTES)} 上限` };
+    }
+    if (pendingChanges >= maxChanges) {
+      return { kind: 'background', reason: `当前已有 ${pendingChanges} 项待提交变更，无法再放入导入行` };
+    }
+    return { kind: 'inline' };
+  }
+  if (tooLarge) {
+    return {
+      kind: 'unsupported',
+      message: extension === 'sql'
+        ? `SQL 文件 ${formatImportSize(file.size)} 过大，请改用「SQL 文件执行」入口，它支持后台执行与取消。`
+        : `JSON 文件 ${formatImportSize(file.size)} 过大，请转存为 CSV 后重试，CSV 支持后台导入。`
+    };
+  }
+  return { kind: 'inline' };
+}
+
+/** 后台导入的上传地址；schemaName 为空表示用连接默认命名空间。 */
+export function backgroundImportPath(params: {
+  connectionId: number;
+  schemaName?: string;
+  tableName: string;
+  fileName: string;
+}): string {
+  const query = new URLSearchParams({
+    connectionId: String(params.connectionId),
+    tableName: params.tableName,
+    fileName: params.fileName
+  });
+  if (params.schemaName) query.set('schemaName', params.schemaName);
+  return `/sql-file-executions/csv-imports?${query.toString()}`;
+}
+
+export function backgroundImportPrompt(target: string, route: Extract<ImportRoute, { kind: 'background' }>): string {
+  return `${route.reason}，将转为后台导入任务写入 ${target}。转换完成后可以在「SQL 文件执行」里查看进度、随时取消。`;
+}

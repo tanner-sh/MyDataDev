@@ -34,6 +34,7 @@ import {
   summarizeBackgroundTasks,
   type BackgroundTaskSummary
 } from './backgroundTasks';
+import { backgroundImportPrompt, importRoute } from './dataImport';
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
@@ -2364,9 +2365,31 @@ export default function App() {
       showInfo('请先打开一张表再导入数据');
       return;
     }
+    const route = importRoute(file, pendingChanges.length, MAX_TABLE_CHANGES);
+    if (route.kind === 'unsupported') {
+      showError(`导入失败：${route.message}`);
+      return;
+    }
+    if (route.kind === 'background') {
+      // 大 CSV 交给后端流式转成 INSERT 脚本，复用 SQL 文件执行的进度、取消与并发闸门。
+      if (!selected) {
+        showInfo('请先选择数据库连接');
+        return;
+      }
+      const target = activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema || undefined;
+      showInfo(backgroundImportPrompt(activeTable.tableName, route));
+      setSqlFileCandidate({
+        requestId: ++sqlFileRequestSeqRef.current,
+        file,
+        connection: selected,
+        csvImport: { schemaName: target, tableName: activeTable.tableName }
+      });
+      setSqlFileFeatureLoaded(true);
+      setSqlFileTasksOpen(true);
+      return;
+    }
     setTableLoading(true);
     try {
-      if (file.size > 10 * 1024 * 1024) throw new Error('导入文件不能超过 10 MB，请拆分后重试。');
       const text = await file.text();
       const worker = new Worker(new URL('./workers/importWorker.ts', import.meta.url), { type: 'module' });
       const result: ImportResult = await new Promise((resolve, reject) => {
@@ -2397,7 +2420,7 @@ export default function App() {
         });
       });
       if (result.rows.length + pendingChanges.length > MAX_TABLE_CHANGES) {
-        throw new Error(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更；请先提交现有修改，或拆分导入文件。`);
+        throw new Error(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更；请先提交现有修改，或改用 CSV 走后台导入。`);
       }
       const importedRows = result.rows.map((values, index) => ({
         id: `import-${Date.now()}-${index}`,

@@ -424,7 +424,13 @@ export type SqlFileExecution = {
   createdAt: string;
 };
 export type SqlFileExecutionPage = { items: SqlFileExecution[]; page: number; pageSize: number; hasMore: boolean };
-export type SqlFileCandidate = { requestId: number; file: File; connection: Connection };
+export type SqlFileCandidate = {
+  requestId: number;
+  file: File;
+  connection: Connection;
+  /** 存在时表示这是一份要转成 INSERT 脚本的 CSV，而不是直接执行的 SQL 文件。 */
+  csvImport?: { schemaName?: string; tableName: string };
+};
 export type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
 export type ResultCopyFormat = 'sql' | 'pipe';

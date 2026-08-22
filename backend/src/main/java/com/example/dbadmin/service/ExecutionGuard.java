@@ -18,14 +18,28 @@ public class ExecutionGuard {
         requireAllowed(connection, true, productionConfirmation);
     }
 
-    private void requireAllowed(DbConnection connection, boolean mutation, String productionConfirmation) {
-        if (mutation && connection.readonly()) {
+    /**
+     * 只校验只读标记，不要求生产确认。
+     *
+     * <p>给「先准备、后执行」的两段式写操作用（大文件导入的转换阶段）：此时还没有真正写库，
+     * 但如果连接压根不允许写，就该在花力气转换之前直接拒绝。真正的生产确认在 start 时补上。</p>
+     */
+    public void requireWritableConnection(DbConnection connection) {
+        requireNotReadonly(connection);
+    }
+
+    private void requireNotReadonly(DbConnection connection) {
+        if (connection.readonly()) {
             throw new ApiProblemException(
                     HttpStatus.FORBIDDEN,
                     "READONLY_CONNECTION",
                     "当前连接为只读连接，不允许执行写入或结构变更。"
             );
         }
+    }
+
+    private void requireAllowed(DbConnection connection, boolean mutation, String productionConfirmation) {
+        if (mutation) requireNotReadonly(connection);
         // Arbitrary SELECT statements can invoke user-defined routines with
         // side effects. Require the exact production confirmation for every
         // free-form SQL operation; generated table-browse queries do not pass

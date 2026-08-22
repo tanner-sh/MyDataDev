@@ -1,0 +1,182 @@
+package com.example.dbadmin.service;
+
+import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DialectRegistry;
+import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
+import com.example.dbadmin.model.DbConnection;
+import org.springframework.stereotype.Service;
+
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+/**
+ * 大文件数据导入。
+ *
+ * <p>此前导入只有一条路径：浏览器把整份文件读进内存解析，10 MB / 1000 行封顶，再走和手工编辑
+ * 同一个 /data/commit。而后端早就有一整套大文件后台执行框架（分块读取、进度上报、可取消、
+ * 每连接并发闸门）—— 只是给 SQL 文件用的。</p>
+ *
+ * <p>这里把 CSV 流式转成批量 INSERT 脚本，交给同一条管线，于是百万行导入自然获得进度、取消
+ * 与排队能力，而不需要新建一套后台任务。</p>
+ */
+@Service
+public class DataImportService {
+    /** 每条 INSERT 携带的行数：太小语句数爆炸，太大单条语句会超出驱动的报文上限。 */
+    static final int ROWS_PER_STATEMENT = 200;
+    static final int MAX_COLUMNS = 500;
+
+    private final ConnectionService connections;
+    private final DialectRegistry dialectRegistry;
+    private final DataEditService dataEdit;
+    private final SqlFileExecutionService sqlFiles;
+    private final ExecutionGuard executionGuard;
+
+    public DataImportService(
+            ConnectionService connections,
+            DialectRegistry dialectRegistry,
+            DataEditService dataEdit,
+            SqlFileExecutionService sqlFiles,
+            ExecutionGuard executionGuard
+    ) {
+        this.connections = connections;
+        this.dialectRegistry = dialectRegistry;
+        this.dataEdit = dataEdit;
+        this.sqlFiles = sqlFiles;
+        this.executionGuard = executionGuard;
+    }
+
+    /**
+     * 接收一份 CSV，转成 INSERT 脚本并注册成待执行的 SQL 文件任务。
+     *
+     * <p>返回的任务还需要调用方再调 start 才会真正写库 —— 与 SQL 文件上传的两步流程一致，
+     * 用户有机会先看清楚要往哪张表写多少行、有没有危险语句。</p>
+     */
+    public SqlFileExecutionResponse uploadCsv(
+            long connectionId,
+            String schemaName,
+            String tableName,
+            String fileName,
+            InputStream input,
+            String actor
+    ) throws Exception {
+        DbConnection dbConnection = connections.require(connectionId);
+        // 导入是写操作。只读连接在这里就该被挡住，而不是等脚本转换完、任务建好之后才报错。
+        executionGuard.requireWritableConnection(dbConnection);
+        if (tableName == null || tableName.isBlank()) throw new IllegalArgumentException("请指定导入的目标表。");
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+
+        Set<String> tableColumns;
+        try (Connection connection = connections.open(connectionId, schemaName)) {
+            tableColumns = new LinkedHashSet<>(dataEdit.editableColumns(connection, dbConnection, schemaName, tableName));
+        }
+        if (tableColumns.isEmpty()) throw new IllegalArgumentException("未找到目标表的字段：" + tableName);
+
+        long[] rows = new long[1];
+        SqlFileExecutionResponse job = sqlFiles.uploadScript(
+                connectionId,
+                importScriptName(fileName, tableName),
+                out -> {
+                    try (CsvStreamReader csv = new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
+                        rows[0] = convert(csv, out, dialect, schemaName, tableName, tableColumns, fileName);
+                    }
+                },
+                actor,
+                "DATA_IMPORT_UPLOAD",
+                "table=" + tableName + "; file=" + fileName
+        );
+        return job;
+    }
+
+    static long convert(
+            CsvStreamReader csv,
+            Writer writer,
+            DatabaseDialect dialect,
+            String schemaName,
+            String tableName,
+            Set<String> tableColumns,
+            String fileName
+    ) throws Exception {
+        List<String> header = csv.readRow();
+        if (header == null || header.isEmpty()) throw new IllegalArgumentException("CSV 文件为空或缺少表头行。");
+        if (header.size() > MAX_COLUMNS) throw new IllegalArgumentException("CSV 列数超过 " + MAX_COLUMNS + "。");
+
+        List<String> columns = new ArrayList<>(header.size());
+        for (String raw : header) {
+            String name = stripBom(raw).trim();
+            String matched = tableColumns.stream()
+                    .filter(candidate -> candidate.equalsIgnoreCase(name))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "CSV 表头里的列在目标表中不存在：" + name + "（表字段：" + String.join("、", tableColumns) + "）"
+                    ));
+            columns.add(matched);
+        }
+
+        String qualified = dialect.qualifiedName(schemaName, tableName);
+        String columnList = String.join(", ", columns.stream().map(dialect::quoteIdentifier).toList());
+        writer.write("-- 由 " + fileName + " 转换而来的导入脚本\n");
+        writer.write("-- 目标表：" + qualified + "\n\n");
+
+        long rows = 0;
+        int inBatch = 0;
+        List<String> row;
+        while ((row = csv.readRow()) != null) {
+            if (row.size() != columns.size()) {
+                throw new IllegalArgumentException(
+                        "第 " + (rows + 2) + " 行有 " + row.size() + " 个字段，与表头的 " + columns.size() + " 列不一致。"
+                );
+            }
+            if (inBatch == 0) writer.write("INSERT INTO " + qualified + " (" + columnList + ") VALUES\n");
+            else writer.write(",\n");
+            writer.write("  (");
+            for (int index = 0; index < row.size(); index++) {
+                if (index > 0) writer.write(", ");
+                writer.write(literal(row.get(index)));
+            }
+            writer.write(")");
+            rows++;
+            inBatch++;
+            if (inBatch >= ROWS_PER_STATEMENT) {
+                writer.write(";\n\n");
+                inBatch = 0;
+            }
+        }
+        if (inBatch > 0) writer.write(";\n");
+        if (rows == 0) throw new IllegalArgumentException("CSV 文件只有表头，没有数据行。");
+        return rows;
+    }
+
+    /**
+     * 空字段写成 NULL；其余一律按字符串字面量，由数据库按目标列类型隐式转换。
+     *
+     * <p>不做类型推断：CSV 里没有类型信息，猜错的代价（把 "007" 变成 7、把 "1e5" 变成浮点）
+     * 比多一次隐式转换大得多。</p>
+     */
+    static String literal(String value) {
+        if (value == null || value.isEmpty()) return "NULL";
+        return "'" + value.replace("'", "''") + "'";
+    }
+
+    /** Excel 导出的 CSV 常带 UTF-8 BOM，不剥掉会让第一列名匹配不上。 */
+    static String stripBom(String value) {
+        return value != null && !value.isEmpty() && value.charAt(0) == '﻿' ? value.substring(1) : value;
+    }
+
+    /** 生成的脚本名要以 .sql 结尾（后台管线的硬性要求），同时保留原始文件名便于在任务列表里辨认。 */
+    static String importScriptName(String fileName, String tableName) {
+        String base = fileName == null || fileName.isBlank() ? "import" : fileName;
+        int slash = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
+        if (slash >= 0) base = base.substring(slash + 1);
+        int dot = base.lastIndexOf('.');
+        if (dot > 0) base = base.substring(0, dot);
+        String name = (base + "-导入-" + tableName + ".sql").replaceAll("[\\\\/:*?\"<>|\\x00]", "_");
+        return name.length() > 200 ? name.substring(name.length() - 200) : name;
+    }
+}

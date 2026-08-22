@@ -5,6 +5,7 @@ import { api, uploadBinary } from '../api';
 import type { Connection, SqlFileCandidate, SqlFileExecution, SqlFileExecutionPage } from '../types';
 import { localizeMessage } from '../utils';
 import { formatSqlFileBytes, sqlFileStatusLabel, sqlFileTaskPercent } from '../sqlFileExecution';
+import { backgroundImportPath } from '../dataImport';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
 
 const { Text } = Typography;
@@ -49,7 +50,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     if (!open || !candidate || handledCandidateRef.current === candidate.requestId) return;
     handledCandidateRef.current = candidate.requestId;
     setConnectionId(candidate.connection.id);
-    void upload(candidate.file, candidate.connection.id);
+    void upload(candidate.file, candidate.connection.id, candidate.csvImport);
   }, [candidate?.requestId, open]);
 
   useVisiblePolling({
@@ -87,9 +88,19 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     }
   }
 
-  async function upload(file: File, targetConnectionId: number) {
-    if (!file.name.toLowerCase().endsWith('.sql')) {
+  /**
+   * 上传一份文件并注册成后台任务。
+   *
+   * <p>CSV 导入与 SQL 文件走同一个入口：区别只在上传地址 —— CSV 由服务端流式转成批量 INSERT
+   * 脚本，之后的解析、确认、执行、取消完全共用同一套 UI 与后台管线。</p>
+   */
+  async function upload(file: File, targetConnectionId: number, csvImport?: { schemaName?: string; tableName: string }) {
+    if (!csvImport && !file.name.toLowerCase().endsWith('.sql')) {
       toast.error('只支持 .sql 文件');
+      return;
+    }
+    if (csvImport && !file.name.toLowerCase().endsWith('.csv')) {
+      toast.error('后台导入只支持 .csv 文件');
       return;
     }
     uploadAbortRef.current?.abort();
@@ -99,11 +110,15 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     setUploadProgress(0);
     setConfirmation('');
     try {
-      const params = new URLSearchParams({ connectionId: String(targetConnectionId), fileName: file.name });
-      const job = await uploadBinary<SqlFileExecution>(`/sql-file-executions/uploads?${params.toString()}`, file, setUploadProgress, controller.signal);
+      const path = csvImport
+        ? backgroundImportPath({ connectionId: targetConnectionId, ...csvImport, fileName: file.name })
+        : `/sql-file-executions/uploads?${new URLSearchParams({ connectionId: String(targetConnectionId), fileName: file.name }).toString()}`;
+      const job = await uploadBinary<SqlFileExecution>(path, file, setUploadProgress, controller.signal);
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       setFocusedId(job.id);
-      toast.success('SQL 文件上传完成，正在后台解析');
+      toast.success(csvImport
+        ? `CSV 已转换为导入 ${csvImport.tableName} 的脚本，确认后即可开始写入`
+        : 'SQL 文件上传完成，正在后台解析');
       await loadJobs(targetConnectionId, false);
     } catch (error) {
       if ((error as Error).name !== 'AbortError') toast.error(localizeMessage((error as Error).message));

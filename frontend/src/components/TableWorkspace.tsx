@@ -153,7 +153,9 @@ export const TableWorkspace = memo(function TableWorkspace({
                 return false;
               }}
             >
-              <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
+              <Tooltip title="CSV / JSON / SQL。小文件直接进待提交变更，可逐行核对；超过 10 MB 的 CSV 自动转成后台导入任务，带进度且可取消。">
+                <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
+              </Tooltip>
             </Upload>
           </Space>
           <Dropdown menu={secondaryMenu} trigger={['click']}>
