@@ -176,6 +176,84 @@ public class DataEditService {
         }
     }
 
+    /**
+     * 为一段单表查询结果准备行定位令牌生成器。
+     *
+     * <p>SQL 查询结果此前一律只读，而表数据工作区早就能就地编辑 —— 两者的差别只在于
+     * 「这段结果是不是来自单张表、那张表有没有稳定行定位字段、这些字段在不在结果集里」。
+     * 三条都成立时用的就是同一套令牌与同一个提交接口。</p>
+     *
+     * <p>令牌里的 jdbcType 必须与 {@link #validatedLocator} 校验用的列描述符完全一致，
+     * 所以这里刻意用表自身的描述符，而不是查询结果集的元数据 —— 后者在有类型转换时会不一样。</p>
+     */
+    public ResultRowLocator resultRowLocator(
+            Connection connection,
+            DbConnection dbConnection,
+            String schemaName,
+            String tableName,
+            ResultSetMetaData md,
+            int visibleColumnCount
+    ) throws Exception {
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (!dialect.capabilities().tableEdit()) {
+            return ResultRowLocator.unavailable("当前数据库类型不支持数据编辑");
+        }
+        if (dbConnection.readonly()) {
+            return ResultRowLocator.unavailable("当前连接为只读连接");
+        }
+        RowIdentity identity = metadata.rowIdentity(connection, dbConnection, schemaName, tableName);
+        if (!identity.stable() || identity.columns().isEmpty()) {
+            return ResultRowLocator.unavailable("该表没有主键或全非空唯一索引，无法定位行");
+        }
+        Map<String, ColumnDescriptor> descriptors = loadColumnDescriptors(connection, dialect, schemaName, tableName);
+        Map<String, Integer> indexes = new LinkedHashMap<>();
+        for (int index = 1; index <= visibleColumnCount; index++) {
+            indexes.putIfAbsent(md.getColumnLabel(index), index);
+        }
+        for (String keyColumn : identity.columns()) {
+            if (columnIndex(indexes, keyColumn) == null) {
+                return ResultRowLocator.unavailable("查询结果缺少行定位字段：" + keyColumn);
+            }
+        }
+        return new ResultRowLocator(
+                schemaName, tableName, identity.columns(), descriptors, indexes, this, dbConnection.id(), null
+        );
+    }
+
+    /** 结果集里可编辑列的集合：不在表里的（表达式、聚合、别名）不能改。 */
+    public Set<String> editableColumns(Connection connection, DbConnection dbConnection, String schemaName, String tableName) throws Exception {
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        return loadColumnDescriptors(connection, dialect, schemaName, tableName).keySet();
+    }
+
+    /**
+     * 逐行生成行定位令牌。{@code reason} 非空表示这段结果不可编辑。
+     */
+    public record ResultRowLocator(
+            String schemaName,
+            String tableName,
+            List<String> keyColumns,
+            Map<String, ColumnDescriptor> descriptors,
+            Map<String, Integer> indexes,
+            DataEditService owner,
+            long connectionId,
+            String reason
+    ) {
+        static ResultRowLocator unavailable(String reason) {
+            return new ResultRowLocator(null, null, List.of(), Map.of(), Map.of(), null, 0, reason);
+        }
+
+        public boolean editable() {
+            return reason == null;
+        }
+
+        public String encode(ResultSet rs) throws Exception {
+            return owner.rowLocatorCodec.encode(
+                    owner.rowLocatorState(rs, connectionId, schemaName, tableName, keyColumns, descriptors, indexes)
+            );
+        }
+    }
+
     public DataPreviewResponse preview(DataPreviewRequest request) throws Exception {
         try (Connection connection = connections.open(request.connectionId())) {
             List<PreparedOperation> operations = operations(connection, request);

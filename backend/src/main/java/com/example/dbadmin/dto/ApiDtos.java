@@ -299,23 +299,51 @@ public final class ApiDtos {
         }
     }
 
+    /**
+     * 查询结果能否就地编辑。
+     *
+     * <p>只有「单表来源 + 该表有稳定行定位字段 + 这些字段都在结果集里」三条同时成立才可编辑；
+     * 不成立时 {@code reason} 说明差在哪，界面据此给出人能看懂的解释而不是把功能藏起来。</p>
+     */
+    public record ResultEditInfo(
+            boolean editable,
+            String schemaName,
+            String tableName,
+            List<String> keyColumns,
+            List<String> rowKeyTokens,
+            String reason
+    ) {
+        public ResultEditInfo {
+            keyColumns = keyColumns == null ? List.of() : List.copyOf(keyColumns);
+            rowKeyTokens = rowKeyTokens == null ? List.of() : List.copyOf(rowKeyTokens);
+        }
+
+        public static ResultEditInfo notEditable(String reason) {
+            return new ResultEditInfo(false, null, null, List.of(), List.of(), reason);
+        }
+    }
+
     public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore, String schemaName) {
         public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
             this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null);
         }
     }
 
-    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable) {
+    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable, ResultEditInfo edit) {
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null, null);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null, null, null);
         }
 
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, page, null);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, page, null, null);
+        }
+
+        public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable) {
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, page, sourceTable, null);
         }
 
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet) {
-            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false, null, null);
+            this(columns, rows, affectedRows, elapsedMs, resultSet, 0, false, null, null, null);
         }
     }
 

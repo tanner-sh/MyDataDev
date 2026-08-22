@@ -10,7 +10,21 @@ import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlR
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
 import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { downloadBlob } from '../api';
-import { timestamp } from '../utils';
+import {
+  applyResultCellEdit,
+  buildResultChanges,
+  countResultEdits,
+  EMPTY_RESULT_EDIT_STATE,
+  isResultColumnEditable,
+  isResultEditable,
+  resultEditDisabledReason,
+  resultEditKey,
+  resultEditSummary,
+  resultRowEdits,
+  type ResultEditCommit,
+  type ResultEditState
+} from '../resultEditing';
+import { localizeError, timestamp } from '../utils';
 import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 
@@ -20,7 +34,7 @@ const RESULT_SELECTION_COLUMN_WIDTH = 38;
 // A very wide SELECT * would otherwise render hundreds of columns on load.
 const DEFAULT_VISIBLE_COLUMNS = 50;
 
-export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, onPageChange }: {
+export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, connectionId, onPageChange, onCommitEdits }: {
   result: SqlResult | null;
   fill?: boolean;
   active?: boolean;
@@ -28,7 +42,10 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   pagingEnabled?: boolean;
   dbType?: string;
   sourceSql?: string;
+  connectionId?: number;
   onPageChange?: (navigation: SqlPageNavigation) => void;
+  /** 提交结果里的就地修改；由 App 复用表数据的 /data/preview 与 /data/commit。 */
+  onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
 }) {
   const [pageSizeDraft, setPageSizeDraft] = useState(500);
   const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
@@ -41,6 +58,9 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const [manualTargetParts, setManualTargetParts] = useState<string[]>();
   const [targetDialogOpen, setTargetDialogOpen] = useState(false);
   const [targetDraft, setTargetDraft] = useState('');
+  const [editState, setEditState] = useState<ResultEditState>(EMPTY_RESULT_EDIT_STATE);
+  const [editingCell, setEditingCell] = useState<string | null>(null);
+  const [committing, setCommitting] = useState(false);
   const [messageApi, messageContextHolder] = message.useMessage();
   const tableRef = useRef<TableRef>(null);
   const gridShellRef = useRef<HTMLDivElement>(null);
@@ -76,6 +96,9 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     setSelectionAnchor(undefined);
     setTargetDialogOpen(false);
     pendingTargetActionRef.current = null;
+    // 行下标只对当前这批结果有意义，换了结果必须丢弃未提交的修改。
+    setEditState(EMPTY_RESULT_EDIT_STATE);
+    setEditingCell(null);
   }, [result?.rows]);
 
   // Sorting and filtering describe columns, not rows. Like the column widths
@@ -130,6 +153,40 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     document.addEventListener('mousemove', handleMove);
     document.addEventListener('mouseup', handleUp);
   }, [resizeColumn]);
+
+  const editInfo = result?.edit;
+  const editingEnabled = isResultEditable(editInfo) && Boolean(onCommitEdits);
+  const editableColumns = useMemo(() => {
+    if (!editingEnabled || !result?.resultSet) return new Set<string>();
+    return new Set(result.columns.filter((column) => isResultColumnEditable(editInfo, column.label)).map((column) => column.label));
+  }, [editInfo, editingEnabled, result?.columns, result?.resultSet]);
+  const pendingEditCount = countResultEdits(editState);
+
+  const commitCellEdit = useCallback((rowIndex: number, column: string, value: unknown, originalValue: unknown) => {
+    setEditState((current) => applyResultCellEdit(current, rowIndex, column, value, originalValue));
+    setEditingCell(null);
+  }, []);
+
+  const discardEdits = useCallback(() => {
+    setEditState(EMPTY_RESULT_EDIT_STATE);
+    setEditingCell(null);
+  }, []);
+
+  const commitEdits = async () => {
+    if (!result?.resultSet || !editInfo?.tableName || !onCommitEdits) return;
+    const changes = buildResultChanges(editState, result.rows, result.columns, editInfo.rowKeyTokens);
+    if (changes.length === 0) return;
+    setCommitting(true);
+    try {
+      await onCommitEdits({ schemaName: editInfo.schemaName, tableName: editInfo.tableName, changes });
+      // 提交成功后由调用方重新执行查询；这里先清空，避免旧下标继续指向已变的行。
+      discardEdits();
+    } catch (error) {
+      void messageApi.error(localizeError(error));
+    } finally {
+      setCommitting(false);
+    }
+  };
 
   const columns = useMemo<ColumnsType<ResultRow>>(() => {
     if (!result?.resultSet) return [];
@@ -237,11 +294,22 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             ),
             onFilter: () => true,
             shouldCellUpdate: (record: ResultRow, previous: ResultRow) => record !== previous,
-            render: (_value: unknown, row: ResultRow) => renderCellValue(row.values[columnIndex])
+            render: (_value: unknown, row: ResultRow) => (
+              <ResultCell
+                row={row}
+                columnIndex={columnIndex}
+                columnLabel={column.label}
+                editable={editableColumns.has(column.label)}
+                onBeginEdit={setEditingCell}
+                onCommitEdit={commitCellEdit}
+              />
+            )
           };
         })
     ];
-  }, [beginColumnResize, columnFilters, columnWidths, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState, visibleColumnKeys]);
+  // editState / editingCell 刻意不在依赖里：它们经由记录到达单元格，正是 shouldCellUpdate 比较的东西。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState, visibleColumnKeys]);
 
   const tableScrollWidth = useMemo(() => {
     if (!result?.resultSet) return 800;
@@ -251,14 +319,17 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     ), 0));
   }, [columnWidths, result?.columns, result?.resultSet, result?.rows, visibleColumnKeys]);
 
+  // 编辑态折进记录：列的 shouldCellUpdate 只比较记录身份，不这样折的话改了值也不会重绘。
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
     const originalIndexes = new Map(result.rows.map((values, index) => [values, index]));
-    return sortResultRows(filterResultRows(result.rows, result.columns, columnFilters), result.columns, sortState).map((values) => ({
-      values,
-      key: String(rowOffset + (originalIndexes.get(values) ?? 0))
-    }));
-  }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
+    return sortResultRows(filterResultRows(result.rows, result.columns, columnFilters), result.columns, sortState).map((values) => {
+      const rowIndex = originalIndexes.get(values) ?? 0;
+      const edits = resultRowEdits(editState, rowIndex);
+      const editingColumn = editingCell?.startsWith(`${rowIndex}:`) ? editingCell.slice(String(rowIndex).length + 1) : undefined;
+      return { values, key: String(rowOffset + rowIndex), rowIndex, edits, editingColumn };
+    });
+  }, [columnFilters, editState, editingCell, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
 
   const displayedRowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const displayedRowIndex = useMemo(() => new Map(displayedRowKeys.map((key, index) => [key, index])), [displayedRowKeys]);
@@ -510,7 +581,25 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             </Dropdown>
           </Space.Compact>
           {selectedRowKeys.length > 0 && <Tag className="result-selection-tag">已选 {selectedRowKeys.length} 行</Tag>}
-          <Tag className="result-scope-tag" color="blue">本地操作 · 当前批次</Tag>
+          {editingEnabled ? (
+            <Space size={4} className="result-edit-actions">
+              <Tag color={pendingEditCount > 0 ? 'warning' : 'green'}>
+                {pendingEditCount > 0 ? resultEditSummary(editState) : `可就地编辑 · ${editInfo?.tableName}`}
+              </Tag>
+              {pendingEditCount > 0 && (
+                <>
+                  <Button size="small" onClick={discardEdits}>撤销</Button>
+                  <Button size="small" type="primary" loading={committing} onClick={() => void commitEdits()}>
+                    提交 {pendingEditCount}
+                  </Button>
+                </>
+              )}
+            </Space>
+          ) : (
+            <Tooltip title={resultEditDisabledReason(editInfo)}>
+              <Tag className="result-scope-tag" color="blue">本地操作 · 当前批次</Tag>
+            </Tooltip>
+          )}
           {hiddenColumnCount > 0 && (
             <Tooltip title={`结果共 ${result.columns.length} 列，当前显示 ${visibleColumnKeys.length} 列。导出与复制仍包含全部列，可在右侧选择要显示的列。`}>
               <Tag className="result-hidden-columns-tag" color="orange">已隐藏 {hiddenColumnCount} 列</Tag>
@@ -735,6 +824,66 @@ function ResultFilterDropdown({ condition, onApply, onReset }: {
     </div>
   );
 }
+
+/**
+ * 结果网格的单元格。
+ *
+ * 可编辑列点一下进入输入态，回车或失焦提交，Esc 放弃。改过但未提交的格子高亮，
+ * 用的是与表数据工作区一致的交互。
+ */
+const ResultCell = memo(function ResultCell({ row, columnIndex, columnLabel, editable, onBeginEdit, onCommitEdit }: {
+  row: ResultRow;
+  columnIndex: number;
+  columnLabel: string;
+  editable: boolean;
+  onBeginEdit: (cellKey: string | null) => void;
+  onCommitEdit: (rowIndex: number, column: string, value: unknown, originalValue: unknown) => void;
+}) {
+  const originalValue = row.values[columnIndex];
+  const edited = row.edits ? Object.prototype.hasOwnProperty.call(row.edits, columnLabel) : false;
+  const currentValue = edited ? row.edits?.[columnLabel] : originalValue;
+  const editing = row.editingColumn === columnLabel;
+  const [draft, setDraft] = useState(() => String(currentValue ?? ''));
+
+  useEffect(() => {
+    if (editing) setDraft(String(currentValue ?? ''));
+  }, [currentValue, editing]);
+
+  if (!editing) {
+    return (
+      <span
+        className={`grid-cell-editable${edited ? ' is-edited' : ''}${editable ? '' : ' is-locked'}`}
+        onClick={editable ? () => onBeginEdit(resultEditKey(row.rowIndex, columnLabel)) : undefined}
+        role={editable ? 'button' : undefined}
+        tabIndex={editable ? 0 : undefined}
+        onKeyDown={editable ? (event) => {
+          if (event.key !== 'Enter' && event.key !== 'F2') return;
+          event.preventDefault();
+          onBeginEdit(resultEditKey(row.rowIndex, columnLabel));
+        } : undefined}
+      >
+        {renderCellValue(currentValue)}
+      </span>
+    );
+  }
+
+  return (
+    <Input
+      autoFocus
+      size="small"
+      value={draft}
+      aria-label={`编辑 ${columnLabel}`}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => onCommitEdit(row.rowIndex, columnLabel, draft, originalValue)}
+      onPressEnter={(event) => event.currentTarget.blur()}
+      onKeyDown={(event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        onBeginEdit(null);
+      }}
+    />
+  );
+});
 
 function renderCellValue(value: unknown) {
   if (value == null) return <span className="cell-null">NULL</span>;

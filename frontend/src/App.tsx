@@ -38,6 +38,7 @@ import { matchesProductionConnectionName, normalizeProductionConfirmation, produ
 import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
 import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
+import type { ResultEditCommit } from './resultEditing';
 import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
@@ -2582,6 +2583,23 @@ export default function App() {
   });
   const changeSqlResultTabEvent = useStableEvent((key: string) => updateActiveSqlTab({ activeResultKey: key }));
   const changeSqlResultPageEvent = useStableEvent((result: SqlStatementResult, navigation: SqlPageNavigation) => loadSqlResultPage(result, navigation));
+  /** 结果就地编辑的提交：复用表数据的 /data/commit，生产连接照样要确认。 */
+  const commitResultEditsEvent = useStableEvent(async (request: ResultEditCommit) => {
+    if (!selected) throw new Error('请先选择数据库连接');
+    const productionConfirmation = await requestProductionConfirmation('提交查询结果修改');
+    if (selected.environment === 'prod' && !productionConfirmation) throw new Error('已取消提交');
+    const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', {
+      method: 'POST',
+      headers: productionConfirmationHeaders(productionConfirmation),
+      body: JSON.stringify({
+        connectionId: selected.id,
+        schemaName: request.schemaName || undefined,
+        tableName: request.tableName,
+        changes: request.changes
+      })
+    });
+    showSuccess(`已提交查询结果修改，影响 ${data.affectedRows} 行`);
+  });
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
   const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
@@ -2819,6 +2837,7 @@ export default function App() {
                 onSaveSnippet={saveSnippetEvent}
                 onResultTabChange={changeSqlResultTabEvent}
                 onResultPageChange={changeSqlResultPageEvent}
+                onCommitResultEdits={commitResultEditsEvent}
               />
             ) : mode === 'table' ? (
               <TableWorkspace

@@ -135,7 +135,19 @@ export type SqlPageInfo = {
   previousOffsets?: number[];
 };
 export type SqlResultSourceTable = { nameParts: string[] };
-export type SqlResult = { columns: ResultColumn[]; rows: unknown[][]; affectedRows: number; elapsedMs: number; resultSet: boolean; maxRows?: number; truncated?: boolean; page?: SqlPageInfo | null; sourceTable?: SqlResultSourceTable | null };
+export type SqlResult = {
+  columns: ResultColumn[];
+  rows: unknown[][];
+  affectedRows: number;
+  elapsedMs: number;
+  resultSet: boolean;
+  maxRows?: number;
+  truncated?: boolean;
+  page?: SqlPageInfo | null;
+  sourceTable?: SqlResultSourceTable | null;
+  /** 单表来源且有稳定行定位字段时随结果下发，见 resultEditing.ts。 */
+  edit?: import('./resultEditing').ResultEditInfo | null;
+};
 export type SqlPageNavigation = { offset: number; pageSize: number; previousOffsets: number[] };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
@@ -418,7 +430,16 @@ export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml';
 export type ResultCopyFormat = 'sql' | 'pipe';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };
-export type ResultRow = { key: string; values: unknown[] };
+export type ResultRow = {
+  key: string;
+  values: unknown[];
+  /** 在本批结果里的原始下标，就地编辑用它定位行定位令牌。 */
+  rowIndex: number;
+  /** 该行未提交的修改，折在记录上让 shouldCellUpdate 能比较出来。 */
+  edits?: Record<string, unknown>;
+  /** 正在编辑的列名。 */
+  editingColumn?: string;
+};
 export type EditableRow = TableRow;
 export type RefreshConnectionsOptions = { retry?: boolean; preferredConnectionId?: number };
 

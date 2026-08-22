@@ -971,6 +971,29 @@ body.is-resizing-column * {
   margin-bottom: 8px;
 }
 
+.grid-cell-editable {
+  display: block;
+  min-width: 0;
+  min-height: 20px;
+  cursor: text;
+}
+
+.grid-cell-editable.is-locked {
+  cursor: default;
+}
+
+/* 改过但未提交的格子要一眼认出来。 */
+.grid-cell-editable.is-edited {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  box-shadow: inset 2px 0 0 var(--warning);
+  padding-left: 4px;
+}
+
+.result-edit-actions {
+  flex: 0 0 auto;
+}
+
 .snippet-search {
   margin-bottom: 8px;
 }

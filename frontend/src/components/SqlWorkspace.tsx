@@ -10,6 +10,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import { resolveEditorSplitRatio } from '../editorSplit';
+import type { ResultEditCommit } from '../resultEditing';
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
@@ -31,7 +32,7 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -68,6 +69,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onSaveSnippet: (sql: string) => void;
   onResultTabChange: (key: string) => void;
   onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
+  onCommitResultEdits: (request: ResultEditCommit) => Promise<void>;
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
@@ -173,10 +175,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           showIdentity={false}
           onPaneModeChange={setResultPaneMode}
           onPageChange={handleResultPageChange}
+          connectionId={selected?.id}
+          onCommitEdits={onCommitResultEdits}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -384,7 +388,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={onCommitResultEdits} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -486,7 +490,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -496,6 +500,8 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   showIdentity: boolean;
   onPaneModeChange: (mode: ResultPaneMode) => void;
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
+  connectionId?: number;
+  onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
   const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
@@ -529,7 +535,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
           <div className="statement-result-notices">
             {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
           </div>
-          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} onPageChange={handlePageChange} />
+          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onCommitEdits={onCommitEdits} />
         </div>
       )}
     </div>

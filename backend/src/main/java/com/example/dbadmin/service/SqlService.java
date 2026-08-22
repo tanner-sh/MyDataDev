@@ -7,6 +7,8 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
+import com.example.dbadmin.dto.ApiDtos.ResultEditInfo;
+import com.example.dbadmin.dto.ApiDtos.ResultSourceTable;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
@@ -56,6 +58,7 @@ public class SqlService {
     private final SqlStatementClassifier classifier;
     private final ExecutionGuard executionGuard;
     private final SqlExecutionRegistry executions;
+    private final DataEditService dataEdit;
 
     public SqlService(
             ConnectionService connections,
@@ -67,7 +70,8 @@ public class SqlService {
             SqlScriptSplitter scriptSplitter,
             SqlStatementClassifier classifier,
             ExecutionGuard executionGuard,
-            SqlExecutionRegistry executions
+            SqlExecutionRegistry executions,
+            DataEditService dataEdit
     ) {
         this.connections = connections;
         this.properties = properties;
@@ -79,6 +83,7 @@ public class SqlService {
         this.classifier = classifier;
         this.executionGuard = executionGuard;
         this.executions = executions;
+        this.dataEdit = dataEdit;
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
@@ -379,7 +384,10 @@ public class SqlService {
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
                 try (ResultSet rs = statement.executeQuery(pageSql)) {
-                    SqlResult result = readPageResult(rs, started, connectionId, offset, rawPageSize, pageSize, dialect.paginationHelperColumn(), schemaName, dialect);
+                    SqlResult result = readPageResult(
+                            rs, started, connectionId, offset, rawPageSize, pageSize,
+                            dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection
+                    );
                     audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     return result;
                 }
@@ -513,7 +521,9 @@ public class SqlService {
             int pageSize,
             String helperColumn,
             String schemaName,
-            DatabaseDialect dialect
+            DatabaseDialect dialect,
+            Connection connection,
+            DbConnection dbConnection
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -525,7 +535,10 @@ public class SqlService {
             columns.add(new ResultColumn("c" + index, metadata.getColumnLabel(index), metadata.getColumnTypeName(index)));
         }
         int effectivePageSize = Math.min(pageSize, MAX_RESULT_CELLS / Math.max(columnCount, 1));
+        ResultSourceTable sourceTable = ResultSetSourceResolver.resolve(metadata, dialect);
+        EditableResult editable = editableResult(connection, dbConnection, sourceTable, metadata, columnCount);
         List<List<Object>> rows = new ArrayList<>();
+        List<String> rowKeyTokens = new ArrayList<>();
         long textChars = 0;
         boolean payloadLimitReached = false;
         while (rows.size() < effectivePageSize && rs.next()) {
@@ -537,6 +550,8 @@ public class SqlService {
                 if (value instanceof CharSequence text) textChars += text.length();
             }
             rows.add(row);
+            // editable 非空但 locator 为空表示「不可编辑且有原因」，这时不发令牌。
+            if (editable != null && editable.locator() != null) rowKeyTokens.add(editable.locator().encode(rs));
             if (textChars >= MAX_RESULT_TEXT_CHARS) {
                 payloadLimitReached = true;
                 break;
@@ -553,8 +568,75 @@ public class SqlService {
                 effectivePageSize,
                 payloadLimitReached,
                 page,
-                ResultSetSourceResolver.resolve(metadata, dialect)
+                sourceTable,
+                editInfo(editable, rowKeyTokens, sourceTable)
         );
+    }
+
+    /**
+     * 判断这段结果能不能就地编辑，并在可以时准备好行定位令牌生成器。
+     *
+     * <p>任何一步失败都只是「不可编辑」，绝不能让一次成功的查询因为编辑能力探测而报错 ——
+     * 权限不足读不到主键元数据是很常见的情况。</p>
+     */
+    private EditableResult editableResult(
+            Connection connection,
+            DbConnection dbConnection,
+            ResultSourceTable sourceTable,
+            ResultSetMetaData metadata,
+            int visibleColumnCount
+    ) {
+        if (sourceTable == null || sourceTable.nameParts().isEmpty()) return null;
+        List<String> parts = sourceTable.nameParts();
+        String table = parts.get(parts.size() - 1);
+        String schema = parts.size() > 1 ? parts.get(parts.size() - 2) : null;
+        // ResultSetSourceResolver 会跳过没有报告表名的列（表达式、别名、部分驱动），这对推断
+        // 导出目标表是合适的宽松度，但用来决定「能不能改这张表」就太松了：一次 JOIN 里只要有
+        // 一侧的列没报表名，就会被当成单表来源。编辑路径要求每一个可见列都明确属于同一张表。
+        if (!everyColumnBelongsTo(metadata, visibleColumnCount, table)) {
+            return new EditableResult(null, "查询结果不是来自单张表，无法定位行");
+        }
+        try {
+            DataEditService.ResultRowLocator locator = dataEdit.resultRowLocator(
+                    connection, dbConnection, schema, table, metadata, visibleColumnCount
+            );
+            if (locator == null || !locator.editable()) {
+                return new EditableResult(null, locator == null ? "无法确认行定位字段" : locator.reason());
+            }
+            return new EditableResult(locator, null);
+        } catch (Exception error) {
+            return new EditableResult(null, "无法确认行定位字段：" + abbreviate(error.getMessage()));
+        }
+    }
+
+    private boolean everyColumnBelongsTo(ResultSetMetaData metadata, int visibleColumnCount, String table) {
+        try {
+            for (int index = 1; index <= visibleColumnCount; index++) {
+                String candidate = metadata.getTableName(index);
+                if (candidate == null || candidate.isBlank() || !candidate.equalsIgnoreCase(table)) return false;
+            }
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
+    }
+
+    private ResultEditInfo editInfo(EditableResult editable, List<String> rowKeyTokens, ResultSourceTable sourceTable) {
+        if (editable == null) {
+            return ResultEditInfo.notEditable(sourceTable == null ? "查询结果不是来自单张表" : "无法确定结果来源表");
+        }
+        if (editable.locator() == null) return ResultEditInfo.notEditable(editable.reason());
+        return new ResultEditInfo(
+                true,
+                editable.locator().schemaName(),
+                editable.locator().tableName(),
+                editable.locator().keyColumns(),
+                rowKeyTokens,
+                null
+        );
+    }
+
+    private record EditableResult(DataEditService.ResultRowLocator locator, String reason) {
     }
 
     private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget, DatabaseDialect dialect) throws Exception {
