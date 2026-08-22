@@ -470,7 +470,11 @@ public class SqlService {
     }
 
     public List<SqlHistoryResponse> history(long connectionId, Integer limit) {
-        return history.findRecent(connectionId, limit == null ? 50 : limit);
+        return history(connectionId, null, limit);
+    }
+
+    public List<SqlHistoryResponse> history(long connectionId, String keyword, Integer limit) {
+        return history.findRecent(connectionId, keyword, limit == null ? 50 : limit);
     }
 
     public List<SqlCompletionItem> completions(SqlCompletionRequest request) {

@@ -957,6 +957,22 @@ body.is-resizing-column * {
   margin-bottom: 8px;
 }
 
+.history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 0 8px;
+  font-size: 12px;
+}
+
+.history-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 0;
+}
+
 .object-detail-tabs {
   height: 100%;
   min-height: 0;

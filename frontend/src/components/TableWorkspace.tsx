@@ -5,6 +5,7 @@ import {
   ArrowLeftOutlined,
   CalculatorOutlined,
   CloudServerOutlined,
+  DoubleLeftOutlined,
   EyeOutlined,
   LeftOutlined,
   MoreOutlined,
@@ -223,6 +224,17 @@ export const TableWorkspace = memo(function TableWorkspace({
             disabled={!tableData || loading || !onPageSizeChange}
             onChange={onPageSizeChange}
           />
+          <Tooltip title="游标分页无法跳页，但回到第一页始终可用">
+            <Button
+              size="small"
+              icon={<DoubleLeftOutlined />}
+              aria-label="回到第一页"
+              disabled={!tableData || loading || page <= 0 || !onPageChange}
+              onClick={() => onPageChange?.(0)}
+            >
+              第一页
+            </Button>
+          </Tooltip>
           <Button
             size="small"
             icon={<LeftOutlined />}

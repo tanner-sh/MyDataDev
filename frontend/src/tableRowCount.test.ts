@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   canCountTableRows,
   IDLE_TABLE_ROW_COUNT,
+  rowCountErrorMessage,
+  rowCountFailure,
   tablePageSummary,
   tableRowCountLabel,
   type TableRowCountState
@@ -13,6 +15,30 @@ describe('tableRowCountLabel', () => {
     expect(tableRowCountLabel({ status: 'loading' })).toBe('正在统计总行数…');
     expect(tableRowCountLabel({ status: 'ready', total: 1234567, elapsedMs: 12 })).toBe('共 1,234,567 行');
     expect(tableRowCountLabel({ status: 'failed' })).toBe('总行数统计失败');
+  });
+
+  it('tells a timeout apart from a genuine failure', () => {
+    expect(tableRowCountLabel({ status: 'failed', reason: 'timeout' })).toBe('总行数统计超时');
+  });
+});
+
+describe('rowCountFailure', () => {
+  it('maps the backend timeout code onto the timeout state', () => {
+    expect(rowCountFailure('ROW_COUNT_TIMEOUT')).toEqual({ status: 'failed', reason: 'timeout' });
+    expect(rowCountFailure('SQL_ERROR')).toEqual({ status: 'failed' });
+    expect(rowCountFailure()).toEqual({ status: 'failed' });
+  });
+});
+
+describe('rowCountErrorMessage', () => {
+  it('keeps the backend timeout wording as-is instead of double-prefixing it', () => {
+    expect(rowCountErrorMessage('统计总行数超过 15 秒仍未完成。', 'ROW_COUNT_TIMEOUT'))
+      .toBe('统计总行数超过 15 秒仍未完成。');
+  });
+
+  it('prefixes anything else so the user knows which action failed', () => {
+    expect(rowCountErrorMessage('表不存在')).toBe('统计总行数失败：表不存在');
+    expect(rowCountErrorMessage('权限不足', 'SQL_ERROR')).toBe('统计总行数失败：权限不足');
   });
 });
 

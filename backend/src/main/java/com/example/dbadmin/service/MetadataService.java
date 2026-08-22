@@ -28,6 +28,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.SQLTimeoutException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.nio.charset.StandardCharsets;
@@ -58,6 +60,9 @@ public class MetadataService {
     private static final long MAX_METADATA_OFFSET = 1_000_000;
     private static final int MAX_SEARCH_LENGTH = 200;
     private static final int METADATA_QUERY_TIMEOUT_SECONDS = 15;
+    private static final int ROW_COUNT_TIMEOUT_SECONDS = 15;
+    private static final Set<String> QUERY_TIMEOUT_SQL_STATES = Set.of("HYT00", "HYT01", "57014");
+    private static final int MAX_CAUSE_DEPTH = 16;
 
     @Autowired
     public MetadataService(ConnectionService connections, DialectRegistry dialectRegistry, AuditRepository audit, MetadataCacheService cache, ExecutionGuard executionGuard) {
@@ -663,12 +668,46 @@ public class MetadataService {
         try (Connection connection = connections.open(connectionId);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
              Statement statement = connection.createStatement()) {
-            dialect.configureReadStatement(connection, statement, 1, 15);
+            dialect.configureReadStatement(connection, statement, 1, ROW_COUNT_TIMEOUT_SECONDS);
             try (ResultSet rs = statement.executeQuery("SELECT COUNT(*) FROM " + dialect.qualifiedName(schemaName, objectName))) {
                 Long value = rs.next() ? rs.getLong(1) : null;
                 return new ObjectRowCountResponse(value, true, (System.nanoTime() - started) / 1_000_000);
             }
+        } catch (SQLException error) {
+            // 大表统计超时是预期结果而不是用户输入错误，交给通用 SQLException 处理器会把
+            // 驱动的英文原文直接甩到界面上。
+            if (!isQueryTimeout(error)) throw error;
+            throw new ApiProblemException(
+                    org.springframework.http.HttpStatus.GATEWAY_TIMEOUT,
+                    "ROW_COUNT_TIMEOUT",
+                    "统计总行数超过 " + ROW_COUNT_TIMEOUT_SECONDS + " 秒仍未完成，该表数据量较大。"
+                            + "可改用数据库自带的统计信息，或在业务低峰期重试。"
+            );
         }
+    }
+
+    /**
+     * 判断异常是否为查询超时/被取消。
+     *
+     * <p>只有 {@link SQLTimeoutException} 是标准信号，但不少驱动只抛普通 {@code SQLException}
+     * 并把原因放在 SQLState 里：{@code HYT00}/{@code HYT01} 是 ODBC 系的超时，{@code 57014}
+     * 是 PostgreSQL 与 DB2 的 query_canceled。</p>
+     */
+    static boolean isQueryTimeout(SQLException error) {
+        Throwable current = error;
+        // 驱动的异常链不会很深；限定层数顺便挡住 initCause 造出的环。
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (current instanceof SQLTimeoutException) return true;
+            if (current instanceof SQLException sqlException) {
+                String state = sqlException.getSQLState();
+                // Set.of 是不可变集合，contains(null) 会抛 NPE，而 SQLState 经常为 null。
+                if (state != null && QUERY_TIMEOUT_SQL_STATES.contains(state)) return true;
+            }
+            Throwable cause = current.getCause();
+            if (cause == current) break;
+            current = cause;
+        }
+        return false;
     }
 
     public ObjectRelations relations(long connectionId, String schemaName, String objectName) throws Exception {

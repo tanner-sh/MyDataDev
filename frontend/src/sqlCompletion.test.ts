@@ -2,6 +2,63 @@ import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion, tokenizeSqlIter } from './sqlCompletion';
 
+describe('getCurrentSqlStatement caching', () => {
+  const script = "select a from first;\nselect b from second;\nselect c from third";
+
+  function sliceWithoutCursor(sql: string, cursor: number) {
+    const { cursor: _cursor, cursorInStatement: _offset, ...bounds } = getCurrentSqlStatement(sql, cursor);
+    return bounds;
+  }
+
+  it('returns the same bounds for every cursor inside one statement', () => {
+    const start = script.indexOf('select b');
+    const end = script.indexOf(';', start);
+    const expected = sliceWithoutCursor(script, start + 3);
+
+    for (let cursor = start; cursor <= end; cursor += 1) {
+      expect(sliceWithoutCursor(script, cursor)).toEqual(expected);
+    }
+  });
+
+  it('reports the cursor of the current call rather than the cached one', () => {
+    const start = script.indexOf('select b');
+    getCurrentSqlStatement(script, start + 1);
+    const later = getCurrentSqlStatement(script, start + 5);
+
+    expect(later.cursor).toBe(start + 5);
+    expect(later.cursorInStatement).toBe(start + 5 - later.start);
+  });
+
+  it('recomputes when the cursor crosses into another statement', () => {
+    const second = script.indexOf('select b');
+    const third = script.indexOf('select c');
+
+    const inSecond = getCurrentSqlStatement(script, second + 2);
+    const inThird = getCurrentSqlStatement(script, third + 2);
+
+    expect(inSecond.text).toContain('second');
+    expect(inThird.text).toContain('third');
+    expect(inThird.start).not.toBe(inSecond.start);
+  });
+
+  it('recomputes when the document text changes', () => {
+    const edited = script.replace('second', 'second_renamed');
+    const cursor = script.indexOf('select b') + 2;
+
+    getCurrentSqlStatement(script, cursor);
+
+    expect(getCurrentSqlStatement(edited, cursor).text).toContain('second_renamed');
+  });
+
+  it('keeps boundary cursors on the correct side of a semicolon', () => {
+    const semicolon = script.indexOf(';');
+
+    // 光标正好落在分号上属于前一条语句，落在分号之后属于下一条。
+    expect(getCurrentSqlStatement(script, semicolon).text).toContain('first');
+    expect(getCurrentSqlStatement(script, semicolon + 1).text).not.toContain('first');
+  });
+});
+
 describe('SQL completion context', () => {
   it('only analyzes the statement containing the cursor', () => {
     const sql = "select * from old_table; select  from users u where u.id = 1";

@@ -619,6 +619,62 @@ class MetadataServiceTest {
                         problem -> assertThat(problem.code()).isEqualTo("STALE_TABLE_OBJECT"));
     }
 
+    @Test
+    void recognizesDriverQueryTimeoutsRegardlessOfHowTheyAreReported() {
+        assertThat(MetadataService.isQueryTimeout(new java.sql.SQLTimeoutException("timed out"))).isTrue();
+        assertThat(MetadataService.isQueryTimeout(new java.sql.SQLException("cancelled", "HYT00"))).isTrue();
+        assertThat(MetadataService.isQueryTimeout(new java.sql.SQLException("query_canceled", "57014"))).isTrue();
+        // 驱动常把超时包在一层通用异常里再抛出。
+        assertThat(MetadataService.isQueryTimeout(
+                new java.sql.SQLException("wrapper", new java.sql.SQLTimeoutException("timed out"))
+        )).isTrue();
+    }
+
+    @Test
+    void keepsOrdinarySqlFailuresOutOfTheTimeoutPath() {
+        assertThat(MetadataService.isQueryTimeout(new java.sql.SQLException("table not found", "42S02"))).isFalse();
+        assertThat(MetadataService.isQueryTimeout(new java.sql.SQLException("denied"))).isFalse();
+    }
+
+    @Test
+    void reportsRowCountTimeoutsAsAProblemWithAChineseMessage() throws Exception {
+        MetadataService service = rowCountService(new java.sql.SQLTimeoutException("statement timed out"));
+
+        assertThatThrownBy(() -> service.rowCount(1L, "APP", "HUGE"))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("ROW_COUNT_TIMEOUT");
+                    assertThat(problem.getMessage()).contains("统计总行数").contains("15 秒");
+                });
+    }
+
+    @Test
+    void leavesNonTimeoutRowCountFailuresToTheGenericSqlHandler() throws Exception {
+        MetadataService service = rowCountService(new java.sql.SQLException("table not found", "42S02"));
+
+        assertThatThrownBy(() -> service.rowCount(1L, "APP", "MISSING"))
+                .isInstanceOf(java.sql.SQLException.class)
+                .isNotInstanceOf(ApiProblemException.class);
+    }
+
+    /** rowCount 的失败分支只关心驱动抛了什么，用桩连接比真库更稳定。 */
+    private MetadataService rowCountService(java.sql.SQLException failure) throws Exception {
+        java.sql.Statement statement = mock(java.sql.Statement.class);
+        when(statement.executeQuery(contains("SELECT COUNT(*)"))).thenThrow(failure);
+        Connection connection = mock(Connection.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(connection.getAutoCommit()).thenReturn(true);
+        when(connection.isReadOnly()).thenReturn(false);
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(anyLong())).thenReturn(connection);
+        when(connections.require(anyLong())).thenReturn(new DbConnection(
+                1L, "h2", "h2", "jdbc:h2:mem:row-count", "sa", "", "dev", false, Instant.now(), Instant.now()
+        ));
+        return new MetadataService(
+                connections, new DialectRegistry(), mock(AuditRepository.class),
+                new MetadataCacheService(), new ExecutionGuard()
+        );
+    }
+
     private MetadataService service(String url) throws Exception {
         return service(url, "dev", false, mock(AuditRepository.class));
     }

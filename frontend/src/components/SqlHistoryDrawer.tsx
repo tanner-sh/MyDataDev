@@ -1,35 +1,86 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import { Button, Drawer, Empty, Input, Pagination, Space, Tag, Tooltip, Typography } from 'antd';
-import { CopyOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Button, Drawer, Empty, Input, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { CopyOutlined, DownOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import type { SqlHistory } from '../types';
 import { formatHistoryTime } from '../utils';
+import { historyLoadedSummary, SQL_HISTORY_SEARCH_DEBOUNCE_MS } from '../sqlHistoryQuery';
 
 const { Text } = Typography;
 
-export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({ open, history, onClose, onPick }: {
+export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
+  open,
+  history,
+  keyword,
+  loading,
+  hasMore,
+  atLimit,
+  onClose,
+  onPick,
+  onSearch,
+  onLoadMore
+}: {
   open: boolean;
   history: SqlHistory[];
+  keyword: string;
+  loading: boolean;
+  hasMore: boolean;
+  atLimit: boolean;
   onClose: () => void;
   onPick: (history: SqlHistory, mode: 'new-tab' | 'replace-current') => void;
+  onSearch: (keyword: string) => void;
+  onLoadMore: () => void;
 }) {
-  const [keyword, setKeyword] = useState('');
-  const [page, setPage] = useState(1);
-  const filteredHistory = useMemo(() => {
-    const normalized = keyword.trim().toLocaleLowerCase();
-    if (!normalized) return history;
-    return history.filter((item) => item.sql.toLocaleLowerCase().includes(normalized) || item.errorMessage?.toLocaleLowerCase().includes(normalized));
-  }, [history, keyword]);
-  const visibleHistory = filteredHistory.slice((page - 1) * 10, page * 10);
-  useEffect(() => setPage((current) => Math.min(current, Math.max(1, Math.ceil(filteredHistory.length / 10)))), [filteredHistory.length]);
+  const [draft, setDraft] = useState(keyword);
+  const debounceRef = useRef<number | null>(null);
+  const keywordRef = useRef(keyword);
+  const wasOpenRef = useRef(false);
+  keywordRef.current = keyword;
+
+  // 只在抽屉从关闭变为打开时同步一次。若把 keyword 放进依赖，一次搜索返回后回写的
+  // keyword 会把用户在等待期间继续敲进去的字符抹掉。
+  useEffect(() => {
+    if (open && !wasOpenRef.current) setDraft(keywordRef.current);
+    wasOpenRef.current = open;
+  }, [open]);
+
+  useEffect(() => () => {
+    if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+  }, []);
+
+  function queueSearch(next: string) {
+    setDraft(next);
+    if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      onSearch(next);
+    }, SQL_HISTORY_SEARCH_DEBOUNCE_MS);
+  }
+
+  function searchNow(next: string) {
+    if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = null;
+    onSearch(next);
+  }
 
   return (
     <Drawer title="SQL 执行历史" size={520} open={open} onClose={onClose}>
-      <Input.Search allowClear className="history-search" placeholder="搜索 SQL 或错误信息" value={keyword} onChange={(event) => { setKeyword(event.target.value); setPage(1); }} />
-      {filteredHistory.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={history.length === 0 ? '暂无 SQL 历史' : '没有匹配的 SQL 历史'} />
+      <Input.Search
+        allowClear
+        className="history-search"
+        // 过滤在服务端进行，所以能搜到保留期内的全部历史，而不只是已加载的这一页。
+        placeholder="搜索 SQL 或错误信息（搜索服务端保留的全部历史）"
+        value={draft}
+        loading={loading}
+        onChange={(event) => queueSearch(event.target.value)}
+        onSearch={searchNow}
+      />
+      {history.length === 0 ? (
+        loading
+          ? <div className="history-loading"><Spin size="small" /> <Text type="secondary">正在加载历史…</Text></div>
+          : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={keyword ? '没有匹配的 SQL 历史' : '暂无 SQL 历史'} />
       ) : (
         <div className="history-list">
-          {visibleHistory.map((item) => (
+          {history.map((item) => (
             <article className="history-item" key={item.id}>
               <div className="history-item-heading">
                 <Space size={6} wrap>
@@ -53,7 +104,14 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({ open, history, 
               </Space>
             </article>
           ))}
-          {filteredHistory.length > 10 && <Pagination size="small" current={page} pageSize={10} total={filteredHistory.length} showSizeChanger={false} onChange={setPage} />}
+          <div className="history-footer">
+            <Text type="secondary">{historyLoadedSummary(history.length, hasMore, atLimit)}</Text>
+            {hasMore && (
+              <Button size="small" type="link" icon={<DownOutlined />} loading={loading} onClick={onLoadMore}>
+                加载更多
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </Drawer>
