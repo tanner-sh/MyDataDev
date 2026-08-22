@@ -461,3 +461,17 @@ export type McpConfig = {
   connections: McpConnectionOption[];
 };
 export type McpCredential = { agent: McpAgent; credential: string };
+
+export type AuditEvent = {
+  id: number;
+  actor: string;
+  action: string;
+  target?: string;
+  detail?: string;
+  detailTruncated: boolean;
+  createdAt: string;
+};
+
+export type AuditEventPage = { items: AuditEvent[]; page: number; pageSize: number; hasMore: boolean };
+
+export type AuditFacets = { actors: string[]; actions: string[] };

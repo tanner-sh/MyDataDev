@@ -971,6 +971,88 @@ body.is-resizing-column * {
   margin-bottom: 8px;
 }
 
+.audit-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.audit-filter-select {
+  min-width: 150px;
+}
+
+.audit-action-select {
+  min-width: 190px;
+}
+
+.audit-error {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.audit-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 0;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+}
+
+.audit-item {
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* 破坏性操作在时间线上要一眼能挑出来。 */
+.audit-item.is-dangerous {
+  border-left-color: var(--danger);
+}
+
+.audit-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audit-item-target {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.audit-item-detail {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.audit-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 12px;
+  font-size: 12px;
+}
+
 .history-footer {
   display: flex;
   align-items: center;

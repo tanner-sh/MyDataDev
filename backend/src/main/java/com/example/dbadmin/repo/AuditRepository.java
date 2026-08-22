@@ -1,13 +1,24 @@
 package com.example.dbadmin.repo;
 
+import com.example.dbadmin.dto.ApiDtos.AuditEventPage;
+import com.example.dbadmin.dto.ApiDtos.AuditEventResponse;
+import com.example.dbadmin.dto.ApiDtos.AuditFacets;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+
 @Repository
 public class AuditRepository {
     private static final Logger log = LoggerFactory.getLogger(AuditRepository.class);
+    public static final int MAX_LISTED_DETAIL_CHARS = 4_000;
     private final JdbcTemplate jdbc;
     private final MetadataWriteQueue writes;
 
@@ -37,8 +48,112 @@ public class AuditRepository {
         }
     }
 
+    /**
+     * 分页查询审计记录。
+     *
+     * <p>审计此前只写不读：全仓除了这里的 INSERT 和 HistoryCleanupService 的保留期清理，
+     * 没有任何地方查询过 audit_log。而 /api 本身没有用户认证（安全边界由外层反向代理承担），
+     * 出事之后能回溯「谁在哪条连接上做了什么」是这张表存在的唯一意义。</p>
+     *
+     * <p>detail 是最大 100 000 字符的 CLOB，列表里按 {@link #MAX_LISTED_DETAIL_CHARS} 截断，
+     * 并通过 detailTruncated 告诉前端还有后续内容。</p>
+     */
+    public AuditEventPage findPage(AuditQuery query) {
+        List<Object> parameters = new ArrayList<>();
+        StringBuilder where = new StringBuilder(" WHERE 1 = 1");
+        if (query.actor() != null) {
+            where.append(" AND actor = ?");
+            parameters.add(query.actor());
+        }
+        if (query.action() != null) {
+            where.append(" AND action = ?");
+            parameters.add(query.action());
+        }
+        if (query.connectionId() != null) {
+            // target 的写法统一是 "connection:<id>"，后面可能还跟着 " table:xxx"。
+            where.append(" AND (target = ? OR target LIKE ?)");
+            parameters.add("connection:" + query.connectionId());
+            parameters.add("connection:" + query.connectionId() + " %");
+        }
+        if (query.keyword() != null) {
+            where.append(" AND (LOWER(target) LIKE ? ESCAPE '!' OR LOWER(detail) LIKE ? ESCAPE '!')");
+            String pattern = likePattern(query.keyword().toLowerCase(Locale.ROOT));
+            parameters.add(pattern);
+            parameters.add(pattern);
+        }
+        if (query.from() != null) {
+            where.append(" AND created_at >= ?");
+            parameters.add(Timestamp.from(query.from()));
+        }
+        if (query.to() != null) {
+            where.append(" AND created_at <= ?");
+            parameters.add(Timestamp.from(query.to()));
+        }
+        // 多取一条用来判断 hasMore，避免为了分页再跑一次 COUNT(*)。
+        parameters.add(query.pageSize() + 1);
+        parameters.add((long) query.page() * query.pageSize());
+
+        List<AuditEventResponse> rows = jdbc.query(
+                "SELECT id, actor, action, target, detail, created_at FROM audit_log"
+                        + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
+                (rs, rowNum) -> {
+                    String detail = rs.getString("detail");
+                    boolean truncated = detail != null && detail.length() > MAX_LISTED_DETAIL_CHARS;
+                    Timestamp createdAt = rs.getTimestamp("created_at");
+                    return new AuditEventResponse(
+                            rs.getLong("id"),
+                            rs.getString("actor"),
+                            rs.getString("action"),
+                            rs.getString("target"),
+                            truncated ? detail.substring(0, MAX_LISTED_DETAIL_CHARS) : detail,
+                            truncated,
+                            createdAt == null ? "" : createdAt.toInstant().toString()
+                    );
+                },
+                parameters.toArray()
+        );
+        boolean hasMore = rows.size() > query.pageSize();
+        return new AuditEventPage(
+                hasMore ? List.copyOf(rows.subList(0, query.pageSize())) : List.copyOf(rows),
+                query.page(),
+                query.pageSize(),
+                hasMore
+        );
+    }
+
+    /** 过滤下拉的候选值取自实际写入过的记录，新增动作码不必同步维护一份枚举。 */
+    public AuditFacets facets() {
+        return new AuditFacets(
+                jdbc.queryForList("SELECT DISTINCT actor FROM audit_log ORDER BY actor", String.class),
+                jdbc.queryForList("SELECT DISTINCT action FROM audit_log ORDER BY action", String.class)
+        );
+    }
+
+    /** 单条记录的完整 detail，列表里被截断后由前端按需拉取。 */
+    public Optional<String> detail(long id) {
+        return jdbc.query("SELECT detail FROM audit_log WHERE id = ?", (rs, rowNum) -> rs.getString("detail"), id)
+                .stream().findFirst();
+    }
+
+    private String likePattern(String keyword) {
+        return "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+    }
+
     private String truncate(String value, int maximumLength) {
         if (value == null || value.length() <= maximumLength) return value;
         return value.substring(0, maximumLength);
+    }
+
+    /** 审计查询条件。所有字段都已归一化：空串一律转成 null。 */
+    public record AuditQuery(
+            String actor,
+            String action,
+            Long connectionId,
+            String keyword,
+            Instant from,
+            Instant to,
+            int page,
+            int pageSize
+    ) {
     }
 }

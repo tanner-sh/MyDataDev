@@ -494,6 +494,24 @@ public final class ApiDtos {
     public record BackupTaskPage(List<com.example.dbadmin.model.BackupTask> items, int page, int pageSize, boolean hasMore) {
     }
 
+    public record AuditEventResponse(
+            long id,
+            String actor,
+            String action,
+            String target,
+            String detail,
+            boolean detailTruncated,
+            String createdAt
+    ) {
+    }
+
+    public record AuditEventPage(List<AuditEventResponse> items, int page, int pageSize, boolean hasMore) {
+    }
+
+    /** 过滤下拉的候选值，来自实际写入过的记录而不是硬编码枚举。 */
+    public record AuditFacets(List<String> actors, List<String> actions) {
+    }
+
     public record RestoreSourceRef(@NotBlank String kind, @NotNull Long id) {
     }
 

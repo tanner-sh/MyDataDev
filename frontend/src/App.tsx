@@ -71,6 +71,7 @@ const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) 
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
+const AuditLogDrawer = lazy(() => import('./components/AuditLogDrawer').then((module) => ({ default: module.AuditLogDrawer })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
 const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
@@ -133,7 +134,7 @@ export default function App() {
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
@@ -2482,6 +2483,7 @@ export default function App() {
   const openConnectionsFromHeader = useStableEvent(() => setActiveDrawer('connections'));
   const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
   const openMcpFromHeader = useStableEvent(() => setActiveDrawer('mcp'));
+  const openAuditFromHeader = useStableEvent(() => setActiveDrawer('audit'));
   const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
   const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
   const previewBackupScheduleEvent = useStableEvent((cron: string) => previewBackupSchedule(cron));
@@ -2687,6 +2689,7 @@ export default function App() {
           onOpenConnections={openConnectionsFromHeader}
           onOpenBackups={openBackupsFromHeader}
           onOpenMcp={openMcpFromHeader}
+          onOpenAudit={openAuditFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -2919,6 +2922,11 @@ export default function App() {
         )}
       </Drawer>
 
+      {activeDrawer === 'audit' && (
+        <Suspense fallback={null}>
+          <AuditLogDrawer open connections={connections} onClose={() => setActiveDrawer(null)} />
+        </Suspense>
+      )}
       <Drawer
         title="MCP Server 设置"
         size={960}
