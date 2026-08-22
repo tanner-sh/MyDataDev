@@ -2,7 +2,8 @@ export type AppShortcut =
   | { kind: 'toggle-explorer' }
   | { kind: 'new-sql-tab' }
   | { kind: 'select-sql-tab'; index: number }
-  | { kind: 'commit-table-changes' };
+  | { kind: 'commit-table-changes' }
+  | { kind: 'open-object-search' };
 
 export type ShortcutKeyEvent = {
   key: string;
@@ -29,6 +30,8 @@ export function resolveAppShortcut(event: ShortcutKeyEvent): AppShortcut | undef
   if (commandKey && !event.altKey && !event.shiftKey) {
     if (event.key.toLowerCase() === 'b') return { kind: 'toggle-explorer' };
     if (event.key.toLowerCase() === 's') return { kind: 'commit-table-changes' };
+    // Ctrl/Cmd+P 是浏览器打印，处理方会 preventDefault —— VS Code Web 等同类工具是同样的取舍。
+    if (event.key.toLowerCase() === 'p') return { kind: 'open-object-search' };
     return undefined;
   }
 
@@ -45,7 +48,8 @@ export const SHORTCUT_HINTS = {
   toggleExplorer: 'Ctrl/Cmd+B',
   newSqlTab: 'Alt+N',
   selectSqlTab: 'Alt+1~9',
-  commitTableChanges: 'Ctrl/Cmd+S'
+  commitTableChanges: 'Ctrl/Cmd+S',
+  openObjectSearch: 'Ctrl/Cmd+P'
 } as const;
 
 function shortcutDigit(code: string): number | undefined {

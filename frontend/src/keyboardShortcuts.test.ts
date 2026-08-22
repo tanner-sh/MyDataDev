@@ -48,3 +48,15 @@ describe('resolveAppShortcut', () => {
     expect(resolveAppShortcut(press({ key: 'f', code: 'KeyF', ctrlKey: true, shiftKey: true }))).toBeUndefined();
   });
 });
+
+describe('全局对象搜索快捷键', () => {
+  it('Ctrl/Cmd+P 打开对象搜索', () => {
+    expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP', metaKey: true }))).toEqual({ kind: 'open-object-search' });
+    expect(resolveAppShortcut(press({ key: 'P', code: 'KeyP', ctrlKey: true }))).toEqual({ kind: 'open-object-search' });
+  });
+
+  it('带 Shift 或不带修饰键时不拦截，交回浏览器', () => {
+    expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP', metaKey: true, shiftKey: true }))).toBeUndefined();
+    expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP' }))).toBeUndefined();
+  });
+});

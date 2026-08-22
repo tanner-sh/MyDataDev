@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectDdlResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectRowCountResponse;
+import com.example.dbadmin.dto.ApiDtos.ObjectSearchResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
@@ -19,6 +20,7 @@ import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleResponse;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectPage;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectTemplateResponse;
 import com.example.dbadmin.service.MetadataService;
+import com.example.dbadmin.service.ObjectSearchService;
 import com.example.dbadmin.service.SchemaObjectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -28,10 +30,12 @@ import org.springframework.web.bind.annotation.*;
 public class MetadataController {
     private final MetadataService service;
     private final SchemaObjectService schemaObjects;
+    private final ObjectSearchService objectSearch;
 
-    public MetadataController(MetadataService service, SchemaObjectService schemaObjects) {
+    public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch) {
         this.service = service;
         this.schemaObjects = schemaObjects;
+        this.objectSearch = objectSearch;
     }
 
     @GetMapping("/{connectionId}")
@@ -44,6 +48,17 @@ public class MetadataController {
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
         return service.inspect(connectionId, schema, keyword, page, pageSize, refresh);
+    }
+
+    /** 跨对象类型的统一搜索，供命令面板式的全局搜索使用。 */
+    @GetMapping("/{connectionId}/search")
+    public ObjectSearchResponse search(
+            @PathVariable long connectionId,
+            @RequestParam(required = false) String schema,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) Integer limit
+    ) throws Exception {
+        return objectSearch.search(connectionId, schema, keyword, limit);
     }
 
     @GetMapping("/{connectionId}/completion-catalog")

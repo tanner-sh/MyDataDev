@@ -36,6 +36,7 @@ import {
 } from './backgroundTasks';
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
+import type { ObjectSearchHit } from './objectSearch';
 import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
@@ -72,6 +73,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const AuditLogDrawer = lazy(() => import('./components/AuditLogDrawer').then((module) => ({ default: module.AuditLogDrawer })));
+const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
 const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
@@ -143,6 +145,8 @@ export default function App() {
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
+  const [objectSearchOpen, setObjectSearchOpen] = useState(false);
+  const [explorerRequestedView, setExplorerRequestedView] = useState<{ kind: ExplorerObjectKind; keyword: string; token: number }>();
   const selectedIdRef = useRef<number | null>(null);
   const backgroundTasksRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const metadataRef = useRef<Metadata | null>(null);
@@ -1001,6 +1005,32 @@ export default function App() {
     }
   }
 
+  /**
+   * 全局搜索命中后的落点。
+   *
+   * 表直接打开数据（和对象树双击一致），视图打开详情；其余类型没有独立工作区，
+   * 交给资源管理器切换到对应类型并带上名字作为关键字。
+   */
+  function openObjectSearchHit(hit: ObjectSearchHit) {
+    const object: DbObject = {
+      schemaName: hit.schemaName || metadataQuery.schema || metadata?.selectedSchema,
+      name: hit.name,
+      type: hit.kind === 'VIEW' ? 'VIEW' : 'TABLE',
+      columns: [],
+      indexes: []
+    };
+    if (hit.kind === 'TABLE') {
+      openTable(object);
+      return;
+    }
+    if (hit.kind === 'VIEW') {
+      openObjectDetail(object);
+      return;
+    }
+    setExplorerRequestedView({ kind: hit.kind as ExplorerObjectKind, keyword: hit.name, token: Date.now() });
+    if (compactLayout) setMobileExplorerOpen(true);
+  }
+
   function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
     return `${connectionId}:${encodeURIComponent(object.schemaName || '')}:${encodeURIComponent(object.name)}`;
   }
@@ -1781,13 +1811,21 @@ export default function App() {
     || tableCreateOpen
     || Boolean(tableLifecycleAction)
     || historyOpen
-    || sqlFileTasksOpen;
+    || sqlFileTasksOpen
+    || objectSearchOpen;
 
   shortcutHandlerRef.current = (shortcut: AppShortcut, event: KeyboardEvent) => {
     if (shortcut.kind === 'toggle-explorer') {
       event.preventDefault();
       if (compactLayout) setMobileExplorerOpen((current) => !current);
       else layoutPreferences.toggleExplorer();
+      return;
+    }
+    if (shortcut.kind === 'open-object-search') {
+      if (!selected) return;
+      // 浏览器的打印快捷键要让位，和 VS Code Web 的取舍一致。
+      event.preventDefault();
+      setObjectSearchOpen((current) => !current);
       return;
     }
     if (overlayOpen) return;
@@ -2639,6 +2677,7 @@ export default function App() {
       onOpenTable={openExplorerTable}
       onBackupTable={backupExplorerTable}
       tableLifecycleEnabled={Boolean(selected?.capabilities?.tableDesign && !selected.readonly)}
+      requestedView={explorerRequestedView}
       onCreateTable={openCreateTableEvent}
       onRenameTable={renameTableEvent}
       onDropTable={dropTableEvent}
@@ -2922,6 +2961,17 @@ export default function App() {
         )}
       </Drawer>
 
+      {objectSearchOpen && (
+        <Suspense fallback={null}>
+          <ObjectSearchPalette
+            open
+            connectionId={selected?.id}
+            schemaName={activeSqlSchema}
+            onClose={() => setObjectSearchOpen(false)}
+            onOpenHit={openObjectSearchHit}
+          />
+        </Suspense>
+      )}
       {activeDrawer === 'audit' && (
         <Suspense fallback={null}>
           <AuditLogDrawer open connections={connections} onClose={() => setActiveDrawer(null)} />

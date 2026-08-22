@@ -52,6 +52,8 @@ export type ResourceExplorerProps = {
   onOpenTable: (object: DbObject) => void;
   onBackupTable: (object: DbObject) => void;
   tableLifecycleEnabled: boolean;
+  /** 由全局搜索驱动：把资源管理器切到某个对象类型并预填关键字。token 变化即生效。 */
+  requestedView?: { kind: ExplorerObjectKind; keyword: string; token: number };
   onCreateTable: () => void;
   onRenameTable: (object: DbObject) => void;
   onDropTable: (object: DbObject) => void;
@@ -83,6 +85,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   onOpenTable,
   onBackupTable,
   tableLifecycleEnabled,
+  requestedView,
   onCreateTable,
   onRenameTable,
   onDropTable
@@ -159,6 +162,18 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   useEffect(() => {
     setKeyboardObjectIndex((current) => Math.min(current, visibleTableObjects.length - 1));
   }, [visibleTableObjects.length]);
+
+  // 全局搜索命中一个 schema 对象时，把这里切到对应类型并带上关键字，用户落地即可见。
+  useEffect(() => {
+    if (!requestedView) return;
+    const kind = normalizeExplorerObjectKind(requestedView.kind, selected?.capabilities);
+    setActiveKind(kind);
+    setObjectView('all');
+    setKeyboardObjectIndex(-1);
+    onSearch(requestedView.keyword, kind);
+    // token 是唯一的触发条件：同一个对象被搜第二次也要重新定位。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedView?.token]);
 
   useEffect(() => {
     if (!supportedKinds.includes(activeKind)) {

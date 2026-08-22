@@ -60,6 +60,30 @@ public final class ApiDtos {
         }
     }
 
+    /**
+     * 全局搜索的一条命中。
+     *
+     * <p>{@code objectKey} 只有 schema 对象（视图/序列/触发器/存储过程/函数）才有，
+     * 表和视图用 schema + name 定位，所以前端要按 kind 分派到不同的打开方式。</p>
+     */
+    public record ObjectSearchHit(
+            String kind,
+            String schemaName,
+            String name,
+            String displayName,
+            String subtype,
+            String objectKey
+    ) {
+    }
+
+    public record ObjectSearchResponse(
+            String namespaceKind,
+            String schemaName,
+            List<ObjectSearchHit> hits,
+            boolean truncated
+    ) {
+    }
+
     public record SchemaObjectCapability(String kind, List<String> operations) {
         public SchemaObjectCapability {
             operations = operations == null ? List.of() : List.copyOf(operations);
