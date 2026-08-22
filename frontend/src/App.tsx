@@ -37,6 +37,7 @@ import {
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
+import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
 import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
@@ -74,6 +75,7 @@ const ConnectionList = lazy(() => import('./components/ConnectionList').then((mo
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const AuditLogDrawer = lazy(() => import('./components/AuditLogDrawer').then((module) => ({ default: module.AuditLogDrawer })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
+const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
 const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
@@ -146,6 +148,8 @@ export default function App() {
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [snippetDraft, setSnippetDraft] = useState<{ draft: SqlSnippetDraft; token: number }>();
   const [explorerRequestedView, setExplorerRequestedView] = useState<{ kind: ExplorerObjectKind; keyword: string; token: number }>();
   const selectedIdRef = useRef<number | null>(null);
   const backgroundTasksRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
@@ -1812,7 +1816,8 @@ export default function App() {
     || Boolean(tableLifecycleAction)
     || historyOpen
     || sqlFileTasksOpen
-    || objectSearchOpen;
+    || objectSearchOpen
+    || snippetsOpen;
 
   shortcutHandlerRef.current = (shortcut: AppShortcut, event: KeyboardEvent) => {
     if (shortcut.kind === 'toggle-explorer') {
@@ -2560,6 +2565,21 @@ export default function App() {
   const openSqlHistoryEvent = useStableEvent(() => openSqlHistory());
   const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
   const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());
+  const openSnippetsEvent = useStableEvent(() => {
+    setSnippetDraft(undefined);
+    setSnippetsOpen(true);
+  });
+  const saveSnippetEvent = useStableEvent((sql: string) => {
+    setSnippetDraft({ draft: snippetDraftFromSql(sql, selected?.dbType), token: Date.now() });
+    setSnippetsOpen(true);
+  });
+  const insertSnippetEvent = useStableEvent((snippet: SqlSnippet) => {
+    const editor = editorRef.current;
+    const currentSql = editor?.getValue() ?? activeSqlTab.sql;
+    const nextSql = appendSnippetToSql(currentSql, snippet.sql);
+    editor?.setValue(nextSql);
+    updateActiveSqlTab({ sql: nextSql, dirty: true, message: `已插入片段「${snippet.name}」`, statusKind: 'info' });
+  });
   const changeSqlResultTabEvent = useStableEvent((key: string) => updateActiveSqlTab({ activeResultKey: key }));
   const changeSqlResultPageEvent = useStableEvent((result: SqlStatementResult, navigation: SqlPageNavigation) => loadSqlResultPage(result, navigation));
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
@@ -2795,6 +2815,8 @@ export default function App() {
                 onOpenHistory={openSqlHistoryEvent}
                 onSqlFileSelect={selectSqlFileEvent}
                 onOpenSqlFileTasks={openSqlFileTasksEvent}
+                onOpenSnippets={openSnippetsEvent}
+                onSaveSnippet={saveSnippetEvent}
                 onResultTabChange={changeSqlResultTabEvent}
                 onResultPageChange={changeSqlResultPageEvent}
               />
@@ -2961,6 +2983,17 @@ export default function App() {
         )}
       </Drawer>
 
+      {snippetsOpen && (
+        <Suspense fallback={null}>
+          <SqlSnippetDrawer
+            open
+            dbType={selected?.dbType}
+            pendingDraft={snippetDraft}
+            onClose={() => setSnippetsOpen(false)}
+            onInsert={insertSnippetEvent}
+          />
+        </Suspense>
+      )}
       {objectSearchOpen && (
         <Suspense fallback={null}>
           <ObjectSearchPalette

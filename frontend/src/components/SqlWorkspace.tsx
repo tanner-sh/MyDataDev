@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
-import { CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
+import { BookOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
@@ -31,7 +31,7 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -64,6 +64,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onOpenHistory: () => void;
   onSqlFileSelect: (file: File) => void;
   onOpenSqlFileTasks: () => void;
+  onOpenSnippets: () => void;
+  onSaveSnippet: (sql: string) => void;
   onResultTabChange: (key: string) => void;
   onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
 }) {
@@ -190,6 +192,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       { key: 'sql-file', icon: <FileTextOutlined />, label: '执行本地 SQL 文件', disabled: !selected },
       { key: 'sql-file-tasks', icon: <ProfileOutlined />, label: '查看 SQL 文件任务' },
       { type: 'divider' },
+      { key: 'snippets', icon: <BookOutlined />, label: 'SQL 片段库' },
+      { key: 'save-snippet', icon: <SaveOutlined />, label: '把当前 SQL 保存为片段', disabled: !draftSql.trim() },
+      { type: 'divider' },
       {
         key: 'export',
         icon: <DownloadOutlined />,
@@ -219,6 +224,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       }
       if (key === 'sql-file-tasks') {
         onOpenSqlFileTasks();
+        return;
+      }
+      if (key === 'snippets') {
+        onOpenSnippets();
+        return;
+      }
+      if (key === 'save-snippet') {
+        commitDraft();
+        onSaveSnippet(draftRef.current);
         return;
       }
       if (key === 'explain') {
@@ -390,6 +404,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
                 </Button>
                 <Button icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>查看历史</Button>
                 <Button icon={<FileTextOutlined />} onClick={appendSelectTemplate}>追加 SELECT 模板</Button>
+                <Button icon={<BookOutlined />} onClick={onOpenSnippets}>SQL 片段库</Button>
               </Space>
             </div>
           )}

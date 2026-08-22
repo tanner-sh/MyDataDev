@@ -518,6 +518,29 @@ public final class ApiDtos {
     public record BackupTaskPage(List<com.example.dbadmin.model.BackupTask> items, int page, int pageSize, boolean hasMore) {
     }
 
+    public record SqlSnippetResponse(
+            long id,
+            String name,
+            String description,
+            String sql,
+            String dbType,
+            String tags,
+            long useCount,
+            String lastUsedAt,
+            String actor,
+            String updatedAt
+    ) {
+    }
+
+    public record SqlSnippetRequest(
+            @NotBlank @Size(max = 120) String name,
+            @Size(max = 500) String description,
+            @NotBlank @Size(max = 200_000) String sql,
+            @Size(max = 40) String dbType,
+            @Size(max = 500) String tags
+    ) {
+    }
+
     public record AuditEventResponse(
             long id,
             String actor,
