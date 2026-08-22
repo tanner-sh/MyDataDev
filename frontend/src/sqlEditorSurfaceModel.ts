@@ -6,8 +6,15 @@ export type SqlLineCommentResult = {
   selectionEnd: number;
 };
 
-export function shouldLoadSqlEditor(userRequested: boolean) {
-  return userRequested;
+/**
+ * 是否该把 Monaco 挂上。
+ *
+ * 除了用户主动聚焦，首屏空闲时也会自动挂载 —— chunk 已经在 App 里预取过，此时是命中
+ * 缓存。之前只在聚焦后才加载，导致进入工作台看到的是一个没有高亮、没有行号的纯
+ * textarea，还配了一句「聚焦后加载高级编辑器」把实现细节暴露给用户。
+ */
+export function shouldLoadSqlEditor(userRequested: boolean, autoLoad = false) {
+  return userRequested || autoLoad;
 }
 
 export function resolveSqlEditorShortcut(event: {

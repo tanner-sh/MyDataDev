@@ -76,7 +76,9 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
             <Button
               size="small"
               type="text"
-              danger={!row.deleted}
+              // 不再默认用 danger：一屏 100 行就是 100 个红色图标，整屏最强的颜色给了
+              // 最低频、最危险的操作。改成中性色，hover/focus 时才变红（见 styles.css）。
+              className={row.deleted ? 'editable-row-action is-undo' : 'editable-row-action'}
               icon={row.deleted ? <UndoOutlined /> : <DeleteOutlined />}
               disabled={row.rowDisabled}
               aria-label={row.deleted ? `撤销删除第 ${rowIndex + 1} 行` : row.inserted ? `移除新增的第 ${rowIndex + 1} 行` : `标记删除第 ${rowIndex + 1} 行`}

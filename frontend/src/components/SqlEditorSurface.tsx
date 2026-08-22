@@ -2,6 +2,7 @@ import { Button } from 'antd';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType, KeyboardEvent } from 'react';
 import { resolveSqlEditorShortcut, shouldLoadSqlEditor, toggleSqlLineComment } from '../sqlEditorSurfaceModel';
+import { prefetchWhenIdle } from '../idlePrefetch';
 import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 
 type SqlEditorComponent = ComponentType<SqlEditorProps>;
@@ -29,6 +30,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
   const [editorComponent, setEditorComponent] = useState<SqlEditorComponent>();
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [autoLoad, setAutoLoad] = useState(false);
   const mountedRef = useRef(true);
   const loadingRef = useRef(false);
   const componentRef = useRef<SqlEditorComponent | undefined>(undefined);
@@ -62,10 +64,14 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     }
   }, []);
 
-  const loadRequested = shouldLoadSqlEditor(userRequested);
+  const loadRequested = shouldLoadSqlEditor(userRequested, autoLoad);
   useEffect(() => {
     if (loadRequested) void loadEditor();
   }, [loadEditor, loadRequested]);
+
+  // 挂载后立刻在空闲时拉起编辑器。App 已经在首屏空闲时预取了这个 chunk，所以这里
+  // 通常是命中缓存、瞬间完成 —— 用户不必先点一下才看到语法高亮和补全。
+  useEffect(() => prefetchWhenIdle(async () => setAutoLoad(true), window), []);
 
   function handleFallbackShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
     const shortcut = resolveSqlEditorShortcut(event);
@@ -143,7 +149,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
         <div className={`sql-editor-fallback-status${loadError ? ' is-error' : ''}`} aria-live="polite">
           {loading && <><span className="editor-loading-dot" aria-hidden="true" /> 正在加载高级编辑器…</>}
           {loadError && <><span>高级编辑器加载失败，当前仍可继续输入。</span><Button type="link" size="small" onClick={() => void loadEditor()}>重试</Button></>}
-          {!loading && !loadError && !loadRequested && <span>聚焦后加载高级编辑器</span>}
+          {!loading && !loadError && !loadRequested && <span>正在准备编辑器…</span>}
         </div>
       )}
     </div>

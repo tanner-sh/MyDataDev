@@ -18,6 +18,8 @@ import {
 import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
+import { productionConfirmationHeaders } from '../productionConfirmation';
+import { compactColumnType } from '../columnTypeLabel';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -295,11 +297,24 @@ function ColumnTable({ rows, primaryKeys, active }: { rows: ColumnRow[]; primary
         </Space>
       )
     },
-    { title: '类型', dataIndex: 'type', key: 'type', width: 150 },
+    // 驱动返回的是 CHARACTER VARYING 这类全称，在 150px 里必然折行，把整行撑成两倍高，
+    // 行高参差不齐。缩写后配合长度列就够读了，完整原文放 title。
+    {
+      title: '类型',
+      dataIndex: 'type',
+      key: 'type',
+      width: 150,
+      render: (value: string) => <span title={value}>{compactColumnType(value)}</span>
+    },
     { title: '长度', dataIndex: 'size', key: 'size', width: 80 },
     { title: '约束', dataIndex: 'nullable', key: 'nullable', width: 92, render: (value: boolean) => value ? <Tag>可空</Tag> : <Tag color="orange">非空</Tag> },
-    { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value?: string) => value == null || value === '' ? '-' : <Text code>{value}</Text> },
-    { title: '备注', dataIndex: 'remarks', key: 'remarks', ellipsis: true, render: (value?: string) => value || '-' }
+    // 整列都空时不占版面：多数表没有默认值和备注，两列常年只显示「-」却吃掉三成宽度。
+    ...(rows.some((row) => row.defaultValue != null && row.defaultValue !== '')
+      ? [{ title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value?: string) => value == null || value === '' ? '-' : <Text code>{value}</Text> }]
+      : []),
+    ...(rows.some((row) => Boolean(row.remarks))
+      ? [{ title: '备注', dataIndex: 'remarks', key: 'remarks', ellipsis: true, render: (value?: string) => value || '-' }]
+      : [])
   ];
   return (
     <div className="object-tab-panel object-column-panel">
@@ -577,7 +592,7 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
       const response = await api<TableDesignResponse>(`/metadata/${connectionId}/objects/design/execute`, {
         method: 'POST',
         signal: controller.signal,
-        headers: productionConfirmationText ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(productionConfirmationText ? productionConfirmation : undefined),
         body: JSON.stringify({ ...designRequest(detail, columns, indexes, primaryKeys), confirmation })
       });
       if (requestId !== requestIdRef.current) return;

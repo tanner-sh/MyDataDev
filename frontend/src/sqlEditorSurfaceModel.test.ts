@@ -39,3 +39,12 @@ describe('SQL editor surface model', () => {
     expect(uncommented.value).toBe('-- select 1;\nselect 2;');
   });
 });
+
+describe('shouldLoadSqlEditor', () => {
+  it('挂载于用户聚焦或首屏空闲自动加载', () => {
+    expect(shouldLoadSqlEditor(false)).toBe(false);
+    expect(shouldLoadSqlEditor(true)).toBe(true);
+    expect(shouldLoadSqlEditor(false, true)).toBe(true);
+    expect(shouldLoadSqlEditor(true, true)).toBe(true);
+  });
+});

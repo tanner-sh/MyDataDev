@@ -12,6 +12,7 @@ import {
 } from './TableDefinitionEditor';
 import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
+import { productionConfirmationHeaders } from '../productionConfirmation';
 
 const { Text, Title } = Typography;
 
@@ -157,7 +158,7 @@ export function TableLifecyclePanel({
     try {
       const response = await api<TableDesignResponse>(`/metadata/${connection.id}/tables/lifecycle/execute`, {
         method: 'POST',
-        headers: productionConfirmationText ? { 'X-Production-Confirmation': createProductionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(productionConfirmationText ? createProductionConfirmation : undefined),
         body: JSON.stringify(createTableRequest(schemaName || undefined, tableName, columns, indexes, primaryKeys, createConfirmation))
       });
       if (requestId !== createRequestIdRef.current) return;
@@ -212,7 +213,7 @@ export function TableLifecyclePanel({
     try {
       const response = await api<TableDesignResponse>(`/metadata/${connection.id}/tables/lifecycle/execute`, {
         method: 'POST',
-        headers: productionConfirmationText ? { 'X-Production-Confirmation': actionProductionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(productionConfirmationText ? actionProductionConfirmation : undefined),
         body: JSON.stringify(tableActionRequest(action.operation, actionDetail, newTableName, actionConfirmation))
       });
       if (requestId !== actionRequestIdRef.current) return;

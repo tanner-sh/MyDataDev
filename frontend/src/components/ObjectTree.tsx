@@ -30,6 +30,7 @@ import {
   treeNodeKey
 } from '../objectTreeModel';
 import type { DbObject } from '../types';
+import { createObjectRowActivation, type ObjectRowActivation } from '../objectRowActivation';
 
 export type ObjectTreeProps = {
   objects: DbObject[];
@@ -148,6 +149,25 @@ export const ObjectTree = memo(function ObjectTree({
   const [viewportHeight, setViewportHeight] = useState(400);
   const scrollFrameRef = useRef<number | null>(null);
   const detailPrefetchTimerRef = useRef<number | null>(null);
+  // 单击看结构、双击看数据。回调经由 ref 读取，activation 本身只建一次。
+  const openDetailRef = useRef(onOpenDetail);
+  const openTableRef = useRef(onOpenTable);
+  openDetailRef.current = onOpenDetail;
+  openTableRef.current = onOpenTable;
+  const activationRef = useRef<ObjectRowActivation<DbObject> | null>(null);
+  if (activationRef.current === null) {
+    activationRef.current = createObjectRowActivation<DbObject>(
+      {
+        openDetail: (object) => openDetailRef.current(object),
+        openData: (object) => openTableRef.current(object)
+      },
+      {
+        setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clearTimer: (timerId) => window.clearTimeout(timerId)
+      }
+    );
+  }
+  useEffect(() => () => activationRef.current?.dispose(), []);
   const latestScrollRef = useRef({ top: 0, height: 0, clientHeight: 0 });
   const scrollPositionsRef = useRef(new Map<string, number>());
   const activeScrollScopeRef = useRef(scrollScopeKey);
@@ -376,17 +396,18 @@ export const ObjectTree = memo(function ObjectTree({
           <button
             className="object-tree-row-main object-tree-object-trigger"
             type="button"
-            title={`${displayName} · 查看详情`}
+            title={isView ? `${displayName} · 查看详情` : `${displayName} · 单击看结构，双击看数据`}
             onPointerEnter={() => scheduleDetailPrefetch(row.object)}
             onPointerLeave={cancelDetailPrefetch}
             onFocus={() => scheduleDetailPrefetch(row.object)}
             onBlur={cancelDetailPrefetch}
-            onClick={() => onOpenDetail(row.object)}
+            onClick={() => activationRef.current!.click(row.object, !isView)}
+            onDoubleClick={() => activationRef.current!.doubleClick(row.object, !isView)}
           >
             <span className="object-tree-object-name"><HighlightedName name={row.object.name} keyword={keyword} /></span>
           </button>
           <span className="object-tree-actions">
-            {!isView && <Tooltip title="打开表数据"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
+            {!isView && <Tooltip title="打开表数据（双击行同样可以）"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
             <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'favorite') onToggleFavorite?.(row.object); if (key === 'backup') onBackupTable?.(row.object); if (key === 'rename') onRenameTable?.(row.object); if (key === 'drop') onDropTable?.(row.object); } }}>
               <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
             </Dropdown>

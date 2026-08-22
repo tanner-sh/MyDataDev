@@ -902,6 +902,20 @@ body.is-resizing-column * {
   min-height: 0;
 }
 
+.editable-row-action {
+  color: var(--text-secondary);
+}
+
+.editable-row-action:hover:not(:disabled),
+.editable-row-action:focus-visible:not(:disabled) {
+  color: var(--danger);
+}
+
+.editable-row-action.is-undo,
+.editable-row-action.is-undo:hover:not(:disabled) {
+  color: var(--primary);
+}
+
 .sql-preview-card {
   border-radius: 0;
   border-left: 0;
@@ -1030,8 +1044,8 @@ body.is-resizing-column * {
   min-width: 0;
   min-height: 66px;
   padding: 9px 12px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(82px, 120px)) minmax(220px, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   overflow-x: auto;
   border-bottom: 1px solid var(--border);
@@ -1051,7 +1065,21 @@ body.is-resizing-column * {
 }
 
 .object-summary-metric {
+  flex: 0 0 auto;
+  min-width: 104px;
   justify-content: space-between;
+}
+
+/* 「行数」这类两字标签在窄卡里会被挤成竖排（「行」换行到「数」上面）。 */
+.object-summary-metric > .ant-typography:first-child,
+.object-summary-primary > .ant-typography:first-child {
+  white-space: nowrap;
+}
+
+/* 主键卡随内容伸缩，但不再为了一个小标签霸占整行剩余宽度。 */
+.object-summary-primary {
+  flex: 1 1 220px;
+  max-width: 560px;
 }
 
 .object-summary-metric > .ant-typography:last-child {
@@ -1764,6 +1792,80 @@ body.is-resizing-column * {
   margin-block: 0;
 }
 
+.sql-result-error-state {
+  height: 100%;
+  min-height: 0;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.sql-result-error-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sql-result-error-heading > .ant-typography {
+  margin-right: auto;
+}
+
+.sql-result-error-icon {
+  color: var(--danger);
+  font-size: 15px;
+}
+
+.sql-result-error-banner {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.sql-result-error-banner-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sql-result-error-banner-line > .ant-typography.ellipsis-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sql-result-error-banner .sql-result-error-detail {
+  max-height: 160px;
+  flex: 0 0 auto;
+}
+
+.sql-result-error-stale {
+  font-size: 12px;
+}
+
+.sql-result-error-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .result-scope-tag {
   margin-inline-end: 0;
 }
@@ -1781,6 +1883,17 @@ body.is-resizing-column * {
 
 .backup-disabled-action-wrap > .ant-btn {
   width: 100%;
+}
+
+.explorer-scope-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.explorer-schema-select {
+  min-width: 0;
 }
 
 .object-type-toolbar {
@@ -3383,16 +3496,9 @@ body.is-resizing-column * {
   }
 }
 
-@media (max-width: 860px) {
-  .app-header {
-    grid-template-columns: auto minmax(190px, 1fr) auto;
-    gap: 6px;
-  }
-
-  .connection-readonly-tag {
-    display: none;
-  }
-
+/* 顶栏的文字按钮从 1100px 就收成图标：资源管理器要到 1199px 才收进抽屉，中间这段
+   「连接管理 / 备份任务 / MCP」三个带文字的按钮会把连接选择器挤到没有余量。 */
+@media (max-width: 1099px) {
   .brand-copy .ant-typography:last-child,
   .app-header-actions .ant-btn:not(.header-icon-button) > span:last-child {
     display: none;
@@ -3401,6 +3507,17 @@ body.is-resizing-column * {
   .app-header-actions .ant-btn:not(.header-icon-button) {
     width: 32px;
     padding-inline: 0;
+  }
+}
+
+@media (max-width: 860px) {
+  .app-header {
+    grid-template-columns: auto minmax(190px, 1fr) auto;
+    gap: 6px;
+  }
+
+  .connection-readonly-tag {
+    display: none;
   }
 
   .workspace-toolbar {

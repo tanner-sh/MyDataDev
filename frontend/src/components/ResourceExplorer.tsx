@@ -92,6 +92,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   const [favoriteObjectKeys, setFavoriteObjectKeys] = useState<string[]>(() => readFavoriteObjectKeys());
   const [recentObjects, setRecentObjects] = useState(() => readRecentObjects());
   const [keyboardObjectIndex, setKeyboardObjectIndex] = useState(-1);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [schemaObjectRefreshToken, setSchemaObjectRefreshToken] = useState(0);
   const [schemaObjectLoadMoreToken, setSchemaObjectLoadMoreToken] = useState(0);
   const [schemaCreateKind, setSchemaCreateKind] = useState<SchemaObjectKind>();
@@ -308,11 +309,14 @@ export const ResourceExplorer = memo(function ResourceExplorer({
       )}
 
       <div className="explorer-filters">
+        {/* Schema 与对象类型合并成一行：这两个选择器之前各占一整行，加上搜索、分组、
+            提示，表列表要滚过近 300px 的控件才开始。 */}
+        <div className="explorer-scope-row">
         <Select
           size="small"
           allowClear
           showSearch
-          className="full-width"
+          className="explorer-schema-select"
           placeholder={`选择${namespaceLabel}`}
           value={metadataQuery.schema || metadata?.selectedSchema || undefined}
           disabled={!selected || metadataBlockingLoading}
@@ -338,6 +342,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             </Tooltip>
           )}
         </div>
+        </div>
         <Input.Search
           size="small"
           allowClear
@@ -349,6 +354,8 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             setKeyboardObjectIndex(-1);
             onKeywordChange(event.target.value, activeKind);
           }}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
           onKeyDown={handleObjectSearchKeyDown}
           onSearch={(keyword) => onSearch(keyword, activeKind)}
         />
@@ -369,7 +376,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
                 setKeyboardObjectIndex(-1);
               }}
             />
-            <Text type="secondary">↑↓ 选择，Enter 查看 · 当前显示 {visibleTableObjects.length} 个</Text>
+            <Text type="secondary">
+              {searchFocused ? '↑↓ 选择，Enter 查看 · ' : ''}当前显示 {visibleTableObjects.length} 个
+            </Text>
           </div>
         )}
       </div>
@@ -379,7 +388,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
         {activeKind === 'TABLE' && (metadataBlockingLoading ? (
           <div className="explorer-loading" role="status">
             <Spin size="small" />
-            <Text type="secondary">正在加载 {metadataQuery.schema || `当前${namespaceLabel}`}…</Text>
+            <Text type="secondary">正在加载 {metadataQuery.schema || `当前 ${namespaceLabel}`}…</Text>
           </div>
         ) : (
           <ObjectTree
@@ -394,7 +403,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
               ? '当前已加载对象中暂无收藏表'
               : objectView === 'recent'
                 ? '当前已加载对象中暂无最近访问的表'
-                : metadataAppliedKeyword ? '未找到匹配的表' : `当前${namespaceLabel}暂无表`}
+                : metadataAppliedKeyword ? '未找到匹配的表' : `当前 ${namespaceLabel} 暂无表`}
             structureLoadingKey={structureLoadingKey}
             hasMore={objectView === 'all' ? metadata?.hasMore : false}
             loadingMore={objectView === 'all' && metadataLoading && !metadataBlockingLoading}

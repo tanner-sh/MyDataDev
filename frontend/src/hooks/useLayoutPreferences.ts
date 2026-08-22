@@ -7,6 +7,8 @@ export interface LayoutPreferences {
   explorerWidth: number;
   explorerCollapsed: boolean;
   editorSplitRatio: number;
+  /** 用户是否手动拖过分隔条。false 时由内容决定默认比例，见 editorSplit.ts。 */
+  editorSplitRatioTouched: boolean;
   sqlPageSize: number;
   tablePageSize: number;
 }
@@ -40,6 +42,7 @@ export const DEFAULT_LAYOUT_PREFERENCES: Readonly<LayoutPreferences> = {
   explorerWidth: 300,
   explorerCollapsed: false,
   editorSplitRatio: 0.52,
+  editorSplitRatioTouched: false,
   sqlPageSize: 500,
   tablePageSize: 100
 };
@@ -107,7 +110,9 @@ export function useLayoutPreferences(): LayoutPreferencesController {
         resolveUpdate(value, current.editorSplitRatio),
         EDITOR_SPLIT_RATIO_MIN,
         EDITOR_SPLIT_RATIO_MAX
-      )
+      ),
+      // 只有用户亲手拖过，才把这个比例当成偏好；否则默认比例跟随内容。
+      editorSplitRatioTouched: true
     }));
   }, []);
 
@@ -179,6 +184,9 @@ export function normalizeLayoutPreferences(value: unknown): LayoutPreferences {
       EDITOR_SPLIT_RATIO_MIN,
       EDITOR_SPLIT_RATIO_MAX
     ),
+    editorSplitRatioTouched: typeof value.editorSplitRatioTouched === 'boolean'
+      ? value.editorSplitRatioTouched
+      : DEFAULT_LAYOUT_PREFERENCES.editorSplitRatioTouched,
     sqlPageSize: normalizeSqlPageSize(sqlPageSize ?? DEFAULT_LAYOUT_PREFERENCES.sqlPageSize),
     tablePageSize: normalizePageSize(tablePageSize ?? DEFAULT_LAYOUT_PREFERENCES.tablePageSize)
   };

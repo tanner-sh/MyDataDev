@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Dropdown, Empty, Input, Popconfirm, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Dropdown, Empty, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useMemo, useState } from 'react';
@@ -26,6 +26,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   const [environment, setEnvironment] = useState<string>('all');
   const [dbType, setDbType] = useState<string>('all');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Connection | null>(null);
   const favoriteIds = useMemo(() => new Set(favoriteConnectionIds), [favoriteConnectionIds]);
   const visibleConnections = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLocaleLowerCase();
@@ -116,58 +117,86 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                 <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
               </div>
               <Space size={2} className="connection-actions">
-                {selectedId !== connection.id && (
-                  <Tooltip title="切换使用">
-                    <Button size="small" type="primary" icon={<SwapOutlined />} aria-label={`切换使用 ${connection.name}`} onClick={() => onSwitch(connection)} />
-                  </Tooltip>
-                )}
+                {/* 当前连接也保留这个按钮（禁用），否则各行的操作区宽度不同，⋮ 会逐行错位。 */}
+                <Tooltip title={selectedId === connection.id ? '已是当前连接' : '切换使用'}>
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<SwapOutlined />}
+                    disabled={selectedId === connection.id}
+                    aria-label={selectedId === connection.id ? `${connection.name} 已是当前连接` : `切换使用 ${connection.name}`}
+                    onClick={() => onSwitch(connection)}
+                  />
+                </Tooltip>
                 <Dropdown
                   trigger={['click']}
-                  menu={connectionMenu(connection, testingConnectionId === connection.id, onTest, onEdit, onDuplicate)}
+                  menu={connectionMenu(
+                    connection,
+                    testingConnectionId === connection.id,
+                    onTest,
+                    onEdit,
+                    onDuplicate,
+                    () => setPendingDelete(connection)
+                  )}
                 >
                   <Tooltip title="更多连接操作">
                     <Button size="small" icon={<MoreOutlined />} aria-label={`${connection.name} 更多连接操作`} />
                   </Tooltip>
                 </Dropdown>
-                <Popconfirm
-                  title="删除连接"
-                  description="确定删除该连接吗？当前未提交的数据变更会丢失；有关联备份任务的连接会被后端拒绝删除。"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => onDelete(connection)}
-                >
-                  <Tooltip title="删除连接">
-                    <Button size="small" danger icon={<DeleteOutlined />} aria-label={`删除连接 ${connection.name}`} />
-                  </Tooltip>
-                </Popconfirm>
               </Space>
             </div>
           </div>
         ))}
         {visibleConnections.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的数据库连接" />}
       </div>
+      <Modal
+        open={pendingDelete !== null}
+        title={pendingDelete ? `删除连接「${pendingDelete.name}」？` : undefined}
+        okText="删除连接"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        onOk={() => {
+          if (pendingDelete) onDelete(pendingDelete);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          当前未提交的数据变更会丢失；有关联备份任务的连接会被后端拒绝删除。
+        </Typography.Paragraph>
+      </Modal>
     </Space>
   );
 }
 
+/**
+ * 删除收进「更多」菜单。
+ *
+ * 之前每张连接卡都常驻一个红色描边的删除按钮，整个抽屉里最强的颜色给了最危险、
+ * 最低频的操作；扫一眼列表满屏都是红框。
+ */
 function connectionMenu(
   connection: Connection,
   testing: boolean,
   onTest: (connection: Connection) => void,
   onEdit: (connection: Connection) => void,
-  onDuplicate: (connection: Connection) => void
+  onDuplicate: (connection: Connection) => void,
+  onRequestDelete: () => void
 ): MenuProps {
   return {
     items: [
       { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing },
       { key: 'edit', icon: <EditOutlined />, label: '编辑连接' },
-      { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接' }
+      { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接' },
+      { type: 'divider' },
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除连接', danger: true }
     ],
     onClick: ({ key }) => {
       if (key === 'test') onTest(connection);
       if (key === 'edit') onEdit(connection);
       if (key === 'duplicate') onDuplicate(connection);
+      if (key === 'delete') onRequestDelete();
     }
   };
 }

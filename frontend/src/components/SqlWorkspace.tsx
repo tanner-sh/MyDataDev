@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
-import { DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
+import { CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
@@ -9,6 +9,7 @@ import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
+import { resolveEditorSplitRatio } from '../editorSplit';
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
@@ -30,7 +31,7 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onResultTabChange, onResultPageChange }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -46,6 +47,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   pagingResultKey: string | null;
   themeMode: 'light' | 'dark';
   editorSplitRatio: number;
+  editorSplitRatioTouched: boolean;
   onEditorSplitRatioChange: (value: number) => void;
   onTabChange: (tabId: string) => void;
   onTabAdd: () => void;
@@ -173,7 +175,16 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
       )
     };
   }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
-  const splitLimits = editorSplitLimits(splitHeight, editorSplitRatio);
+  // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
+  // 而不是无论内容如何都给编辑器固定的一半。
+  const preferredSplitRatio = resolveEditorSplitRatio({
+    touched: editorSplitRatioTouched,
+    storedRatio: editorSplitRatio,
+    hasResults: activeTab.results.length > 0,
+    sql: draftSql,
+    containerHeight: splitHeight
+  });
+  const splitLimits = editorSplitLimits(splitHeight, preferredSplitRatio);
   const moreMenu: MenuProps = {
     items: [
       { key: 'sql-file', icon: <FileTextOutlined />, label: '执行本地 SQL 文件', disabled: !selected },
@@ -239,6 +250,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             <Text strong>SQL 工作台</Text>
             <Text type="secondary" className="ellipsis-text">
               {selected ? `${selected.name} · ${namespaceKind === 'CATALOG' ? '数据库' : 'Schema'} ${activeSchema || '连接默认值'}` : '请先选择数据库连接'}
+              {/* 顶栏和资源管理器已各有一个「只读」标签，这里不再占一整条横幅，只补一句说明。 */}
+              {selected?.readonly ? ' · 只读连接，写入和 DDL 会被拒绝' : ''}
             </Text>
           </div>
         </Tooltip>
@@ -290,7 +303,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           />
         </div>
       </Header>
-      {selected?.readonly && <Alert className="sql-readonly-alert" type="warning" showIcon title="只读连接：后端仅允许查询类 SQL，写入和 DDL 会被拒绝。" />}
       <Tabs
         className="sql-tabs"
         type="editable-card"
@@ -344,6 +356,16 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           onChange={onEditorSplitRatioChange}
         />}
         <div className={`sql-results-pane is-${resultPaneMode}`}>
+          {/* 上一次的结果还在时，失败必须以横幅形式压在结果上方：这是最常见的场景
+              （跑一次、改一版、再跑一次失败），此前失败只写进底部状态栏，而结果区
+              还显示着上一次的数据，看起来像执行成功了。 */}
+          {activeTab.errorDetail && activeTab.results.length > 0 && resultPaneMode !== 'collapsed' && (
+            <SqlExecutionErrorBanner
+              detail={activeTab.errorDetail}
+              retryDisabled={!selected || loading || !draftSql.trim()}
+              onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
+            />
+          )}
           {resultPaneMode === 'collapsed' && activeResult ? (
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
@@ -352,6 +374,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
+          ) : activeTab.errorDetail ? (
+            <SqlExecutionErrorPanel
+              detail={activeTab.errorDetail}
+              retryDisabled={!selected || loading || !draftSql.trim()}
+              onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
+            />
           ) : (
             <div className="sql-result-empty-state">
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无执行结果" />
@@ -368,6 +396,77 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         </div>
       </div>
       <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{loading ? `${cancelling ? '正在取消' : '执行中'} · ${formatElapsed(executionElapsedMs)} · ` : ''}{tabs.length} 个查询标签</Text>} />
+    </div>
+  );
+});
+
+/**
+ * 整次执行失败时占据结果区。
+ *
+ * 之前失败只写进底部状态栏那条单行里：驱动原文动辄上百字符（还带着后端自动补的
+ * LIMIT/OFFSET），在状态栏里会被截断，也没法选中复制，而结果区还停在「尚无执行结果」，
+ * 看起来像什么都没发生。
+ */
+const SqlExecutionErrorPanel = memo(function SqlExecutionErrorPanel({ detail, retryDisabled, onRetry }: {
+  detail: string;
+  retryDisabled: boolean;
+  onRetry: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1_600);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+  useEffect(() => setCopied(false), [detail]);
+
+  return (
+    <div className="sql-result-error-state" role="alert">
+      <div className="sql-result-error-heading">
+        <CloseCircleFilled className="sql-result-error-icon" />
+        <Text strong>SQL 执行失败</Text>
+        <Space size={4}>
+          <Button
+            size="small"
+            icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+            onClick={() => {
+              void navigator.clipboard?.writeText(detail).then(() => setCopied(true)).catch(() => undefined);
+            }}
+          >
+            {copied ? '已复制' : '复制错误'}
+          </Button>
+          <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={retryDisabled} onClick={onRetry}>重试</Button>
+        </Space>
+      </div>
+      <pre className="sql-result-error-detail">{detail}</pre>
+    </div>
+  );
+});
+
+/** 失败发生时上一次的结果仍在屏幕上，用横幅明确「下面是上一次的结果」。 */
+const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, retryDisabled, onRetry }: {
+  detail: string;
+  retryDisabled: boolean;
+  onRetry: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => setExpanded(false), [detail]);
+
+  return (
+    <div className="sql-result-error-banner" role="alert">
+      <div className="sql-result-error-banner-line">
+        <CloseCircleFilled className="sql-result-error-icon" />
+        <Text strong>本次执行失败</Text>
+        <Text type="secondary" className="ellipsis-text">{detail}</Text>
+        <Space size={4}>
+          <Button size="small" type="text" onClick={() => setExpanded((current) => !current)}>
+            {expanded ? '收起' : '展开'}
+          </Button>
+          <Button size="small" icon={<PlayCircleOutlined />} disabled={retryDisabled} onClick={onRetry}>重试</Button>
+        </Space>
+      </div>
+      {expanded && <pre className="sql-result-error-detail">{detail}</pre>}
+      <Text type="secondary" className="sql-result-error-stale">下方仍是上一次执行的结果。</Text>
     </div>
   );
 });

@@ -34,7 +34,7 @@ import {
   summarizeBackgroundTasks,
   type BackgroundTaskSummary
 } from './backgroundTasks';
-import { matchesProductionConnectionName, normalizeProductionConfirmation } from './productionConfirmation';
+import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
@@ -1129,7 +1129,7 @@ export default function App() {
         if (path === '/sql/explain') {
         const data = await api<SqlResult>(path, {
           method: 'POST',
-          headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+          headers: productionConfirmationHeaders(productionConfirmation),
           body: JSON.stringify({ connectionId: selected.id, sql: target.sql, executionId, schemaName: activeSqlSchema })
         });
         const result: SqlStatementResult = {
@@ -1142,11 +1142,11 @@ export default function App() {
           result: data
         };
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
-        updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success' });
+        updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success', errorDetail: undefined });
         } else {
         const executeScript = (unscopedMutationConfirmed: boolean) => api<SqlScriptResult>('/sql/execute-script', {
           method: 'POST',
-          headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+          headers: productionConfirmationHeaders(productionConfirmation),
           body: JSON.stringify({
             connectionId: selected.id,
             sql: target.sql,
@@ -1182,7 +1182,9 @@ export default function App() {
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
           message: nextMessage,
-          statusKind: failed ? 'error' : 'success'
+          statusKind: failed ? 'error' : 'success',
+          // 单条语句的失败由结果标签自己展示，这里不再重复整体错误面板。
+          errorDetail: undefined
         });
         if (failed) {
           selectStatementRange(target.baseOffset + failed.startOffset, target.baseOffset + failed.endOffset);
@@ -1196,7 +1198,8 @@ export default function App() {
         if (historyOpen) await refreshSqlHistoryQuietly(selected);
       } catch (e) {
         const errorMessage = localizeError(e);
-        updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
+        // 结果区也要拿到原文：状态栏只有一行，长错误会被截断且无法复制。
+        updateActiveSqlTab({ message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
         toastApi.error(errorMessage);
         if (historyOpen) await refreshSqlHistoryQuietly(selected);
       } finally {
@@ -1241,7 +1244,7 @@ export default function App() {
         // SELECT 可能调用带副作用的函数。翻页会把同一条 SELECT 重新执行一遍，也就会把那些
         // 副作用再触发一次，而用户只在首次执行时确认过。这里接受这个权衡（否则每翻一页都要
         // 重新输入连接名），但它不是「翻页一定安全」。
-        headers: selected.environment === 'prod' ? { 'X-Production-Confirmation': selected.name } : undefined,
+        headers: productionConfirmationHeaders(selected.environment === 'prod' ? selected.name : undefined),
         body: JSON.stringify({
           connectionId: page.connectionId,
           sql: statementResult.sql,
@@ -1418,7 +1421,7 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
           'X-User': 'admin',
-          ...(productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : {})
+          ...productionConfirmationHeaders(productionConfirmation)
         },
         body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts })
       });
@@ -2274,7 +2277,7 @@ export default function App() {
     try {
       const data = await api<{ sql: string[]; affectedRows: number }>('/data/commit', {
         method: 'POST',
-        headers: productionConfirmation ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(productionConfirmation),
         body: JSON.stringify(dataChangePayload())
       });
       setPreviewSql(data.sql);
@@ -2733,6 +2736,7 @@ export default function App() {
                 pagingResultKey={sqlPagingResultKey}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
+                editorSplitRatioTouched={layoutPreferences.editorSplitRatioTouched}
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
                 onTabChange={setActiveSqlTabId}
                 onTabAdd={addSqlTabEvent}

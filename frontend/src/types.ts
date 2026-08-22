@@ -363,7 +363,21 @@ export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; keyToken?: strin
 export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
-export type SqlTab = { id: string; title: string; sql: string; dirty: boolean; results: SqlStatementResult[]; activeResultKey?: string; message: string; statusKind?: WorkspaceStatusKind };
+export type SqlTab = {
+  id: string;
+  title: string;
+  sql: string;
+  dirty: boolean;
+  results: SqlStatementResult[];
+  activeResultKey?: string;
+  message: string;
+  statusKind?: WorkspaceStatusKind;
+  /**
+   * 整次请求失败（连接不上、被闸门拒绝、驱动报错）的完整原文。
+   * 状态栏只有一行、会被截断且无法复制，所以结果区也要显示它。
+   */
+  errorDetail?: string;
+};
 export type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; createdAt: string };
 export type SqlFileExecutionStatus = 'ANALYZING' | 'READY' | 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
 export type SqlFileExecution = {

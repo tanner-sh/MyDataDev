@@ -59,6 +59,7 @@ import type {
 import { ResultGrid } from './ResultGrid';
 import { SqlPreview } from './SqlPreview';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
+import { productionConfirmationHeaders } from '../productionConfirmation';
 
 const { Text, Title } = Typography;
 
@@ -392,7 +393,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     try {
       const response = await api<SchemaObjectLifecycleResponse>(`/metadata/${connection.id}/schema-objects/lifecycle/execute`, {
         method: 'POST',
-        headers: production ? { 'X-Production-Confirmation': productionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(production ? productionConfirmation : undefined),
         body: JSON.stringify({ ...pending.request, confirmation })
       });
       messageApi.success(response.message);
@@ -415,7 +416,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     try {
       const result = await api<RoutineInvokeResponse>(`/metadata/${connection.id}/schema-objects/invoke`, {
         method: 'POST',
-        headers: production ? { 'X-Production-Confirmation': invokeProductionConfirmation } : undefined,
+        headers: productionConfirmationHeaders(production ? invokeProductionConfirmation : undefined),
         body: JSON.stringify({
           objectKey: detail.object.objectKey,
           structureVersion: detail.structureVersion,

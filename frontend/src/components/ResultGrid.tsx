@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
 import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
+import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, QuestionCircleOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
@@ -530,7 +530,13 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             />
           )}
         </div>
-        <Text type="secondary" className="result-grid-toolbar-hint">单击选择 · Shift 连选 · 结果区聚焦时 Ctrl/Cmd+C 复制 · Ctrl/Cmd+A 全选 · Esc 清空</Text>
+        {/* 这行原本常驻，占掉整条工具栏的右半边跟数据抢位置；它是教学文案，收进气泡即可。 */}
+        <Tooltip
+          placement="bottomRight"
+          title={<span>单击选择 · Shift 连选<br />结果区聚焦时：Ctrl/Cmd+C 复制 · Ctrl/Cmd+A 全选 · Esc 清空</span>}
+        >
+          <Button type="text" size="small" className="result-grid-toolbar-hint" icon={<QuestionCircleOutlined />} aria-label="查看结果区选择与复制快捷键" />
+        </Tooltip>
       </div>
       <div ref={viewportRef} className="data-grid-viewport">
         {scrollY === undefined ? (
@@ -554,7 +560,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           {result.page ? (
             <>
               <Text type="secondary" className="grid-pagination-summary">
-                {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`} · {result.elapsedMs}ms
+                {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`}
                 {result.page.effectivePageSize < result.page.requestedPageSize ? ` · 服务端单批上限 ${result.page.effectivePageSize}` : ''}
               </Text>
               <div className="result-pagination-actions">
@@ -593,7 +599,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               </div>
             </>
           ) : (
-            <Text type="secondary" className="grid-pagination-summary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`} · {result.elapsedMs}ms（当前结果不支持翻页）</Text>
+            <Text type="secondary" className="grid-pagination-summary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`}（当前结果不支持翻页）</Text>
           )}
         </div>
       </div>
