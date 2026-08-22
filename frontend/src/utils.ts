@@ -185,6 +185,7 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   READONLY_CONNECTION: '当前连接为只读连接，不允许执行写入或结构变更。',
   CONNECTION_HAS_BACKUP_TASKS: '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。',
   CONNECTION_RESTORE_RUNNING: '该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。',
+  CONNECTION_TRANSACTION_OPEN: '该连接上有未结束的手动事务，请先提交或回滚后再修改或删除连接。',
   CONNECTION_BACKGROUND_BUSY: '该连接已有后台重任务正在执行，请等待完成后重试。',
   BACKUP_ALREADY_RUNNING: '该备份任务正在执行，请勿重复启动。',
   BACKUP_QUEUE_FULL: '备份执行队列已满，请稍后重试。',

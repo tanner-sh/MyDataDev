@@ -29,6 +29,11 @@ public class MariaDbDialect extends MySqlDialect {
     }
 
     @Override
+    public boolean supportsKillSession() {
+        return true;
+    }
+
+    @Override
     public String killSessionSql(String sessionId) {
         return "KILL " + Long.parseLong(sessionId);
     }

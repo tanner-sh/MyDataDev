@@ -140,9 +140,14 @@ public class SqlFileExecutionService {
                 actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size);
     }
 
-    /** 由服务端生成脚本内容的回调；写入的字符会直接落到最终的脚本文件里。 */
+    /**
+     * 由服务端生成脚本内容的回调；写入的字符会直接落到最终的脚本文件里。
+     *
+     * <p>返回值会拼进审计明细 —— 生成过程里才知道的事实（比如一份 CSV 实际转换了多少行）
+     * 只有在这里才拿得到。</p>
+     */
     public interface ScriptWriter {
-        void write(Writer out) throws Exception;
+        String write(Writer out) throws Exception;
     }
 
     /**
@@ -153,7 +158,8 @@ public class SqlFileExecutionService {
      * 导入任务天然具备进度、取消与并发闸门。</p>
      */
     public SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, ScriptWriter writer,
-                                                 String actor, String auditAction, String auditDetail) throws Exception {
+                                                 String actor, String auditAction, String auditDetailPrefix) throws Exception {
+        String auditDetail = auditDetailPrefix;
         DbConnection connection = connections.require(connectionId);
         String fileName = safeFileName(rawFileName);
         long maximum = properties.getSqlFile().getMaxUploadBytes();
@@ -167,9 +173,10 @@ public class SqlFileExecutionService {
              BoundedOutputStream bounded = new BoundedOutputStream(file, maximum);
              DigestOutputStream digested = new DigestOutputStream(bounded, digest);
              Writer out = new BufferedWriter(new OutputStreamWriter(digested, StandardCharsets.UTF_8), 128 * 1024)) {
-            writer.write(out);
+            String detail = writer.write(out);
             out.flush();
             size = bounded.written();
+            if (detail != null && !detail.isBlank()) auditDetail = auditDetail + "; " + detail;
         } catch (Exception error) {
             Files.deleteIfExists(target);
             throw error;

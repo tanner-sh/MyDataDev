@@ -8,7 +8,8 @@ import {
   transactionLeaveWarning,
   transactionTooltip,
   type SqlTransaction,
-  type SqlTransactionState
+  type SqlTransactionState,
+  restoredTransactionNotice
 } from './sqlTransaction';
 
 const transaction = (overrides: Partial<SqlTransaction> = {}): SqlTransaction => ({
@@ -66,5 +67,21 @@ describe('transactionLeaveWarning', () => {
   it('warns only while a transaction is open', () => {
     expect(transactionLeaveWarning(IDLE_SQL_TRANSACTION)).toBeNull();
     expect(transactionLeaveWarning(active({ statementCount: 2 }))).toContain('已执行 2 条');
+  });
+});
+
+describe('restoredTransactionNotice', () => {
+  it('接回带未提交语句的事务时点明条数', () => {
+    expect(restoredTransactionNotice(transaction({ statementCount: 3 }))).toContain('3 条未提交语句');
+  });
+
+  it('刚开还没执行的事务只说明超时时间', () => {
+    const notice = restoredTransactionNotice(transaction({ statementCount: 0, idleTimeoutSeconds: 600 }));
+    expect(notice).toContain('10 分钟');
+    expect(notice).not.toContain('未提交语句');
+  });
+
+  it('超时时间不足一分钟也至少说 1 分钟', () => {
+    expect(restoredTransactionNotice(transaction({ statementCount: 0, idleTimeoutSeconds: 20 }))).toContain('1 分钟');
   });
 });

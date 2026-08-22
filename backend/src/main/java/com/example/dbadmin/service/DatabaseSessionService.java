@@ -58,7 +58,7 @@ public class DatabaseSessionService {
         if (sql == null) {
             return new DatabaseSessionPage(false, false, List.of(), "当前数据库类型暂不支持查看活动会话。");
         }
-        boolean canKill = dialect.killSessionSql("1") != null;
+        boolean canKill = dialect.supportsKillSession();
         List<DatabaseSession> sessions = new ArrayList<>();
         try (Connection connection = connections.open(connectionId);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
@@ -93,16 +93,17 @@ public class DatabaseSessionService {
         // 终止别人的会话是破坏性操作，按写操作要求确认。
         executionGuard.requireMutationAllowed(dbConnection, productionConfirmation);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (!dialect.supportsKillSession()) {
+            throw new ApiProblemException(
+                    HttpStatus.BAD_REQUEST, "SESSION_KILL_UNSUPPORTED", "当前数据库类型暂不支持终止会话。"
+            );
+        }
         String sql;
         try {
             sql = dialect.killSessionSql(sessionId);
         } catch (RuntimeException error) {
+            // 方言按自己的格式校验会话标识（Oracle 要 SID,SERIAL#，其余要纯数字）。
             throw new IllegalArgumentException("会话标识无效：" + sessionId);
-        }
-        if (sql == null) {
-            throw new ApiProblemException(
-                    HttpStatus.BAD_REQUEST, "SESSION_KILL_UNSUPPORTED", "当前数据库类型暂不支持终止会话。"
-            );
         }
         try (Connection connection = connections.open(connectionId);
              Statement statement = connection.createStatement()) {

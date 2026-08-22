@@ -880,7 +880,9 @@ public class BackupService {
      */
     private BackupFile runPgDump(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
         PostgresJdbcTarget target = postgresTarget(connection.jdbcUrl());
-        String database = "DATABASE".equals(resolved.scope()) ? target.database() : target.database();
+        // 与 mysqldump 不同：MySQL 的「schema」就是数据库，而 PostgreSQL 的 schema 在库内，
+        // 所以无论备份整库还是单个 schema，连的都是 JDBC URL 里的那个库，范围由 --schema 收窄。
+        String database = target.database();
         if (database == null || database.isBlank()) {
             throw new IllegalArgumentException("pg_dump 备份需要 JDBC URL 中包含数据库名。");
         }

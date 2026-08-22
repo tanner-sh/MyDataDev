@@ -11,6 +11,7 @@ import java.io.InputStreamReader;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -75,23 +76,26 @@ public class DataImportService {
         Set<String> tableColumns;
         try (Connection connection = connections.open(connectionId, schemaName)) {
             tableColumns = new LinkedHashSet<>(dataEdit.editableColumns(connection, dbConnection, schemaName, tableName));
+        } catch (SQLException error) {
+            // 目标表不存在是最常见的失败，驱动原文是英文且带 SQL 片段，对用户没有意义。
+            throw new IllegalArgumentException(
+                    "无法读取目标表 " + dialect.qualifiedName(schemaName, tableName) + " 的字段，请确认表名与所在 Schema 是否正确。", error
+            );
         }
         if (tableColumns.isEmpty()) throw new IllegalArgumentException("未找到目标表的字段：" + tableName);
 
-        long[] rows = new long[1];
-        SqlFileExecutionResponse job = sqlFiles.uploadScript(
+        return sqlFiles.uploadScript(
                 connectionId,
                 importScriptName(fileName, tableName),
                 out -> {
                     try (CsvStreamReader csv = new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
-                        rows[0] = convert(csv, out, dialect, schemaName, tableName, tableColumns, fileName);
+                        return "rows=" + convert(csv, out, dialect, schemaName, tableName, tableColumns, fileName);
                     }
                 },
                 actor,
                 "DATA_IMPORT_UPLOAD",
                 "table=" + tableName + "; file=" + fileName
         );
-        return job;
     }
 
     static long convert(

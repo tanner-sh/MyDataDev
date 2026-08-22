@@ -46,7 +46,7 @@ class ConnectionServiceCacheTest {
         when(crypto.decrypt("cipher")).thenReturn("secret");
         service = new ConnectionService(
                 repository, crypto, mock(AuditRepository.class), backupTasks,
-                mock(MetadataCacheService.class), dataSources, new DialectRegistry(), restoreJobs,
+                mock(MetadataCacheService.class), dataSources, new DialectRegistry(), restoreJobs, new SqlTransactionRegistry(),
                 new SqlScriptSplitter(), new SqlStatementClassifier()
         );
     }

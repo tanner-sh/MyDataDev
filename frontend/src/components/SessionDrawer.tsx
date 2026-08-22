@@ -4,6 +4,7 @@ import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
 import { localizeError } from '../utils';
+import { productionConfirmationHeaders } from '../productionConfirmation';
 import {
   canKillSession,
   formatSessionDuration,
@@ -80,7 +81,8 @@ export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, c
       if (productionConfirmationText && !confirmation) return;
       await api<{ ok: boolean }>(
         `/sessions/${encodeURIComponent(session.sessionId)}/kill?connectionId=${connectionId}`,
-        { method: 'POST', headers: confirmation ? { 'X-Production-Confirmation': encodeURIComponent(confirmation) } : undefined }
+        // 走共享助手而不是就地拼头：HTTP 头值只能是 ISO-8859-1，中文连接名必须先编码。
+        { method: 'POST', headers: productionConfirmationHeaders(confirmation) }
       );
       await load();
     } catch (e) {

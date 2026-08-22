@@ -123,6 +123,17 @@ public interface DatabaseDialect {
      *
      * <p>返回 {@code null} 表示该方言不支持终止。</p>
      */
+    /**
+     * 是否支持终止会话。
+     *
+     * <p>单独给一个能力位，而不是拿一个假的会话号去调 {@link #killSessionSql} 试探 —— Oracle
+     * 的会话标识是 {@code SID,SERIAL#} 形式，任何不合法的输入都会抛异常，试探会把整个活动
+     * 会话列表带崩。</p>
+     */
+    default boolean supportsKillSession() {
+        return false;
+    }
+
     default String killSessionSql(String sessionId) {
         return null;
     }

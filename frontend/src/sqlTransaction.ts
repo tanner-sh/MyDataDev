@@ -69,3 +69,16 @@ export function transactionLeaveWarning(state: SqlTransactionState): string | nu
   if (!state.transaction) return null;
   return `当前有一个进行中的手动事务（已执行 ${state.transaction.statementCount} 条），离开前请提交或回滚。`;
 }
+
+/**
+ * 页面重新加载后接回一个仍在服务端的事务时的提示。
+ *
+ * 事务活在后端，刷新页面不会结束它 —— 它继续占着连接池里的一条连接并在数据库上持有锁。
+ * 不明确告诉用户，界面看起来干净、实际却有未提交的改动悬着。
+ */
+export function restoredTransactionNotice(transaction: SqlTransaction): string {
+  const minutes = Math.max(1, Math.round(transaction.idleTimeoutSeconds / 60));
+  return transaction.statementCount === 0
+    ? `已接回服务端仍开着的手动事务，空闲超过 ${minutes} 分钟会被自动回滚。`
+    : `已接回服务端仍开着的手动事务（含 ${transaction.statementCount} 条未提交语句），请尽快提交或回滚。`;
+}

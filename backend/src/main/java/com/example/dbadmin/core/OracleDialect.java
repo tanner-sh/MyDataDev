@@ -155,6 +155,11 @@ public class OracleDialect extends DefaultDialect {
     }
 
     @Override
+    public boolean supportsKillSession() {
+        return true;
+    }
+
+    @Override
     public String killSessionSql(String sessionId) {
         // Oracle 需要 SID,SERIAL#；这里只接受调用方传入的 "sid,serial" 组合。
         if (!sessionId.matches("\\d+,\\d+")) {

@@ -109,6 +109,11 @@ public class MySqlDialect extends DefaultDialect {
     }
 
     @Override
+    public boolean supportsKillSession() {
+        return true;
+    }
+
+    @Override
     public String killSessionSql(String sessionId) {
         return "KILL " + Long.parseLong(sessionId);
     }

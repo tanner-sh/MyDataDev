@@ -3,6 +3,10 @@
 backend/target/
 backend/data/
 backend/backups/
+# 本地跑 mvn spring-boot:run 时，SQL 文件任务与 web profile 的日志也落在 backend/ 下。
+# 这些目录里有上传的 SQL 脚本与运行日志，不该进仓库。
+backend/sql-files/
+backend/logs/
 
 frontend/node_modules/
 frontend/dist/

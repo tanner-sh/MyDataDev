@@ -47,11 +47,12 @@ public class ConnectionService {
     private final RemoteDataSourceRegistry dataSources;
     private final DialectRegistry dialectRegistry;
     private final RestoreJobRepository restoreJobs;
+    private final SqlTransactionRegistry transactions;
     private final SqlScriptSplitter scriptSplitter;
     private final SqlStatementClassifier statementClassifier;
 
     @Autowired
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry, RestoreJobRepository restoreJobs, SqlScriptSplitter scriptSplitter, SqlStatementClassifier statementClassifier) {
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry, RestoreJobRepository restoreJobs, SqlTransactionRegistry transactions, SqlScriptSplitter scriptSplitter, SqlStatementClassifier statementClassifier) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
@@ -60,6 +61,7 @@ public class ConnectionService {
         this.dataSources = dataSources;
         this.dialectRegistry = dialectRegistry;
         this.restoreJobs = restoreJobs;
+        this.transactions = transactions;
         this.scriptSplitter = scriptSplitter;
         this.statementClassifier = statementClassifier;
     }
@@ -83,6 +85,7 @@ public class ConnectionService {
         if (restoreJobs.countActiveByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的恢复任务，请等待恢复完成后再修改连接。");
         }
+        requireNoOpenTransaction(id, "修改连接");
         String secret = reusesStoredPassword(request.password())
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
@@ -104,10 +107,27 @@ public class ConnectionService {
             throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_RESTORE_RUNNING",
                     "该连接有正在执行的恢复任务，请等待恢复完成后再删除连接。");
         }
+        requireNoOpenTransaction(id, "删除连接");
         repository.delete(id);
         evictConnection(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
+    }
+
+    /**
+     * 手动事务开着时不许改动连接。
+     *
+     * <p>改连接会淘汰远程连接池，而事务正握着池里的一条连接；删连接更糟：事务会留在注册表里
+     * 指向一个已经不存在的连接，之后既执行不了（要查连接配置）也没人记得回滚它。与已有的
+     * 备份/恢复任务一样，先让用户自己了结。</p>
+     */
+    private void requireNoOpenTransaction(long id, String action) {
+        if (transactions.activeFor(id) == null) return;
+        throw new ApiProblemException(
+                HttpStatus.CONFLICT,
+                "CONNECTION_TRANSACTION_OPEN",
+                "该连接上有未结束的手动事务，请先提交或回滚后再" + action + "。"
+        );
     }
 
     public void test(TestConnectionRequest request) throws Exception {

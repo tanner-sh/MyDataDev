@@ -59,6 +59,11 @@ public class PostgreSqlDialect extends DefaultDialect {
     }
 
     @Override
+    public boolean supportsKillSession() {
+        return true;
+    }
+
+    @Override
     public String killSessionSql(String sessionId) {
         return "SELECT pg_terminate_backend(" + Long.parseLong(sessionId) + ")";
     }

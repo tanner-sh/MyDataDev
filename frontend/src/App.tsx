@@ -51,6 +51,7 @@ import {
   IDLE_SQL_TRANSACTION,
   transactionExecutePath,
   transactionFinishPrompt,
+  restoredTransactionNotice,
   transactionLeaveWarning,
   type SqlTransaction,
   type SqlTransactionState
@@ -272,6 +273,29 @@ export default function App() {
   useEffect(() => {
     const nextConnectionId = selected?.id ?? null;
     activateSqlSession(nextConnectionId, false);
+  }, [selected?.id]);
+
+  /**
+   * 恢复服务端还开着的手动事务。
+   *
+   * 事务活在后端，刷新页面不会结束它 —— 它继续占着连接池里的一条连接，并在数据库上持有锁。
+   * 不恢复的话用户会卡死：界面上没有可提交的事务，再点「开启事务」又被 409 挡住，只能干等
+   * 十分钟的空闲回收。
+   */
+  useEffect(() => {
+    const connectionId = selected?.id;
+    if (!connectionId) return;
+    let cancelled = false;
+    void api<{ transaction?: SqlTransaction }>(`/sql/transactions/active?connectionId=${connectionId}`)
+      .then((response) => {
+        if (cancelled || !response?.transaction) return;
+        setTransactionState({ transaction: response.transaction, pending: false });
+        showInfo(restoredTransactionNotice(response.transaction));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [selected?.id]);
 
   useEffect(() => {
