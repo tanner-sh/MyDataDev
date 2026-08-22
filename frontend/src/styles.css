@@ -971,6 +971,12 @@ body.is-resizing-column * {
   margin-bottom: 8px;
 }
 
+/* 事务状态必须一直可见：一个开着的事务独占一条池化连接。 */
+.sql-toolbar-transaction-group .ant-btn:disabled .sql-transaction-badge {
+  color: var(--warning);
+  font-weight: 600;
+}
+
 .grid-cell-editable {
   display: block;
   min-width: 0;

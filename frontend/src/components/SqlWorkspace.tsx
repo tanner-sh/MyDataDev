@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
-import { BookOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
+import { BookOutlined, BranchesOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
@@ -11,6 +11,7 @@ import { SqlEditorSurface } from './SqlEditorSurface';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import { resolveEditorSplitRatio } from '../editorSplit';
 import type { ResultEditCommit } from '../resultEditing';
+import { transactionBadge, transactionTooltip, type SqlTransactionState } from '../sqlTransaction';
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
@@ -32,7 +33,7 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -70,6 +71,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onResultTabChange: (key: string) => void;
   onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
   onCommitResultEdits: (request: ResultEditCommit) => Promise<void>;
+  transactionState: SqlTransactionState;
+  onBeginTransaction: () => void;
+  onFinishTransaction: (commit: boolean) => void;
 }) {
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
@@ -290,6 +294,45 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
                 <span className="sql-toolbar-label">更多</span>
               </Button>
             </Dropdown>
+          </Space>
+          <Space size={4} className="sql-toolbar-group sql-toolbar-transaction-group">
+            <Tooltip title={transactionTooltip(transactionState)}>
+              {transactionState.transaction ? (
+                <Space.Compact>
+                  <Button className="sql-toolbar-button" size="small" disabled>
+                    <span className="sql-transaction-badge">{transactionBadge(transactionState)}</span>
+                  </Button>
+                  <Button
+                    className="sql-toolbar-button"
+                    size="small"
+                    loading={transactionState.pending}
+                    onClick={() => onFinishTransaction(false)}
+                  >
+                    回滚
+                  </Button>
+                  <Button
+                    className="sql-toolbar-button"
+                    size="small"
+                    type="primary"
+                    loading={transactionState.pending}
+                    onClick={() => onFinishTransaction(true)}
+                  >
+                    提交
+                  </Button>
+                </Space.Compact>
+              ) : (
+                <Button
+                  className="sql-toolbar-button"
+                  size="small"
+                  icon={<BranchesOutlined />}
+                  disabled={!selected || selected.readonly || loading}
+                  loading={transactionState.pending}
+                  onClick={onBeginTransaction}
+                >
+                  <span className="sql-toolbar-label">手动事务</span>
+                </Button>
+              )}
+            </Tooltip>
           </Space>
           <Space size={4} className="sql-toolbar-group sql-toolbar-execution-group">
             <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>

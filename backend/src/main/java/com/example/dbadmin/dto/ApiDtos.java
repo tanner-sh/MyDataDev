@@ -546,6 +546,37 @@ public final class ApiDtos {
     public record BackupTaskPage(List<com.example.dbadmin.model.BackupTask> items, int page, int pageSize, boolean hasMore) {
     }
 
+    public record SqlTransactionResponse(
+            String id,
+            long connectionId,
+            String schemaName,
+            String startedAt,
+            String lastUsedAt,
+            int statementCount,
+            int idleTimeoutSeconds
+    ) {
+    }
+
+    public record SqlTransactionScriptResponse(
+            SqlTransactionResponse transaction,
+            String status,
+            long elapsedMs,
+            int executedCount,
+            List<SqlStatementResult> results,
+            boolean metadataChanged
+    ) {
+    }
+
+    public record SqlTransactionBeginRequest(@NotNull Long connectionId, @Size(max = 240) String schemaName) {
+    }
+
+    public record SqlTransactionExecuteRequest(
+            @NotBlank @Size(max = 2_000_000) String sql,
+            Integer maxRows,
+            boolean unscopedMutationConfirmed
+    ) {
+    }
+
     public record SqlSnippetResponse(
             long id,
             String name,

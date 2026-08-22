@@ -508,7 +508,8 @@ public class SqlService {
         return FORMATTER.format(sql);
     }
 
-    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
+    /** 手动事务复用同一套结果读取与限额，见 SqlTransactionService。 */
+    SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
         return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS, dialect);
     }
 
@@ -692,7 +693,11 @@ public class SqlService {
         );
     }
 
-    private SqlResult emptyResult(int affectedRows, long elapsedMs, int maxRows) {
+    int sqlTimeoutSeconds() {
+        return properties.getSql().getTimeoutSeconds();
+    }
+
+    SqlResult emptyResult(int affectedRows, long elapsedMs, int maxRows) {
         return new SqlResult(List.of(), List.of(), affectedRows, elapsedMs, false, maxRows, false);
     }
 
@@ -702,7 +707,7 @@ public class SqlService {
                 : connections.open(connectionId, schemaName);
     }
 
-    private int normalizeMaxRows(Integer requestedMaxRows) {
+    int normalizeMaxRows(Integer requestedMaxRows) {
         int configuredMaximum = Math.max(properties.getSql().getMaxRows(), 1);
         int requested = requestedMaxRows == null ? Math.min(DEFAULT_MAX_ROWS, configuredMaximum) : requestedMaxRows;
         return Math.min(Math.max(requested, 1), configuredMaximum);
@@ -716,7 +721,7 @@ public class SqlService {
         return statements.get(0).sql();
     }
 
-    private boolean changesMetadata(String sql) {
+    boolean changesMetadata(String sql) {
         return classifier.classify(sql) == SqlStatementClassifier.Kind.DDL;
     }
 

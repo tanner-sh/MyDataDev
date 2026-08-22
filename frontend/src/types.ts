@@ -496,3 +496,7 @@ export type AuditEvent = {
 export type AuditEventPage = { items: AuditEvent[]; page: number; pageSize: number; hasMore: boolean };
 
 export type AuditFacets = { actors: string[]; actions: string[] };
+
+export type SqlTransactionScriptResult = SqlScriptResult & {
+  transaction: import("./sqlTransaction").SqlTransaction;
+};

@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.ApiDtos.FormatResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlTransactionResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlPageRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
@@ -25,10 +26,16 @@ import org.springframework.web.bind.annotation.*;
 public class SqlController {
     private final SqlService sqlService;
     private final ExportService exportService;
+    private final com.example.dbadmin.service.SqlTransactionService transactions;
 
-    public SqlController(SqlService sqlService, ExportService exportService) {
+    public SqlController(
+            SqlService sqlService,
+            ExportService exportService,
+            com.example.dbadmin.service.SqlTransactionService transactions
+    ) {
         this.sqlService = sqlService;
         this.exportService = exportService;
+        this.transactions = transactions;
     }
 
     @PostMapping("/execute")
@@ -76,6 +83,47 @@ public class SqlController {
     public com.example.dbadmin.dto.ApiDtos.MessageResponse cancel(@PathVariable String executionId) throws Exception {
         boolean cancelled = sqlService.cancel(executionId);
         return new com.example.dbadmin.dto.ApiDtos.MessageResponse(cancelled, cancelled ? "已发送取消请求" : "SQL 已结束或不存在");
+    }
+
+    @PostMapping("/transactions")
+    public SqlTransactionResponse beginTransaction(
+            @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlTransactionBeginRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        return transactions.begin(request.connectionId(), request.schemaName(), actor, productionConfirmation);
+    }
+
+    /** 页面刷新后要能认回还开着的事务，否则那条连接会一直被占到超时。 */
+    @GetMapping("/transactions/active")
+    public java.util.Map<String, Object> activeTransaction(@RequestParam long connectionId) {
+        SqlTransactionResponse active = transactions.active(connectionId);
+        return active == null ? java.util.Map.of() : java.util.Map.of("transaction", active);
+    }
+
+    @PostMapping("/transactions/{id}/execute")
+    public com.example.dbadmin.dto.ApiDtos.SqlTransactionScriptResponse executeInTransaction(
+            @PathVariable String id,
+            @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlTransactionExecuteRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) throws Exception {
+        return transactions.execute(id, request.sql(), request.maxRows(), actor, request.unscopedMutationConfirmed());
+    }
+
+    @PostMapping("/transactions/{id}/commit")
+    public SqlTransactionResponse commitTransaction(
+            @PathVariable String id,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) throws Exception {
+        return transactions.finish(id, true, actor);
+    }
+
+    @PostMapping("/transactions/{id}/rollback")
+    public SqlTransactionResponse rollbackTransaction(
+            @PathVariable String id,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) throws Exception {
+        return transactions.finish(id, false, actor);
     }
 
     @GetMapping("/history")

@@ -5,7 +5,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, downloadBlob, downloadFromUrl } from './api';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -39,6 +39,14 @@ import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
 import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
 import type { ResultEditCommit } from './resultEditing';
+import {
+  IDLE_SQL_TRANSACTION,
+  transactionExecutePath,
+  transactionFinishPrompt,
+  transactionLeaveWarning,
+  type SqlTransaction,
+  type SqlTransactionState
+} from './sqlTransaction';
 import { prefetchAllWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
@@ -150,6 +158,7 @@ export default function App() {
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
+  const [transactionState, setTransactionState] = useState<SqlTransactionState>(IDLE_SQL_TRANSACTION);
   const [snippetDraft, setSnippetDraft] = useState<{ draft: SqlSnippetDraft; token: number }>();
   const [explorerRequestedView, setExplorerRequestedView] = useState<{ kind: ExplorerObjectKind; keyword: string; token: number }>();
   const selectedIdRef = useRef<number | null>(null);
@@ -742,6 +751,8 @@ export default function App() {
     objectDetailCacheRef.current.clear();
     // 历史属于某一条连接，切换后必须重新取，不能把上一条连接的记录留在抽屉里。
     sqlHistoryRequestSeqRef.current += 1;
+    // 事务属于某一条连接；切换连接前 selectConnection 已经拦过未结束的事务。
+    setTransactionState(IDLE_SQL_TRANSACTION);
     setSqlHistory([]);
     setSqlHistoryQuery(INITIAL_SQL_HISTORY_QUERY);
     setStructureLoadingKey(null);
@@ -772,6 +783,11 @@ export default function App() {
 
   function selectConnection(connection: Connection, onSelected?: () => void) {
     if (selected?.id === connection.id) return;
+    const transactionWarning = transactionLeaveWarning(transactionState);
+    if (transactionWarning) {
+      showInfo(transactionWarning);
+      return;
+    }
     if (sqlLoading || tableLoading || objectDetailLoading) {
       showInfo(sqlCancellable
         ? '请等待当前操作完成后再切换连接，或先点击工具栏的「取消」终止本次执行'
@@ -1180,18 +1196,30 @@ export default function App() {
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success', errorDetail: undefined });
         } else {
-        const executeScript = (unscopedMutationConfirmed: boolean) => api<SqlScriptResult>('/sql/execute-script', {
-          method: 'POST',
-          headers: productionConfirmationHeaders(productionConfirmation),
-          body: JSON.stringify({
-            connectionId: selected.id,
-            sql: target.sql,
-            pageSize: layoutPreferences.sqlPageSize,
-            executionId,
-            schemaName: activeSqlSchema,
-            unscopedMutationConfirmed
-          })
-        });
+        // 手动事务开着时走事务端点：同一条连接、同一个事务，由用户决定提交还是回滚。
+        const transactionPath = transactionExecutePath(transactionState);
+        const executeScript = async (unscopedMutationConfirmed: boolean): Promise<SqlScriptResult> => {
+          if (transactionPath) {
+            const response = await api<SqlTransactionScriptResult>(transactionPath, {
+              method: 'POST',
+              body: JSON.stringify({ sql: target.sql, unscopedMutationConfirmed })
+            });
+            setTransactionState((current) => ({ ...current, transaction: response.transaction }));
+            return response;
+          }
+          return api<SqlScriptResult>('/sql/execute-script', {
+            method: 'POST',
+            headers: productionConfirmationHeaders(productionConfirmation),
+            body: JSON.stringify({
+              connectionId: selected.id,
+              sql: target.sql,
+              pageSize: layoutPreferences.sqlPageSize,
+              executionId,
+              schemaName: activeSqlSchema,
+              unscopedMutationConfirmed
+            })
+          });
+        };
         let data: SqlScriptResult;
         try {
           data = await executeScript(false);
@@ -1373,6 +1401,53 @@ export default function App() {
       setSqlLoading(false);
       sqlBusyRef.current = false;
     }
+  }
+
+  async function beginSqlTransaction() {
+    if (!selected) {
+      showInfo('请先选择数据库连接');
+      return;
+    }
+    const productionConfirmation = await requestProductionConfirmation('开启手动事务');
+    if (selected.environment === 'prod' && !productionConfirmation) return;
+    setTransactionState((current) => ({ ...current, pending: true }));
+    try {
+      const transaction = await api<SqlTransaction>('/sql/transactions', {
+        method: 'POST',
+        headers: productionConfirmationHeaders(productionConfirmation),
+        body: JSON.stringify({ connectionId: selected.id, schemaName: activeSqlSchema })
+      });
+      setTransactionState({ transaction, pending: false });
+      showSuccess('已开启手动事务：后续语句在同一事务中执行，需要手动提交或回滚');
+    } catch (e) {
+      setTransactionState(IDLE_SQL_TRANSACTION);
+      showError(localizeError(e));
+    }
+  }
+
+  function finishSqlTransaction(commit: boolean) {
+    const transaction = transactionState.transaction;
+    if (!transaction) return;
+    modalApi.confirm({
+      title: commit ? '提交手动事务？' : '回滚手动事务？',
+      content: transactionFinishPrompt(transactionState, commit),
+      okText: commit ? '提交' : '回滚',
+      cancelText: '返回',
+      okButtonProps: { danger: !commit },
+      onOk: async () => {
+        setTransactionState((current) => ({ ...current, pending: true }));
+        try {
+          await api<SqlTransaction>(`/sql/transactions/${transaction.id}/${commit ? 'commit' : 'rollback'}`, { method: 'POST' });
+          setTransactionState(IDLE_SQL_TRANSACTION);
+          showSuccess(commit ? `事务已提交，共 ${transaction.statementCount} 条语句生效` : '事务已回滚，本次改动全部丢弃');
+          if (selected) void loadMetadata(selected, { page: 0, refresh: true, background: true });
+        } catch (e) {
+          setTransactionState((current) => ({ ...current, pending: false }));
+          showError(localizeError(e));
+          throw e;
+        }
+      }
+    });
   }
 
   async function cancelSqlExecution() {
@@ -2584,6 +2659,8 @@ export default function App() {
   const changeSqlResultTabEvent = useStableEvent((key: string) => updateActiveSqlTab({ activeResultKey: key }));
   const changeSqlResultPageEvent = useStableEvent((result: SqlStatementResult, navigation: SqlPageNavigation) => loadSqlResultPage(result, navigation));
   /** 结果就地编辑的提交：复用表数据的 /data/commit，生产连接照样要确认。 */
+  const beginTransactionEvent = useStableEvent(() => void beginSqlTransaction());
+  const finishTransactionEvent = useStableEvent((commit: boolean) => finishSqlTransaction(commit));
   const commitResultEditsEvent = useStableEvent(async (request: ResultEditCommit) => {
     if (!selected) throw new Error('请先选择数据库连接');
     const productionConfirmation = await requestProductionConfirmation('提交查询结果修改');
@@ -2838,6 +2915,9 @@ export default function App() {
                 onResultTabChange={changeSqlResultTabEvent}
                 onResultPageChange={changeSqlResultPageEvent}
                 onCommitResultEdits={commitResultEditsEvent}
+                transactionState={transactionState}
+                onBeginTransaction={beginTransactionEvent}
+                onFinishTransaction={finishTransactionEvent}
               />
             ) : mode === 'table' ? (
               <TableWorkspace
