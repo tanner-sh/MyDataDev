@@ -17,4 +17,19 @@ public class MariaDbDialect extends MySqlDialect {
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mariaDb());
     }
+
+    @Override
+    public String activeSessionsSql() {
+        return """
+                SELECT ID AS session_id, USER AS session_user, HOST AS session_host, DB AS session_database,
+                       STATE AS session_state, COMMAND AS session_command, TIME AS duration_seconds, INFO AS session_sql
+                FROM information_schema.PROCESSLIST
+                ORDER BY TIME DESC
+                """;
+    }
+
+    @Override
+    public String killSessionSql(String sessionId) {
+        return "KILL " + Long.parseLong(sessionId);
+    }
 }

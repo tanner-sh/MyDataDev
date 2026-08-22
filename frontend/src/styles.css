@@ -1213,6 +1213,66 @@ body.is-resizing-column * {
   font-size: 12px;
 }
 
+.session-alert,
+.session-summary {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.session-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 0;
+}
+
+.session-list {
+  display: grid;
+  gap: 8px;
+}
+
+.session-item {
+  min-width: 0;
+  padding: 9px 11px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+/* 长时间运行的会话往往就是锁的来源，要一眼挑出来。 */
+.session-item.is-long {
+  border-left-color: var(--warning);
+}
+
+.session-item.is-idle {
+  opacity: 0.72;
+}
+
+.session-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.session-item-sql {
+  max-height: 140px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .audit-filters {
   display: flex;
   flex-direction: column;

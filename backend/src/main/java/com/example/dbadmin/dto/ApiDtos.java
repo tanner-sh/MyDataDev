@@ -546,6 +546,30 @@ public final class ApiDtos {
     public record BackupTaskPage(List<com.example.dbadmin.model.BackupTask> items, int page, int pageSize, boolean hasMore) {
     }
 
+    public record DatabaseSession(
+            String sessionId,
+            String user,
+            String host,
+            String database,
+            String state,
+            String command,
+            Long durationSeconds,
+            String sql
+    ) {
+    }
+
+    /** {@code supported} 区分「方言不支持」与「支持但这次读失败」，界面文案不同。 */
+    public record DatabaseSessionPage(
+            boolean supported,
+            boolean canKill,
+            List<DatabaseSession> sessions,
+            String message
+    ) {
+        public DatabaseSessionPage {
+            sessions = sessions == null ? List.of() : List.copyOf(sessions);
+        }
+    }
+
     public record SqlTransactionResponse(
             String id,
             long connectionId,

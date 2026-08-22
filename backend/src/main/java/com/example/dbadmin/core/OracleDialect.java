@@ -141,4 +141,25 @@ public class OracleDialect extends DefaultDialect {
         }
         return super.literal(value);
     }
+
+    @Override
+    public String activeSessionsSql() {
+        return """
+                SELECT s.SID AS session_id, s.USERNAME AS session_user, s.MACHINE AS session_host,
+                       s.SCHEMANAME AS session_database, s.STATUS AS session_state, s.PROGRAM AS session_command,
+                       s.LAST_CALL_ET AS duration_seconds, q.SQL_TEXT AS session_sql
+                FROM V$SESSION s LEFT JOIN V$SQL q ON q.SQL_ID = s.SQL_ID
+                WHERE s.TYPE = 'USER'
+                ORDER BY s.LAST_CALL_ET DESC
+                """;
+    }
+
+    @Override
+    public String killSessionSql(String sessionId) {
+        // Oracle 需要 SID,SERIAL#；这里只接受调用方传入的 "sid,serial" 组合。
+        if (!sessionId.matches("\\d+,\\d+")) {
+            throw new IllegalArgumentException("Oracle 会话标识需要 SID,SERIAL# 形式。");
+        }
+        return "ALTER SYSTEM KILL SESSION '" + sessionId + "' IMMEDIATE";
+    }
 }

@@ -45,4 +45,21 @@ public class PostgreSqlDialect extends DefaultDialect {
         }
         return sql;
     }
+
+    @Override
+    public String activeSessionsSql() {
+        return """
+                SELECT pid AS session_id, usename AS session_user, client_addr AS session_host,
+                       datname AS session_database, state AS session_state, backend_type AS session_command,
+                       EXTRACT(EPOCH FROM (now() - query_start))::bigint AS duration_seconds, query AS session_sql
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                ORDER BY query_start NULLS LAST
+                """;
+    }
+
+    @Override
+    public String killSessionSql(String sessionId) {
+        return "SELECT pg_terminate_backend(" + Long.parseLong(sessionId) + ")";
+    }
 }

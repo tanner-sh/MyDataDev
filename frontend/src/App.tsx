@@ -89,6 +89,7 @@ const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) 
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
+const SessionDrawer = lazy(() => import('./components/SessionDrawer').then((module) => ({ default: module.SessionDrawer })));
 const AuditLogDrawer = lazy(() => import('./components/AuditLogDrawer').then((module) => ({ default: module.AuditLogDrawer })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
 const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
@@ -154,7 +155,7 @@ export default function App() {
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | 'sessions' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
@@ -2658,6 +2659,8 @@ export default function App() {
   const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
   const openMcpFromHeader = useStableEvent(() => setActiveDrawer('mcp'));
   const openAuditFromHeader = useStableEvent(() => setActiveDrawer('audit'));
+  const openSessionsFromHeader = useStableEvent(() => setActiveDrawer('sessions'));
+  const requestProductionConfirmationEvent = useStableEvent((action: string) => requestProductionConfirmation(action));
   const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
   const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
   const previewBackupScheduleEvent = useStableEvent((cron: string) => previewBackupSchedule(cron));
@@ -2902,6 +2905,7 @@ export default function App() {
           onOpenBackups={openBackupsFromHeader}
           onOpenMcp={openMcpFromHeader}
           onOpenAudit={openAuditFromHeader}
+          onOpenSessions={openSessionsFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -3162,6 +3166,18 @@ export default function App() {
             schemaName={activeSqlSchema}
             onClose={() => setObjectSearchOpen(false)}
             onOpenHit={openObjectSearchHit}
+          />
+        </Suspense>
+      )}
+      {activeDrawer === 'sessions' && (
+        <Suspense fallback={null}>
+          <SessionDrawer
+            open
+            connectionId={selected?.id}
+            connectionName={selected?.name}
+            productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
+            onClose={() => setActiveDrawer(null)}
+            onRequestConfirmation={requestProductionConfirmationEvent}
           />
         </Suspense>
       )}

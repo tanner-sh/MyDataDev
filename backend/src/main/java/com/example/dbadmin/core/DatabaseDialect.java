@@ -107,6 +107,26 @@ public interface DatabaseDialect {
         return null;
     }
 
+    /**
+     * 目标库上的活动会话。
+     *
+     * <p>返回 {@code null} 表示该方言不支持 —— 界面据此隐藏会话面板，而不是报一个看不懂的
+     * SQL 错误。语句必须返回 sessionId / user / host / database / state / command /
+     * durationSeconds / sql 这几列（缺的用 NULL 占位），由 SessionService 统一读取。</p>
+     */
+    default String activeSessionsSql() {
+        return null;
+    }
+
+    /**
+     * 终止一个会话的语句。会话 id 由调用方校验成纯数字或原样透传，实现负责拼装。
+     *
+     * <p>返回 {@code null} 表示该方言不支持终止。</p>
+     */
+    default String killSessionSql(String sessionId) {
+        return null;
+    }
+
     default void configureReadStatement(Connection connection, Statement statement, int fetchSize, int timeoutSeconds) throws SQLException {
         if (timeoutSeconds > 0) {
             try {

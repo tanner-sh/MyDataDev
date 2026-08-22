@@ -11,7 +11,8 @@ import {
   SettingOutlined,
   StarFilled,
   SunOutlined,
-  SyncOutlined
+  SyncOutlined,
+  ThunderboltOutlined
 } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
@@ -36,6 +37,7 @@ type AppHeaderProps = {
   onOpenBackups: () => void;
   onOpenMcp: () => void;
   onOpenAudit: () => void;
+  onOpenSessions: () => void;
   onToggleTheme: () => void;
 };
 
@@ -54,6 +56,7 @@ export const AppHeader = memo(function AppHeader({
   onOpenBackups,
   onOpenMcp,
   onOpenAudit,
+  onOpenSessions,
   onToggleTheme
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
@@ -160,6 +163,9 @@ export const AppHeader = memo(function AppHeader({
         </Tooltip>
         <Tooltip title="MCP Server 设置">
           <Button type="text" icon={<ApiOutlined />} aria-label="MCP Server 设置" onClick={onOpenMcp}>MCP</Button>
+        </Tooltip>
+        <Tooltip title="目标库活动会话">
+          <Button type="text" icon={<ThunderboltOutlined />} aria-label="活动会话" disabled={!selected} onClick={onOpenSessions}>会话</Button>
         </Tooltip>
         <Tooltip title="审计日志">
           <Button type="text" icon={<AuditOutlined />} aria-label="审计日志" onClick={onOpenAudit}>审计</Button>
