@@ -691,4 +691,31 @@ class MetadataServiceTest {
                 new ExecutionGuard()
         );
     }
+
+    @Test
+    void connectionDefaultNamespaceWinsOverTheDriverReportedOne() {
+        // 连接上明确配置了默认库，就该停在那里，而不是登录用户的默认库。
+        assertThat(MetadataService.resolveCurrentNamespace("public", "reporting", List.of("public", "reporting")))
+                .isEqualTo("reporting");
+    }
+
+    @Test
+    void connectionDefaultNamespaceMatchesCaseInsensitivelyButKeepsServerCasing() {
+        assertThat(MetadataService.resolveCurrentNamespace("PUBLIC", "app", List.of("PUBLIC", "APP")))
+                .isEqualTo("APP");
+    }
+
+    @Test
+    void unknownDefaultNamespaceFallsBackInsteadOfPointingAtANonexistentSchema() {
+        // 指向服务端不存在的 schema 会让整棵资源树打不开，退回驱动给的值更安全。
+        assertThat(MetadataService.resolveCurrentNamespace("public", "gone", List.of("public")))
+                .isEqualTo("public");
+    }
+
+    @Test
+    void blankDefaultNamespaceKeepsTheDriverReportedNamespace() {
+        assertThat(MetadataService.resolveCurrentNamespace("public", "  ", List.of("public"))).isEqualTo("public");
+        assertThat(MetadataService.resolveCurrentNamespace("public", null, List.of("public"))).isEqualTo("public");
+        assertThat(MetadataService.resolveCurrentNamespace(null, null, List.of())).isEmpty();
+    }
 }

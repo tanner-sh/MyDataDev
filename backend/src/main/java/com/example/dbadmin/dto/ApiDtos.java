@@ -21,8 +21,18 @@ public final class ApiDtos {
             @Size(max = 240) String username,
             @Size(max = 10_000) String password,
             @Size(max = 40) String environment,
-            boolean readonly
+            boolean readonly,
+            @Size(max = 120) String groupName,
+            @Size(max = 500) String tags,
+            @Size(max = 240) String defaultSchema,
+            @Size(max = 4_000) String initSql,
+            @Size(max = 1_000) String description
     ) {
+        /** 兼容不带连接档案字段的请求体（旧版前端、脚本调用）。 */
+        public ConnectionRequest(String name, String dbType, String jdbcUrl, String username, String password,
+                                 String environment, boolean readonly) {
+            this(name, dbType, jdbcUrl, username, password, environment, readonly, null, null, null, null, null);
+        }
     }
 
     public record ConnectionResponse(
@@ -33,8 +43,18 @@ public final class ApiDtos {
             String username,
             String environment,
             boolean readonly,
+            String groupName,
+            List<String> tags,
+            String defaultSchema,
+            String initSql,
+            String description,
             DatabaseCapabilities capabilities
     ) {
+        /** 兼容不关心连接档案字段的构造点。 */
+        public ConnectionResponse(long id, String name, String dbType, String jdbcUrl, String username,
+                                  String environment, boolean readonly, DatabaseCapabilities capabilities) {
+            this(id, name, dbType, jdbcUrl, username, environment, readonly, null, List.of(), null, null, null, capabilities);
+        }
     }
 
     public record DatabaseCapabilities(

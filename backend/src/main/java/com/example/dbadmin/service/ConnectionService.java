@@ -47,9 +47,11 @@ public class ConnectionService {
     private final RemoteDataSourceRegistry dataSources;
     private final DialectRegistry dialectRegistry;
     private final RestoreJobRepository restoreJobs;
+    private final SqlScriptSplitter scriptSplitter;
+    private final SqlStatementClassifier statementClassifier;
 
     @Autowired
-    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry, RestoreJobRepository restoreJobs) {
+    public ConnectionService(ConnectionRepository repository, CryptoService crypto, AuditRepository audit, BackupTaskRepository backupTasks, MetadataCacheService metadataCache, RemoteDataSourceRegistry dataSources, DialectRegistry dialectRegistry, RestoreJobRepository restoreJobs, SqlScriptSplitter scriptSplitter, SqlStatementClassifier statementClassifier) {
         this.repository = repository;
         this.crypto = crypto;
         this.audit = audit;
@@ -58,6 +60,8 @@ public class ConnectionService {
         this.dataSources = dataSources;
         this.dialectRegistry = dialectRegistry;
         this.restoreJobs = restoreJobs;
+        this.scriptSplitter = scriptSplitter;
+        this.statementClassifier = statementClassifier;
     }
 
     public List<ConnectionResponse> list() {
@@ -133,6 +137,9 @@ public class ConnectionService {
 
     public Connection open(long id, String schemaName) throws Exception {
         DbConnection configured = require(id);
+        // 未指定命名空间时用连接上配置的默认值，省去每次打开连接后再手动切库。
+        if (schemaName == null || schemaName.isBlank()) schemaName = configured.defaultSchema();
+        if (schemaName == null || schemaName.isBlank()) return dataSources.open(configured, password(id));
         Connection connection = dataSources.open(configured, password(id));
         var dialect = dialectRegistry.dialectFor(configured);
         try {
@@ -195,6 +202,10 @@ public class ConnectionService {
     }
 
     private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword) {
+        String initSql = ConnectionProfile.normalizeInitSql(r.initSql());
+        // 保存时就把初始化 SQL 校验掉：它之后会在每条物理连接上隐式执行，等到建连时才报错
+        // 就变成了一条连不上的连接，用户很难定位。
+        ConnectionProfile.initStatements(initSql, scriptSplitter, statementClassifier);
         return new DbConnection(
                 id,
                 r.name().trim(),
@@ -204,6 +215,11 @@ public class ConnectionService {
                 encryptedPassword,
                 normalizeEnvironment(r.environment()),
                 r.readonly(),
+                ConnectionProfile.normalizeGroup(r.groupName()),
+                ConnectionProfile.normalizeTags(r.tags()),
+                ConnectionProfile.normalizeDefaultSchema(r.defaultSchema()),
+                initSql,
+                ConnectionProfile.normalizeDescription(r.description()),
                 Instant.now(),
                 Instant.now()
         );
@@ -212,6 +228,7 @@ public class ConnectionService {
     private ConnectionResponse toResponse(DbConnection c) {
         return new ConnectionResponse(
                 c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), normalizeEnvironment(c.environment()), c.readonly(),
+                c.groupName(), ConnectionProfile.parseTags(c.tags()), c.defaultSchema(), c.initSql(), c.description(),
                 dialectRegistry.dialectFor(c).capabilities()
         );
     }

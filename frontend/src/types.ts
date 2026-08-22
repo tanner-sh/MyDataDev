@@ -6,6 +6,14 @@ export type Connection = {
   username?: string;
   environment: string;
   readonly: boolean;
+  /** 连接分组，仅用于组织列表。 */
+  groupName?: string;
+  tags?: string[];
+  /** 连接级默认 schema/catalog：打开连接后资源树默认停在这里。 */
+  defaultSchema?: string;
+  /** 每建立一条物理数据库会话时执行的语句。 */
+  initSql?: string;
+  description?: string;
   capabilities: DatabaseCapabilities;
 };
 
@@ -372,7 +380,21 @@ export type TableRow = { id: string; values: Record<string, unknown>; original?:
 export type TableData = { columns: TableColumn[]; rows: Record<string, unknown>[]; rowKeyTokens?: string[]; keyColumns: string[]; editable: boolean; navigationMode: 'KEYSET' | 'OFFSET'; nextCursor?: string | null; hasMore: boolean };
 export type CompletionCatalog = { namespaceKind?: 'SCHEMA' | 'CATALOG'; selectedSchema?: string; objects: DbObject[]; hasMore?: boolean };
 export type RowChange = { type: 'INSERT' | 'UPDATE' | 'DELETE'; keyToken?: string; values?: Record<string, unknown>; originalValues?: Record<string, unknown> };
-export type ConnectionForm = { name: string; dbType: string; jdbcUrl: string; username: string; password: string; environment: string; readonly: boolean };
+export type ConnectionForm = {
+  name: string;
+  dbType: string;
+  jdbcUrl: string;
+  username: string;
+  password: string;
+  environment: string;
+  readonly: boolean;
+  groupName: string;
+  /** 逗号分隔，提交给后端时由后端规范化。 */
+  tags: string;
+  defaultSchema: string;
+  initSql: string;
+  description: string;
+};
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = {

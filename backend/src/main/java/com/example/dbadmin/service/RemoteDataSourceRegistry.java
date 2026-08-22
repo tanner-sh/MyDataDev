@@ -13,14 +13,20 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
+import javax.sql.DataSource;
+import java.io.PrintWriter;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.logging.Logger;
 
 @Component
 public class RemoteDataSourceRegistry {
@@ -36,6 +42,8 @@ public class RemoteDataSourceRegistry {
     private final long idleTimeoutMs;
     private final long maxLifetimeMs;
     private final MeterRegistry meterRegistry;
+    private static final SqlScriptSplitter SPLITTER = new SqlScriptSplitter();
+    private static final SqlStatementClassifier CLASSIFIER = new SqlStatementClassifier();
 
     public RemoteDataSourceRegistry() {
         this.maxPools = MAX_POOLS;
@@ -69,7 +77,8 @@ public class RemoteDataSourceRegistry {
             if (existing == null) {
                 makeRoom();
                 existing = new PoolEntry(
-                        create(connection.jdbcUrl(), connection.username(), password, connection.readonly(), "remote-" + connection.id()),
+                        create(connection.jdbcUrl(), connection.username(), password, connection.readonly(),
+                                "remote-" + connection.id(), false, initStatements(connection)),
                         fingerprint,
                         System.nanoTime(),
                         1
@@ -154,11 +163,12 @@ public class RemoteDataSourceRegistry {
         idle.getValue().dataSource().close();
     }
 
-    private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName) {
-        return create(jdbcUrl, username, password, readonly, poolName, false);
+    private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName, boolean failFast) {
+        return create(jdbcUrl, username, password, readonly, poolName, failFast, List.of());
     }
 
-    private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName, boolean failFast) {
+    private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName,
+                                    boolean failFast, List<String> initStatements) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(jdbcUrl);
         config.setUsername(username);
@@ -182,6 +192,15 @@ public class RemoteDataSourceRegistry {
             config.setJdbcUrl(jdbcUrl + separator + "rewriteBatchedStatements=true");
         }
 
+        if (!initStatements.isEmpty()) {
+            // Hikari 的 connectionInitSql 只能执行一条语句；会话初始化常常需要好几条 SET，
+            // 所以自己接管建连这一步。只在配置了初始化 SQL 时替换，其余连接仍走 Hikari
+            // 原本的驱动解析逻辑，不受影响。
+            config.setDataSource(new InitializingDataSource(config.getJdbcUrl(), username, password, initStatements));
+            config.setJdbcUrl(null);
+            config.setUsername(null);
+            config.setPassword(null);
+        }
         if (meterRegistry != null) config.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(meterRegistry));
         return new HikariDataSource(config);
     }
@@ -200,6 +219,8 @@ public class RemoteDataSourceRegistry {
             appendFingerprintValue(value, connection.username());
             appendFingerprintValue(value, password);
             appendFingerprintValue(value, Boolean.toString(connection.readonly()));
+            // 初始化 SQL 改了必须重建池：已有物理连接上跑的是旧语句。
+            appendFingerprintValue(value, connection.initSql());
             return Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(value.toString().getBytes(StandardCharsets.UTF_8)));
         } catch (Exception error) {
             throw new IllegalStateException("无法生成远程连接池标识", error);
@@ -213,6 +234,86 @@ public class RemoteDataSourceRegistry {
             target.append(value.length()).append(':').append(value);
         }
         target.append('|');
+    }
+
+    /**
+     * 解析连接上配置的会话初始化语句。
+     *
+     * <p>保存连接时已经校验过一遍；这里再解析一次是因为建池发生在很久之后，且要容忍历史数据。
+     * 解析失败不能让连接直接不可用 —— 忽略掉比整条连接打不开更容易排查。</p>
+     */
+    private List<String> initStatements(DbConnection connection) {
+        try {
+            return ConnectionProfile.initStatements(connection.initSql(), SPLITTER, CLASSIFIER);
+        } catch (RuntimeException error) {
+            return List.of();
+        }
+    }
+
+    /**
+     * 建连后立刻执行会话初始化语句的 DataSource。
+     *
+     * <p>语句只在建立物理连接时执行一次，之后这条连接在池里被反复借出都保持同一份会话设置 ——
+     * 这正是「会话初始化」应有的语义。</p>
+     */
+    private record InitializingDataSource(String jdbcUrl, String username, String password, List<String> initStatements)
+            implements DataSource {
+        @Override
+        public Connection getConnection() throws SQLException {
+            Connection connection = username == null && password == null
+                    ? DriverManager.getConnection(jdbcUrl)
+                    : DriverManager.getConnection(jdbcUrl, username, password);
+            try (Statement statement = connection.createStatement()) {
+                for (String sql : initStatements) statement.execute(sql);
+            } catch (SQLException error) {
+                try {
+                    connection.close();
+                } catch (SQLException closeError) {
+                    error.addSuppressed(closeError);
+                }
+                throw error;
+            }
+            return connection;
+        }
+
+        @Override
+        public Connection getConnection(String user, String secret) throws SQLException {
+            return new InitializingDataSource(jdbcUrl, user, secret, initStatements).getConnection();
+        }
+
+        @Override
+        public PrintWriter getLogWriter() {
+            return null;
+        }
+
+        @Override
+        public void setLogWriter(PrintWriter out) {
+        }
+
+        @Override
+        public void setLoginTimeout(int seconds) {
+        }
+
+        @Override
+        public int getLoginTimeout() {
+            return 0;
+        }
+
+        @Override
+        public Logger getParentLogger() {
+            return Logger.getLogger(InitializingDataSource.class.getName());
+        }
+
+        @Override
+        public <T> T unwrap(Class<T> type) throws SQLException {
+            if (type.isInstance(this)) return type.cast(this);
+            throw new SQLException("不支持的类型：" + type);
+        }
+
+        @Override
+        public boolean isWrapperFor(Class<?> type) {
+            return type.isInstance(this);
+        }
     }
 
     private record PoolEntry(HikariDataSource dataSource, String fingerprint, long lastAccessNanos, int pendingBorrows) {

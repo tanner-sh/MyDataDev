@@ -4,6 +4,7 @@ import type { MenuProps } from 'antd';
 import { useMemo, useState } from 'react';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
+import { availableTags, connectionProfileSummary, groupConnections, matchesKeyword, matchesTags } from '../connectionProfile';
 
 const { Text } = Typography;
 
@@ -26,17 +27,17 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   const [environment, setEnvironment] = useState<string>('all');
   const [dbType, setDbType] = useState<string>('all');
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
   const [pendingDelete, setPendingDelete] = useState<Connection | null>(null);
   const favoriteIds = useMemo(() => new Set(favoriteConnectionIds), [favoriteConnectionIds]);
+  const tagOptions = useMemo(() => availableTags(connections), [connections]);
   const visibleConnections = useMemo(() => {
-    const normalizedKeyword = keyword.trim().toLocaleLowerCase();
     return connections
       .map((connection, index) => ({ connection, index }))
-      .filter(({ connection }) => (!normalizedKeyword
-        || connection.name.toLocaleLowerCase().includes(normalizedKeyword)
-        || connection.jdbcUrl.toLocaleLowerCase().includes(normalizedKeyword))
+      .filter(({ connection }) => matchesKeyword(connection, keyword)
         && (environment === 'all' || connection.environment === environment)
         && (dbType === 'all' || connection.dbType === dbType)
+        && matchesTags(connection, tags)
         && (!favoriteOnly || favoriteIds.has(connection.id)))
       .sort((left, right) => {
         if (left.connection.id === selectedId) return -1;
@@ -45,7 +46,8 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
         return favoriteDifference || left.index - right.index;
       })
       .map(({ connection }) => connection);
-  }, [connections, dbType, environment, favoriteIds, favoriteOnly, keyword, selectedId]);
+  }, [connections, dbType, environment, favoriteIds, favoriteOnly, keyword, selectedId, tags]);
+  const groups = useMemo(() => groupConnections(visibleConnections), [visibleConnections]);
 
   if (connectionsLoading && connections.length === 0) {
     return (
@@ -67,7 +69,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
     <Space orientation="vertical" size={8} className="full-width">
       {connectionsError && <Alert type="warning" showIcon title={connectionsError} />}
       <div className="connection-list-filters">
-        <Input.Search allowClear placeholder="搜索名称或 JDBC 地址" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+        <Input.Search allowClear placeholder="搜索名称、地址、分组、标签或备注" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
         <Select
           aria-label="筛选连接环境"
           value={environment}
@@ -80,6 +82,19 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
           options={[{ value: 'all', label: '全部类型' }, ...[...new Set(connections.map((connection) => connection.dbType))].map((value) => ({ value, label: dbTypeLabel(value) }))]}
           onChange={setDbType}
         />
+        {tagOptions.length > 0 && (
+          <Select
+            mode="multiple"
+            allowClear
+            maxTagCount="responsive"
+            aria-label="按标签筛选连接"
+            placeholder="按标签筛选"
+            className="connection-tag-filter"
+            value={tags}
+            options={tagOptions.map((tag) => ({ value: tag, label: tag }))}
+            onChange={setTags}
+          />
+        )}
         <Tooltip title={favoriteOnly ? '显示全部连接' : '只显示收藏连接'}>
           <Button
             type={favoriteOnly ? 'primary' : 'default'}
@@ -91,7 +106,16 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
       </div>
       <Text type="secondary" className="connection-filter-summary">显示 {visibleConnections.length} / {connections.length} 个连接，当前连接与收藏连接优先排列</Text>
       <div className="connection-list">
-        {visibleConnections.map((connection) => (
+        {groups.map((group) => (
+          <section key={group.name} className="connection-group">
+            {/* 只有一个分组时标题是纯噪音，把分组隐藏起来更干净。 */}
+            {groups.length > 1 && (
+              <div className="connection-group-heading">
+                <Text type="secondary">{group.name}</Text>
+                <Text type="secondary">{group.connections.length}</Text>
+              </div>
+            )}
+            {group.connections.map((connection) => (
           <div key={connection.id} className={selectedId === connection.id ? 'connection-item selected' : 'connection-item'}>
             <div className="connection-card">
               <div className="connection-main-info">
@@ -113,8 +137,17 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                 <Space size={4} wrap className="connection-tags">
                   <Tag color="blue">{dbTypeLabel(connection.dbType)}</Tag>
                   <Tag>{environmentLabel(connection.environment)}</Tag>
+                  {(connection.tags || []).map((tag) => <Tag key={tag} color="purple">{tag}</Tag>)}
                 </Space>
                 <Text type="secondary" className="ellipsis-text connection-url">{connection.jdbcUrl}</Text>
+                {connectionProfileSummary(connection) && (
+                  <Text type="secondary" className="ellipsis-text connection-profile-summary">{connectionProfileSummary(connection)}</Text>
+                )}
+                {connection.description?.trim() && (
+                  <Tooltip title={connection.description}>
+                    <Text type="secondary" className="ellipsis-text connection-description">{connection.description}</Text>
+                  </Tooltip>
+                )}
               </div>
               <Space size={2} className="connection-actions">
                 {/* 当前连接也保留这个按钮（禁用），否则各行的操作区宽度不同，⋮ 会逐行错位。 */}
@@ -146,6 +179,8 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
               </Space>
             </div>
           </div>
+            ))}
+          </section>
         ))}
         {visibleConnections.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的数据库连接" />}
       </div>

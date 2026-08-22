@@ -36,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -220,6 +221,23 @@ public class MetadataService {
         cache.evictConnection(connectionId);
     }
 
+    /**
+     * 决定资源树默认停在哪个命名空间。
+     *
+     * <p>连接上配置的默认值优先 —— 那是用户明确表达的意图，比驱动报告的登录默认库更贴近他要
+     * 干的事。但必须服务端确实存在：指向一个不存在的 schema 会让整棵资源树打不开，那还不如退回
+     * 驱动给的值。大小写以服务端返回的写法为准。</p>
+     */
+    static String resolveCurrentNamespace(String driverCurrent, String configuredDefault, Collection<String> available) {
+        String configured = trimToNull(configuredDefault);
+        if (configured != null) {
+            for (String name : available) {
+                if (name != null && name.equalsIgnoreCase(configured)) return name;
+            }
+        }
+        return driverCurrent == null ? "" : driverCurrent;
+    }
+
     private MetadataCacheService.SchemaCatalogSnapshot loadSchemaCatalog(long connectionId, Connection connection, DbConnection dbConnection, DatabaseDialect dialect) throws Exception {
         DatabaseMetaData meta = connection.getMetaData();
         String currentSchema = trimToNull(dialect.currentSchema(connection));
@@ -235,7 +253,8 @@ public class MetadataService {
             available.add(currentSchema);
         }
         available.addAll(namespaces(meta, dialect));
-        String resolvedCurrentSchema = currentSchema;
+        String resolvedCurrentSchema = resolveCurrentNamespace(currentSchema, dbConnection.defaultSchema(), available);
+        currentSchema = resolvedCurrentSchema;
         List<String> schemaNames = available.stream()
                 .sorted((left, right) -> {
                     if (left.equals(right)) return 0;
@@ -971,7 +990,7 @@ public class MetadataService {
         return requested;
     }
 
-    private String trimToNull(String value) {
+    private static String trimToNull(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }

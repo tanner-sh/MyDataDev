@@ -27,6 +27,11 @@ public class ConnectionRepository {
             rs.getString("encrypted_password"),
             rs.getString("environment"),
             rs.getBoolean("readonly"),
+            rs.getString("group_name"),
+            rs.getString("tags"),
+            rs.getString("default_schema"),
+            rs.getString("init_sql"),
+            rs.getString("description"),
             toInstant(rs.getTimestamp("created_at")),
             toInstant(rs.getTimestamp("updated_at"))
     );
@@ -48,8 +53,9 @@ public class ConnectionRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
-                    INSERT INTO db_connection(name, db_type, jdbc_url, username, encrypted_password, environment, readonly)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO db_connection(name, db_type, jdbc_url, username, encrypted_password, environment, readonly,
+                                              group_name, tags, default_schema, init_sql, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, c.name());
             ps.setString(2, c.dbType());
@@ -58,6 +64,11 @@ public class ConnectionRepository {
             ps.setString(5, c.encryptedPassword());
             ps.setString(6, c.environment());
             ps.setBoolean(7, c.readonly());
+            ps.setString(8, c.groupName());
+            ps.setString(9, c.tags());
+            ps.setString(10, c.defaultSchema());
+            ps.setString(11, c.initSql());
+            ps.setString(12, c.description());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -70,9 +81,11 @@ public class ConnectionRepository {
     public void update(long id, DbConnection c) {
         jdbc.update("""
                 UPDATE db_connection
-                SET name = ?, db_type = ?, jdbc_url = ?, username = ?, encrypted_password = ?, environment = ?, readonly = ?, updated_at = CURRENT_TIMESTAMP
+                SET name = ?, db_type = ?, jdbc_url = ?, username = ?, encrypted_password = ?, environment = ?, readonly = ?,
+                    group_name = ?, tags = ?, default_schema = ?, init_sql = ?, description = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-                """, c.name(), c.dbType(), c.jdbcUrl(), c.username(), c.encryptedPassword(), c.environment(), c.readonly(), id);
+                """, c.name(), c.dbType(), c.jdbcUrl(), c.username(), c.encryptedPassword(), c.environment(), c.readonly(),
+                c.groupName(), c.tags(), c.defaultSchema(), c.initSql(), c.description(), id);
     }
 
     public void delete(long id) {

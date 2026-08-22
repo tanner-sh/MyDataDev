@@ -27,7 +27,12 @@ function formFromConnection(connection: Connection, password: string): Connectio
     username: connection.username || '',
     password,
     environment: normalizeEnvironment(connection.environment),
-    readonly: connection.readonly
+    readonly: connection.readonly,
+    groupName: connection.groupName || '',
+    tags: (connection.tags || []).join(','),
+    defaultSchema: connection.defaultSchema || '',
+    initSql: connection.initSql || '',
+    description: connection.description || ''
   };
 }
 

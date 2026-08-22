@@ -43,7 +43,8 @@ class ConnectionServiceNamespaceTest {
         dataSources = new RemoteDataSourceRegistry();
         service = new ConnectionService(
                 repository, crypto, mock(AuditRepository.class), mock(BackupTaskRepository.class),
-                mock(MetadataCacheService.class), dataSources, new DialectRegistry(), mock(RestoreJobRepository.class)
+                mock(MetadataCacheService.class), dataSources, new DialectRegistry(), mock(RestoreJobRepository.class),
+                new SqlScriptSplitter(), new SqlStatementClassifier()
         );
         try (Connection connection = service.open(CONNECTION_ID)) {
             connection.createStatement().execute("CREATE SCHEMA reporting");

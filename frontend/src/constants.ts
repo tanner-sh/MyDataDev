@@ -31,5 +31,10 @@ export const EMPTY_FORM: ConnectionForm = {
   username: 'sa',
   password: '',
   environment: 'dev',
-  readonly: false
+  readonly: false,
+  groupName: '',
+  tags: '',
+  defaultSchema: '',
+  initSql: '',
+  description: ''
 };

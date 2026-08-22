@@ -3979,6 +3979,11 @@ body.is-resizing-column * {
     grid-row: 2;
   }
 
+  /* 窄屏下环境/类型两个下拉已经占满第二行，标签筛选要自己再占一行。 */
+  .connection-list-filters > .connection-tag-filter {
+    grid-row: 3;
+  }
+
   .app-header-actions > .ant-space-item:first-child {
     display: none;
   }
@@ -4115,4 +4120,40 @@ body.is-resizing-column * {
   .sql-workspace .workspace-toolbar {
     justify-content: flex-end;
   }
+}
+
+/* 连接分组：标题只是一条弱化的分隔提示，不能喧宾夺主盖过连接名。 */
+.connection-group + .connection-group {
+  margin-top: 10px;
+}
+
+.connection-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 4px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--app-border-subtle, rgba(0, 0, 0, 0.06));
+  margin-bottom: 6px;
+}
+
+/* 标签筛选单独占一行：塞进上面那行会把搜索框挤到没法用。 */
+.connection-tag-filter {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.connection-profile-summary,
+.connection-description {
+  font-size: 12px;
+}
+
+.connection-description {
+  opacity: 0.85;
+}
+
+/* 折叠的档案区不该在表单里再撑出一层缩进。 */
+.connection-profile-collapse .ant-collapse-content-box {
+  padding-inline: 0;
 }
