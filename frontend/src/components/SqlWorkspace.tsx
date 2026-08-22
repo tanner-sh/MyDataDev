@@ -8,6 +8,7 @@ import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
+import { ExplainInsightsPanel } from './ExplainInsightsPanel';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import { resolveEditorSplitRatio } from '../editorSplit';
 import type { ResultEditCommit } from '../resultEditing';
@@ -577,6 +578,9 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
         <div className="statement-result-content">
           <div className="statement-result-notices">
             {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
+            {result.result.resultSet && (
+              <ExplainInsightsPanel columns={result.result.columns.map((column) => column.label)} rows={result.result.rows} />
+            )}
           </div>
           <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onCommitEdits={onCommitEdits} />
         </div>

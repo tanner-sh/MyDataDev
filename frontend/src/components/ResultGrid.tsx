@@ -9,6 +9,7 @@ import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
 import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { explainFindings, explainRowLevels } from '../explainInsights';
 import { downloadBlob } from '../api';
 import {
   applyResultCellEdit,
@@ -425,8 +426,27 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     setAllResultRowsChecked(false);
   }, [setAllResultRowsChecked]);
 
+  /**
+   * 执行计划里有问题的行。
+   *
+   * <p>解读面板给的是结论，网格里还要能一眼对上是哪几行 —— 计划一长，靠行号来回数很费劲。
+   * 非执行计划的结果集这里恒为空表，不产生任何开销。</p>
+   */
+  const explainRowSeverity = useMemo(() => {
+    if (!result?.resultSet) return new Map<number, 'warning' | 'notice'>();
+    return explainRowLevels(explainFindings(result.columns.map((column) => column.label), result.rows));
+  }, [result?.columns, result?.resultSet, result?.rows]);
+  const explainRowSeverityRef = useRef(explainRowSeverity);
+  explainRowSeverityRef.current = explainRowSeverity;
+
   const resultRowClassName = useCallback<ResultRowClassName>(
-    (row) => selectionStateRef.current.selectedSet.has(row.key) ? 'result-row-selected' : '',
+    (row) => {
+      const classes: string[] = [];
+      if (selectionStateRef.current.selectedSet.has(row.key)) classes.push('result-row-selected');
+      const severity = explainRowSeverityRef.current.get(row.rowIndex);
+      if (severity) classes.push(severity === 'warning' ? 'explain-row-warning' : 'explain-row-notice');
+      return classes.join(' ');
+    },
     []
   );
   const resultOnRow = useCallback<NonNullable<TableProps<ResultRow>['onRow']>>((row) => ({

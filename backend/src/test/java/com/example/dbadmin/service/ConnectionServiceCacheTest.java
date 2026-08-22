@@ -93,7 +93,8 @@ class ConnectionServiceCacheTest {
 
         when(repository.findById(7)).thenReturn(Optional.of(updated));
         service.update(7, new ConnectionRequest(
-                "prod-main", "mysql", "jdbc:mysql://other:3306/demo", "app", "new-secret", "prod", true
+                "prod-main", "mysql", "jdbc:mysql://other:3306/demo", "app", "new-secret", "prod", true,
+                null, null, null, null, null
         ), "admin");
 
         assertThat(service.require(7)).isEqualTo(updated);
@@ -118,7 +119,8 @@ class ConnectionServiceCacheTest {
         when(backupTasks.countRunningByConnectionId(anyLong())).thenReturn(1);
 
         assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> service.update(7, new ConnectionRequest(
-                "prod-main", "mysql", "jdbc:mysql://localhost:3306/demo", "app", "x", "prod", false
+                "prod-main", "mysql", "jdbc:mysql://localhost:3306/demo", "app", "x", "prod", false,
+                null, null, null, null, null
         ), "admin"))).isInstanceOf(IllegalStateException.class);
 
         verify(repository, times(0)).update(anyLong(), any());

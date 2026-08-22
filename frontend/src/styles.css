@@ -3979,9 +3979,10 @@ body.is-resizing-column * {
     grid-row: 2;
   }
 
-  /* 窄屏下环境/类型两个下拉已经占满第二行，标签筛选要自己再占一行。 */
+  /* 窄屏下环境/类型两个下拉已经占满第二行，标签筛选要自己再占一行，收藏开关跟在同一行。 */
   .connection-list-filters > .connection-tag-filter {
     grid-row: 3;
+    grid-column: 1 / 3;
   }
 
   .app-header-actions > .ant-space-item:first-child {
@@ -4138,10 +4139,11 @@ body.is-resizing-column * {
   margin-bottom: 6px;
 }
 
-/* 标签筛选单独占一行：塞进上面那行会把搜索框挤到没法用。 */
+/* 标签筛选另起一行：塞进搜索那行会把搜索框挤到没法用。留出最后一列给收藏开关，
+   否则那个小按钮会被顶到第三行，孤零零占满一整行。 */
 .connection-tag-filter {
   min-width: 0;
-  grid-column: 1 / -1;
+  grid-column: 1 / 4;
 }
 
 .connection-profile-summary,
@@ -4156,4 +4158,53 @@ body.is-resizing-column * {
 /* 折叠的档案区不该在表单里再撑出一层缩进。 */
 .connection-profile-collapse .ant-collapse-content-box {
   padding-inline: 0;
+}
+
+/* 执行计划解读：结论在上，问题行在网格里用左边一道色条对上，不给整行铺底色 ——
+   计划表本来就密，整行变色会盖掉内容本身。 */
+.explain-insights {
+  margin-bottom: 6px;
+}
+
+.explain-insights-toggle {
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.explain-finding {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.explain-finding-detail {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 结果网格是虚拟表：行是 div.ant-table-row 而不是 tr，单元格同理。
+   选择器落在 .ant-table-cell 上，两种渲染方式都能覆盖。 */
+.result-grid .explain-row-warning > .ant-table-cell:first-child,
+.result-grid .explain-row-notice > .ant-table-cell:first-child {
+  position: relative;
+}
+
+.result-grid .explain-row-warning > .ant-table-cell:first-child::before,
+.result-grid .explain-row-notice > .ant-table-cell:first-child::before {
+  content: '';
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 3px;
+  z-index: 1;
+}
+
+.result-grid .explain-row-warning > .ant-table-cell:first-child::before {
+  background: var(--ant-color-warning, #faad14);
+}
+
+.result-grid .explain-row-notice > .ant-table-cell:first-child::before {
+  background: var(--ant-color-info, #1677ff);
+  opacity: 0.55;
 }
