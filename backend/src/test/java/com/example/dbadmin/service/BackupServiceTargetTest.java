@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.MetadataWriteQueue;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,7 +55,7 @@ class BackupServiceTargetTest {
         JdbcTemplate appJdbc = new JdbcTemplate(appDataSource);
         taskRepository = new BackupTaskRepository(appJdbc);
         BackupHistoryRepository historyRepository = new BackupHistoryRepository(appJdbc);
-        AuditRepository auditRepository = new AuditRepository(appJdbc);
+        AuditRepository auditRepository = new AuditRepository(appJdbc, MetadataWriteQueue.inline());
         AppProperties properties = new AppProperties();
         properties.getBackup().setDirectory(tempDir.toString());
         DbConnection model = new DbConnection(
