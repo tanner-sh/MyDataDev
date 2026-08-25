@@ -62,6 +62,27 @@ export function importRoute(file: ImportFileInfo, pendingChanges: number, maxCha
   return { kind: 'inline' };
 }
 
+/**
+ * 浏览器内解析完之后才发现行数超限时，还能往哪走。
+ *
+ * <p>行数在解析前是不知道的，而 {@link importRoute} 只看得到文件大小 —— 一份 100 KB、1001 行
+ * 的 CSV 会先被判成 inline，解析完再撞上待提交变更上限。以前这里只是报错，用户手上那份文件
+ * 就没有任何入口可用了；CSV 明明还有后台这条路，直接改走后台即可。</p>
+ */
+export function oversizedRowsRoute(
+  file: ImportFileInfo,
+  rows: number,
+  maxChanges: number
+): Extract<ImportRoute, { kind: 'background' | 'unsupported' }> {
+  if (importFileExtension(file.name) === 'csv') {
+    return { kind: 'background', reason: `解析出 ${rows} 行，超过浏览器内一次可提交的 ${maxChanges} 项变更上限` };
+  }
+  return {
+    kind: 'unsupported',
+    message: `单次最多提交 ${maxChanges} 项变更；请先提交现有修改，或转存为 CSV 后走后台导入。`
+  };
+}
+
 /** 后台导入的上传地址；schemaName 为空表示用连接默认命名空间。 */
 export function backgroundImportPath(params: {
   connectionId: number;

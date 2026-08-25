@@ -125,8 +125,8 @@ public class DataImportService {
 
         String qualified = dialect.qualifiedName(schemaName, tableName);
         String columnList = String.join(", ", columns.stream().map(dialect::quoteIdentifier).toList());
-        writer.write("-- 由 " + fileName + " 转换而来的导入脚本\n");
-        writer.write("-- 目标表：" + qualified + "\n\n");
+        writer.write("-- 由 " + commentText(fileName) + " 转换而来的导入脚本\n");
+        writer.write("-- 目标表：" + commentText(qualified) + "\n\n");
 
         long rows = 0;
         int inBatch = 0;
@@ -142,7 +142,7 @@ public class DataImportService {
             writer.write("  (");
             for (int index = 0; index < row.size(); index++) {
                 if (index > 0) writer.write(", ");
-                writer.write(literal(row.get(index)));
+                writer.write(literal(dialect, row.get(index)));
             }
             writer.write(")");
             rows++;
@@ -162,10 +162,27 @@ public class DataImportService {
      *
      * <p>不做类型推断：CSV 里没有类型信息，猜错的代价（把 "007" 变成 7、把 "1e5" 变成浮点）
      * 比多一次隐式转换大得多。</p>
+     *
+     * <p>转义交给方言，不能在这里自己拼：MySQL、ClickHouse 默认还认反斜杠转义，只翻倍单引号
+     * 的话，一个以反斜杠结尾的单元格就能让字符串提前结束，后面的内容变成可执行的 SQL。用
+     * scriptLiteral 而不是 literal —— 这份脚本是先生成、后执行的，写法不能依赖生成时的会话
+     * 设置（MySQL 的 NO_BACKSLASH_ESCAPES 会改变反斜杠的含义）。</p>
      */
-    static String literal(String value) {
+    static String literal(DatabaseDialect dialect, String value) {
         if (value == null || value.isEmpty()) return "NULL";
-        return "'" + value.replace("'", "''") + "'";
+        return dialect.scriptLiteral(value);
+    }
+
+    /**
+     * 写进 {@code --} 注释的文本必须是单行的。
+     *
+     * <p>文件名由请求参数带进来，换行没被去掉的话注释就在那里结束了，后面的内容会被脚本执行
+     * 管线当成语句执行 —— 一条注释就成了注入点。</p>
+     */
+    static String commentText(String value) {
+        if (value == null) return "";
+        String single = value.replaceAll("\\R", " ").replace("*/", "* /");
+        return single.length() > 200 ? single.substring(0, 200) + "…" : single;
     }
 
     /** Excel 导出的 CSV 常带 UTF-8 BOM，不剥掉会让第一列名匹配不上。 */

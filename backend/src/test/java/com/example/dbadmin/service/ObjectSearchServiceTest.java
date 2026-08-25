@@ -24,10 +24,12 @@ import static org.mockito.Mockito.when;
 
 class ObjectSearchServiceTest {
     private ObjectSearchService service;
+    private String databaseUrl;
 
     @BeforeEach
     void setUp() throws Exception {
         String url = "jdbc:h2:mem:object-search-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        databaseUrl = url;
         new JdbcTemplate(new DriverManagerDataSource(url, "sa", "")).execute("""
                 CREATE TABLE customer_orders(id INT PRIMARY KEY, total DECIMAL(10,2));
                 CREATE TABLE order_items(id INT PRIMARY KEY, sku VARCHAR(40));
@@ -108,6 +110,24 @@ class ObjectSearchServiceTest {
 
         assertThat(capped.hits()).hasSize(2);
         assertThat(capped.truncated()).isTrue();
+    }
+
+    /**
+     * 每种类型只取 PER_KIND_LIMIT 条，被这一层截断时总条数可能远不到 cap —— 只看 cap 会把
+     * 一次明显不完整的搜索报告成「结果完整」，用户以为没有更多匹配就不再翻了。
+     */
+    @Test
+    void reportsTruncationWhenAKindHitsItsPerKindLimit() throws Exception {
+        StringBuilder ddl = new StringBuilder();
+        for (int index = 0; index < ObjectSearchService.PER_KIND_LIMIT + 5; index++) {
+            ddl.append("CREATE TABLE bulk_order_").append(index).append("(id INT PRIMARY KEY);");
+        }
+        new JdbcTemplate(new DriverManagerDataSource(databaseUrl, "sa", "")).execute(ddl.toString());
+
+        ObjectSearchResponse response = service.search(1L, null, "bulk_order", 100);
+
+        assertThat(response.hits()).hasSizeLessThan(ObjectSearchService.PER_KIND_LIMIT + 5);
+        assertThat(response.truncated()).isTrue();
     }
 
     @Test

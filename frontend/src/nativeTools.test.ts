@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeToolForBackup, nativeToolForRestore, requestedToolPath } from './nativeTools';
+import { nativeToolForBackup, nativeToolForRestore, requestedToolPath, restoreFormatForBackupMethod, restoreToolHint } from './nativeTools';
 
 describe('native tool selection', () => {
   it('maps backup and restore operations to their executable type', () => {
@@ -28,5 +28,23 @@ describe('PostgreSQL 原生工具', () => {
     expect(nativeToolForBackup('ORACLE_EXP')).toBe('ORACLE_EXP');
     expect(nativeToolForRestore('MYSQLDUMP')).toBe('MYSQL');
     expect(nativeToolForRestore('ORACLE_DMP')).toBe('ORACLE_IMP');
+  });
+});
+
+describe('PostgreSQL 恢复入口', () => {
+  it('pg_dump 备份回推出 PG_DUMP 格式，而不是掉回 SQL', () => {
+    // 掉回 SQL 的话，一份 custom 格式的 .dump 会被当成可转换 SQL 去解析，直接失败。
+    expect(restoreFormatForBackupMethod('PG_DUMP')).toBe('PG_DUMP');
+    expect(restoreFormatForBackupMethod('MYSQLDUMP')).toBe('MYSQLDUMP');
+    expect(restoreFormatForBackupMethod('ORACLE_EXP')).toBe('ORACLE_DMP');
+    expect(restoreFormatForBackupMethod(undefined)).toBe('SQL');
+  });
+
+  it('每种格式给出自己的工具名与路径示例', () => {
+    expect(nativeToolForRestore('PG_DUMP')).toBe('PG_RESTORE');
+    expect(restoreToolHint('PG_DUMP').name).toContain('pg_restore');
+    expect(restoreToolHint('PG_DUMP').placeholder).toContain('pg_restore');
+    expect(restoreToolHint('MYSQLDUMP').name).toContain('mysql');
+    expect(restoreToolHint('ORACLE_DMP').name).toContain('imp');
   });
 });

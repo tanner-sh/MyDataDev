@@ -47,6 +47,27 @@ class DatabaseSessionServiceTest {
         assertThat(page.message()).contains("权限");
     }
 
+    /**
+     * pg_terminate_backend() 杀不掉时不抛异常，只返回 false。不读这个返回值的话，一次什么都
+     * 没做的调用会被记成成功，用户还以为那个会话已经被终止了。
+     */
+    @Test
+    void postgresReportsAFailedTerminationInsteadOfLoggingSuccess() throws Exception {
+        String url = "jdbc:h2:mem:sess-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute(
+                    "CREATE ALIAS pg_terminate_backend AS 'boolean terminate(int pid) { return pid == 42; }'"
+            );
+        }
+        DatabaseSessionService service = service("postgresql", url);
+
+        assertThatThrownBy(() -> service.kill(1L, "7", "admin", null))
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .hasMessageContaining("未能终止会话");
+        // 真的杀掉了就不该报错。
+        service.kill(1L, "42", "admin", null);
+    }
+
     @Test
     void mysqlListsAndKillsBySessionId() {
         MySqlDialect dialect = new MySqlDialect();

@@ -30,6 +30,17 @@ export function nextSqlPage(page: SqlPageInfo, rowCount: number): SqlPageNavigat
   };
 }
 
+/**
+ * 重新加载当前这一页。
+ *
+ * <p>结果就地编辑提交后必须重查：表格会清空本地编辑态，不重查的话界面继续显示旧值，用户再改
+ * 同一行时带上去的原值已经过期，会被乐观锁挡下来。偏移和翻页历史保持不变，用户不会被弹回
+ * 第一页。</p>
+ */
+export function currentSqlPage(page: SqlPageInfo): SqlPageNavigation {
+  return { offset: page.offset, pageSize: page.requestedPageSize, previousOffsets: page.previousOffsets || [] };
+}
+
 export function resizedSqlPage(pageSize: number): SqlPageNavigation {
   return { offset: 0, pageSize, previousOffsets: [] };
 }

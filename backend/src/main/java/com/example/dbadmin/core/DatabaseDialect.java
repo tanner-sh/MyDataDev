@@ -168,4 +168,16 @@ public interface DatabaseDialect {
         }
         return "'" + value.toString().replace("'", "''") + "'";
     }
+
+    /**
+     * 写进「将来会被真正执行的脚本」里的字面量。
+     *
+     * <p>与 {@link #literal} 的区别只在于取舍：{@code literal} 服务于预览，可读性优先；这个
+     * 方法服务于生成的导入脚本，正确性优先 —— 脚本可能在另一台机器、另一个会话设置下执行，
+     * 所以它必须选一种不依赖会话状态的写法，哪怕不好看。默认两者相同，只有转义规则会随会话
+     * 变化的方言（MySQL 系）才需要区分。</p>
+     */
+    default String scriptLiteral(Object value) {
+        return literal(value);
+    }
 }

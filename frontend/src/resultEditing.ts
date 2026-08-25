@@ -117,6 +117,44 @@ export function buildResultChanges(
   return changes;
 }
 
+/**
+ * 把已经提交成功的变更写回本批结果的行数据。
+ *
+ * <p>提交成功后表格会清空本地编辑态，所以界面显示的值必须在那之前就变成新值。只靠「提交完
+ * 重新查询」不够：重查可能因为网络错误或工作台正忙而失败，那样表格会退回旧值，用户再改同一
+ * 行时带上去的原值已经过期，会被后端的乐观校验挡下来。</p>
+ *
+ * <p>写回按行定位令牌匹配，而不是按下标 —— 令牌是后端签发的行身份，提交用的也是它。</p>
+ *
+ * @return 有变更时返回新数组，没有匹配上任何一行时返回原数组
+ */
+export function applyCommittedChanges(
+  rows: unknown[][],
+  columns: Array<{ label: string }>,
+  rowKeyTokens: string[],
+  changes: RowChange[]
+): unknown[][] {
+  const byToken = new Map<string, RowChange>();
+  for (const change of changes) {
+    if (change.type === 'UPDATE' && change.keyToken && change.values) byToken.set(change.keyToken, change);
+  }
+  if (byToken.size === 0) return rows;
+  let changed = false;
+  const next = rows.map((row, rowIndex) => {
+    const change = byToken.get(rowKeyTokens[rowIndex]);
+    if (!change?.values) return row;
+    const updated = [...row];
+    for (const [column, value] of Object.entries(change.values)) {
+      const columnIndex = columns.findIndex((item) => item.label === column);
+      if (columnIndex < 0) continue;
+      updated[columnIndex] = value;
+      changed = true;
+    }
+    return updated;
+  });
+  return changed ? next : rows;
+}
+
 /** 提交请求：复用表数据的 /data/preview 与 /data/commit。 */
 export type ResultEditCommit = {
   schemaName?: string | null;

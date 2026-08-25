@@ -108,9 +108,36 @@ public class DatabaseSessionService {
         try (Connection connection = connections.open(connectionId);
              Statement statement = connection.createStatement()) {
             statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
-            statement.execute(sql);
+            boolean hasResult = statement.execute(sql);
+            if (hasResult) requireTerminated(statement, sessionId);
         }
         audit.log(actor, "SESSION_KILL", "connection:" + connectionId, "session:" + sessionId);
+    }
+
+    /**
+     * 有的数据库用返回值而不是异常表示「没杀成」。
+     *
+     * <p>PostgreSQL 的 {@code pg_terminate_backend()} 在会话号不存在时只发一条 WARNING 并返回
+     * false —— 不看这个布尔值的话，一次什么都没做的调用会被当成成功记进审计日志，用户也以为
+     * 那个会话已经被终止了。MySQL 的 KILL 与 Oracle 的 ALTER SYSTEM 走的是抛异常的路子，不进
+     * 这个分支。</p>
+     */
+    private void requireTerminated(Statement statement, String sessionId) throws Exception {
+        try (ResultSet rs = statement.getResultSet()) {
+            if (rs == null || !rs.next()) return;
+            Object value = rs.getObject(1);
+            boolean terminated;
+            if (value == null) terminated = false;
+            else if (value instanceof Boolean bool) terminated = bool;
+            else if (value instanceof Number number) terminated = number.intValue() != 0;
+            else terminated = !Set.of("f", "false", "0", "n", "no").contains(String.valueOf(value).toLowerCase(Locale.ROOT));
+            if (!terminated) {
+                throw new ApiProblemException(
+                        HttpStatus.CONFLICT, "SESSION_KILL_FAILED",
+                        "数据库未能终止会话 " + sessionId + "，它可能已经结束或不属于当前实例。"
+                );
+            }
+        }
     }
 
     private static Set<String> columnLabels(ResultSetMetaData metadata) throws Exception {

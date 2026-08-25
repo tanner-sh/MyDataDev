@@ -23,6 +23,66 @@ class DataImportServiceTest {
         return out.toString();
     }
 
+    /**
+     * 含反斜杠的值不能写成带引号的字面量：MySQL 默认把反斜杠当转义符（以反斜杠结尾会吃掉
+     * 闭合引号，后面的内容跑到字符串外面变成 SQL），而开了 NO_BACKSLASH_ESCAPES 又不当转义符
+     * ——同一份脚本在两种会话下会得到两个不同的值。十六进制字面量不参与任何转义，两种模式下
+     * 都还原成同一串字节。
+     */
+    @Test
+    void writesBackslashValuesAsHexSoTheyDoNotDependOnSqlMode() throws Exception {
+        String sql = convert("id,note\n1,\"c:\\tmp\"\n", COLUMNS);
+
+        assertThat(sql).contains("('1', _utf8mb4 0x" + hex("c:\\tmp") + ")");
+        // 既没有反斜杠也没有引号留在脚本里，转义规则的分歧就无从谈起。
+        assertThat(sql).doesNotContain("'c:");
+    }
+
+    @Test
+    void keepsOrdinaryValuesReadableRatherThanHexEncodingEverything() throws Exception {
+        String sql = convert("id,name\n1,张三\n", COLUMNS);
+
+        assertThat(sql).contains("('1', '张三')");
+        assertThat(sql).doesNotContain("0x");
+    }
+
+    @Test
+    void injectionShapedValuesCannotBreakOutOfTheStatement() throws Exception {
+        String csv = "id,note\n1,\"x\\',(SELECT 1)); DROP TABLE orders; -- \"\n";
+        String sql = convert(csv, COLUMNS);
+
+        // 整段内容以十六进制原样落进一个值里，语句数量不变。
+        assertThat(sql).contains("_utf8mb4 0x" + hex("x\\',(SELECT 1)); DROP TABLE orders; -- "));
+        assertThat(sql).doesNotContain("DROP TABLE orders;");
+        assertThat(sql.lines().filter(line -> line.startsWith("INSERT INTO")).count()).isEqualTo(1L);
+    }
+
+    /** 单引号仍然走普通字面量，只翻倍就够了 —— 引号的含义不随 sql_mode 变化。 */
+    @Test
+    void quotesStillUseOrdinaryDoubling() throws Exception {
+        String sql = convert("id,note\n1,\"O'Brien\"\n", COLUMNS);
+
+        assertThat(sql).contains("('1', 'O''Brien')");
+    }
+
+    private static String hex(String value) {
+        return java.util.HexFormat.of().formatHex(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void keepsFileNameCommentOnASingleLine() throws Exception {
+        StringWriter out = new StringWriter();
+        try (CsvStreamReader reader = new CsvStreamReader(new StringReader("id,name\n1,a\n"))) {
+            DataImportService.convert(reader, out, DIALECT, "shop", "orders", COLUMNS,
+                    "evil.csv\nDROP TABLE orders;\n--");
+        }
+        String sql = out.toString();
+
+        assertThat(sql.lines().filter(line -> !line.startsWith("--") && !line.isBlank()))
+                .allSatisfy(line -> assertThat(line).doesNotContain("DROP TABLE"));
+        assertThat(sql).contains("-- 由 evil.csv DROP TABLE orders; -- 转换而来的导入脚本");
+    }
+
     @Test
     void generatesQualifiedBatchInsert() throws Exception {
         String sql = convert("id,name\n1,张三\n2,李四\n", COLUMNS);

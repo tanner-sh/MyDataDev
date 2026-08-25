@@ -111,12 +111,46 @@ class SqlServiceEditableResultTest {
 
     @Test
     void refusesWhenAColumnIsAnExpressionRatherThanATableColumn() throws Exception {
-        // 表达式列不报表名，说明这段结果不是「一张表的若干行」，不能整体当成可编辑。
+        // 表达式列没有对应的表字段，界面上的这一列改了也不知道该写回哪里。
         SqlResult result = fixture(false).sql()
                 .executePage(1L, "select id, upper(name) as upper_name from customers", 0, 10, "admin", null, null, null);
 
         assertThat(result.edit().editable()).isFalse();
-        assertThat(result.edit().reason()).contains("不是来自单张表");
+        assertThat(result.edit().reason()).contains("别名或表达式");
+    }
+
+    /**
+     * 别名把「界面上的列名」和「表里的字段」拆开了，而 JDBC 元数据分辨不出这一点：
+     * getColumnLabel 给的是别名，getTableName 不受别名影响。放行的话，主键 code 会从
+     * nickname 那一列取值，定位到的可能是另一行。
+     */
+    @Test
+    void refusesWhenTheProjectionSwapsColumnNamesWithAliases() throws Exception {
+        SqlResult result = fixture(false).sql()
+                .executePage(1L, "select name as city, city as name, id from customers", 0, 10, "admin", null, null, null);
+
+        assertThat(result.edit().editable()).isFalse();
+        assertThat(result.edit().reason()).contains("别名或表达式");
+        assertThat(result.edit().rowKeyTokens()).isEmpty();
+    }
+
+    @Test
+    void refusesASingleAliasEvenWhenTheAliasIsHarmless() throws Exception {
+        SqlResult result = fixture(false).sql()
+                .executePage(1L, "select id, name as who from customers", 0, 10, "admin", null, null, null);
+
+        assertThat(result.edit().editable()).isFalse();
+    }
+
+    @Test
+    void stillAllowsQualifiedAndStarProjections() throws Exception {
+        SqlResult star = fixture(false).sql()
+                .executePage(1L, "select * from customers", 0, 10, "admin", null, null, null);
+        assertThat(star.edit().editable()).isTrue();
+
+        SqlResult qualified = fixture(false).sql()
+                .executePage(1L, "select c.id, c.name from customers c order by c.id", 0, 10, "admin", null, null, null);
+        assertThat(qualified.edit().editable()).isTrue();
     }
 
     @Test

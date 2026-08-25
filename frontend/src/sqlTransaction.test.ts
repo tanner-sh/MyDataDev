@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   IDLE_SQL_TRANSACTION,
+  isTransactionGone,
+  transactionGoneNotice,
+  transactionStateAfterError,
   isTransactionActive,
   transactionBadge,
   transactionExecutePath,
@@ -83,5 +86,40 @@ describe('restoredTransactionNotice', () => {
 
   it('超时时间不足一分钟也至少说 1 分钟', () => {
     expect(restoredTransactionNotice(transaction({ statementCount: 0, idleTimeoutSeconds: 20 }))).toContain('1 分钟');
+  });
+
+  describe('服务端已经结束的事务', () => {
+    const open: SqlTransactionState = {
+      transaction: {
+        id: 't-1',
+        connectionId: 1,
+        startedAt: '2026-08-25T00:00:00Z',
+        lastUsedAt: '2026-08-25T00:00:00Z',
+        statementCount: 3,
+        idleTimeoutSeconds: 600
+      },
+      pending: true
+    };
+
+    it('识别 TRANSACTION_NOT_FOUND', () => {
+      expect(isTransactionGone('TRANSACTION_NOT_FOUND')).toBe(true);
+      expect(isTransactionGone('PRODUCTION_CONFIRMATION_REQUIRED')).toBe(false);
+      expect(isTransactionGone(undefined)).toBe(false);
+    });
+
+    it('事务不在了就退回自动提交，否则只解除 pending', () => {
+      // 留着已失效的事务 id 会让之后每次执行都发到它上面，切换连接也被拦住，只能刷新页面。
+      expect(transactionStateAfterError(open, 'TRANSACTION_NOT_FOUND')).toEqual(IDLE_SQL_TRANSACTION);
+      // 语句本身出错时事务还开着，清掉就没人去提交或回滚它了。
+      expect(transactionStateAfterError(open, 'SQL_ERROR')).toEqual({ ...open, pending: false });
+      expect(transactionStateAfterError(open, undefined)).toEqual({ ...open, pending: false });
+    });
+
+    it('提示里说清楚改动已丢弃并且回到了自动提交', () => {
+      expect(transactionGoneNotice(open)).toContain('3 条语句的改动已丢弃');
+      expect(transactionGoneNotice(open)).toContain('自动提交');
+      expect(transactionGoneNotice({ transaction: { ...open.transaction!, statementCount: 0 }, pending: false }))
+        .not.toContain('丢弃');
+    });
   });
 });

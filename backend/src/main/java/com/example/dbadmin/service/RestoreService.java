@@ -203,14 +203,19 @@ public class RestoreService {
                 }
             }
             try {
-                extraArgs(request.extraArgs());
+                extraArgs(source.format(), request.extraArgs());
             } catch (IllegalArgumentException error) {
                 errors.add(error.getMessage());
             }
             warnings.add("原生恢复由数据库工具执行；对象覆盖行为还会受到备份文件自身参数影响。");
+            warnings.add(nativeConflictNotice(source.format(), mode));
         }
-        if ("OVERWRITE".equals(mode)) warnings.add("覆盖模式只会删除预检识别到的目标基础表，执行后无法自动撤销。");
-        if ("APPEND".equals(mode)) warnings.add("追加模式忽略输入文件中的建表和索引语句，仅执行 INSERT。");
+        // 下面两条只对可转换 SQL 成立：原生格式的策略说明由 nativeConflictNotice 给出，
+        // 两套文案不能混着发，否则会承诺一个原生路径根本做不到的行为。
+        if ("SQL".equals(source.format())) {
+            if ("OVERWRITE".equals(mode)) warnings.add("覆盖模式只会删除预检识别到的目标基础表，执行后无法自动撤销。");
+            if ("APPEND".equals(mode)) warnings.add("追加模式忽略输入文件中的建表和索引语句，仅执行 INSERT。");
+        }
         boolean valid = errors.isEmpty();
         String token = null;
         if (valid) {
@@ -399,7 +404,7 @@ public class RestoreService {
             command.add("--host=" + mysql.host());
             command.add("--port=" + mysql.port());
             if (target.username() != null && !target.username().isBlank()) command.add("--user=" + target.username());
-            command.addAll(extraArgs(extraArgs));
+            command.addAll(extraArgs(job.fileFormat(), extraArgs));
             if (mysql.database() != null) command.add(mysql.database());
             builder = new ProcessBuilder(command);
             builder.redirectInput(Path.of(job.sourceFilePath()).toFile());
@@ -414,11 +419,19 @@ public class RestoreService {
             if (target.username() != null && !target.username().isBlank()) command.add("--username=" + target.username());
             command.add("--no-password");
             if (postgres.database() != null) command.add("--dbname=" + postgres.database());
+            // pg_restore 默认「出错继续、最后报个数」：SAFE 模式下遇到已存在的表会先失败再继续把数据
+            // 灌进去，任务显示失败而目标库已经被改了一半。单事务执行让三种策略都变成「要么全成、
+            // 要么什么都没发生」，也顺带隐含了 --exit-on-error。
+            command.add("--single-transaction");
+            if ("APPEND".equals(job.conflictMode())) {
+                // 追加就是只补数据：不加这个开关，pg_restore 照样会执行建表、建索引。
+                command.add("--data-only");
+            }
             if ("OVERWRITE".equals(job.conflictMode())) {
                 command.add("--clean");
                 command.add("--if-exists");
             }
-            command.addAll(extraArgs(extraArgs));
+            command.addAll(extraArgs(job.fileFormat(), extraArgs));
             command.add(Path.of(job.sourceFilePath()).toAbsolutePath().toString());
             builder = new ProcessBuilder(command);
             String password = connections.password(target.id());
@@ -436,7 +449,7 @@ public class RestoreService {
                     + "\nfile=" + Path.of(job.sourceFilePath()).toAbsolutePath() + "\n", StandardCharsets.UTF_8);
             command.add(toolPath);
             command.add("parfile=" + par.toAbsolutePath());
-            command.addAll(extraArgs(extraArgs));
+            command.addAll(extraArgs(job.fileFormat(), extraArgs));
             builder = new ProcessBuilder(command);
             builder.redirectErrorStream(true);
             builder.redirectOutput(ProcessBuilder.Redirect.DISCARD);
@@ -568,6 +581,28 @@ public class RestoreService {
         return target;
     }
 
+    /**
+     * 原生格式下「已有对象处理」到底会发生什么。
+     *
+     * <p>转换 SQL 的策略是我们自己实现的（预检查冲突、删表、丢掉 DDL），原生格式的策略只能靠
+     * 工具开关表达，能力并不对等：pg_restore 有 --data-only / --clean 可用，mysql 客户端和 imp
+     * 则完全按 dump 文件里的语句走。这条差异必须写在预检里，而不是让用户以为三种格式一样。</p>
+     */
+    private String nativeConflictNotice(String format, String mode) {
+        if (!"PG_DUMP".equals(format)) {
+            String tool = "MYSQLDUMP".equals(format) ? "mysql 客户端" : "Oracle imp";
+            return "该格式由 " + tool + " 按备份文件内容执行，「已有对象处理」策略无法生效："
+                    + "文件里的建表/删除语句会照原样运行，预检也不会检查目标库中的同名对象。";
+        }
+        String base = "pg_restore 以单事务执行：整份备份要么全部生效，要么全部回滚，不会留下半恢复状态"
+                + "（含 CREATE DATABASE 等不能在事务块里执行的语句的备份文件会因此整体失败）。";
+        return switch (mode) {
+            case "APPEND" -> base + " 追加模式只恢复数据（--data-only），不执行建表与索引语句。";
+            case "OVERWRITE" -> base + " 覆盖模式会先删除备份中包含的同名对象（--clean --if-exists），执行后无法撤销。";
+            default -> base + " 安全模式不做额外处理：目标库已存在同名对象时恢复会整体失败并回滚。";
+        };
+    }
+
     private void validateNativeCompatibility(String format, String sourceDbType, String targetDbType, String toolPath, List<String> errors) {
         String source = family(sourceDbType);
         String target = family(targetDbType);
@@ -590,7 +625,8 @@ public class RestoreService {
                 && before.sourceDbType().equalsIgnoreCase(request.sourceDbType())
                 && before.conflictMode().equalsIgnoreCase(request.conflictMode())
                 && java.util.Objects.equals(blankToNull(before.toolPath()), blankToNull(request.toolPath()))
-                && java.util.Objects.equals(normalizedExtraArgs(before.extraArgs()), normalizedExtraArgs(request.extraArgs()))
+                && java.util.Objects.equals(normalizedExtraArgs(plan.source().format(), before.extraArgs()),
+                        normalizedExtraArgs(plan.source().format(), request.extraArgs()))
                 && safeMappings(before.namespaceMapping()).equals(safeMappings(request.namespaceMapping()));
     }
 
@@ -769,30 +805,22 @@ public class RestoreService {
         return jdbcUrl != null && jdbcUrl.startsWith(prefix) ? jdbcUrl.substring(prefix.length()) : null;
     }
 
-    private List<String> extraArgs(String raw) {
-        if (raw == null || raw.isBlank()) return List.of();
-        List<String> result = new ArrayList<>();
-        for (String line : raw.split("\\R")) {
-            String value = line.trim();
-            if (value.isBlank()) continue;
-            if (value.length() > 2_000) throw new IllegalArgumentException("单个恢复额外参数不能超过 2000 个字符。");
-            if (result.size() >= 100) throw new IllegalArgumentException("恢复额外参数最多填写 100 行。");
-            if (value.matches(".*[|&;<>`$].*")) throw new IllegalArgumentException("恢复额外参数包含不允许的 shell 控制字符。");
-            String lower = value.toLowerCase(Locale.ROOT);
-            String option = lower.contains("=") ? lower.substring(0, lower.indexOf('=')) : lower;
-            if (Set.of("--host", "--port", "--user", "--password", "--database", "-h", "-p", "-u",
-                    "userid", "file", "parfile", "log").contains(option)
-                    || value.startsWith("-h") || value.startsWith("-P") || value.startsWith("-p") || value.startsWith("-u")) {
-                throw new IllegalArgumentException("恢复额外参数不能覆盖系统控制参数：" + value);
-            }
-            result.add(value);
-        }
-        return result;
+    /**
+     * 额外参数按目标工具校验。
+     *
+     * <p>拦截名单必须跟着工具走 —— 恢复目标库是预检和生产确认里唯一被展示、被确认的东西，
+     * 而 pg_restore 的 --dbname、mysql 的 -D 都能在命令行末尾把它改掉。</p>
+     */
+    private List<String> extraArgs(String fileFormat, String raw) {
+        return NativeToolArguments.parse(extraArgsTool(fileFormat), raw, "恢复");
     }
 
-    private String normalizedExtraArgs(String raw) {
-        List<String> args = extraArgs(raw);
-        return args.isEmpty() ? null : String.join("\n", args);
+    private NativeToolLocator.Tool extraArgsTool(String fileFormat) {
+        return fileFormat == null || "SQL".equals(fileFormat) ? null : restoreTool(fileFormat);
+    }
+
+    private String normalizedExtraArgs(String fileFormat, String raw) {
+        return NativeToolArguments.normalize(extraArgsTool(fileFormat), raw, "恢复");
     }
 
     private NativeToolLocator.Tool restoreTool(String format) {

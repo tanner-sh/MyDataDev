@@ -386,7 +386,8 @@ public class SqlService {
                 try (ResultSet rs = statement.executeQuery(pageSql)) {
                     SqlResult result = readPageResult(
                             rs, started, connectionId, offset, rawPageSize, pageSize,
-                            dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection
+                            dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection,
+                            executionSql
                     );
                     audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     return result;
@@ -524,7 +525,8 @@ public class SqlService {
             String schemaName,
             DatabaseDialect dialect,
             Connection connection,
-            DbConnection dbConnection
+            DbConnection dbConnection,
+            String executionSql
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -537,7 +539,7 @@ public class SqlService {
         }
         int effectivePageSize = Math.min(pageSize, MAX_RESULT_CELLS / Math.max(columnCount, 1));
         ResultSourceTable sourceTable = ResultSetSourceResolver.resolve(metadata, dialect);
-        EditableResult editable = editableResult(connection, dbConnection, sourceTable, metadata, columnCount);
+        EditableResult editable = editableResult(connection, dbConnection, sourceTable, metadata, columnCount, executionSql);
         List<List<Object>> rows = new ArrayList<>();
         List<String> rowKeyTokens = new ArrayList<>();
         long textChars = 0;
@@ -585,9 +587,15 @@ public class SqlService {
             DbConnection dbConnection,
             ResultSourceTable sourceTable,
             ResultSetMetaData metadata,
-            int visibleColumnCount
+            int visibleColumnCount,
+            String executionSql
     ) {
         if (sourceTable == null || sourceTable.nameParts().isEmpty()) return null;
+        // 别名会让「界面上的这一列」与「表里的哪个字段」对不上，而 JDBC 元数据分辨不出别名，
+        // 详见 SelectProjection。分辨不了就不给编辑，否则可能定位到另一行、写错另一个字段。
+        if (!SelectProjection.isDirectColumnProjection(executionSql)) {
+            return new EditableResult(null, "查询结果使用了别名或表达式，无法对应到表字段");
+        }
         List<String> parts = sourceTable.nameParts();
         String table = parts.get(parts.size() - 1);
         String schema = parts.size() > 1 ? parts.get(parts.size() - 2) : null;

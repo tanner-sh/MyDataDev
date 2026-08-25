@@ -3,9 +3,10 @@ import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Spin, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
-import { ApiError, api, downloadBlob, downloadFromUrl } from './api';
+import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
+import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -34,12 +35,12 @@ import {
   summarizeBackgroundTasks,
   type BackgroundTaskSummary
 } from './backgroundTasks';
-import { backgroundImportPrompt, importRoute } from './dataImport';
+import { backgroundImportPrompt, importRoute, oversizedRowsRoute, type ImportRoute } from './dataImport';
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
 import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
-import type { ResultEditCommit } from './resultEditing';
+import { applyCommittedChanges, type ResultEditCommit } from './resultEditing';
 import {
   canJumpToRelation,
   foreignKeyColumns,
@@ -49,8 +50,11 @@ import {
 } from './relationNavigation';
 import {
   IDLE_SQL_TRANSACTION,
+  isTransactionGone,
   transactionExecutePath,
   transactionFinishPrompt,
+  transactionGoneNotice,
+  transactionStateAfterError,
   restoredTransactionNotice,
   transactionLeaveWarning,
   type SqlTransaction,
@@ -1332,6 +1336,9 @@ export default function App() {
         if (historyOpen) await refreshSqlHistoryQuietly(selected);
       } catch (e) {
         const errorMessage = localizeError(e);
+        // 服务端已经把事务回收了（多半是空闲超时自动回滚）。不清掉本地状态的话，之后每次
+        // 执行都会继续发到这个不存在的事务上，连切换连接都会被「有未结束的事务」拦住。
+        releaseTransactionIfGone(e);
         // 结果区也要拿到原文：状态栏只有一行，长错误会被截断且无法复制。
         updateActiveSqlTab({ message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
         toastApi.error(errorMessage);
@@ -1344,6 +1351,45 @@ export default function App() {
     } finally {
       sqlBusyRef.current = false;
     }
+  }
+
+  /** 当前正在看的那段结果：就地编辑发生在可见的表格里，写回和刷新都以它为准。 */
+  function activeStatementResult(): SqlStatementResult | undefined {
+    const results = activeSqlTab.results;
+    return results.find((item) => statementResultKey(item) === activeSqlTab.activeResultKey)
+      ?? results.find((item) => item.result?.resultSet);
+  }
+
+  /**
+   * 把已提交的值写回当前结果的行数据。
+   *
+   * 必须在重查之前做：ResultGrid 一旦提交成功就会清空本地编辑态，而重查是尽力而为的
+   * （网络错误、工作台正忙都会失败）。不先写回的话，表格会继续显示旧值，用户再改同一行时
+   * 带上去的原值已经过期，会被后端的乐观校验挡下来 —— 也就是被修掉的那个问题又回来了。
+   */
+  function applyCommittedResultEdits(changes: RowChange[]) {
+    const tabId = activeSqlTab.id;
+    const target = activeStatementResult();
+    const resultKey = target && statementResultKey(target);
+    if (!target || !resultKey) return;
+    setSqlTabs((tabs) => tabs.map((tab) => tab.id !== tabId ? tab : {
+      ...tab,
+      results: tab.results.map((item) => {
+        if (statementResultKey(item) !== resultKey) return item;
+        const rows = applyCommittedChanges(
+          item.result.rows, item.result.columns, item.result.edit?.rowKeyTokens || [], changes
+        );
+        return rows === item.result.rows ? item : { ...item, result: { ...item.result, rows } };
+      })
+    }));
+  }
+
+  /** 重新执行当前正在看的那段结果，偏移与翻页历史保持不变。 */
+  async function refreshActiveSqlResult() {
+    const target = activeStatementResult();
+    const page = target?.result?.page;
+    if (!target || !page) return;
+    await loadSqlResultPage(target, currentSqlPage(page));
   }
 
   async function loadSqlResultPage(statementResult: SqlStatementResult, navigation: SqlPageNavigation) {
@@ -1495,6 +1541,14 @@ export default function App() {
     }
   }
 
+  /** 事务已被服务端回收时清掉本地状态并说明原因；返回是否确实是这种情况。 */
+  function releaseTransactionIfGone(error: unknown): boolean {
+    if (!isTransactionGone(apiErrorCode(error))) return false;
+    if (transactionState.transaction) showInfo(transactionGoneNotice(transactionState));
+    setTransactionState(IDLE_SQL_TRANSACTION);
+    return true;
+  }
+
   function finishSqlTransaction(commit: boolean) {
     const transaction = transactionState.transaction;
     if (!transaction) return;
@@ -1512,7 +1566,10 @@ export default function App() {
           showSuccess(commit ? `事务已提交，共 ${transaction.statementCount} 条语句生效` : '事务已回滚，本次改动全部丢弃');
           if (selected) void loadMetadata(selected, { page: 0, refresh: true, background: true });
         } catch (e) {
-          setTransactionState((current) => ({ ...current, pending: false }));
+          // 提交/回滚失败同样可能是事务已经不在了。那种情况要退出事务模式并让弹窗关掉，
+          // 而不是留一个提交不掉也回滚不掉的死状态。
+          if (releaseTransactionIfGone(e)) return;
+          setTransactionState((current) => transactionStateAfterError(current, apiErrorCode(e)));
           showError(localizeError(e));
           throw e;
         }
@@ -2384,6 +2441,24 @@ export default function App() {
     setPreviewSql([]);
   }
 
+  /** 大 CSV 交给后端流式转成 INSERT 脚本，复用 SQL 文件执行的进度、取消与并发闸门。 */
+  function startBackgroundImport(file: File, route: Extract<ImportRoute, { kind: 'background' }>) {
+    if (!selected || !activeTable) {
+      showInfo('请先选择数据库连接');
+      return;
+    }
+    const target = activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema || undefined;
+    showInfo(backgroundImportPrompt(activeTable.tableName, route));
+    setSqlFileCandidate({
+      requestId: ++sqlFileRequestSeqRef.current,
+      file,
+      connection: selected,
+      csvImport: { schemaName: target, tableName: activeTable.tableName }
+    });
+    setSqlFileFeatureLoaded(true);
+    setSqlFileTasksOpen(true);
+  }
+
   async function importRows(file: File) {
     if (!activeTable || !tableData) {
       showInfo('请先打开一张表再导入数据');
@@ -2395,21 +2470,7 @@ export default function App() {
       return;
     }
     if (route.kind === 'background') {
-      // 大 CSV 交给后端流式转成 INSERT 脚本，复用 SQL 文件执行的进度、取消与并发闸门。
-      if (!selected) {
-        showInfo('请先选择数据库连接');
-        return;
-      }
-      const target = activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema || undefined;
-      showInfo(backgroundImportPrompt(activeTable.tableName, route));
-      setSqlFileCandidate({
-        requestId: ++sqlFileRequestSeqRef.current,
-        file,
-        connection: selected,
-        csvImport: { schemaName: target, tableName: activeTable.tableName }
-      });
-      setSqlFileFeatureLoaded(true);
-      setSqlFileTasksOpen(true);
+      startBackgroundImport(file, route);
       return;
     }
     setTableLoading(true);
@@ -2444,7 +2505,11 @@ export default function App() {
         });
       });
       if (result.rows.length + pendingChanges.length > MAX_TABLE_CHANGES) {
-        throw new Error(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更；请先提交现有修改，或改用 CSV 走后台导入。`);
+        // 行数只有解析完才知道。CSV 还有后台这条路，不该让用户拿着文件无处可去。
+        const fallback = oversizedRowsRoute(file, result.rows.length + pendingChanges.length, MAX_TABLE_CHANGES);
+        if (fallback.kind !== 'background') throw new Error(fallback.message);
+        startBackgroundImport(file, fallback);
+        return;
       }
       const importedRows = result.rows.map((values, index) => ({
         id: `import-${Date.now()}-${index}`,
@@ -2784,6 +2849,9 @@ export default function App() {
       })
     });
     showSuccess(`已提交查询结果修改，影响 ${data.affectedRows} 行`);
+    // 先把已提交的值写回本地行，再尽力重查：重查失败时表格至少与刚写进库里的值一致。
+    applyCommittedResultEdits(request.changes);
+    await refreshActiveSqlResult();
   });
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());

@@ -70,6 +70,35 @@ export function transactionLeaveWarning(state: SqlTransactionState): string | nu
   return `当前有一个进行中的手动事务（已执行 ${state.transaction.statementCount} 条），离开前请提交或回滚。`;
 }
 
+/** 服务端已经没有这个事务了：空闲超时被自动回滚，或是被别处结束掉了。 */
+export const TRANSACTION_GONE_CODE = 'TRANSACTION_NOT_FOUND';
+
+export function isTransactionGone(errorCode?: string): boolean {
+  return errorCode === TRANSACTION_GONE_CODE;
+}
+
+/**
+ * 一次事务内操作失败之后，事务状态该变成什么。
+ *
+ * <p>关键是 TRANSACTION_NOT_FOUND 这一类：服务端已经把事务回滚并释放了，界面却还留着它的
+ * id。留着的后果是彻底卡死 —— 之后每次执行都发到那个已经不存在的事务上继续报同一个错，
+ * 提交和回滚同样报错，而切换连接又被「有未结束的事务」拦住，只能刷新页面。</p>
+ *
+ * <p>其余失败（网络错误、语句本身出错）不能清状态：事务还在服务端开着，清掉就没人去提交或
+ * 回滚它了。</p>
+ */
+export function transactionStateAfterError(state: SqlTransactionState, errorCode?: string): SqlTransactionState {
+  if (isTransactionGone(errorCode)) return IDLE_SQL_TRANSACTION;
+  return { ...state, pending: false };
+}
+
+/** 事务已被服务端回收时给用户的解释，说清楚「已经回滚了」和「现在回到了自动提交」。 */
+export function transactionGoneNotice(state: SqlTransactionState): string {
+  const count = state.transaction?.statementCount ?? 0;
+  const dropped = count === 0 ? '' : `本事务中 ${count} 条语句的改动已丢弃。`;
+  return `手动事务已被服务端结束（通常是空闲超时后自动回滚）。${dropped}已切回自动提交，请重新开启事务后再试。`;
+}
+
 /**
  * 页面重新加载后接回一个仍在服务端的事务时的提示。
  *

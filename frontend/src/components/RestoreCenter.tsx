@@ -36,7 +36,7 @@ import type {
   RestoreUpload
 } from '../types';
 import { formatFileSize, formatHistoryTime } from '../utils';
-import { nativeToolForRestore, requestedToolPath } from '../nativeTools';
+import { nativeToolForRestore, requestedToolPath, restoreFormatForBackupMethod, restoreToolHint } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
 import { buildRestoreUploadPath } from '../restoreUpload';
@@ -86,7 +86,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
     if (initialHistory) {
       setSourceKind('HISTORY');
       setSource({ kind: 'HISTORY', id: initialHistory.id });
-      setFormat((initialHistory.fileFormat as RestoreFileFormat) || methodFormat(initialHistory.backupMethod));
+      setFormat((initialHistory.fileFormat as RestoreFileFormat) || restoreFormatForBackupMethod(initialHistory.backupMethod));
       setSourceDbType(initialHistory.sourceDbType || selected?.dbType || 'mysql');
       setPreflight(null);
     }
@@ -165,7 +165,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
     const history = historyRows.find((row) => row.id === historyId);
     setSource(history ? { kind: 'HISTORY', id: history.id } : null);
     if (history) {
-      setFormat((history.fileFormat as RestoreFileFormat) || methodFormat(history.backupMethod));
+      setFormat((history.fileFormat as RestoreFileFormat) || restoreFormatForBackupMethod(history.backupMethod));
       setSourceDbType(history.sourceDbType || selected?.dbType || sourceDbType);
     }
     setPreflight(null);
@@ -242,7 +242,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
             <Space orientation="vertical" className="full-width">
               <Upload.Dragger maxCount={1} fileList={fileList} beforeUpload={(file) => { setFileList([{ uid: file.uid, name: file.name, status: 'done', originFileObj: file }]); setSource(null); return false; }} onRemove={() => { setFileList([]); setSource(null); }}>
                 <CloudUploadOutlined className="restore-upload-icon" />
-                <div>选择 SQL、MySQL dump 或 Oracle dmp 文件</div>
+                <div>选择 SQL、MySQL dump、PostgreSQL dump 或 Oracle dmp 文件</div>
                 <Text type="secondary">文件流式保存，24 小时后自动清理</Text>
               </Upload.Dragger>
               <Button block loading={uploading} disabled={!fileList.length} onClick={uploadFile}>上传并计算校验值</Button>
@@ -251,7 +251,10 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
           <Divider />
           <Form layout="vertical" size="small">
             <Form.Item label="文件格式"><Select value={format} onChange={(value) => { setFormat(value); setSource(null); setPreflight(null); }} options={[
-              { value: 'SQL', label: '可转换 SQL' }, { value: 'MYSQLDUMP', label: 'MySQL 原生 dump' }, { value: 'ORACLE_DMP', label: 'Oracle dmp' }
+              { value: 'SQL', label: '可转换 SQL' },
+              { value: 'MYSQLDUMP', label: 'MySQL 原生 dump' },
+              { value: 'PG_DUMP', label: 'PostgreSQL pg_dump（.dump）' },
+              { value: 'ORACLE_DMP', label: 'Oracle dmp' }
             ]} /></Form.Item>
             <Form.Item label="源数据库类型"><Select showSearch value={sourceDbType} onChange={(value) => { setSourceDbType(value); setPreflight(null); }} options={DB_TYPE_OPTIONS} /></Form.Item>
           </Form>
@@ -270,10 +273,10 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
                 className="native-tool-status-alert"
                 type={detectedTool?.available ? 'success' : nativeToolsError ? 'error' : 'warning'}
                 showIcon
-                title={nativeToolsLoading ? '正在检测应用服务器上的恢复工具…' : detectedTool?.available ? `已发现 ${detectedTool.displayName}` : `未发现 ${format === 'MYSQLDUMP' ? 'MySQL mysql' : 'Oracle imp'}`}
+                title={nativeToolsLoading ? '正在检测应用服务器上的恢复工具…' : detectedTool?.available ? `已发现 ${detectedTool.displayName}` : `未发现 ${restoreToolHint(format).name}`}
                 description={detectedTool?.available ? <Space orientation="vertical" size={0}><Text code>{detectedTool.resolvedPath}</Text>{detectedTool.version && <Text type="secondary">{detectedTool.version}</Text>}</Space> : nativeToolsError || detectedTool?.message}
                 action={<Button size="small" icon={<ReloadOutlined />} loading={nativeToolsLoading} onClick={() => void onRefreshNativeTools()}>重新检测</Button>}
-              /> : <Form.Item label="恢复工具路径" required><Input value={toolPath} onChange={(event) => { setToolPath(event.target.value); setPreflight(null); }} placeholder={format === 'MYSQLDUMP' ? '/usr/local/bin/mysql' : '/opt/oracle/bin/imp'} /></Form.Item>}
+              /> : <Form.Item label="恢复工具路径" required><Input value={toolPath} onChange={(event) => { setToolPath(event.target.value); setPreflight(null); }} placeholder={restoreToolHint(format).placeholder} /></Form.Item>}
               <Form.Item label="额外参数"><Input.TextArea rows={2} value={extraArgs} onChange={(event) => { setExtraArgs(event.target.value); setPreflight(null); }} placeholder="一行一个参数" /></Form.Item>
             </>}
           </Form>
@@ -304,12 +307,6 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
       </Spin>
     </div>
   );
-}
-
-function methodFormat(method?: string): RestoreFileFormat {
-  if (method === 'MYSQLDUMP') return 'MYSQLDUMP';
-  if (method === 'ORACLE_EXP') return 'ORACLE_DMP';
-  return 'SQL';
 }
 
 function statusColor(status: string) {

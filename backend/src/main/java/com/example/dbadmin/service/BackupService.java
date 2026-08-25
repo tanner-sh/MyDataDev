@@ -740,7 +740,7 @@ public class BackupService {
         String scheduleZone = validateScheduleZone(request.scheduleZone());
         String backupMethod = validateBackupMethod(request.backupMethod(), connection);
         String toolPath = blankToNull(request.toolPath());
-        String extraArgs = validateExtraArgs(request.extraArgs());
+        String extraArgs = validateExtraArgs(backupMethod, request.extraArgs());
         String nativeConnectName = blankToNull(request.nativeConnectName());
         Integer retentionDays = validateRetention(request.retentionDays(), "保留天数", 3650);
         Integer retentionCount = validateRetention(request.retentionCount(), "最大保留份数", 10000);
@@ -858,7 +858,7 @@ public class BackupService {
             command.add("--user=" + connection.username());
         }
         command.add("--result-file=" + file.toAbsolutePath().normalize());
-        command.addAll(extraArgs(task.extraArgs()));
+        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
         command.add(database);
         if ("TABLES".equals(resolved.scope())) {
             command.addAll(resolved.tables().stream().map(TableRef::name).toList());
@@ -905,7 +905,7 @@ public class BackupService {
                 command.add("--table=" + (resolved.namespace() == null ? table.name() : resolved.namespace() + "." + table.name()));
             }
         }
-        command.addAll(extraArgs(task.extraArgs()));
+        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
         command.add(database);
         ProcessBuilder builder = new ProcessBuilder(command);
         String password = connections.password(connection.id());
@@ -952,7 +952,7 @@ public class BackupService {
         List<String> command = new ArrayList<>();
         command.add(toolPath);
         command.add("parfile=" + parameterFile.toAbsolutePath().normalize());
-        command.addAll(extraArgs(task.extraArgs()));
+        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
         try {
             runNativeProcess(new ProcessBuilder(command), file, "Oracle exp", password);
             return new BackupFile(file, Files.size(file));
@@ -1093,9 +1093,13 @@ public class BackupService {
         };
     }
 
-    private String validateExtraArgs(String extraArgs) {
-        List<String> args = extraArgs(extraArgs);
-        return args.isEmpty() ? null : String.join("\n", args);
+    /** 额外参数按备份方式校验：能拦住什么取决于工具，见 {@link NativeToolArguments}。 */
+    private String validateExtraArgs(String backupMethod, String extraArgs) {
+        return NativeToolArguments.normalize(extraArgsTool(backupMethod), extraArgs, "备份");
+    }
+
+    private NativeToolLocator.Tool extraArgsTool(String backupMethod) {
+        return backupMethod == null || "SQL".equals(backupMethod) ? null : backupTool(backupMethod);
     }
 
     private NativeToolLocator.Tool backupTool(String backupMethod) {
@@ -1106,44 +1110,8 @@ public class BackupService {
         };
     }
 
-    private List<String> extraArgs(String extraArgs) {
-        if (extraArgs == null || extraArgs.isBlank()) {
-            return List.of();
-        }
-        List<String> args = new ArrayList<>();
-        for (String raw : extraArgs.split("\\R")) {
-            String arg = raw.trim();
-            if (arg.isEmpty()) {
-                continue;
-            }
-            if (arg.length() > 2_000) {
-                throw new IllegalArgumentException("单个备份额外参数不能超过 2000 个字符。");
-            }
-            if (args.size() >= 100) {
-                throw new IllegalArgumentException("备份额外参数最多填写 100 行。");
-            }
-            validateExtraArg(arg);
-            args.add(arg);
-        }
-        return args;
-    }
-
-    private void validateExtraArg(String arg) {
-        if (arg.matches(".*[|&;<>`$].*")) {
-            throw new IllegalArgumentException("备份额外参数包含不允许的 shell 控制字符：" + arg);
-        }
-        String lower = arg.toLowerCase(Locale.ROOT);
-        String optionName = lower.contains("=") ? lower.substring(0, lower.indexOf('=')) : lower;
-        Set<String> blockedNames = Set.of(
-                "--result-file", "--host", "--port", "--user", "--password",
-                "--databases", "--all-databases", "--tables",
-                "file", "log", "userid", "owner", "tables", "full", "parfile"
-        );
-        boolean blockedShortOption = arg.startsWith("-r") || arg.startsWith("-h") || arg.startsWith("-P")
-                || arg.startsWith("-p") || arg.startsWith("-u");
-        if (blockedNames.contains(optionName) || blockedShortOption) {
-            throw new IllegalArgumentException("备份额外参数不能覆盖系统控制参数：" + arg);
-        }
+    private List<String> extraArgs(String backupMethod, String extraArgs) {
+        return NativeToolArguments.parse(extraArgsTool(backupMethod), extraArgs, "备份");
     }
 
     private MysqlJdbcTarget mysqlTarget(String jdbcUrl) {

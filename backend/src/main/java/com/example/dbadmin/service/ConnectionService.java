@@ -151,8 +151,15 @@ public class ConnectionService {
         dataSources.test(request.jdbcUrl().trim(), request.username(), password);
     }
 
+    /**
+     * 按连接配置打开一条连接，未指定命名空间即落到连接上配置的默认命名空间。
+     *
+     * <p>这里必须和 {@link #open(long, String)} 走同一条回落逻辑：之前这个重载直接返回原始
+     * 连接，于是 SQL 文件执行、导出、备份这些不带 schema 参数的调用方全都绕过了默认命名空间，
+     * 脚本里的无限定表名会落到登录账号的默认库，而不是用户在连接上配置的那个。</p>
+     */
     public Connection open(long id) throws Exception {
-        return dataSources.open(require(id), password(id));
+        return open(id, null);
     }
 
     public Connection open(long id, String schemaName) throws Exception {

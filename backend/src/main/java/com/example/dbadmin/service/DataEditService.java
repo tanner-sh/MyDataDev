@@ -208,7 +208,15 @@ public class DataEditService {
         Map<String, ColumnDescriptor> descriptors = loadColumnDescriptors(connection, dialect, schemaName, tableName);
         Map<String, Integer> indexes = new LinkedHashMap<>();
         for (int index = 1; index <= visibleColumnCount; index++) {
-            indexes.putIfAbsent(md.getColumnLabel(index), index);
+            String label = md.getColumnLabel(index);
+            // 第二道防线：能报出底层字段名的驱动（MySQL、H2）在这里就能识破别名。
+            // pgjdbc 的 getColumnName 只是 getColumnLabel 的别名，挡不住的那部分由调用方
+            // 用 SQL 文本判断（SelectProjection），两层都只在「确定安全」时才放行。
+            String underlying = md.getColumnName(index);
+            if (underlying != null && !underlying.isBlank() && !underlying.equalsIgnoreCase(label)) {
+                return ResultRowLocator.unavailable("查询结果列 " + label + " 使用了别名，无法对应到表字段");
+            }
+            indexes.putIfAbsent(label, index);
         }
         for (String keyColumn : identity.columns()) {
             if (columnIndex(indexes, keyColumn) == null) {

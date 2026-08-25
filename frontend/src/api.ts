@@ -24,6 +24,11 @@ export class ApiError extends Error {
   }
 }
 
+/** 取出后端问题详情里的 code；不是 ApiError（网络中断、解析失败）时返回 undefined。 */
+export function apiErrorCode(error: unknown): string | undefined {
+  return error instanceof ApiError ? error.code : undefined;
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
   const res = await fetch(`${API}${path}`, {

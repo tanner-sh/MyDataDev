@@ -67,8 +67,11 @@ public class ObjectSearchService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
 
         List<ObjectSearchHit> hits = new ArrayList<>();
+        // 每种类型各自只取一页，任何一页还有下文都意味着这次搜索是不完整的 —— 只看总条数
+        // 有没有超过 cap 会把「表匹配了 30 张、这里只拿回 10 张」报告成结果完整。
         // 表和视图走已有的元数据分页，它同时决定了本次搜索落在哪个 schema 上。
         MetadataResponse tables = metadata.inspect(connectionId, schemaName, normalized, 0, PER_KIND_LIMIT, false);
+        boolean incomplete = tables.hasMore();
         String resolvedSchema = tables.selectedSchema();
         for (DbObject object : tables.objects()) {
             hits.add(new ObjectSearchHit(
@@ -90,6 +93,7 @@ public class ObjectSearchService {
                 SchemaObjectPage page = schemaObjects.list(
                         connectionId, resolvedSchema, capability.kind(), normalized, 0, PER_KIND_LIMIT, false
                 );
+                incomplete = incomplete || page.hasMore();
                 for (SchemaObjectSummary item : page.items()) {
                     hits.add(new ObjectSearchHit(
                             capability.kind(),
@@ -101,17 +105,19 @@ public class ObjectSearchService {
                     ));
                 }
             } catch (Exception error) {
-                // 单一类型查询失败（权限不足、方言差异）不该让整个搜索变成一个错误弹窗。
+                // 单一类型查询失败（权限不足、方言差异）不该让整个搜索变成一个错误弹窗，
+                // 但少了一整类结果同样不能宣称结果完整。
+                incomplete = true;
                 log.debug("搜索 {} 失败，跳过该类型", capability.kind(), error);
             }
         }
 
-        boolean truncated = hits.size() > cap;
+        boolean overCap = hits.size() > cap;
         return new ObjectSearchResponse(
                 dialect.namespaceKind().name(),
                 resolvedSchema,
-                truncated ? List.copyOf(hits.subList(0, cap)) : List.copyOf(hits),
-                truncated
+                overCap ? List.copyOf(hits.subList(0, cap)) : List.copyOf(hits),
+                overCap || incomplete
         );
     }
 }

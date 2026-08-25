@@ -17,4 +17,18 @@ public class ClickHouseDialect extends DefaultDialect {
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, false, false, true, List.of(), List.of(), SchemaObjectCapabilities.clickHouse());
     }
+
+    /**
+     * ClickHouse 与 MySQL 一样在字符串字面量里解释反斜杠转义，理由见 {@link MySqlDialect#literal}。
+     *
+     * <p>不需要像 MySQL 那样再分出 scriptLiteral：ClickHouse 没有可以关掉反斜杠转义的会话开关，
+     * 翻倍在任何会话下都还原成同一个值。</p>
+     */
+    @Override
+    public String literal(Object value) {
+        if (value instanceof CharSequence text) {
+            return "'" + text.toString().replace("\\", "\\\\").replace("'", "''") + "'";
+        }
+        return super.literal(value);
+    }
 }

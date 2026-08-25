@@ -4,7 +4,8 @@ import {
   formatImportSize,
   importFileExtension,
   importRoute,
-  INLINE_IMPORT_MAX_BYTES
+  INLINE_IMPORT_MAX_BYTES,
+  oversizedRowsRoute
 } from './dataImport';
 
 const small = { name: 'orders.csv', size: 2048 };
@@ -81,5 +82,21 @@ describe('backgroundImportPath', () => {
   it('没有 schema 时不发送空参数，交给连接默认命名空间', () => {
     const path = backgroundImportPath({ connectionId: 1, tableName: 't', fileName: 'a.csv' });
     expect(path).not.toContain('schemaName');
+  });
+});
+
+describe('oversizedRowsRoute', () => {
+  it('小体积但行数超限的 CSV 改走后台，而不是变成一条死胡同提示', () => {
+    // 100 KB、1001 行的 CSV 按体积判定会先走 inline，解析完才撞上 1000 项变更上限；
+    // 以前这里只报错，而那句「改用 CSV 走后台导入」对一份 CSV 来说无处可去。
+    const route = oversizedRowsRoute({ name: 'orders.csv', size: 100 * 1024 }, 1001, 1000);
+    expect(route.kind).toBe('background');
+    expect(route.kind === 'background' && route.reason).toContain('1001 行');
+  });
+
+  it('JSON 没有后台通道，如实告诉用户要转存 CSV', () => {
+    const route = oversizedRowsRoute({ name: 'orders.json', size: 100 * 1024 }, 1001, 1000);
+    expect(route.kind).toBe('unsupported');
+    expect(route.kind === 'unsupported' && route.message).toContain('CSV');
   });
 });

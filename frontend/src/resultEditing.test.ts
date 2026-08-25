@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyCommittedChanges,
   applyResultCellEdit,
   buildResultChanges,
   countEditedResultRows,
@@ -146,5 +147,50 @@ describe('resultRowEdits', () => {
 
   it('returns undefined for an untouched row so the record identity can stay stable', () => {
     expect(resultRowEdits(EMPTY_RESULT_EDIT_STATE, 0)).toBeUndefined();
+  });
+});
+
+describe('applyCommittedChanges', () => {
+  const columns = [{ label: 'ID' }, { label: 'NAME' }, { label: 'CITY' }];
+  const rows: unknown[][] = [[1, 'Alice', '上海'], [2, 'Bob', '北京']];
+  const tokens = ['tok-1', 'tok-2'];
+
+  it('按行定位令牌写回已提交的值', () => {
+    const next = applyCommittedChanges(rows, columns, tokens, [
+      { type: 'UPDATE', keyToken: 'tok-2', values: { NAME: 'Bobby' }, originalValues: { NAME: 'Bob' } }
+    ]);
+
+    expect(next[1]).toEqual([2, 'Bobby', '北京']);
+    // 未涉及的行保持原引用，表格不会白白重绘。
+    expect(next[0]).toBe(rows[0]);
+    expect(rows[1]).toEqual([2, 'Bob', '北京']);
+  });
+
+  it('令牌对不上就不动任何一行', () => {
+    // 令牌是后端签发的行身份；对不上说明结果已经和令牌不是同一批，宁可不写。
+    const next = applyCommittedChanges(rows, columns, tokens, [
+      { type: 'UPDATE', keyToken: 'tok-9', values: { NAME: 'X' } }
+    ]);
+    expect(next).toBe(rows);
+  });
+
+  it('忽略结果集里没有的列与非 UPDATE 变更', () => {
+    expect(applyCommittedChanges(rows, columns, tokens, [
+      { type: 'UPDATE', keyToken: 'tok-1', values: { MISSING: 'x' } }
+    ])).toBe(rows);
+    expect(applyCommittedChanges(rows, columns, tokens, [
+      { type: 'DELETE', keyToken: 'tok-1' }
+    ])).toBe(rows);
+    expect(applyCommittedChanges(rows, columns, tokens, [])).toBe(rows);
+  });
+
+  it('写回后的值就是下一次编辑的原值，乐观校验才不会用过期数据', () => {
+    const committed = applyCommittedChanges(rows, columns, tokens, [
+      { type: 'UPDATE', keyToken: 'tok-1', values: { CITY: '广州' } }
+    ]);
+    const state = applyResultCellEdit(EMPTY_RESULT_EDIT_STATE, 0, 'CITY', '深圳', '广州');
+    const changes = buildResultChanges(state, committed, columns, tokens);
+
+    expect(changes[0].originalValues).toEqual({ CITY: '广州' });
   });
 });
