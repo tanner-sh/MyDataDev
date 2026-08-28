@@ -181,12 +181,12 @@ public class SchemaObjectService {
                 statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
                 statement.execute(plan.sql());
             }
-            audit.log(actor, "OBJECT_" + plan.operation().name(), "connection:" + connectionId + " object:" + plan.confirmationTarget(), plan.sql());
+            audit.onConnection(actor, "OBJECT_" + plan.operation().name(), connectionId, "object:" + plan.confirmationTarget(), plan.sql());
             history.insert(connectionId, plan.sql(), "OBJECT_" + plan.operation().name(), "SUCCESS", elapsed(started), null, actor);
             return new SchemaObjectLifecycleResponse(List.of(plan.sql()), operationMessage(plan.operation(), plan.kind()));
         } catch (Exception exception) {
             String error = error(exception);
-            audit.log(actor, "OBJECT_" + plan.operation().name() + "_FAILED", "connection:" + connectionId + " object:" + plan.confirmationTarget(), error);
+            audit.onConnection(actor, "OBJECT_" + plan.operation().name() + "_FAILED", connectionId, "object:" + plan.confirmationTarget(), error);
             history.insert(connectionId, plan.sql(), "OBJECT_" + plan.operation().name(), "FAILED", elapsed(started), error, actor);
             throw exception;
         } finally {
@@ -239,12 +239,12 @@ public class SchemaObjectService {
             String auditDetail = parameters.stream()
                     .map(parameter -> parameterLabel(parameter) + ":" + value(parameter.typeName()) + ":" + parameter.mode())
                     .reduce((left, right) -> left + ", " + right).orElse("无参数");
-            audit.log(actor, "OBJECT_INVOKE", "connection:" + connectionId + " object:" + confirmationTarget(live.object()), auditDetail);
+            audit.onConnection(actor, "OBJECT_INVOKE", connectionId, "object:" + confirmationTarget(live.object()), auditDetail);
             history.insert(connectionId, historySql, "ROUTINE_INVOKE", "SUCCESS", response.elapsedMs(), null, actor);
             return response;
         } catch (Exception exception) {
             history.insert(connectionId, historySql == null ? "CALL <schema-object>" : historySql, "ROUTINE_INVOKE", "FAILED", elapsed(started), error(exception), actor);
-            audit.log(actor, "OBJECT_INVOKE_FAILED", "connection:" + connectionId, error(exception));
+            audit.onConnection(actor, "OBJECT_INVOKE_FAILED", connectionId, error(exception));
             throw exception;
         } finally {
             // Routines may execute DDL internally, so metadata cannot be kept.

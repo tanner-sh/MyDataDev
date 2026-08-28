@@ -143,7 +143,8 @@ class SchemaDiffServiceTest {
 
         service.compare(new SchemaDiffRequest(1L, "PUBLIC", 2L, "PUBLIC", List.of(), false), "admin");
 
-        verify(audit).log(eq("admin"), eq("SCHEMA_DIFF"), contains("source"), contains("PUBLIC"));
+        // 归属到目标连接，且连接 id 是独立参数而不是拼进字符串。
+        verify(audit).onConnection(eq("admin"), eq("SCHEMA_DIFF"), eq(2L), contains("PUBLIC"), contains("source"));
     }
 
     @Test

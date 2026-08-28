@@ -129,7 +129,7 @@ public class BackupService {
         DbConnection connection = connections.require(request.connectionId());
         BackupTask task = taskFromRequest(0, request, connection, null, null, null, null, null);
         long id = repository.insert(task);
-        audit.log(actor, "BACKUP_TASK_CREATE", request.name(), request.scope());
+        audit.onConnection(actor, "BACKUP_TASK_CREATE", task.connectionId(), "backup:" + request.name(), request.scope());
         return repository.findById(id).orElseThrow();
     }
 
@@ -140,7 +140,7 @@ public class BackupService {
             DbConnection connection = connections.require(request.connectionId());
             BackupTask task = taskFromRequest(id, request, connection, null, null, null, null, null);
             repository.update(id, task);
-            audit.log(actor, "BACKUP_TASK_UPDATE", request.name(), request.scope());
+            audit.onConnection(actor, "BACKUP_TASK_UPDATE", task.connectionId(), "backup:" + request.name(), request.scope());
             return repository.findById(id).orElseThrow();
         }
     }
@@ -157,7 +157,7 @@ public class BackupService {
                 }
             }
             repository.updateEnabled(id, enabled);
-            audit.log(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.name(), task.cron());
+            audit.onConnection(actor, enabled ? "BACKUP_TASK_ENABLE" : "BACKUP_TASK_DISABLE", task.connectionId(), "backup:" + task.name(), task.cron());
             return repository.findById(id).orElseThrow();
         }
     }
@@ -205,7 +205,7 @@ public class BackupService {
             }
             historyRepository.deleteByTaskId(id);
             repository.delete(id);
-            audit.log(actor, "BACKUP_TASK_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
+            audit.onConnection(actor, "BACKUP_TASK_DELETE", task.connectionId(), "backup:" + task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
         }
     }
 
@@ -242,7 +242,7 @@ public class BackupService {
                 historyRepository.updateExecution(executionId, status, status, 0, 1L, message, null, null, null, Instant.now());
             }
             updateStatus(id, status, message, null, null);
-            audit.log(actor, cancelled ? "BACKUP_TASK_CANCELLED" : "BACKUP_TASK_RUN_FAILED", task.name(), message);
+            audit.onConnection(actor, cancelled ? "BACKUP_TASK_CANCELLED" : "BACKUP_TASK_RUN_FAILED", task.connectionId(), "backup:" + task.name(), message);
             throw e;
         }
         String message = methodLabel(task.backupMethod()) + " 备份已生成：" + backup.path().getFileName();
@@ -300,7 +300,7 @@ public class BackupService {
                                 null, null, null, Instant.now());
                     }
                     repository.updateStatus(id, "CANCELLED", "备份已取消。");
-                    audit.log(actor, "BACKUP_TASK_CANCELLED", task.name(), "备份已取消。");
+                    audit.onConnection(actor, "BACKUP_TASK_CANCELLED", task.connectionId(), "backup:" + task.name(), "备份已取消。");
                     throw uploadError;
                 }
                 String uploadMessage = "备份已生成，但上传文件服务失败：" + safeMessage(uploadError);
@@ -314,10 +314,10 @@ public class BackupService {
                             filePath, backup.size(), checksum, Instant.now(), storageProfile.type(), storageProfile.id(), objectKey, expiresAt);
                 }
                 repository.updateStatus(id, "FAILED", uploadMessage);
-                audit.log(actor, "BACKUP_UPLOAD_FAILED", task.name(), uploadMessage);
+                audit.onConnection(actor, "BACKUP_UPLOAD_FAILED", task.connectionId(), "backup:" + task.name(), uploadMessage);
                 throw new IllegalStateException(uploadMessage, uploadError);
             }
-            audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
+            audit.onConnection(actor, "BACKUP_TASK_RUN", task.connectionId(), "backup:" + task.name(), message);
             cleanupRetention(task);
             return repository.findById(id).orElseThrow();
         }
@@ -329,7 +329,7 @@ public class BackupService {
             historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", 1, 1L, message, filePath, backup.size(), checksum, Instant.now());
         }
         updateStatus(id, "SUCCESS", message, filePath, backup.size());
-        audit.log(actor, "BACKUP_TASK_RUN", task.name(), message);
+        audit.onConnection(actor, "BACKUP_TASK_RUN", task.connectionId(), "backup:" + task.name(), message);
         cleanupRetention(task);
         return repository.findById(id).orElseThrow();
     }
@@ -468,7 +468,7 @@ public class BackupService {
                 historyRepository.updateExecution(historyId, "CANCELLED", "CANCELLED", value(history.progressCurrent()), history.progressTotal(), "备份已取消。", null, null, null, Instant.now());
                 repository.updateStatus(taskId, "CANCELLED", "备份已取消。");
             }
-            audit.log(actor, "BACKUP_TASK_CANCEL", String.valueOf(taskId), "history=" + historyId);
+            audit.onConnection(actor, "BACKUP_TASK_CANCEL", history.connectionId(), "backup-task:" + taskId, "history=" + historyId);
             return historyRepository.findById(historyId).orElseThrow();
         }
     }
@@ -500,7 +500,7 @@ public class BackupService {
                 historyRepository.updateProgress(historyId, "FAILED", "UPLOAD_FAILED", 0, history.fileSize(), "后台队列已满，请稍后重试。");
                 throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "BACKUP_QUEUE_FULL", "备份执行队列已满，请稍后重试。");
             }
-            audit.log(actor, "BACKUP_UPLOAD_RETRY", task.name(), "history=" + historyId);
+            audit.onConnection(actor, "BACKUP_UPLOAD_RETRY", task.connectionId(), "backup:" + task.name(), "history=" + historyId);
             return historyRepository.findById(historyId).orElseThrow();
         }
     }
@@ -522,14 +522,14 @@ public class BackupService {
                     history.checksumSha256(), history.finishedAt(), profile.type(), profile.id(), history.storageObjectKey(), null);
             Files.deleteIfExists(path);
             refreshTaskSummary(task.id());
-            audit.log(actor, "BACKUP_UPLOAD_RETRY_SUCCESS", task.name(), "history=" + history.id());
+            audit.onConnection(actor, "BACKUP_UPLOAD_RETRY_SUCCESS", task.connectionId(), "backup:" + task.name(), "history=" + history.id());
         } catch (Exception error) {
             String message = "重新上传失败：" + safeMessage(error);
             historyRepository.updateExecution(history.id(), "FAILED", "UPLOAD_FAILED", 0, history.fileSize(), message,
                     path.toString(), history.fileSize(), history.checksumSha256(), history.finishedAt(), profile.type(),
                     profile.id(), history.storageObjectKey(), history.stagingExpiresAt());
             refreshTaskSummary(task.id());
-            audit.log(actor, "BACKUP_UPLOAD_RETRY_FAILED", task.name(), message);
+            audit.onConnection(actor, "BACKUP_UPLOAD_RETRY_FAILED", task.connectionId(), "backup:" + task.name(), message);
         }
     }
 
@@ -668,7 +668,7 @@ public class BackupService {
             }
             historyRepository.delete(historyId);
             refreshTaskSummary(taskId);
-            audit.log(actor, "BACKUP_HISTORY_DELETE", task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
+            audit.onConnection(actor, "BACKUP_HISTORY_DELETE", task.connectionId(), "backup:" + task.name(), deleteFile ? "deleteFile=true" : "deleteFile=false");
         }
     }
 

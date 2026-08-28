@@ -98,10 +98,17 @@ public class SqlTransactionRegistry {
         return true;
     }
 
-    /** 回滚并释放所有空闲超时的事务，返回被回收的事务 id。 */
-    public List<String> sweepIdle() {
+    /**
+     * 被回收的事务。带上连接 id，好让审计能把这条记录归到对应的连接名下 —— 只返回事务 id
+     * 的话，调用方拿不到连接，这类事件就永远筛不出来。
+     */
+    public record ReclaimedTransaction(String id, long connectionId) {
+    }
+
+    /** 回滚并释放所有空闲超时的事务。 */
+    public List<ReclaimedTransaction> sweepIdle() {
         Instant deadline = Instant.now().minus(idleTimeout);
-        List<String> reclaimed = new java.util.ArrayList<>();
+        List<ReclaimedTransaction> reclaimed = new java.util.ArrayList<>();
         for (OpenTransaction transaction : byId.values()) {
             if (transaction.lastUsedAt().isAfter(deadline)) continue;
             if (!transaction.lock().tryLock()) continue;
@@ -113,7 +120,7 @@ public class SqlTransactionRegistry {
                 } catch (Exception error) {
                     log.warn("自动回滚失败 transaction={}", transaction.id(), error);
                 }
-                if (close(transaction.id())) reclaimed.add(transaction.id());
+                if (close(transaction.id())) reclaimed.add(new ReclaimedTransaction(transaction.id(), transaction.connectionId()));
             } finally {
                 transaction.lock().unlock();
             }

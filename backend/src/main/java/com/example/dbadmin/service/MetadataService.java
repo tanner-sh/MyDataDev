@@ -771,7 +771,7 @@ public class MetadataService {
             return new TableDesignResponse(List.of(), "没有检测到结构变更。");
         }
         executeDdl(connectionId, sql, () -> cache.evictObject(connectionId, request.schemaName(), request.tableName()));
-        audit.log(actor, "TABLE_DESIGN_EXECUTE", "connection:" + connectionId + " table:" + expected, String.join("\n", sql));
+        audit.onConnection(actor, "TABLE_DESIGN_EXECUTE", connectionId, "table:" + expected, String.join("\n", sql));
         return new TableDesignResponse(sql, "已执行 " + sql.size() + " 条 DDL。");
     }
 
@@ -797,10 +797,11 @@ public class MetadataService {
             throw new IllegalArgumentException("确认文本不匹配，请输入完整表名：" + plan.confirmationTarget());
         }
         executeDdl(connectionId, plan.sql(), () -> cache.evictConnection(connectionId));
-        audit.log(
+        audit.onConnection(
                 actor,
                 "TABLE_" + plan.operation().name(),
-                "connection:" + connectionId + " table:" + plan.confirmationTarget(),
+                connectionId,
+                "table:" + plan.confirmationTarget(),
                 String.join("\n", plan.sql())
         );
         return new TableDesignResponse(plan.sql(), switch (plan.operation()) {

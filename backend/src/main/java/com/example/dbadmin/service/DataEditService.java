@@ -337,7 +337,7 @@ public class DataEditService {
                 connection.setAutoCommit(previousAutoCommit);
             }
             List<String> previews = operations.stream().map(PreparedOperation::previewSql).toList();
-            audit.log(actor, "DATA_COMMIT", "connection:" + request.connectionId() + " table:" + request.tableName(), String.join("\n", previews));
+            audit.onConnection(actor, "DATA_COMMIT", request.connectionId(), "table:" + request.tableName(), String.join("\n", previews));
             return new DataCommitResponse(previews, affected);
         }
     }

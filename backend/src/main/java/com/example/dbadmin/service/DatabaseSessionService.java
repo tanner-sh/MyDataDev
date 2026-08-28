@@ -111,7 +111,7 @@ public class DatabaseSessionService {
             boolean hasResult = statement.execute(sql);
             if (hasResult) requireTerminated(statement, sessionId);
         }
-        audit.log(actor, "SESSION_KILL", "connection:" + connectionId, "session:" + sessionId);
+        audit.onConnection(actor, "SESSION_KILL", connectionId, "session:" + sessionId);
     }
 
     /**

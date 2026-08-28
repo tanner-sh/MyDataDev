@@ -277,7 +277,7 @@ public class RestoreService {
             verifiedSources.remove(id);
             throw error;
         }
-        audit.log(actor, "RESTORE_START", target.name(), plan.source().name());
+        audit.onConnection(actor, "RESTORE_START", target.id(), "restore:" + plan.source().name(), "job=" + id);
         return jobs.findById(id).orElseThrow();
     }
 
@@ -309,7 +309,7 @@ public class RestoreService {
         // The permit stays with the worker until it actually stops; its finally
         // block releases it and clears the cancellation marker.
         jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(job.progressCurrent()), job.progressTotal(), "恢复已取消。", null, Instant.now());
-        audit.log(actor, "RESTORE_CANCEL", job.sourceName(), "job=" + id);
+        audit.onConnection(actor, "RESTORE_CANCEL", job.targetConnectionId(), "restore:" + job.sourceName(), "job=" + id);
         return get(id);
     }
 
@@ -331,7 +331,7 @@ public class RestoreService {
             ensureNotCancelled(id);
             jobs.updateProgress(id, "SUCCESS", "COMPLETED", job.progressTotal() == null ? 0 : job.progressTotal(),
                     job.progressTotal(), "恢复完成。", null, Instant.now());
-            audit.log(job.actor(), "RESTORE_SUCCESS", job.sourceName(), "job=" + id);
+            audit.onConnection(job.actor(), "RESTORE_SUCCESS", job.targetConnectionId(), "restore:" + job.sourceName(), "job=" + id);
         } catch (CancelledException cancelled) {
             RestoreJob latest = jobs.findById(id).orElse(job);
             jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(latest.progressCurrent()), latest.progressTotal(), "恢复已取消。", null, Instant.now());
@@ -341,7 +341,7 @@ public class RestoreService {
             String status = cancelled ? "CANCELLED" : "FAILED";
             String message = cancelled ? "恢复已取消。" : safeMessage(error);
             jobs.updateProgress(id, status, status, value(latest.progressCurrent()), latest.progressTotal(), message, null, Instant.now());
-            audit.log(job.actor(), cancelled ? "RESTORE_CANCELLED" : "RESTORE_FAILED", job.sourceName(), message);
+            audit.onConnection(job.actor(), cancelled ? "RESTORE_CANCELLED" : "RESTORE_FAILED", job.targetConnectionId(), "restore:" + job.sourceName(), message);
         } finally {
             runningStatements.remove(id);
             runningProcesses.remove(id);

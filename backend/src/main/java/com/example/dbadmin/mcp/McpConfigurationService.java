@@ -140,7 +140,7 @@ public class McpConfigurationService {
             repository.replaceOrigins(origins);
         });
         reload();
-        audit.log(actor, "MCP_CONFIG_UPDATE", "mcp", "origins=" + origins.size());
+        audit.global(actor, "MCP_CONFIG_UPDATE", "mcp", "origins=" + origins.size());
         return configResponse();
     }
 
@@ -153,7 +153,7 @@ public class McpConfigurationService {
         );
         transactions.executeWithoutResult(ignored -> repository.updateSettings(updated));
         reload();
-        audit.log(actor, enabled ? "MCP_ENABLE" : "MCP_DISABLE", "mcp", "enabled=" + enabled);
+        audit.global(actor, enabled ? "MCP_ENABLE" : "MCP_DISABLE", "mcp", "enabled=" + enabled);
         return configResponse();
     }
 
@@ -166,7 +166,7 @@ public class McpConfigurationService {
         long id = transactions.execute(status -> repository.insertAgent(agentId, hash, true, request.allowProduction(), connectionIds));
         reload();
         Agent agent = requireAgent(id);
-        audit.log(actor, "MCP_AGENT_CREATE", "mcp-agent:" + agentId, "connections=" + connectionIds.size());
+        audit.global(actor, "MCP_AGENT_CREATE", "mcp-agent:" + agentId, "connections=" + connectionIds.size());
         return new McpCredentialResponse(toResponse(agent), agentId + "." + secret);
     }
 
@@ -175,7 +175,7 @@ public class McpConfigurationService {
         Set<Long> connectionIds = validateConnections(request.connectionIds(), request.allowProduction());
         transactions.executeWithoutResult(ignored -> repository.updateAgent(id, request.enabled(), request.allowProduction(), connectionIds));
         reload();
-        audit.log(actor, "MCP_AGENT_UPDATE", "mcp-agent:" + existing.agentId(),
+        audit.global(actor, "MCP_AGENT_UPDATE", "mcp-agent:" + existing.agentId(),
                 "enabled=" + request.enabled() + ";connections=" + connectionIds.size());
         return toResponse(requireAgent(id));
     }
@@ -186,7 +186,7 @@ public class McpConfigurationService {
         String hash = encoder.encode(secret);
         transactions.executeWithoutResult(ignored -> repository.updateAgentKey(id, hash));
         reload();
-        audit.log(actor, "MCP_AGENT_ROTATE_KEY", "mcp-agent:" + existing.agentId(), "rotated=true");
+        audit.global(actor, "MCP_AGENT_ROTATE_KEY", "mcp-agent:" + existing.agentId(), "rotated=true");
         return new McpCredentialResponse(toResponse(requireAgent(id)), existing.agentId() + "." + secret);
     }
 
@@ -194,7 +194,7 @@ public class McpConfigurationService {
         Agent existing = requireAgent(id);
         transactions.executeWithoutResult(ignored -> repository.deleteAgent(id));
         reload();
-        audit.log(actor, "MCP_AGENT_DELETE", "mcp-agent:" + existing.agentId(), "deleted=true");
+        audit.global(actor, "MCP_AGENT_DELETE", "mcp-agent:" + existing.agentId(), "deleted=true");
         return existing.agentId();
     }
 

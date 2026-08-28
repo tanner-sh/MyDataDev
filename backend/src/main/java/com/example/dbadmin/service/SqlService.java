@@ -114,7 +114,7 @@ public class SqlService {
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
                 boolean hasResult = statement.execute(executionSql);
-                audit.log(actor, "SQL_EXECUTE", "connection:" + connectionId, abbreviate(sql));
+                audit.onConnection(actor, "SQL_EXECUTE", connectionId, abbreviate(sql));
                 if (!hasResult) {
                     long elapsedMs = elapsed(started);
                     SqlResult result = emptyResult(statement.getUpdateCount(), elapsedMs, maxRows);
@@ -183,7 +183,7 @@ public class SqlService {
                         limits.maxCellTextChars(),
                         dialect
                 );
-                audit.log(actor, "MCP_SQL_QUERY", "connection:" + connectionId, "read-only query");
+                audit.onConnection(actor, "MCP_SQL_QUERY", connectionId, "read-only query");
                 history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
                 return result;
             }
@@ -294,7 +294,7 @@ public class SqlService {
                 executions.unregister(registeredId, jdbc);
             }
             long elapsedMs = elapsed(scriptStarted);
-            audit.log(actor, "SQL_EXECUTE_SCRIPT", "connection:" + connectionId, abbreviate(sql));
+            audit.onConnection(actor, "SQL_EXECUTE_SCRIPT", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", status, elapsedMs, errorMessage == null ? null : abbreviate(errorMessage), actor);
             return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged);
         } catch (Exception e) {
@@ -343,10 +343,10 @@ public class SqlService {
                     Map.of("statements", unsafeStatements)
             );
         }
-        audit.log(
+        audit.onConnection(
                 actor,
                 "SQL_UNSCOPED_MUTATION_CONFIRMED",
-                "connection:" + connectionId,
+                connectionId,
                 "statements=" + unsafeStatements.size()
         );
     }
@@ -390,7 +390,7 @@ public class SqlService {
                             dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection,
                             executionSql
                     );
-                    audit.log(actor, "SQL_QUERY_PAGE", "connection:" + connectionId, "offset=" + offset + "; " + abbreviate(sql));
+                    audit.onConnection(actor, "SQL_QUERY_PAGE", connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     return result;
                 }
             } finally {
@@ -424,7 +424,7 @@ public class SqlService {
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly())) {
             SqlResult result = dialect.explain(connection, executionSql, properties.getSql().getMaxRows(), properties.getSql().getTimeoutSeconds());
-            audit.log(actor, "SQL_EXPLAIN", "connection:" + connectionId, abbreviate(sql));
+            audit.onConnection(actor, "SQL_EXPLAIN", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXPLAIN", "SUCCESS", elapsed(started), null, actor);
             return result;
         } catch (Exception e) {
@@ -458,7 +458,7 @@ public class SqlService {
                     limits.normalizeRows(null),
                     limits.timeoutSeconds()
             );
-            audit.log(actor, "MCP_SQL_EXPLAIN", "connection:" + connectionId, "read-only explain");
+            audit.onConnection(actor, "MCP_SQL_EXPLAIN", connectionId, "read-only explain");
             history.insert(connectionId, sql, "MCP_EXPLAIN", "SUCCESS", result.elapsedMs(), null, actor);
             return result;
         } catch (Exception e) {

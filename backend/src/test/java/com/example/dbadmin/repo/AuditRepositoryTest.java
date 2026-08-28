@@ -17,7 +17,7 @@ class AuditRepositoryTest {
         // inline 队列让「写失败被吞掉」这条契约仍然可以同步断言。
         AuditRepository repository = new AuditRepository(jdbc, MetadataWriteQueue.inline());
 
-        assertThatCode(() -> repository.log("admin", "DATA_COMMIT", "table:users", "done"))
+        assertThatCode(() -> repository.onConnection("admin", "DATA_COMMIT", 1L, "table:users", "done"))
                 .doesNotThrowAnyException();
     }
 }

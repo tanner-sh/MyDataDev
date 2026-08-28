@@ -19,6 +19,7 @@ import java.util.Optional;
 public class AuditRepository {
     private static final Logger log = LoggerFactory.getLogger(AuditRepository.class);
     public static final int MAX_LISTED_DETAIL_CHARS = 4_000;
+    private static final String CONNECTION_TARGET_PREFIX = "connection:";
     private final JdbcTemplate jdbc;
     private final MetadataWriteQueue writes;
 
@@ -27,24 +28,75 @@ public class AuditRepository {
         this.writes = writes;
     }
 
-    public void log(String actor, String action, String target, String detail) {
+    /**
+     * 记录一次发生在某条连接上的操作。
+     *
+     * <p>连接 id 写进独立字段，而不是拼进 {@code target} 字符串。以前全靠调用方各自拼
+     * {@code "connection:" + id}，只要有一处没照做（备份、恢复、连接自身的增删改都没照做），
+     * 按连接筛选就会静默漏掉它 —— 而「谁改了这条生产连接」恰恰是最需要查出来的那类记录。</p>
+     */
+    public void onConnection(String actor, String action, long connectionId, String detail) {
+        onConnection(actor, action, connectionId, null, detail);
+    }
+
+    /**
+     * 同上，{@code subject} 补充连接内部的对象，例如 {@code "table:orders"}。
+     * 它只影响给人看的 {@code target} 文案，不参与筛选。
+     */
+    public void onConnection(String actor, String action, long connectionId, String subject, String detail) {
+        String target = subject == null || subject.isBlank()
+                ? CONNECTION_TARGET_PREFIX + connectionId
+                : CONNECTION_TARGET_PREFIX + connectionId + " " + subject;
+        write(actor, action, connectionId, target, detail);
+    }
+
+    /**
+     * 记录一次与具体连接无关的操作：MCP 配置与 Agent、文件服务、SQL 片段。
+     *
+     * <p>凡是有连接可归属的都该走 {@link #onConnection}；这个方法故意起了个显眼的名字，
+     * 免得又有人把连接 id 拼进 target 字符串。</p>
+     */
+    public void global(String actor, String action, String target, String detail) {
+        write(actor, action, null, target, detail);
+    }
+
+    private void write(String actor, String action, Long connectionId, String target, String detail) {
         // 参数在提交时就截断并固定下来，后台线程不再依赖调用方的任何可变状态。
         String safeActor = truncate(actor == null || actor.isBlank() ? "anonymous" : actor, 120);
         String safeAction = truncate(action, 80);
         String safeTarget = truncate(target, 500);
         String safeDetail = truncate(detail, 100_000);
         // 审计只写不读，挪出请求线程可以省掉一次同步 H2 写；写失败的处理与之前一致。
-        writes.submit(() -> insert(safeActor, safeAction, safeTarget, safeDetail));
+        writes.submit(() -> insert(safeActor, safeAction, connectionId, safeTarget, safeDetail));
     }
 
-    private void insert(String actor, String action, String target, String detail) {
+    private void insert(String actor, String action, Long connectionId, String target, String detail) {
         try {
-            jdbc.update("INSERT INTO audit_log(actor, action, target, detail) VALUES (?, ?, ?, ?)",
-                    actor, action, target, detail);
+            jdbc.update("INSERT INTO audit_log(actor, action, connection_id, target, detail) VALUES (?, ?, ?, ?, ?)",
+                    actor, action, connectionId, target, detail);
         } catch (RuntimeException error) {
             // A local observability failure must never make an already-completed
             // remote database operation look failed to the caller.
             log.error("Unable to persist audit event action={} target={}", action, target, error);
+        }
+    }
+
+    /**
+     * 从历史记录的 {@code target} 里还原连接 id，供迁移回填使用。
+     *
+     * <p>只认 {@code "connection:<数字>"} 这一种写法（后面可以跟别的片段）；认不出来的返回
+     * {@code null}，那些行的 connection_id 保持为空，而不是猜一个可能错的值。</p>
+     */
+    public static Long connectionIdFromTarget(String target) {
+        if (target == null || !target.startsWith(CONNECTION_TARGET_PREFIX)) return null;
+        int start = CONNECTION_TARGET_PREFIX.length();
+        int end = target.indexOf(' ', start);
+        String digits = end < 0 ? target.substring(start) : target.substring(start, end);
+        if (digits.isEmpty() || !digits.chars().allMatch(Character::isDigit)) return null;
+        try {
+            return Long.parseLong(digits);
+        } catch (NumberFormatException overflow) {
+            return null;
         }
     }
 
@@ -70,10 +122,8 @@ public class AuditRepository {
             parameters.add(query.action());
         }
         if (query.connectionId() != null) {
-            // target 的写法统一是 "connection:<id>"，后面可能还跟着 " table:xxx"。
-            where.append(" AND (target = ? OR target LIKE ?)");
-            parameters.add("connection:" + query.connectionId());
-            parameters.add("connection:" + query.connectionId() + " %");
+            where.append(" AND connection_id = ?");
+            parameters.add(query.connectionId());
         }
         if (query.keyword() != null) {
             where.append(" AND (LOWER(target) LIKE ? ESCAPE '!' OR LOWER(detail) LIKE ? ESCAPE '!')");

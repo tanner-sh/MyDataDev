@@ -87,7 +87,7 @@ public class SqlTransactionService {
             connection.close();
             throw error;
         }
-        audit.log(actor, "SQL_TRANSACTION_BEGIN", "connection:" + connectionId, "transaction:" + transaction.id());
+        audit.onConnection(actor, "SQL_TRANSACTION_BEGIN", connectionId, "transaction:" + transaction.id());
         return describe(transaction);
     }
 
@@ -185,10 +185,10 @@ public class SqlTransactionService {
             transaction.lock().unlock();
             registry.close(transactionId);
         }
-        audit.log(
+        audit.onConnection(
                 actor,
                 commit ? "SQL_TRANSACTION_COMMIT" : "SQL_TRANSACTION_ROLLBACK",
-                "connection:" + transaction.connectionId(),
+                transaction.connectionId(),
                 "transaction:" + transactionId + " statements=" + transaction.statementCount()
         );
         // 事务结束后缓存里的表结构/行数可能已经变了。
@@ -199,8 +199,9 @@ public class SqlTransactionService {
     /** 空闲太久的事务会占死连接池，定期回收。 */
     @Scheduled(fixedDelay = 60_000, initialDelay = 60_000)
     public void reclaimIdleTransactions() {
-        for (String id : registry.sweepIdle()) {
-            audit.log("system", "SQL_TRANSACTION_TIMEOUT", "transaction:" + id, "空闲超时自动回滚");
+        for (SqlTransactionRegistry.ReclaimedTransaction reclaimed : registry.sweepIdle()) {
+            audit.onConnection("system", "SQL_TRANSACTION_TIMEOUT", reclaimed.connectionId(),
+                    "transaction:" + reclaimed.id(), "空闲超时自动回滚");
         }
     }
 
@@ -221,7 +222,7 @@ public class SqlTransactionService {
                     java.util.Map.of("statements", unsafe)
             );
         }
-        audit.log(actor, "SQL_UNSCOPED_MUTATION_CONFIRMED", "connection:" + transaction.connectionId(),
+        audit.onConnection(actor, "SQL_UNSCOPED_MUTATION_CONFIRMED", transaction.connectionId(),
                 "transaction:" + transaction.id() + " statements=" + unsafe.size());
     }
 

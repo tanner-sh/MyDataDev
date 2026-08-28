@@ -42,7 +42,7 @@ public class SqlSnippetService {
                 name, trimToNull(request.description()), request.sql(),
                 normalizeDbType(request.dbType()), trimToNull(request.tags()), actor
         );
-        audit.log(actor, "SQL_SNIPPET_CREATE", "snippet:" + id, name);
+        audit.global(actor, "SQL_SNIPPET_CREATE", "snippet:" + id, name);
         return require(id);
     }
 
@@ -53,14 +53,14 @@ public class SqlSnippetService {
                 id, name, trimToNull(request.description()), request.sql(),
                 normalizeDbType(request.dbType()), trimToNull(request.tags())
         );
-        audit.log(actor, "SQL_SNIPPET_UPDATE", "snippet:" + id, name);
+        audit.global(actor, "SQL_SNIPPET_UPDATE", "snippet:" + id, name);
         return require(id);
     }
 
     public void delete(long id, String actor) {
         SqlSnippetResponse snippet = require(id);
         repository.delete(id);
-        audit.log(actor, "SQL_SNIPPET_DELETE", "snippet:" + id, snippet.name());
+        audit.global(actor, "SQL_SNIPPET_DELETE", "snippet:" + id, snippet.name());
     }
 
     /** 插入到编辑器时调用，让常用片段自然排到前面。 */

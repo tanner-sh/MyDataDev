@@ -45,7 +45,7 @@ class SqlSnippetServiceTest {
         assertThat(created.id()).isPositive();
         assertThat(created.name()).isEqualTo("每日对账");
         assertThat(service.list(null, null)).hasSize(1);
-        verify(audit).log(anyString(), org.mockito.ArgumentMatchers.eq("SQL_SNIPPET_CREATE"), anyString(), anyString());
+        verify(audit).global(anyString(), org.mockito.ArgumentMatchers.eq("SQL_SNIPPET_CREATE"), anyString(), anyString());
     }
 
     @Test

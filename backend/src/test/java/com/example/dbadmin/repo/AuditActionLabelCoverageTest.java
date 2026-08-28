@@ -23,12 +23,17 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * {@code SQL_TRANSACTION_ROLLBACK} 这类原始枚举，等于把翻译成本转嫁给读日志的人 —— 而这恰恰
  * 发生在最需要快速看懂的时候。</p>
  *
- * <p>检查放在这一侧是因为动作码的源头在后端：新增一处 {@code audit.log} 时，这个测试会立刻
+ * <p>检查放在这一侧是因为动作码的源头在后端：新增一处审计埋点时，这个测试会立刻
  * 指出前端漏了哪一条，而不是等到有人打开审计抽屉才发现。</p>
  */
 class AuditActionLabelCoverageTest {
-    /** 结尾必须紧跟逗号：拼接出来的动作码（"OBJECT_" + operation）没有完整字面量可校验。 */
-    private static final Pattern AUDIT_CALL = Pattern.compile("audit\\.log\\(\\s*[^,]+,\\s*\"([A-Z][A-Z_]+)\"\\s*,");
+    /**
+     * 匹配 audit.onConnection / audit.global 的动作码参数。
+     *
+     * <p>结尾必须紧跟逗号：拼接出来的动作码（"OBJECT_" + operation）没有完整字面量可校验。</p>
+     */
+    private static final Pattern AUDIT_CALL =
+            Pattern.compile("audit\\.(?:onConnection|global)\\(\\s*[^,]+,\\s*\"([A-Z][A-Z_]+)\"\\s*,");
 
     @Test
     void everyAuditActionHasAChineseLabelInTheUi() throws IOException {

@@ -212,7 +212,7 @@ public class SqlFileExecutionService {
             Files.deleteIfExists(target);
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "SQL_FILE_QUEUE_FULL", "SQL 文件任务队列已满，请稍后重试。");
         }
-        audit.log(actor, auditAction, "connection:" + connection.id(), auditDetail);
+        audit.onConnection(actor, auditAction, connection.id(), auditDetail);
         return response(require(id));
     }
 
@@ -278,7 +278,7 @@ public class SqlFileExecutionService {
             deleteFileQuietly(job);
             throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "SQL_FILE_QUEUE_FULL", "SQL 文件执行队列已满，请稍后重试。");
         }
-        audit.log(actor, "SQL_FILE_START", "connection:" + connection.id(), "job=" + id + "; file=" + job.fileName());
+        audit.onConnection(actor, "SQL_FILE_START", connection.id(), "job=" + id + "; file=" + job.fileName());
         return response(require(id));
     }
 
@@ -295,7 +295,7 @@ public class SqlFileExecutionService {
         jobs.markTerminal(id, "CANCELLED", "CANCELLED", job.statementCurrent(), job.successCount(), job.queryRowCount(),
                 null, null, "SQL 文件任务已取消。");
         deleteFileQuietly(job);
-        audit.log(actor, "SQL_FILE_CANCEL", "connection:" + job.connectionId(), "job=" + id);
+        audit.onConnection(actor, "SQL_FILE_CANCEL", job.connectionId(), "job=" + id);
         return response(require(id));
     }
 
@@ -467,16 +467,16 @@ public class SqlFileExecutionService {
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
                     "SQL 文件执行完成，共成功 " + success[0] + " 条语句。");
-            audit.log(job.actor(), "SQL_FILE_SUCCESS", "connection:" + job.connectionId(), "job=" + id + "; statements=" + success[0]);
+            audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; statements=" + success[0]);
         } catch (StatementFailure failure) {
             jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", failure.index, success[0], queryRows[0], failure.index,
                     preview(failure.sql), safeMessage(failure.getCause()));
-            audit.log(job.actor(), "SQL_FILE_FAILED", "connection:" + job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
+            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
         } catch (CancelledException ignored) {
             jobs.markTerminal(id, "CANCELLED", "CANCELLED", current[0], success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
         } catch (Exception error) {
             jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", current[0], success[0], queryRows[0], null, null, safeMessage(error));
-            audit.log(job.actor(), "SQL_FILE_FAILED", "connection:" + job.connectionId(), "job=" + id + "; " + safeMessage(error));
+            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + safeMessage(error));
         } finally {
             runningStatements.remove(id);
             analyzedSources.remove(id);

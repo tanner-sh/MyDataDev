@@ -132,8 +132,9 @@ public class SchemaDiffService {
             }
         }
 
-        audit.log(actor, "SCHEMA_DIFF", source.name() + " → " + target.name(),
-                sourceSchema + " → " + targetSchema + "，对比 " + tables.size() + " 张表");
+        // 归到目标连接名下：对比是只读的，但它服务的是「把目标端改成源端的样子」。
+        audit.onConnection(actor, "SCHEMA_DIFF", targetId, "schema:" + targetSchema,
+                "源=" + source.name() + "/" + sourceSchema + "，对比 " + tables.size() + " 张表");
         return new SchemaDiffResponse(
                 new SchemaDiffEndpoint(sourceId, source.name(), source.dbType(), sourceSchema),
                 new SchemaDiffEndpoint(targetId, target.name(), target.dbType(), targetSchema),

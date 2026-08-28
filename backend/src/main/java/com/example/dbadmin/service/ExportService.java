@@ -131,7 +131,7 @@ public class ExportService {
             }
             rawOutput.flush();
             long elapsed = (System.nanoTime() - started) / 1_000_000;
-            audit.log(actor, "SQL_EXPORT", "connection:" + connectionId, abbreviate(sql));
+            audit.onConnection(actor, "SQL_EXPORT", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "SUCCESS", elapsed, null, actor);
         } catch (Exception error) {
             long elapsed = (System.nanoTime() - started) / 1_000_000;
@@ -175,7 +175,7 @@ public class ExportService {
                 truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget);
             }
             long elapsed = (System.nanoTime() - started) / 1_000_000;
-            audit.log(actor, "SQL_EXPORT", "connection:" + connectionId, abbreviate(sql));
+            audit.onConnection(actor, "SQL_EXPORT", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "SUCCESS", elapsed, null, actor);
             return new PreparedExport(file, normalizedFormat, truncated, Files.size(file));
         } catch (Exception e) {

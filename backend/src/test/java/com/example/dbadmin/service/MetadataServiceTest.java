@@ -572,7 +572,7 @@ class MetadataServiceTest {
         ObjectDetail created = service.detail(1L, "PUBLIC", "APP_USER", true);
         assertThat(created.columns()).extracting("name").containsExactly("ID", "NAME");
         assertThat(created.indexes()).extracting("name").contains("IDX_APP_USER_NAME");
-        verify(audit).log(eq("admin"), eq("TABLE_CREATE"), contains("PUBLIC.APP_USER"), contains("CREATE TABLE"));
+        verify(audit).onConnection(eq("admin"), eq("TABLE_CREATE"), eq(1L), contains("PUBLIC.APP_USER"), contains("CREATE TABLE"));
 
         TableLifecycleRequest rename = new TableLifecycleRequest(
                 "RENAME", "PUBLIC", "APP_USER", "APP_MEMBER", null, null, null,
@@ -585,7 +585,7 @@ class MetadataServiceTest {
         assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_USER", true))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("未找到");
-        verify(audit).log(eq("admin"), eq("TABLE_RENAME"), contains("PUBLIC.APP_USER"), contains("RENAME TO"));
+        verify(audit).onConnection(eq("admin"), eq("TABLE_RENAME"), eq(1L), contains("PUBLIC.APP_USER"), contains("RENAME TO"));
 
         TableLifecycleRequest drop = new TableLifecycleRequest(
                 "DROP", "PUBLIC", "APP_MEMBER", null, null, null, null,
@@ -596,7 +596,7 @@ class MetadataServiceTest {
         assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_MEMBER", true))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("未找到");
-        verify(audit).log(eq("admin"), eq("TABLE_DROP"), contains("PUBLIC.APP_MEMBER"), contains("DROP TABLE"));
+        verify(audit).onConnection(eq("admin"), eq("TABLE_DROP"), eq(1L), contains("PUBLIC.APP_MEMBER"), contains("DROP TABLE"));
     }
 
     @Test

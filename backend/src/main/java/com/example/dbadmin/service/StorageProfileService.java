@@ -40,7 +40,7 @@ public class StorageProfileService {
     public StorageProfileResponse create(StorageProfileRequest request, String actor) {
         StorageProfile profile = model(0, request, null);
         long id = repository.insert(profile);
-        audit.log(actor, "STORAGE_PROFILE_CREATE", profile.name(), profile.type());
+        audit.global(actor, "STORAGE_PROFILE_CREATE", profile.name(), profile.type());
         return response(require(id));
     }
 
@@ -54,7 +54,7 @@ public class StorageProfileService {
         }
         StorageProfile profile = model(id, request, old);
         repository.update(id, profile);
-        audit.log(actor, "STORAGE_PROFILE_UPDATE", profile.name(), profile.type());
+        audit.global(actor, "STORAGE_PROFILE_UPDATE", profile.name(), profile.type());
         return response(require(id));
     }
 
@@ -67,7 +67,7 @@ public class StorageProfileService {
                     "文件服务仍被备份任务或历史记录引用，暂不能删除。");
         }
         repository.delete(id);
-        audit.log(actor, "STORAGE_PROFILE_DELETE", profile.name(), profile.type());
+        audit.global(actor, "STORAGE_PROFILE_DELETE", profile.name(), profile.type());
     }
 
     public StorageTestResponse testDraft(StorageProfileRequest request) throws Exception {
@@ -85,12 +85,12 @@ public class StorageProfileService {
         try {
             storage.test(profile);
             repository.updateTest(id, true, "文件服务连接及读写删除测试通过。");
-            audit.log(actor, "STORAGE_PROFILE_TEST", profile.name(), "SUCCESS");
+            audit.global(actor, "STORAGE_PROFILE_TEST", profile.name(), "SUCCESS");
             return new StorageTestResponse(true, "文件服务连接及读写删除测试通过。");
         } catch (Exception error) {
             String message = safeMessage(error);
             repository.updateTest(id, false, message);
-            audit.log(actor, "STORAGE_PROFILE_TEST", profile.name(), "FAILED: " + message);
+            audit.global(actor, "STORAGE_PROFILE_TEST", profile.name(), "FAILED: " + message);
             throw new ApiProblemException(HttpStatus.BAD_REQUEST, "STORAGE_CONNECTION_FAILED", "文件服务测试失败：" + message);
         }
     }

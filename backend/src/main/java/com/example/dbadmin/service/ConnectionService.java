@@ -76,7 +76,7 @@ public class ConnectionService {
     public ConnectionResponse create(ConnectionRequest request, String actor) {
         DbConnection c = toModel(0, request, crypto.encrypt(request.password()), null);
         long id = repository.insert(c);
-        audit.log(actor, "CONNECTION_CREATE", request.name(), request.jdbcUrl());
+        audit.onConnection(actor, "CONNECTION_CREATE", id, request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
     }
 
@@ -95,7 +95,7 @@ public class ConnectionService {
         repository.update(id, toModel(id, request, secret, old.sshTunnel()));
         evictConnection(id);
         metadataCache.evictConnection(id);
-        audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
+        audit.onConnection(actor, "CONNECTION_UPDATE", id, request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
     }
 
@@ -114,7 +114,7 @@ public class ConnectionService {
         repository.delete(id);
         evictConnection(id);
         metadataCache.evictConnection(id);
-        audit.log(actor, "CONNECTION_DELETE", c.name(), c.jdbcUrl());
+        audit.onConnection(actor, "CONNECTION_DELETE", id, c.name(), c.jdbcUrl());
     }
 
     /**

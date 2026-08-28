@@ -399,8 +399,10 @@ public class McpDatabaseTools {
             throw error;
         } finally {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-            String target = connectionId == null ? "mcp" : "connection:" + connectionId;
-            audit.log(access.actor(), "MCP_TOOL_CALL", target, "tool=" + tool + ";status=" + status + ";elapsedMs=" + elapsedMs);
+            String detail = "tool=" + tool + ";status=" + status + ";elapsedMs=" + elapsedMs;
+            // listConnections 之类的工具不针对某条连接，其余的都要能按连接筛出来。
+            if (connectionId == null) audit.global(access.actor(), "MCP_TOOL_CALL", "mcp", detail);
+            else audit.onConnection(access.actor(), "MCP_TOOL_CALL", connectionId, detail);
             Timer.builder("dbadmin.mcp.tool")
                     .tag("tool", tool)
                     .tag("status", status)
