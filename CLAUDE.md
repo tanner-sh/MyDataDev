@@ -58,6 +58,7 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 - **`service/RowLocatorCodec` / `TableCursorCodec`**：行定位令牌与游标分页令牌，用 `CryptoService` 签名后下发给前端，前端不接触真实主键值。解码失败即拒绝编辑请求。
 - **`service/BackgroundTaskControl` + `BackupExecutionCoordinator` / `SqlFileExecutionCoordinator`**：备份和大 SQL 文件执行的后台队列、并发上限（含每连接上限）、进度上报与取消。`SqlExecutionRegistry` 负责前台 SQL 的按 executionId 取消。
 - **`service/BackgroundTaskStream`**：后台任务进度的 SSE 推送（`GET /api/restores/operations/stream`）。轮询收到了服务端：有订阅者时按 `app.background-tasks.stream-interval-ms` 扫一遍，内容变了才推，没有订阅者时一条查询都不发。`/operations/active` 保留为降级用的轮询接口，前端在 SSE 建不起来时退回它。反向代理必须关闭响应缓冲。
+- **前端 `src/resultChart.ts` + `components/ResultChart.tsx`**：查询结果图表。建模是纯逻辑（能画什么、色位怎么分、上限与提示），渲染是自绘 SVG（不引图表库，首屏预算是硬约束）。分类色板与深浅两套取值经 `dataviz` 规范的校验脚本在本应用的真实表面色上验证过，**色位顺序本身是色觉安全机制，不要随手调换**；序列色位跟着所选列走，筛掉一条不会让其余换色。绝不加第二个 Y 轴：量级悬殊时给提示让用户拆开看。
 - **`service/XlsxWriter` + 前端 `src/xlsx.ts`**：Excel 导出的两个入口写的是同一个 OOXML 子集（单工作表、inline string、无 styles.xml），类型判定规则也必须保持一致 —— 后端负责「重新查询并导出」，前端负责「导出本批」。两边都不按数字写超过 15 位有效数字的整数：Excel 用双精度存数字，19 位的雪花 ID 会被静默改写。都没有引入第三方库（前端的 ZIP 用 STORED 不压缩）。
 - **`storage/BackupStorage` + `BackupStorageRegistry`**：SMB / NFS / FTP / SFTP 远端备份目标的统一抽象。远端备份先写本地再原子改名上传，失败保留暂存文件。
 

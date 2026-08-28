@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
-import { Button, Dropdown, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Button, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, QuestionCircleOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
@@ -28,9 +28,13 @@ import {
 import { localizeError, timestamp } from '../utils';
 import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
 import { buildXlsx } from '../xlsx';
+import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 
 const { Text } = Typography;
+
+// 图表只在用户切过去时才下载：结果表格是每次查询都要用的，图表不是。
+const ResultChart = lazy(() => import('./ResultChart').then((module) => ({ default: module.ResultChart })));
 type ResultRowClassName = (record: ResultRow, index: number, indent: number) => string;
 const RESULT_SELECTION_COLUMN_WIDTH = 38;
 // A very wide SELECT * would otherwise render hundreds of columns on load.
@@ -79,6 +83,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resultRowCheckboxChangeRef = useRef<(rowKey: string, checked: boolean) => void>(() => undefined);
   const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
+  const [view, setView] = useState<'table' | 'chart'>('table');
   const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
@@ -332,6 +337,16 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       return { values, key: String(rowOffset + rowIndex), rowIndex, edits, editingColumn };
     });
   }, [columnFilters, editState, editingCell, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
+
+  // 有数值列才提供图表入口；判定用未筛选的原始结果，免得筛掉几行就把入口弄没了。
+  const chartable = useMemo(
+    () => Boolean(result?.resultSet) && canChartResult(result?.columns ?? [], result?.rows ?? []),
+    [result?.columns, result?.resultSet, result?.rows]
+  );
+  // 换一次查询就回到表格：图表配置是跟着列走的，留在图表视图上多半看到的是空图。
+  useEffect(() => setView('table'), [columnSignature]);
+  // 图表要的是裸值数组。不缓存的话每次重渲都换一个数组身份，图表会跟着重建模型。
+  const chartRows = useMemo(() => rows.map((row) => row.values), [rows]);
 
   const displayedRowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
   const displayedRowIndex = useMemo(() => new Map(displayedRowKeys.map((key, index) => [key, index])), [displayedRowKeys]);
@@ -642,6 +657,15 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             />
           )}
         </div>
+        {chartable && (
+          <Segmented
+            size="small"
+            className="result-view-switch"
+            value={view}
+            options={[{ value: 'table', label: '表格' }, { value: 'chart', label: '图表' }]}
+            onChange={(value) => setView(value as 'table' | 'chart')}
+          />
+        )}
         {/* 这行原本常驻，占掉整条工具栏的右半边跟数据抢位置；它是教学文案，收进气泡即可。 */}
         <Tooltip
           placement="bottomRight"
@@ -651,7 +675,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         </Tooltip>
       </div>
       <div ref={viewportRef} className="data-grid-viewport">
-        {scrollY === undefined ? (
+        {view === 'chart' ? (
+          <Suspense fallback={<div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在加载图表…</Text></div>}>
+            <ResultChart columns={result.columns} rows={chartRows} />
+          </Suspense>
+        ) : scrollY === undefined ? (
           <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
         ) : (
           <MemoizedResultTable
