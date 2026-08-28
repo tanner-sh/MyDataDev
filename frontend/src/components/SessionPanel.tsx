@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Empty, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
+import { PanelEmpty } from './PanelState';
+import { Alert, Button, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
 import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
@@ -7,10 +8,11 @@ import { localizeError } from '../utils';
 import { productionConfirmationHeaders } from '../productionConfirmation';
 import {
   canKillSession,
-  formatSessionDuration,
+  filterRunningSessions,
   isIdle,
   isLongRunning,
   orderSessions,
+  sessionDurationLabel,
   sessionLabel,
   sessionSummary,
   SESSION_POLL_INTERVAL_MS,
@@ -39,6 +41,9 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  // 默认展示全部：连接总数本身就是有用的信息（「怎么开了这么多连接」）。要排查锁等待时
+  // 再切到只看执行中。
+  const [runningOnly, setRunningOnly] = useState(false);
   const [pendingKill, setPendingKill] = useState<DatabaseSession | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -90,13 +95,19 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
     }
   }
 
-  const sessions = orderSessions(page?.sessions || []);
+  const sessions = filterRunningSessions(orderSessions(page?.sessions || []), runningOnly);
 
   return (
     <div className="management-section">
       <header className="management-section-header">
         <Text strong>{connectionName ? `活动会话 · ${connectionName}` : '活动会话'}</Text>
         <Space size={8}>
+          <Tooltip title="只保留正在执行语句的会话。其余多是各客户端连接池常驻的空闲连接，不代表数据库在忙。">
+            <Space size={4}>
+              <Text type="secondary">只看执行中</Text>
+              <Switch size="small" checked={runningOnly} onChange={setRunningOnly} />
+            </Space>
+          </Tooltip>
           <Tooltip title="每 5 秒自动刷新。排查锁等待时静态快照没有意义；在生产上可以关掉，避免持续查询系统视图。">
             <Space size={4}>
               <Text type="secondary">自动刷新</Text>
@@ -113,7 +124,9 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
       {!page && loading ? (
         <div className="session-loading"><Spin size="small" /> <Text type="secondary">正在读取活动会话…</Text></div>
       ) : sessions.length === 0 ? (
-        page?.supported && !page.message ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有活动会话" /> : null
+        page?.supported && !page.message
+          ? <PanelEmpty title={runningOnly ? '当前没有正在执行的会话' : '当前没有活动会话'} description={runningOnly ? '关掉「只看执行中」可以看到全部连接。' : undefined} />
+          : null
       ) : (
         <>
           <Text type="secondary" className="session-summary">{sessionSummary(page!)}</Text>
@@ -129,7 +142,7 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
                     {session.sessionId && <Tag>#{session.sessionId}</Tag>}
                     {session.database && <Tag color="blue">{session.database}</Tag>}
                     {session.state && <Tag color={isIdle(session) ? undefined : 'green'}>{session.state}</Tag>}
-                    <Tag color={isLongRunning(session) ? 'warning' : undefined}>{formatSessionDuration(session.durationSeconds)}</Tag>
+                    <Tag color={isLongRunning(session) ? 'warning' : undefined}>{sessionDurationLabel(session)}</Tag>
                   </Space>
                   {canKillSession(page!, session) && (
                     <Tooltip title="终止该会话">

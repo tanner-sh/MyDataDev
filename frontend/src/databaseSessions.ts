@@ -36,8 +36,25 @@ export function formatSessionDuration(seconds?: number | null): string {
   return `${hours} 小时 ${minutes % 60} 分`;
 }
 
+/**
+ * 值得高亮的长时间运行会话。
+ *
+ * 空闲会话一律不算。各家的「时长」列对空闲连接说的都不是同一件事：MySQL 的
+ * PROCESSLIST.TIME 对 Sleep 会话是「已空闲多久」，PostgreSQL 的 now()-query_start 是
+ * 「距上一条语句开始多久」。把它们按「已运行多久」高亮成橙色，等于对着一批什么都没做的
+ * 连接池连接报警 —— 而连接池本来就该常驻若干条空闲连接。
+ */
 export function isLongRunning(session: DatabaseSession): boolean {
-  return (session.durationSeconds ?? 0) >= LONG_RUNNING_SECONDS;
+  return !isIdle(session) && (session.durationSeconds ?? 0) >= LONG_RUNNING_SECONDS;
+}
+
+/**
+ * 时长标签。空闲会话显式写成「空闲 N」，否则一个裸时长会被读成「跑了这么久」。
+ */
+export function sessionDurationLabel(session: DatabaseSession): string {
+  const duration = formatSessionDuration(session.durationSeconds);
+  if (duration === '—') return duration;
+  return isIdle(session) ? `空闲 ${duration}` : duration;
 }
 
 /** 空闲会话（没有正在执行的语句）排在后面，正在跑的先看。 */
@@ -74,5 +91,14 @@ export function sessionSummary(page: DatabaseSessionPage): string {
   if (!page.supported) return page.message || '当前数据库类型暂不支持查看活动会话';
   if (page.message) return page.message;
   const active = page.sessions.filter((session) => !isIdle(session)).length;
-  return `共 ${page.sessions.length} 个会话，其中 ${active} 个正在执行`;
+  const idle = page.sessions.length - active;
+  if (idle === 0) return `共 ${page.sessions.length} 个会话，全部正在执行`;
+  // 说清楚空闲的那些是什么，否则「怎么这么多会话」是每个人的第一反应 —— 而它们通常
+  // 只是其他客户端连接池里常驻的空闲连接。
+  return `共 ${page.sessions.length} 个会话：${active} 个正在执行，${idle} 个空闲（多为各客户端连接池常驻的连接）`;
+}
+
+/** 「只看执行中」时留下的会话。 */
+export function filterRunningSessions(sessions: DatabaseSession[], runningOnly: boolean): DatabaseSession[] {
+  return runningOnly ? sessions.filter((session) => !isIdle(session)) : sessions;
 }

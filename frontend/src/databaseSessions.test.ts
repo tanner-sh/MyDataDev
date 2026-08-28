@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   canKillSession,
+  filterRunningSessions,
   formatSessionDuration,
   isIdle,
   isLongRunning,
   LONG_RUNNING_SECONDS,
   orderSessions,
+  sessionDurationLabel,
   sessionLabel,
   sessionSummary,
   type DatabaseSession,
@@ -64,6 +66,30 @@ describe('isLongRunning', () => {
     expect(isLongRunning(session({ durationSeconds: LONG_RUNNING_SECONDS - 1 }))).toBe(false);
     expect(isLongRunning(session({ durationSeconds: null }))).toBe(false);
   });
+
+  it('空闲会话再久也不算长时间运行', () => {
+    // MySQL 的 PROCESSLIST.TIME 对 Sleep 会话是「已空闲多久」。按「已运行多久」高亮，
+    // 等于对着一批什么都没做的连接池连接报警。
+    expect(isLongRunning(session({ command: 'Sleep', sql: null, durationSeconds: 6_120 }))).toBe(false);
+    expect(isLongRunning(session({ sql: null, durationSeconds: 6_120 }))).toBe(false);
+  });
+});
+
+describe('sessionDurationLabel', () => {
+  it('空闲会话的时长写明是空闲，避免被读成「跑了这么久」', () => {
+    expect(sessionDurationLabel(session({ command: 'Sleep', sql: null, durationSeconds: 6_120 })))
+      .toBe('空闲 1 小时 42 分');
+    expect(sessionDurationLabel(session({ durationSeconds: 90 }))).toBe('1 分 30 秒');
+    expect(sessionDurationLabel(session({ durationSeconds: null }))).toBe('—');
+  });
+});
+
+describe('filterRunningSessions', () => {
+  it('只看执行中时滤掉空闲会话', () => {
+    const rows = [session(), session({ command: 'Sleep', sql: null })];
+    expect(filterRunningSessions(rows, true)).toHaveLength(1);
+    expect(filterRunningSessions(rows, false)).toHaveLength(2);
+  });
 });
 
 describe('sessionLabel', () => {
@@ -89,6 +115,8 @@ describe('sessionSummary', () => {
     expect(sessionSummary(page({ supported: false, message: '暂不支持' }))).toBe('暂不支持');
     expect(sessionSummary(page({ message: '权限不足' }))).toBe('权限不足');
     expect(sessionSummary(page({ sessions: [session(), session({ command: 'Sleep' })] })))
-      .toBe('共 2 个会话，其中 1 个正在执行');
+      .toBe('共 2 个会话：1 个正在执行，1 个空闲（多为各客户端连接池常驻的连接）');
+    expect(sessionSummary(page({ sessions: [session(), session()] })))
+      .toBe('共 2 个会话，全部正在执行');
   });
 });
