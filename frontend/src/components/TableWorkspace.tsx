@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { DRAWER_WIDTH } from '../constants';
 import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Tooltip, Typography, Upload } from 'antd';
 import type { MenuProps } from 'antd';
 import {
@@ -273,7 +274,7 @@ export const TableWorkspace = memo(function TableWorkspace({
       <Drawer
         title="变更语句预览"
         placement="bottom"
-        size={260}
+        size={DRAWER_WIDTH.form}
         open={previewOpen}
         getContainer={false}
         rootClassName="workspace-bottom-drawer"

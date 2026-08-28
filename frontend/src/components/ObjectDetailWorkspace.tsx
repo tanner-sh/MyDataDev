@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import { PanelEmpty, PanelLoading } from './PanelState';
+import { Alert, Button, Dropdown, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
@@ -161,10 +162,10 @@ export function ObjectDetailWorkspace({
                 action={<Button size="small" onClick={onReloadDetail}>重试</Button>}
               />
             ) : (
-              <Empty className="empty-state" description="对象定义尚未加载。" />
+              <PanelEmpty title="对象定义尚未加载" />
             )}
           </div>
-        ) : <Empty className="empty-state" description="点击左侧对象查看详情。" />
+        ) : <PanelEmpty title="点击左侧对象查看详情" fill />
       ) : (
         <div className="object-detail-content">
           <ObjectSummary connectionId={connectionId} detail={detail} />
@@ -423,7 +424,7 @@ function RelationsPanel({ connectionId, detail, active, onOpenRelation }: {
   }, [active, connectionId, detail, relations]);
 
   if (error) return <Alert type="error" showIcon title="关系加载失败" description={error} />;
-  if (!relations) return <Empty className="empty-state" description="正在加载关系..." />;
+  if (!relations) return <PanelLoading text="正在加载对象关系…" compact />;
   return (
     <div className="object-tab-scroll relations-panel">
       <RelationCards title="引用的对象" rows={relations.importedKeys} direction="imported" onOpen={onOpenRelation} />

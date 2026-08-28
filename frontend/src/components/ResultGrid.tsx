@@ -1,6 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PanelEmpty, PanelLoading } from './PanelState';
 import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
-import { Button, Dropdown, Empty, Input, InputNumber, Modal, Segmented, Select, Space, Spin, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Button, Dropdown, Input, InputNumber, Modal, Segmented, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, QuestionCircleOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
@@ -84,7 +85,6 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const [view, setView] = useState<'table' | 'chart'>('table');
-  const emptyClassName = fill ? 'empty-state empty-state-fill' : 'empty-state';
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
   const columnSignature = result?.resultSet ? result.columns.map((column) => `${column.key}:${column.label}:${column.typeName}`).join('|') : '';
@@ -560,8 +560,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   copySelectedRowsRef.current = copySelectedRows;
   const requestCopySelectedRows = useCallback(() => copySelectedRowsRef.current(), []);
 
-  if (!result) return <Empty className={emptyClassName} description="执行查询后查看结果。" />;
-  if (!result.resultSet) return <Empty className={emptyClassName} description={`影响 ${result.affectedRows} 行。`} />;
+  if (!result) return <PanelEmpty title="执行查询后查看结果" fill={fill} />;
+  if (!result.resultSet) return <PanelEmpty title={`影响 ${result.affectedRows} 行`} fill={fill} />;
 
   return (
     <div
@@ -678,11 +678,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       </div>
       <div ref={viewportRef} className="data-grid-viewport">
         {view === 'chart' ? (
-          <Suspense fallback={<div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在加载图表…</Text></div>}>
+          <Suspense fallback={<PanelLoading compact text="正在加载图表…" />}>
             <ResultChart columns={result.columns} rows={chartRows} />
           </Suspense>
         ) : scrollY === undefined ? (
-          <div className="table-viewport-loading"><Spin size="small" /><Text type="secondary">正在准备查询结果…</Text></div>
+          <PanelLoading compact text="正在准备查询结果…" />
         ) : (
           <MemoizedResultTable
             tableRef={tableRef}
@@ -701,9 +701,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         <div className="result-pagination-main">
           {result.page ? (
             <>
+              {/*
+                没有筛选时不再重复行数：结果标题栏已经写了「N 行 · Nms」，分页栏右侧也有
+                范围指示，同一个数字在一屏里出现三次只是噪音。筛选之后两个数字不同了，
+                才有必要说清楚「筛掉后剩多少 / 本批共多少」。
+              */}
               <Text type="secondary" className="grid-pagination-summary">
-                {rows.length === rowCount ? `本批 ${rowCount} 行` : `筛选后 ${rows.length} / 本批 ${rowCount} 行`}
-                {result.page.effectivePageSize < result.page.requestedPageSize ? ` · 服务端单批上限 ${result.page.effectivePageSize}` : ''}
+                {rows.length === rowCount ? '' : `筛选后 ${rows.length} / 本批 ${rowCount} 行`}
+                {result.page.effectivePageSize < result.page.requestedPageSize ? `${rows.length === rowCount ? '' : ' · '}服务端单批上限 ${result.page.effectivePageSize}` : ''}
               </Text>
               <div className="result-pagination-actions">
                 <Space size={4} className="result-range-navigation">

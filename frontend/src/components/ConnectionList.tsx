@@ -1,4 +1,5 @@
-import { Alert, Button, Card, Dropdown, Empty, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Card, Dropdown, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { PanelEmpty, PanelLoading } from './PanelState';
 import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useMemo, useState } from 'react';
@@ -60,10 +61,10 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
     return <Alert type="warning" showIcon title={connectionsError} />;
   }
   if (!connectionsReady) {
-    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="正在准备连接列表" /></Card>;
+    return <Card size="small"><PanelLoading text="正在准备连接列表…" /></Card>;
   }
   if (connections.length === 0) {
-    return <Card size="small"><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无数据库连接" /></Card>;
+    return <Card size="small"><PanelEmpty title="暂无数据库连接" description="点击右上角「新建连接」添加第一个。" /></Card>;
   }
   return (
     <Space orientation="vertical" size={8} className="full-width">
@@ -154,7 +155,10 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                 <Tooltip title={selectedId === connection.id ? '已是当前连接' : '切换使用'}>
                   <Button
                     size="small"
-                    type="primary"
+                    // 不用 primary：一屏 5 条连接就是 5 个同等权重的蓝色实心按钮，加上右上角
+                    // 的「新建连接」，主色被摊薄到没有主次。真正的主操作只有「新建连接」一个。
+                    type="text"
+                    className="connection-switch-action"
                     icon={<SwapOutlined />}
                     disabled={selectedId === connection.id}
                     aria-label={selectedId === connection.id ? `${connection.name} 已是当前连接` : `切换使用 ${connection.name}`}
@@ -173,7 +177,9 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                   )}
                 >
                   <Tooltip title="更多连接操作">
-                    <Button size="small" icon={<MoreOutlined />} aria-label={`${connection.name} 更多连接操作`} />
+                    {/* 与相邻的「切换」保持同一种呈现：一个无边框、一个带边框时，两个并排的
+                        图标按钮视觉重量不对等，比统一成实心按钮时还乱。 */}
+                    <Button size="small" type="text" className="connection-switch-action" icon={<MoreOutlined />} aria-label={`${connection.name} 更多连接操作`} />
                   </Tooltip>
                 </Dropdown>
               </Space>
@@ -182,7 +188,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
             ))}
           </section>
         ))}
-        {visibleConnections.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的数据库连接" />}
+        {visibleConnections.length === 0 && <PanelEmpty title="没有匹配的数据库连接" description="换个关键字，或清空环境与类型筛选。" />}
       </div>
       <Modal
         open={pendingDelete !== null}

@@ -1,4 +1,6 @@
 import Editor from './SqlEditor';
+import { DRAWER_WIDTH } from '../constants';
+import { PanelEmpty } from './PanelState';
 import {
   ApiOutlined,
   CodeOutlined,
@@ -476,7 +478,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       {modalContextHolder}
       <Drawer
         open
-        size="large"
+        size={DRAWER_WIDTH.workspace}
         title={<Space><SchemaObjectIcon kind={kind!} /><span>{creation ? `新建${schemaObjectKindLabel(kind!)}` : object?.displayName}</span>{object?.status && <Tag>{schemaObjectDisplayStatus(object.status)}</Tag>}</Space>}
         extra={(
           <Space>
@@ -595,7 +597,7 @@ function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
       {response.results.map((item, index) => item.kind === 'RESULT_SET'
         ? <div className="routine-result-set" key={index}><Title level={5}>结果集 {index + 1}</Title><ResultGrid result={item.result || null} pagingEnabled={false} /></div>
         : <Alert key={index} type="info" message={`更新计数：${item.updateCount ?? 0}`} />)}
-      {response.results.length === 0 && response.returnValue === undefined && response.outParameters.length === 0 && <Empty description="调用没有返回结果" />}
+      {response.results.length === 0 && response.returnValue === undefined && response.outParameters.length === 0 && <PanelEmpty title="调用没有返回结果" compact />}
     </div>
   );
 }

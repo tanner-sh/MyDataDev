@@ -1,22 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  Button,
-  Divider,
-  Empty,
-  Form,
-  Input,
-  List,
-  Progress,
-  Select,
-  Space,
-  Spin,
-  Steps,
-  Tag,
-  Typography,
-  Upload,
-  message
-} from 'antd';
+import { PanelEmpty } from './PanelState';
+import { Alert, Button, Divider, Form, Input, List, Progress, Select, Space, Spin, Steps, Tag, Typography, Upload, message } from 'antd';
 import { CloudUploadOutlined, PauseCircleOutlined, ReloadOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import type { UploadFile } from 'antd';
 import { api, uploadBinary } from '../api';
@@ -296,7 +280,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
 
       <Divider titlePlacement="start">恢复记录</Divider>
       <Spin spinning={jobsLoading}>
-        {jobs.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无恢复记录" /> : <List dataSource={jobs} renderItem={(job) => {
+        {jobs.length === 0 ? <PanelEmpty fill title="暂无恢复记录" description="从备份历史或本地文件发起恢复后，任务会出现在这里。" /> : <List dataSource={jobs} renderItem={(job) => {
           const total = job.progressTotal || 0;
           const percent = total > 0 ? Math.min(100, Math.round(((job.progressCurrent || 0) / total) * 100)) : 0;
           const active = ['QUEUED', 'RUNNING'].includes(job.status);

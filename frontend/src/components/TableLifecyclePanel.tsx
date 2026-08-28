@@ -1,4 +1,5 @@
 import { Alert, Button, Drawer, Input, Modal, Select, Space, Typography } from 'antd';
+import { DRAWER_WIDTH } from '../constants';
 import { EyeOutlined, SwapOutlined } from '@ant-design/icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
@@ -232,7 +233,7 @@ export function TableLifecyclePanel({
       {modalContextHolder}
       <Drawer
         title="新建表"
-        size={960}
+        size={DRAWER_WIDTH.workspace}
         open={createOpen}
         rootClassName="management-drawer table-create-drawer"
         mask={{ closable: !createSubmitting }}

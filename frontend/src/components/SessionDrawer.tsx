@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { DRAWER_WIDTH } from '../constants';
 import { Alert, Button, Drawer, Empty, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
 import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { api } from '../api';
@@ -95,7 +96,7 @@ export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, c
   return (
     <Drawer
       title={connectionName ? `活动会话 · ${connectionName}` : '活动会话'}
-      size={720}
+      size={DRAWER_WIDTH.browse}
       open={open}
       rootClassName="management-drawer"
       extra={

@@ -1,27 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Collapse,
-  Divider,
-  Dropdown,
-  Empty,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Pagination,
-  Popconfirm,
-  Select,
-  Space,
-  Spin,
-  Tag,
-  Tabs,
-  Tooltip,
-  Typography,
-  message
-} from 'antd';
+import { PanelEmpty } from './PanelState';
+import { Alert, Button, Checkbox, Collapse, Divider, Dropdown, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Tag, Tabs, Tooltip, Typography, message } from 'antd';
 import {
   CheckCircleOutlined,
   DeleteOutlined,
@@ -623,7 +602,12 @@ function BackupTasksPanel({
         <Tag>{selected ? selected.name : '未选择连接'}</Tag>
       </div>
       <Space orientation="vertical" size={10} className="full-width">
-        <Space.Compact block>
+        {/*
+          不再用 block：Space.Compact 的 block 会把两个按钮拉满整行，于是「备份当前表」在
+          禁用时变成一条近千像素的灰条 —— 一个不可点的控件拿到了整屏最大的视觉重量。
+          按钮就该是按钮的宽度。
+        */}
+        <Space.Compact>
           <Button size="small" icon={<PlusOutlined />} aria-label="新建数据库备份任务" disabled={!selected || loading} onClick={openDatabaseTask}>新建任务</Button>
           <Tooltip title={currentTableBackupDisabledReason}>
             <span className="backup-disabled-action-wrap">
@@ -631,7 +615,7 @@ function BackupTasksPanel({
             </span>
           </Tooltip>
         </Space.Compact>
-        {backups.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份任务，点击上方按钮创建' : '请选择连接'} /> : (
+        {backups.length === 0 ? <PanelEmpty fill title={selected ? '暂无备份任务' : '请先选择一个数据库连接'} description={selected ? '点击上方「新建任务」创建第一个备份计划。' : undefined} /> : (
           <div className="backup-task-list">
           {visibleBackups.map((backup) => {
             const configuredStorage = backup.storageProfileId ? storageProfiles.find((profile) => profile.id === backup.storageProfileId) : null;
@@ -991,7 +975,7 @@ function BackupTasksPanel({
         }}
       >
         <Spin spinning={historyLoading}>
-          {histories.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无执行历史" /> : (
+          {histories.length === 0 ? <PanelEmpty fill title="暂无执行历史" description="备份任务运行后，每次执行的结果会出现在这里。" /> : (
             <div className="backup-history-list">
               {histories.map((history) => (
                 <article className="backup-history-item" key={history.id}>

@@ -77,6 +77,8 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 
 `src/App.tsx`（约 2700 行）是唯一的状态容器：连接选择、SQL 标签页、表格工作区、后台任务轮询、生产确认弹窗都在这里。所有重型面板（`SqlWorkspace`、`ObjectDetailWorkspace`、`BackupPanel`、`McpSettingsPanel` 等）通过 `React.lazy` 懒加载 —— 这是构建体积预算能通过的前提。
 
+样式走 `src/styles.css` 顶部的令牌：间距 `--space-*`、圆角 `--radius-*`、字号 `--text-*`。**`App.tsx` 里 `ConfigProvider` 的 `borderRadius` / `fontSize` 必须和 `--radius-md` / `--text-md` 保持同值**——两套尺度一旦分叉，就会退回到用 `!important` 互相覆盖。字号下限是 11px（`--text-xs`），中文在更小的字号下笔画会糊。抽屉宽度只有 `DRAWER_WIDTH` 的三档，不要再现拍新值。空状态与加载态一律用 `components/PanelState.tsx` 的 `PanelEmpty` / `PanelLoading`，不要各自再写一套骨架。
+
 有状态但与界面无关的子系统抽成 `src/hooks/` 下的自定义 hook（`useBackgroundTasks`、`useSqlHistory`、`useVisiblePolling`、`useLayoutPreferences`），hook 内部依赖的纯逻辑再落到 `src/` 下的同名模块（`backgroundTaskStream.ts`、`sqlHistoryQuery.ts`）。新增「一组状态 + 一条取数路径」时优先走这条路，而不是继续往 `App.tsx` 里加 `useState`。
 
 **测试约定：纯逻辑从组件里抽出来，放在 `src/` 下的独立模块，每个模块配一个同名 `.test.ts`**（`sqlCompletion.ts`/`sqlCompletion.test.ts`、`resultGridData.ts`、`productionConfirmation.ts`、`tableLifecycle.ts` …）。仓库里没有组件渲染测试。新增行为时，先想清楚哪部分能抽成纯函数放进这类模块并补测试，而不是把逻辑埋进 `.tsx`。

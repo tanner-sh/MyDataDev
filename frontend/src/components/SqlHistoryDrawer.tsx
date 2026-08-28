@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { DRAWER_WIDTH } from '../constants';
 import { Button, Drawer, Empty, Input, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DownOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import type { SqlHistory } from '../types';
@@ -63,7 +64,7 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
   }
 
   return (
-    <Drawer title="SQL 执行历史" size={520} open={open} onClose={onClose}>
+    <Drawer title="SQL 执行历史" size={DRAWER_WIDTH.form} open={open} onClose={onClose}>
       <Input.Search
         allowClear
         className="history-search"

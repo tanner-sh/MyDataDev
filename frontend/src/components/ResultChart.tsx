@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Empty, Segmented, Select, Space, Typography } from 'antd';
+import { PanelEmpty } from './PanelState';
+import { Alert, Segmented, Select, Space, Typography } from 'antd';
 import {
   buildChartModel,
   chartableColumns,
@@ -93,7 +94,7 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
   );
 
   if (!config || !model) {
-    return <Empty description="当前结果没有可用于绘图的数值列" />;
+    return <PanelEmpty title="当前结果没有可用于绘图的列" description="图表至少需要一列能解析成数值的列。" />;
   }
 
   return (
@@ -133,7 +134,7 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
       ))}
 
       {model.series.length === 0 || model.categories.length === 0 ? (
-        <Empty description="没有可绘制的数据" />
+        <PanelEmpty title="没有可绘制的数据" />
       ) : (
         <div className="result-chart-plot" ref={plotRef}>
           {model.type === 'pie'
@@ -331,7 +332,7 @@ function PieChart({ model, width, height, hover, onHover }: {
   const radius = Math.min(height, width) / 2 - 24;
   const centerX = width / 2;
   const centerY = height / 2;
-  if (total <= 0) return <Empty description="所选列的合计为 0，无法绘制饼图" />;
+  if (total <= 0) return <PanelEmpty title="所选列的合计为 0，无法绘制饼图" />;
 
   let angle = -Math.PI / 2;
   return (

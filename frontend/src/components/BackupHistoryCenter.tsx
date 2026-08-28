@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Button, Empty, List, Pagination, Space, Spin, Tag, Typography, message } from 'antd';
+import { PanelEmpty } from './PanelState';
+import { Button, List, Pagination, Space, Spin, Tag, Typography, message } from 'antd';
 import { DownloadOutlined, RedoOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, downloadFromUrl } from '../api';
 import { API } from '../constants';
@@ -55,7 +56,7 @@ export function BackupHistoryCenter({ selected, onRestore }: { selected: Connect
   return <div className="backup-history-center">
     {holder}
     <Spin spinning={loading}>
-      {rows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={selected ? '暂无备份历史' : '请选择连接'} /> : <List dataSource={rows} renderItem={(history) => {
+      {rows.length === 0 ? <PanelEmpty fill title={selected ? '暂无备份历史' : '请先选择一个数据库连接'} /> : <List dataSource={rows} renderItem={(history) => {
         const fileAvailable = history.fileAvailable ?? Boolean(history.filePath);
         const restorable = history.status === 'SUCCESS' && fileAvailable;
         return <List.Item actions={[

@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Descriptions, Drawer, Empty, Input, Progress, Select, Space, Spin, Tag, Typography, Upload, message } from 'antd';
+import { DRAWER_WIDTH } from '../constants';
+import { PanelEmpty } from './PanelState';
+import { Alert, Button, Descriptions, Drawer, Input, Progress, Select, Space, Spin, Tag, Typography, Upload, message } from 'antd';
 import { CloudUploadOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, uploadBinary } from '../api';
 import type { Connection, SqlFileCandidate, SqlFileExecution, SqlFileExecutionPage } from '../types';
@@ -158,7 +160,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   }
 
   return (
-    <Drawer title="SQL 文件执行" size={760} open={open} onClose={onClose} rootClassName="management-drawer sql-file-execution-drawer">
+    <Drawer title="SQL 文件执行" size={DRAWER_WIDTH.browse} open={open} onClose={onClose} rootClassName="management-drawer sql-file-execution-drawer">
       {contextHolder}
       <div className="sql-file-upload-card">
         <Space orientation="vertical" size={10} className="full-width">
@@ -211,7 +213,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
       )}
 
       <div className="sql-file-job-list">
-        {loading ? <div className="sql-file-job-empty"><Spin /></div> : jobs.length === 0 ? <Empty description="暂无 SQL 文件任务" /> : jobs.map((job) => {
+        {loading ? <div className="sql-file-job-empty"><Spin /></div> : jobs.length === 0 ? <PanelEmpty title="暂无 SQL 文件任务" /> : jobs.map((job) => {
           const percent = sqlFileTaskPercent(job);
           return (
             <div key={job.id} className={`sql-file-job-item${job.id === focused?.id ? ' is-selected' : ''}`}

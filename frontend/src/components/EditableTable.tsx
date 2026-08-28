@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { PanelEmpty, PanelLoading } from './PanelState';
 import { isNumericColumnType, suggestedResultColumnWidth } from '../resultGridData';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { Button, Empty, Input, Spin, Table, Tooltip, Typography } from 'antd';
+import { Button, Input, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
@@ -158,13 +159,13 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
     lastScrolledDataRef.current = data;
   }, [data, scrollY]);
 
-  if (!data) return <Empty className="empty-state empty-state-fill" description="点击左侧对象树中的表来浏览数据。" />;
+  if (!data) return <PanelEmpty title="点击左侧对象树中的表来浏览数据" fill />;
 
   const scrollX = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160), 58);
   return (
     <div ref={viewportRef} className="editable-table-viewport">
       {scrollY === undefined ? (
-        <div className="table-viewport-loading"><Spin size="small" /><Typography.Text type="secondary">正在准备表格…</Typography.Text></div>
+        <PanelLoading compact text="正在准备表格…" />
       ) : (
         <Table<EditableDisplayRow>
           ref={tableRef}

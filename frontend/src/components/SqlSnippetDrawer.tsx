@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Drawer, Empty, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { api } from '../api';
-import { DB_TYPE_OPTIONS } from '../constants';
+import { DB_TYPE_OPTIONS, DRAWER_WIDTH } from '../constants';
 import { localizeError } from '../utils';
 import {
   EMPTY_SNIPPET_DRAFT,
@@ -133,7 +133,7 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
   return (
     <Drawer
       title="SQL 片段"
-      size={560}
+      size={DRAWER_WIDTH.browse}
       open={open}
       rootClassName="management-drawer"
       extra={

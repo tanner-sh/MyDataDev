@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PanelLoading } from './components/PanelState';
 import type * as Monaco from 'monaco-editor';
-import { Button, ConfigProvider, Drawer, Input, Modal, Space, Spin, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Space, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
 import { currentSqlPage } from './sqlResultPaging';
-import { API, DB_TYPE_OPTIONS } from './constants';
+import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
@@ -152,6 +153,8 @@ export default function App() {
   const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | 'sessions' | 'schema-diff' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
+  // 与 styles.css 里收起按钮文字的断点保持一致（--breakpoint-shell-compact）。
+  const [headerOverflow, setHeaderOverflow] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
@@ -229,7 +232,9 @@ export default function App() {
   const connectionFormDirty = isConnectionEditorDirty(connectionEditor);
   const antThemeConfig = useMemo(() => ({
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
-    token: { colorPrimary: '#2f74e8', borderRadius: 7, controlHeight: 34, fontSize: 13 }
+    // 这四个值必须和 styles.css 的令牌一致：borderRadius 对 --radius-md，fontSize 对
+    // --text-md。之前 antd 用 7、手写 CSS 用 6/8/9，两套尺度在同一个界面上打架。
+    token: { colorPrimary: '#2f74e8', borderRadius: 8, controlHeight: 34, fontSize: 13 }
   }), [layoutPreferences.themeMode]);
 
   useEffect(() => {
@@ -247,10 +252,17 @@ export default function App() {
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1199px)');
+    const compactMedia = window.matchMedia('(max-width: 1099px)');
+    const syncOverflow = () => setHeaderOverflow(compactMedia.matches);
+    syncOverflow();
+    compactMedia.addEventListener('change', syncOverflow);
     const syncLayout = () => setCompactLayout(media.matches);
     syncLayout();
     media.addEventListener('change', syncLayout);
-    return () => media.removeEventListener('change', syncLayout);
+    return () => {
+      compactMedia.removeEventListener('change', syncOverflow);
+      media.removeEventListener('change', syncLayout);
+    };
   }, []);
 
   useEffect(() => {
@@ -1236,7 +1248,9 @@ export default function App() {
         const truncated = data.results.some((item) => item.result?.truncated);
         const nextMessage = failed
           ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms`
-          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms`;
+          // 「含往返」是必要的：结果标题栏里的 ms 是单条语句的执行耗时，这里是整批的端到端
+          // 耗时，两个数字本来就不该相等，不说明就会被当成哪里算错了。
+          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms（含往返）`;
         updateActiveSqlTab({
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
@@ -2940,6 +2954,7 @@ export default function App() {
           backgroundTasks={backgroundTasks}
           explorerCollapsed={compactLayout ? !mobileExplorerOpen : layoutPreferences.explorerCollapsed}
           themeMode={layoutPreferences.themeMode}
+          overflowActions={headerOverflow}
           onToggleExplorer={toggleExplorerFromHeader}
           onSelectConnection={selectConnectionFromHeader}
           onRefreshConnections={refreshConnectionsFromHeader}
@@ -2971,7 +2986,7 @@ export default function App() {
           )}
 
           <main className="app-content">
-            <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载工作区…</div>}>
+            <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
             {mode === 'sql' && !selected ? (
               <div className="empty-state empty-state-fill">
                 <div className="empty-state-content">
@@ -3082,7 +3097,7 @@ export default function App() {
 
       <Drawer
         title={null}
-        size={380}
+        size={DRAWER_WIDTH.form}
         open={compactLayout && mobileExplorerOpen}
         closeIcon={null}
         rootClassName="mobile-explorer-drawer"
@@ -3093,7 +3108,7 @@ export default function App() {
 
       <Drawer
         title="连接管理"
-        size={480}
+        size={DRAWER_WIDTH.form}
         open={activeDrawer === 'connections' && connectionEditor.mode === 'closed'}
         rootClassName="management-drawer"
         extra={<Button type="primary" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>}
@@ -3101,7 +3116,7 @@ export default function App() {
       >
         <div className="connection-management-content">
           {activeDrawer === 'connections' && (
-            <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载连接管理…</div>}>
+            <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
               <ConnectionList
                 connections={connections}
                 favoriteConnectionIds={favoriteConnectionIds}
@@ -3137,7 +3152,7 @@ export default function App() {
         destroyOnHidden
       >
         {connectionEditor.mode !== 'closed' && (
-          <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载连接表单…</div>}>
+          <Suspense fallback={<PanelLoading text="正在加载连接表单…" />}>
             <ConnectionFormPanel
               form={connectionEditor.form}
               editing={connectionEditor.mode === 'edit'}
@@ -3154,14 +3169,14 @@ export default function App() {
 
       <Drawer
         title="备份与恢复"
-        size={960}
+        size={DRAWER_WIDTH.workspace}
         open={activeDrawer === 'backups'}
         rootClassName="management-drawer backup-management-drawer"
         onClose={() => setActiveDrawer(null)}
         destroyOnHidden
       >
         {activeDrawer === 'backups' && (
-          <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载备份管理…</div>}>
+          <Suspense fallback={<PanelLoading text="正在加载备份管理…" />}>
             <BackupPanel
               connections={connections}
               backups={backups}
@@ -3231,13 +3246,13 @@ export default function App() {
       )}
       <Drawer
         title="结构对比与同步"
-        size={960}
+        size={DRAWER_WIDTH.workspace}
         open={activeDrawer === 'schema-diff'}
         rootClassName="management-drawer"
         onClose={() => setActiveDrawer(null)}
         destroyOnHidden
       >
-        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载结构对比…</div>}>
+        <Suspense fallback={<PanelLoading text="正在加载结构对比…" />}>
           {activeDrawer === 'schema-diff' && (
             <SchemaDiffPanel
               connections={connections}
@@ -3249,13 +3264,13 @@ export default function App() {
       </Drawer>
       <Drawer
         title="MCP Server 设置"
-        size={960}
+        size={DRAWER_WIDTH.workspace}
         open={activeDrawer === 'mcp'}
         rootClassName="management-drawer mcp-management-drawer"
         onClose={() => setActiveDrawer(null)}
         destroyOnHidden
       >
-        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载 MCP 设置…</div>}>
+        <Suspense fallback={<PanelLoading text="正在加载 MCP 设置…" />}>
           {activeDrawer === 'mcp' && <McpSettingsPanel />}
         </Suspense>
       </Drawer>

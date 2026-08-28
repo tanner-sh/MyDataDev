@@ -24,6 +24,22 @@ export const ENVIRONMENT_OPTIONS = [
 
 export const PASSWORD_MASK = '******';
 
+/**
+ * 抽屉宽度只有三档。
+ *
+ * 之前是 260/380/480/520/560/720/760/960/"large" 九种，每加一个面板就现拍一个值；
+ * 同一种交互长出九种宽度，用户在面板之间切换时右侧边界一直在跳。
+ *
+ *   form      单栏表单、卡片列表
+ *   browse    记录浏览（历史、审计、会话、任务）
+ *   workspace 多区工作面板（备份、结构对比、MCP、对象管理）
+ */
+export const DRAWER_WIDTH = {
+  form: 480,
+  browse: 720,
+  workspace: 960
+} as const;
+
 export const SSH_AUTH_MODE_OPTIONS = [
   { value: 'PASSWORD', label: '口令' },
   { value: 'PRIVATE_KEY', label: '私钥' }

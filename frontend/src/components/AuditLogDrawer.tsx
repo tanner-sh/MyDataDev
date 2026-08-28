@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, DatePicker, Drawer, Empty, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { PanelEmpty } from './PanelState';
+import { DRAWER_WIDTH } from '../constants';
+import { Button, DatePicker, Drawer, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
 import type { AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
@@ -114,7 +116,7 @@ export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, 
   return (
     <Drawer
       title="审计日志"
-      size={720}
+      size={DRAWER_WIDTH.browse}
       open={open}
       rootClassName="management-drawer"
       extra={
@@ -190,7 +192,7 @@ export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, 
       {loading && items.length === 0 ? (
         <div className="audit-loading"><Spin size="small" /> <Text type="secondary">正在加载审计记录…</Text></div>
       ) : items.length === 0 ? (
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="没有匹配的审计记录" />
+        <PanelEmpty fill title="没有匹配的审计记录" description="换一个操作者、动作或时间范围再试。" />
       ) : (
         <div className="audit-list">
           {items.map((event) => {

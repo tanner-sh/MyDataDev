@@ -1,5 +1,6 @@
 import { memo, useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Empty, Form, Input, Select, Space, Spin, Table, Tag, Tooltip, Typography } from 'antd';
+import { PanelEmpty, PanelLoading } from './PanelState';
+import { Alert, Button, Checkbox, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DiffOutlined, ExportOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { localizeError } from '../utils';
@@ -142,7 +143,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
       </Form>
 
       {error && <Alert type="error" showIcon className="schema-diff-alert" message={error} />}
-      {loading && <div className="workspace-lazy-loading"><Spin /> 正在读取两侧结构…</div>}
+      {loading && <PanelLoading text="正在读取两侧结构…" />}
 
       {result && !loading && (
         <>
@@ -172,7 +173,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
             <Button icon={<CopyOutlined />} disabled={!script} onClick={copyScript}>复制脚本</Button>
           </Space>
           {visibleTables.length === 0 ? (
-            <Empty description={showIdentical ? '没有可对比的表' : '没有差异'} />
+            <PanelEmpty title={showIdentical ? '没有可对比的表' : '两侧结构没有差异'} />
           ) : (
             <Table<SchemaDiffTable>
               size="small"
