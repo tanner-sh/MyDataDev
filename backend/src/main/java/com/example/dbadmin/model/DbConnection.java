@@ -20,6 +20,8 @@ public record DbConnection(
         /** 每建立一条物理数据库会话时执行的语句，按分号分隔。 */
         String initSql,
         String description,
+        /** SSH 隧道配置；{@code null} 与 enabled=false 等价，都表示直连。 */
+        SshTunnelSettings sshTunnel,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -43,5 +45,36 @@ public record DbConnection(
     ) {
         this(id, name, dbType, jdbcUrl, username, encryptedPassword, environment, readonly,
                 null, null, null, null, null, createdAt, updatedAt);
+    }
+
+    /**
+     * 兼容没有 SSH 隧道字段的构造顺序。
+     *
+     * <p>理由同上：隧道是后加的，绝大多数调用方（尤其是测试）根本不关心它。</p>
+     */
+    public DbConnection(
+            long id,
+            String name,
+            String dbType,
+            String jdbcUrl,
+            String username,
+            String encryptedPassword,
+            String environment,
+            boolean readonly,
+            String groupName,
+            String tags,
+            String defaultSchema,
+            String initSql,
+            String description,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+        this(id, name, dbType, jdbcUrl, username, encryptedPassword, environment, readonly,
+                groupName, tags, defaultSchema, initSql, description, null, createdAt, updatedAt);
+    }
+
+    /** 隧道是否真的启用；未配置和显式关闭在调用方看来应当一样。 */
+    public boolean usesSshTunnel() {
+        return sshTunnel != null && sshTunnel.enabled();
     }
 }

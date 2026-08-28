@@ -4208,3 +4208,45 @@ body.is-resizing-column * {
   background: var(--ant-color-info, #1677ff);
   opacity: 0.55;
 }
+
+/* 结构对比：两端选择器并排，差异明细在展开行里 */
+.schema-diff-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.schema-diff-endpoints .ant-form-item {
+  margin-bottom: 0;
+}
+
+.schema-diff-connection {
+  min-width: 220px;
+}
+
+.schema-diff-alert,
+.schema-diff-actions {
+  width: 100%;
+}
+
+.schema-diff-warning {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.schema-diff-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.schema-diff-sql {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}

@@ -42,6 +42,7 @@ public class RemoteDataSourceRegistry {
     private final long idleTimeoutMs;
     private final long maxLifetimeMs;
     private final MeterRegistry meterRegistry;
+    private final SshTunnel.Timeouts sshTimeouts;
     private static final SqlScriptSplitter SPLITTER = new SqlScriptSplitter();
     private static final SqlStatementClassifier CLASSIFIER = new SqlStatementClassifier();
 
@@ -52,6 +53,7 @@ public class RemoteDataSourceRegistry {
         this.idleTimeoutMs = IDLE_TIMEOUT_MS;
         this.maxLifetimeMs = MAX_LIFETIME_MS;
         this.meterRegistry = null;
+        this.sshTimeouts = SshTunnel.Timeouts.DEFAULTS;
     }
 
     @Autowired
@@ -62,52 +64,129 @@ public class RemoteDataSourceRegistry {
         this.idleTimeoutMs = Math.max(10_000, properties.getRemotePool().getIdleTimeoutMs());
         this.maxLifetimeMs = Math.max(30_000, properties.getRemotePool().getMaxLifetimeMs());
         this.meterRegistry = meterRegistry.getIfAvailable();
+        this.sshTimeouts = new SshTunnel.Timeouts(
+                java.time.Duration.ofSeconds(Math.max(1, properties.getSsh().getConnectTimeoutSeconds())),
+                java.time.Duration.ofSeconds(Math.max(1, properties.getSsh().getAuthTimeoutSeconds())),
+                java.time.Duration.ofSeconds(Math.max(5, properties.getSsh().getHeartbeatSeconds())));
     }
 
     public Connection open(DbConnection connection, String password) throws Exception {
-        HikariDataSource dataSource;
-        synchronized (pools) {
-            String fingerprint = fingerprint(connection, password);
-            PoolEntry existing = pools.get(connection.id());
-            if (existing != null && !existing.fingerprint().equals(fingerprint)) {
-                pools.remove(connection.id());
-                existing.dataSource().close();
-                existing = null;
-            }
-            if (existing == null) {
-                makeRoom();
-                existing = new PoolEntry(
-                        create(connection.jdbcUrl(), connection.username(), password, connection.readonly(),
-                                "remote-" + connection.id(), false, initStatements(connection)),
-                        fingerprint,
-                        System.nanoTime(),
-                        1
-                );
-            } else {
-                existing = new PoolEntry(
-                        existing.dataSource(), existing.fingerprint(), System.nanoTime(), existing.pendingBorrows() + 1
-                );
-            }
-            pools.put(connection.id(), existing);
-            dataSource = existing.dataSource();
-        }
+        return open(connection, password, null);
+    }
+
+    /**
+     * 按连接配置借出一条连接，必要时先建好 SSH 隧道。
+     *
+     * @param ssh 已解密的隧道参数；{@code null} 表示直连
+     */
+    public Connection open(DbConnection connection, String password, SshTunnelSpec ssh) throws Exception {
+        String fingerprint = fingerprint(connection, password, ssh);
+        HikariDataSource dataSource = borrow(connection.id(), fingerprint);
+        // 建池要握手 SSH，可能耗到超时上限，所以放在注册表锁外面：一条连不上的跳板机不该
+        // 让其他连接的借还全部排队。代价是可能有两个线程同时建池，由 install 收拾多余的那个。
+        if (dataSource == null) dataSource = install(connection.id(), createEntry(connection, password, ssh, fingerprint));
         try {
             return dataSource.getConnection();
         } finally {
-            synchronized (pools) {
-                PoolEntry current = pools.get(connection.id());
-                if (current != null && current.dataSource() == dataSource && current.pendingBorrows() > 0) {
-                    pools.put(connection.id(), new PoolEntry(
-                            current.dataSource(), current.fingerprint(), current.lastAccessNanos(), current.pendingBorrows() - 1
-                    ));
+            release(connection.id(), dataSource);
+        }
+    }
+
+    private HikariDataSource borrow(long connectionId, String fingerprint) {
+        PoolEntry stale = null;
+        HikariDataSource dataSource = null;
+        synchronized (pools) {
+            PoolEntry existing = pools.get(connectionId);
+            // 隧道断了池里的连接就全废了，和配置变更一样要重建。
+            if (existing != null && (!existing.fingerprint().equals(fingerprint) || !existing.tunnelAlive())) {
+                pools.remove(connectionId);
+                stale = existing;
+                existing = null;
+            }
+            if (existing != null) {
+                pools.put(connectionId, existing.borrowed());
+                dataSource = existing.dataSource();
+            }
+        }
+        if (stale != null) stale.close();
+        return dataSource;
+    }
+
+    private PoolEntry createEntry(DbConnection connection, String password, SshTunnelSpec ssh, String fingerprint) throws Exception {
+        SshTunnel tunnel = null;
+        String jdbcUrl = connection.jdbcUrl();
+        if (ssh != null) {
+            JdbcEndpoints.Endpoint endpoint = JdbcEndpoints.locate(jdbcUrl);
+            tunnel = SshTunnel.open(ssh, endpoint.host(), endpoint.port(), sshTimeouts);
+            jdbcUrl = JdbcEndpoints.rewrite(connection.jdbcUrl(), tunnel.localHost(), tunnel.localPort());
+        }
+        try {
+            HikariDataSource dataSource = create(jdbcUrl, connection.username(), password, connection.readonly(),
+                    "remote-" + connection.id(), false, initStatements(connection));
+            return new PoolEntry(dataSource, tunnel, fingerprint, System.nanoTime(), 1);
+        } catch (RuntimeException error) {
+            if (tunnel != null) tunnel.close();
+            throw error;
+        }
+    }
+
+    private HikariDataSource install(long connectionId, PoolEntry created) {
+        PoolEntry stale = null;
+        PoolEntry redundant = null;
+        RuntimeException failure = null;
+        HikariDataSource dataSource;
+        synchronized (pools) {
+            PoolEntry existing = pools.get(connectionId);
+            if (existing != null && existing.fingerprint().equals(created.fingerprint()) && existing.tunnelAlive()) {
+                pools.put(connectionId, existing.borrowed());
+                dataSource = existing.dataSource();
+                redundant = created;
+            } else {
+                if (existing != null) {
+                    pools.remove(connectionId);
+                    stale = existing;
                 }
+                try {
+                    makeRoom();
+                    pools.put(connectionId, created);
+                    dataSource = created.dataSource();
+                } catch (RuntimeException error) {
+                    failure = error;
+                    redundant = created;
+                    dataSource = null;
+                }
+            }
+        }
+        if (stale != null) stale.close();
+        if (redundant != null) redundant.close();
+        if (failure != null) throw failure;
+        return dataSource;
+    }
+
+    private void release(long connectionId, HikariDataSource dataSource) {
+        synchronized (pools) {
+            PoolEntry current = pools.get(connectionId);
+            if (current != null && current.dataSource() == dataSource && current.pendingBorrows() > 0) {
+                pools.put(connectionId, current.returned());
             }
         }
     }
 
     public void test(String jdbcUrl, String username, String password) throws Exception {
+        test(jdbcUrl, username, password, null);
+    }
+
+    /** 测试连接：配了隧道就连隧道测，否则「测试通过但保存后连不上」会让人无从下手。 */
+    public void test(String jdbcUrl, String username, String password, SshTunnelSpec ssh) throws Exception {
+        SshTunnel tunnel = null;
         try {
-            try (HikariDataSource dataSource = create(jdbcUrl, username, password, false, "connection-test", true);
+            String effectiveUrl = jdbcUrl;
+            if (ssh != null) {
+                JdbcEndpoints.Endpoint endpoint = JdbcEndpoints.locate(jdbcUrl);
+                tunnel = SshTunnel.open(ssh, endpoint.host(), endpoint.port(), sshTimeouts);
+                effectiveUrl = JdbcEndpoints.rewrite(jdbcUrl, tunnel.localHost(), tunnel.localPort());
+            }
+            try (HikariDataSource dataSource = create(effectiveUrl, username, password, false, "connection-test", true);
                  Connection ignored = dataSource.getConnection()) {
                 // Obtaining a connection is the test.
             }
@@ -118,6 +197,8 @@ public class RemoteDataSourceRegistry {
             SQLException jdbcError = findSqlException(error);
             if (jdbcError != null) throw jdbcError;
             throw error;
+        } finally {
+            if (tunnel != null) tunnel.close();
         }
     }
 
@@ -126,7 +207,7 @@ public class RemoteDataSourceRegistry {
         synchronized (pools) {
             removed = pools.remove(connectionId);
         }
-        if (removed != null) removed.dataSource().close();
+        if (removed != null) removed.close();
     }
 
     int size() {
@@ -142,7 +223,7 @@ public class RemoteDataSourceRegistry {
             entries = pools.values().toArray(PoolEntry[]::new);
             pools.clear();
         }
-        for (PoolEntry entry : entries) entry.dataSource().close();
+        for (PoolEntry entry : entries) entry.close();
     }
 
     private void makeRoom() {
@@ -160,7 +241,7 @@ public class RemoteDataSourceRegistry {
                         "同时活跃的数据库连接已达到上限（" + maxPools + " 个），请等待正在执行的操作完成后重试。"
                 ));
         pools.remove(idle.getKey());
-        idle.getValue().dataSource().close();
+        idle.getValue().close();
     }
 
     private HikariDataSource create(String jdbcUrl, String username, String password, boolean readonly, String poolName, boolean failFast) {
@@ -213,6 +294,10 @@ public class RemoteDataSourceRegistry {
     }
 
     String fingerprint(DbConnection connection, String password) {
+        return fingerprint(connection, password, null);
+    }
+
+    String fingerprint(DbConnection connection, String password, SshTunnelSpec ssh) {
         try {
             StringBuilder value = new StringBuilder();
             appendFingerprintValue(value, connection.jdbcUrl());
@@ -221,6 +306,8 @@ public class RemoteDataSourceRegistry {
             appendFingerprintValue(value, Boolean.toString(connection.readonly()));
             // 初始化 SQL 改了必须重建池：已有物理连接上跑的是旧语句。
             appendFingerprintValue(value, connection.initSql());
+            // 隧道参数改了也要重建池：池里的连接连的是上一条隧道的本地端口。
+            appendFingerprintValue(value, ssh == null ? null : ssh.fingerprintMaterial());
             return Base64.getEncoder().encodeToString(MessageDigest.getInstance("SHA-256").digest(value.toString().getBytes(StandardCharsets.UTF_8)));
         } catch (Exception error) {
             throw new IllegalStateException("无法生成远程连接池标识", error);
@@ -316,6 +403,31 @@ public class RemoteDataSourceRegistry {
         }
     }
 
-    private record PoolEntry(HikariDataSource dataSource, String fingerprint, long lastAccessNanos, int pendingBorrows) {
+    /**
+     * 一个远程连接池，外加它依赖的 SSH 隧道。
+     *
+     * <p>两者生命周期必须绑在一起：隧道先关，池里的连接会在下一次使用时才发现自己断了。</p>
+     */
+    private record PoolEntry(HikariDataSource dataSource, SshTunnel tunnel, String fingerprint,
+                             long lastAccessNanos, int pendingBorrows) {
+        PoolEntry borrowed() {
+            return new PoolEntry(dataSource, tunnel, fingerprint, System.nanoTime(), pendingBorrows + 1);
+        }
+
+        PoolEntry returned() {
+            return new PoolEntry(dataSource, tunnel, fingerprint, lastAccessNanos, Math.max(0, pendingBorrows - 1));
+        }
+
+        boolean tunnelAlive() {
+            return tunnel == null || tunnel.isOpen();
+        }
+
+        void close() {
+            try {
+                dataSource.close();
+            } finally {
+                if (tunnel != null) tunnel.close();
+            }
+        }
     }
 }

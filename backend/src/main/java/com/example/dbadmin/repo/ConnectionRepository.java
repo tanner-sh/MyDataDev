@@ -1,6 +1,7 @@
 package com.example.dbadmin.repo;
 
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.model.SshTunnelSettings;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -32,6 +33,7 @@ public class ConnectionRepository {
             rs.getString("default_schema"),
             rs.getString("init_sql"),
             rs.getString("description"),
+            toSshTunnel(rs),
             toInstant(rs.getTimestamp("created_at")),
             toInstant(rs.getTimestamp("updated_at"))
     );
@@ -54,8 +56,11 @@ public class ConnectionRepository {
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement("""
                     INSERT INTO db_connection(name, db_type, jdbc_url, username, encrypted_password, environment, readonly,
-                                              group_name, tags, default_schema, init_sql, description)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                              group_name, tags, default_schema, init_sql, description,
+                                              ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_mode,
+                                              ssh_encrypted_password, ssh_encrypted_private_key, ssh_encrypted_passphrase,
+                                              ssh_server_fingerprint, ssh_skip_host_key_check)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, c.name());
             ps.setString(2, c.dbType());
@@ -69,6 +74,17 @@ public class ConnectionRepository {
             ps.setString(10, c.defaultSchema());
             ps.setString(11, c.initSql());
             ps.setString(12, c.description());
+            SshTunnelSettings ssh = tunnelOf(c);
+            ps.setBoolean(13, ssh.enabled());
+            ps.setString(14, ssh.host());
+            ps.setInt(15, ssh.port());
+            ps.setString(16, ssh.username());
+            ps.setString(17, ssh.authMode());
+            ps.setString(18, ssh.encryptedPassword());
+            ps.setString(19, ssh.encryptedPrivateKey());
+            ps.setString(20, ssh.encryptedPassphrase());
+            ps.setString(21, ssh.serverFingerprint());
+            ps.setBoolean(22, ssh.skipHostKeyCheck());
             return ps;
         }, keys);
         if (keys.getKeys() != null && keys.getKeys().get("id") instanceof Number id) {
@@ -79,13 +95,20 @@ public class ConnectionRepository {
     }
 
     public void update(long id, DbConnection c) {
+        SshTunnelSettings ssh = tunnelOf(c);
         jdbc.update("""
                 UPDATE db_connection
                 SET name = ?, db_type = ?, jdbc_url = ?, username = ?, encrypted_password = ?, environment = ?, readonly = ?,
-                    group_name = ?, tags = ?, default_schema = ?, init_sql = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+                    group_name = ?, tags = ?, default_schema = ?, init_sql = ?, description = ?,
+                    ssh_enabled = ?, ssh_host = ?, ssh_port = ?, ssh_username = ?, ssh_auth_mode = ?,
+                    ssh_encrypted_password = ?, ssh_encrypted_private_key = ?, ssh_encrypted_passphrase = ?,
+                    ssh_server_fingerprint = ?, ssh_skip_host_key_check = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """, c.name(), c.dbType(), c.jdbcUrl(), c.username(), c.encryptedPassword(), c.environment(), c.readonly(),
-                c.groupName(), c.tags(), c.defaultSchema(), c.initSql(), c.description(), id);
+                c.groupName(), c.tags(), c.defaultSchema(), c.initSql(), c.description(),
+                ssh.enabled(), ssh.host(), ssh.port(), ssh.username(), ssh.authMode(),
+                ssh.encryptedPassword(), ssh.encryptedPrivateKey(), ssh.encryptedPassphrase(),
+                ssh.serverFingerprint(), ssh.skipHostKeyCheck(), id);
     }
 
     public void delete(long id) {
@@ -94,5 +117,28 @@ public class ConnectionRepository {
 
     private Instant toInstant(Timestamp ts) {
         return ts == null ? null : ts.toInstant();
+    }
+
+    /** 未配置隧道的行落成关闭状态，调用方不用到处判空。 */
+    private static SshTunnelSettings tunnelOf(DbConnection c) {
+        return c.sshTunnel() == null ? SshTunnelSettings.disabled() : c.sshTunnel();
+    }
+
+    private static SshTunnelSettings toSshTunnel(java.sql.ResultSet rs) throws java.sql.SQLException {
+        // wasNull() 说的是「上一次读取」，所以端口要读完立刻判空，不能挪到后面。
+        int rawPort = rs.getInt("ssh_port");
+        int port = rs.wasNull() || rawPort <= 0 ? SshTunnelSettings.DEFAULT_PORT : rawPort;
+        return new SshTunnelSettings(
+                rs.getBoolean("ssh_enabled"),
+                rs.getString("ssh_host"),
+                port,
+                rs.getString("ssh_username"),
+                rs.getString("ssh_auth_mode"),
+                rs.getString("ssh_encrypted_password"),
+                rs.getString("ssh_encrypted_private_key"),
+                rs.getString("ssh_encrypted_passphrase"),
+                rs.getString("ssh_server_fingerprint"),
+                rs.getBoolean("ssh_skip_host_key_check")
+        );
     }
 }

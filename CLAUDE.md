@@ -51,10 +51,13 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 - **`core/DatabaseDialect` + `DialectRegistry`**：所有数据库差异（分页 SQL、EXPLAIN、DDL 生成、标识符引用、schema/catalog 语义、对象能力矩阵）都收敛到方言接口。`DialectRegistry` 按声明顺序做 `supports(dbType, jdbcUrl)` 首次匹配，顺序有意义（OceanBase 在 Oracle/MySQL 之前，`DefaultDialect` 兜底）。新增数据库支持 = 新增一个 dialect 并插入到正确位置，而不是在 service 里加 if。
 - **`service/ExecutionGuard`**：只读连接与生产连接的统一闸门。生产连接上的自由 SQL 与所有写操作都要求调用方回传与连接名完全相同的确认串，否则抛 `409 PRODUCTION_CONFIRMATION_REQUIRED`。表浏览生成的查询不走这个闸门。
-- **`service/RemoteDataSourceRegistry`**：目标库 HikariCP 连接池的缓存与淘汰，连接配置变更后要 `evict`。
+- **`service/RemoteDataSourceRegistry`**：目标库 HikariCP 连接池的缓存与淘汰，连接配置变更后要 `evict`。连接启用 SSH 隧道时，池与 `SshTunnel` 的生命周期绑定在同一个 `PoolEntry` 上；建池（含 SSH 握手）发生在注册表锁外面，`install` 负责收拾并发建出来的多余池。
+- **`service/SshTunnel` + `JdbcEndpoints` + `SshTunnelProfile`**：SSH 跳板机支持。`JdbcEndpoints` 按 URL scheme（不是方言）定位并改写 `host:port`，`SshTunnel` 用 Apache MINA sshd 起本地端口转发，`SshTunnelProfile` 负责隧道配置的规范化、掩码语义（`******` 沿用旧密钥）与加解密转换。密钥与数据库密码同用 `app.crypto-key`。
+- **`service/SchemaDiffService` + `SchemaComparison`**：两个 Schema 的结构对比。`SchemaComparison` 是纯逻辑（差异判定 + 生成 `TableDesignRequest` 设计稿），DDL 一律交给**目标端方言**的 `createTableSql` / `alterTableSql`，复用表设计器那条路径。注意方言要求设计稿覆盖目标表的每个字段与可编辑索引，且必须排除主键背后的索引。对比只读，生成的脚本交给用户在 SQL 工作台执行 —— 这样生产确认、无 WHERE 写操作确认与审计都不会被绕过。
 - **`service/MetadataCacheService`**：Caffeine 多级元数据缓存（schema 目录、对象分页、对象详情）。任何改结构的操作都必须调用对应的 `evict*`，否则资源树会显示陈旧数据。
 - **`service/RowLocatorCodec` / `TableCursorCodec`**：行定位令牌与游标分页令牌，用 `CryptoService` 签名后下发给前端，前端不接触真实主键值。解码失败即拒绝编辑请求。
 - **`service/BackgroundTaskControl` + `BackupExecutionCoordinator` / `SqlFileExecutionCoordinator`**：备份和大 SQL 文件执行的后台队列、并发上限（含每连接上限）、进度上报与取消。`SqlExecutionRegistry` 负责前台 SQL 的按 executionId 取消。
+- **`service/BackgroundTaskStream`**：后台任务进度的 SSE 推送（`GET /api/restores/operations/stream`）。轮询收到了服务端：有订阅者时按 `app.background-tasks.stream-interval-ms` 扫一遍，内容变了才推，没有订阅者时一条查询都不发。`/operations/active` 保留为降级用的轮询接口，前端在 SSE 建不起来时退回它。反向代理必须关闭响应缓冲。
 - **`storage/BackupStorage` + `BackupStorageRegistry`**：SMB / NFS / FTP / SFTP 远端备份目标的统一抽象。远端备份先写本地再原子改名上传，失败保留暂存文件。
 
 ### 安全模型
@@ -70,6 +73,8 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 ### 前端结构
 
 `src/App.tsx`（约 2700 行）是唯一的状态容器：连接选择、SQL 标签页、表格工作区、后台任务轮询、生产确认弹窗都在这里。所有重型面板（`SqlWorkspace`、`ObjectDetailWorkspace`、`BackupPanel`、`McpSettingsPanel` 等）通过 `React.lazy` 懒加载 —— 这是构建体积预算能通过的前提。
+
+有状态但与界面无关的子系统抽成 `src/hooks/` 下的自定义 hook（`useBackgroundTasks`、`useSqlHistory`、`useVisiblePolling`、`useLayoutPreferences`），hook 内部依赖的纯逻辑再落到 `src/` 下的同名模块（`backgroundTaskStream.ts`、`sqlHistoryQuery.ts`）。新增「一组状态 + 一条取数路径」时优先走这条路，而不是继续往 `App.tsx` 里加 `useState`。
 
 **测试约定：纯逻辑从组件里抽出来，放在 `src/` 下的独立模块，每个模块配一个同名 `.test.ts`**（`sqlCompletion.ts`/`sqlCompletion.test.ts`、`resultGridData.ts`、`productionConfirmation.ts`、`tableLifecycle.ts` …）。仓库里没有组件渲染测试。新增行为时，先想清楚哪部分能抽成纯函数放进这类模块并补测试，而不是把逻辑埋进 `.tsx`。
 

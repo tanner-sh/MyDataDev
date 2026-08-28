@@ -14,7 +14,24 @@ export type Connection = {
   /** 每建立一条物理数据库会话时执行的语句。 */
   initSql?: string;
   description?: string;
+  /** SSH 隧道配置摘要；后端只回传「有没有配」，不回传任何密钥。 */
+  ssh?: ConnectionSsh;
   capabilities: DatabaseCapabilities;
+};
+
+export type ConnectionSshAuthMode = 'PASSWORD' | 'PRIVATE_KEY';
+
+export type ConnectionSsh = {
+  enabled: boolean;
+  host?: string;
+  port: number;
+  username?: string;
+  authMode: ConnectionSshAuthMode;
+  hasPassword: boolean;
+  hasPrivateKey: boolean;
+  hasPassphrase: boolean;
+  serverFingerprint?: string;
+  skipHostKeyCheck: boolean;
 };
 
 export type DatabaseCapabilities = {
@@ -394,6 +411,20 @@ export type ConnectionForm = {
   defaultSchema: string;
   initSql: string;
   description: string;
+  ssh: ConnectionSshForm;
+};
+/** 三个密钥字段沿用数据库密码的约定：****** 表示沿用已保存的值，空串表示清除。 */
+export type ConnectionSshForm = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  authMode: ConnectionSshAuthMode;
+  password: string;
+  privateKey: string;
+  passphrase: string;
+  serverFingerprint: string;
+  skipHostKeyCheck: boolean;
 };
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
@@ -527,4 +558,39 @@ export type AuditFacets = { actors: string[]; actions: string[] };
 
 export type SqlTransactionScriptResult = SqlScriptResult & {
   transaction: import("./sqlTransaction").SqlTransaction;
+};
+
+export type SchemaDiffStatus = 'ONLY_IN_SOURCE' | 'ONLY_IN_TARGET' | 'DIFFERENT' | 'IDENTICAL';
+export type SchemaDiffChange = 'ADDED' | 'REMOVED' | 'CHANGED';
+export type SchemaDiffRequest = {
+  sourceConnectionId: number;
+  sourceSchema?: string;
+  targetConnectionId: number;
+  targetSchema?: string;
+  tables: string[];
+  includeDrops: boolean;
+};
+export type SchemaDiffEndpoint = { connectionId: number; connectionName: string; dbType: string; schemaName: string };
+/** 差异方向一律以源端为准：ADDED 表示源端有而目标端没有。 */
+export type SchemaDiffItem = {
+  category: string;
+  name: string;
+  change: SchemaDiffChange;
+  source?: string;
+  target?: string;
+};
+export type SchemaDiffTable = {
+  tableName: string;
+  status: SchemaDiffStatus;
+  items: SchemaDiffItem[];
+  migration: string[];
+};
+export type SchemaDiffSummary = { onlyInSource: number; onlyInTarget: number; different: number; identical: number };
+export type SchemaDiffResponse = {
+  source: SchemaDiffEndpoint;
+  target: SchemaDiffEndpoint;
+  summary: SchemaDiffSummary;
+  tables: SchemaDiffTable[];
+  migration: string[];
+  warnings: string[];
 };

@@ -4,6 +4,7 @@ import {
   AuditOutlined,
   CloudServerOutlined,
   DatabaseOutlined,
+  DiffOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
@@ -38,6 +39,7 @@ type AppHeaderProps = {
   onOpenMcp: () => void;
   onOpenAudit: () => void;
   onOpenSessions: () => void;
+  onOpenSchemaDiff: () => void;
   onToggleTheme: () => void;
 };
 
@@ -57,6 +59,7 @@ export const AppHeader = memo(function AppHeader({
   onOpenMcp,
   onOpenAudit,
   onOpenSessions,
+  onOpenSchemaDiff,
   onToggleTheme
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
@@ -166,6 +169,9 @@ export const AppHeader = memo(function AppHeader({
         </Tooltip>
         <Tooltip title="目标库活动会话">
           <Button type="text" icon={<ThunderboltOutlined />} aria-label="活动会话" disabled={!selected} onClick={onOpenSessions}>会话</Button>
+        </Tooltip>
+        <Tooltip title="结构对比与同步">
+          <Button type="text" icon={<DiffOutlined />} aria-label="结构对比" onClick={onOpenSchemaDiff}>结构对比</Button>
         </Tooltip>
         <Tooltip title="审计日志">
           <Button type="text" icon={<AuditOutlined />} aria-label="审计日志" onClick={onOpenAudit}>审计</Button>

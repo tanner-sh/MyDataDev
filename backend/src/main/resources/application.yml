@@ -63,7 +63,7 @@ spring:
           keep-alive-interval: 15s
 
 app:
-  crypto-key: ${DB_ADMIN_CRYPTO_KEY:change-me-change-me-change-me-32}
+  crypto-key: ${DB_ADMIN_CRYPTO_KEY:}
   cors:
     # Keep the browser UI same-origin in production; only Vite's two local
     # development origins are allowed by default. Deployments that serve the UI
@@ -100,11 +100,17 @@ app:
     backup-worker-threads: 2
     sql-file-worker-threads: 2
     queue-capacity: 20
+    stream-interval-ms: 1000
+    stream-timeout-minutes: 30
   maintenance:
     sql-history-retention-days: 90
     audit-retention-days: 180
     job-retention-days: 90
     cleanup-batch-size: 500
+  ssh:
+    connect-timeout-seconds: 10
+    auth-timeout-seconds: 10
+    heartbeat-seconds: 30
   remote-pool:
     max-pools: 50
     maximum-pool-size: 3

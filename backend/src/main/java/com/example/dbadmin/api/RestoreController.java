@@ -9,6 +9,7 @@ import com.example.dbadmin.model.RestoreJob;
 import com.example.dbadmin.model.RestoreUpload;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
+import com.example.dbadmin.service.BackgroundTaskStream;
 import com.example.dbadmin.service.RestoreService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 @RequestMapping("/api/restores")
@@ -30,11 +32,14 @@ public class RestoreController {
     private final RestoreService service;
     private final BackupHistoryRepository histories;
     private final SqlFileExecutionRepository sqlFiles;
+    private final BackgroundTaskStream stream;
 
-    public RestoreController(RestoreService service, BackupHistoryRepository histories, SqlFileExecutionRepository sqlFiles) {
+    public RestoreController(RestoreService service, BackupHistoryRepository histories,
+                             SqlFileExecutionRepository sqlFiles, BackgroundTaskStream stream) {
         this.service = service;
         this.histories = histories;
         this.sqlFiles = sqlFiles;
+        this.stream = stream;
     }
 
     @PostMapping(value = "/uploads", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
@@ -82,5 +87,14 @@ public class RestoreController {
     @GetMapping("/operations/active")
     public ActiveOperations active(@RequestParam(required = false) Long connectionId) {
         return service.active(connectionId, histories.findActive(connectionId), sqlFiles.findActive(connectionId));
+    }
+
+    /**
+     * 同一份数据的推送版本。前端优先订阅这里，只有 SSE 建不起来（老旧代理、被裁剪的运行环境）
+     * 才退回上面的轮询接口。
+     */
+    @GetMapping(value = "/operations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter stream(@RequestParam(required = false) Long connectionId) {
+        return stream.subscribe(connectionId);
     }
 }

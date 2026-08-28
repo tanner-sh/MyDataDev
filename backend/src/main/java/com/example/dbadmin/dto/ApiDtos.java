@@ -26,13 +26,57 @@ public final class ApiDtos {
             @Size(max = 500) String tags,
             @Size(max = 240) String defaultSchema,
             @Size(max = 4_000) String initSql,
-            @Size(max = 1_000) String description
+            @Size(max = 1_000) String description,
+            @Valid SshTunnelRequest ssh
     ) {
         /** 兼容不带连接档案字段的请求体（旧版前端、脚本调用）。 */
         public ConnectionRequest(String name, String dbType, String jdbcUrl, String username, String password,
                                  String environment, boolean readonly) {
-            this(name, dbType, jdbcUrl, username, password, environment, readonly, null, null, null, null, null);
+            this(name, dbType, jdbcUrl, username, password, environment, readonly, null, null, null, null, null, null);
         }
+
+        /** 兼容不带 SSH 隧道字段的请求体。 */
+        public ConnectionRequest(String name, String dbType, String jdbcUrl, String username, String password,
+                                 String environment, boolean readonly, String groupName, String tags,
+                                 String defaultSchema, String initSql, String description) {
+            this(name, dbType, jdbcUrl, username, password, environment, readonly, groupName, tags,
+                    defaultSchema, initSql, description, null);
+        }
+    }
+
+    /**
+     * 连接编辑时提交的 SSH 隧道配置。
+     *
+     * <p>口令、私钥、私钥口令沿用数据库密码那套约定：{@code ******} 表示沿用已保存的值，
+     * 空串表示清除。</p>
+     */
+    public record SshTunnelRequest(
+            boolean enabled,
+            @Size(max = 500) String host,
+            Integer port,
+            @Size(max = 240) String username,
+            @Size(max = 20) String authMode,
+            @Size(max = 10_000) String password,
+            @Size(max = 100_000) String privateKey,
+            @Size(max = 10_000) String passphrase,
+            @Size(max = 200) String serverFingerprint,
+            boolean skipHostKeyCheck
+    ) {
+    }
+
+    /** 回显给界面的隧道配置：只说「有没有配」，不回传任何密文或明文密钥。 */
+    public record SshTunnelSummary(
+            boolean enabled,
+            String host,
+            int port,
+            String username,
+            String authMode,
+            boolean hasPassword,
+            boolean hasPrivateKey,
+            boolean hasPassphrase,
+            String serverFingerprint,
+            boolean skipHostKeyCheck
+    ) {
     }
 
     public record ConnectionResponse(
@@ -48,12 +92,13 @@ public final class ApiDtos {
             String defaultSchema,
             String initSql,
             String description,
+            SshTunnelSummary ssh,
             DatabaseCapabilities capabilities
     ) {
         /** 兼容不关心连接档案字段的构造点。 */
         public ConnectionResponse(long id, String name, String dbType, String jdbcUrl, String username,
                                   String environment, boolean readonly, DatabaseCapabilities capabilities) {
-            this(id, name, dbType, jdbcUrl, username, environment, readonly, null, List.of(), null, null, null, capabilities);
+            this(id, name, dbType, jdbcUrl, username, environment, readonly, null, List.of(), null, null, null, null, capabilities);
         }
     }
 
@@ -110,7 +155,15 @@ public final class ApiDtos {
         }
     }
 
-    public record TestConnectionRequest(@NotBlank @Size(max = 1000) String jdbcUrl, @Size(max = 240) String username, @Size(max = 10_000) String password) {
+    public record TestConnectionRequest(
+            @NotBlank @Size(max = 1000) String jdbcUrl,
+            @Size(max = 240) String username,
+            @Size(max = 10_000) String password,
+            @Valid SshTunnelRequest ssh
+    ) {
+        public TestConnectionRequest(String jdbcUrl, String username, String password) {
+            this(jdbcUrl, username, password, null);
+        }
     }
 
     public record MessageResponse(boolean ok, String message) {
@@ -283,6 +336,45 @@ public final class ApiDtos {
     }
 
     public record TableDesignResponse(List<String> sql, String message) {
+    }
+
+    /**
+     * 结构对比请求：把 target 的结构对齐到 source。
+     *
+     * <p>{@code tables} 为空表示比较两侧的全部表；{@code includeDrops} 决定迁移脚本里要不要
+     * 包含删除目标端多余对象的语句 —— 默认不包含，因为「对方多出来的东西」往往是有意为之。</p>
+     */
+    public record SchemaDiffRequest(
+            @NotNull Long sourceConnectionId,
+            @Size(max = 240) String sourceSchema,
+            @NotNull Long targetConnectionId,
+            @Size(max = 240) String targetSchema,
+            List<@Size(max = 240) String> tables,
+            boolean includeDrops
+    ) {
+    }
+
+    public record SchemaDiffEndpoint(long connectionId, String connectionName, String dbType, String schemaName) {
+    }
+
+    /** 一处差异。{@code change} 取 ADDED / REMOVED / CHANGED，方向都以 source 为准。 */
+    public record SchemaDiffItem(String category, String name, String change, String source, String target) {
+    }
+
+    public record SchemaDiffTable(String tableName, String status, List<SchemaDiffItem> items, List<String> migration) {
+    }
+
+    public record SchemaDiffSummary(int onlyInSource, int onlyInTarget, int different, int identical) {
+    }
+
+    public record SchemaDiffResponse(
+            SchemaDiffEndpoint source,
+            SchemaDiffEndpoint target,
+            SchemaDiffSummary summary,
+            List<SchemaDiffTable> tables,
+            List<String> migration,
+            List<String> warnings
+    ) {
     }
 
     public record TableLifecycleRequest(

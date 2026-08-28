@@ -1,4 +1,4 @@
-import type { ConnectionForm } from './types';
+import type { ConnectionForm, ConnectionSshForm } from './types';
 
 export const API = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
@@ -24,6 +24,24 @@ export const ENVIRONMENT_OPTIONS = [
 
 export const PASSWORD_MASK = '******';
 
+export const SSH_AUTH_MODE_OPTIONS = [
+  { value: 'PASSWORD', label: '口令' },
+  { value: 'PRIVATE_KEY', label: '私钥' }
+];
+
+export const EMPTY_SSH_FORM: ConnectionSshForm = {
+  enabled: false,
+  host: '',
+  port: 22,
+  username: '',
+  authMode: 'PASSWORD',
+  password: '',
+  privateKey: '',
+  passphrase: '',
+  serverFingerprint: '',
+  skipHostKeyCheck: false
+};
+
 export const EMPTY_FORM: ConnectionForm = {
   name: '',
   dbType: 'h2',
@@ -36,5 +54,6 @@ export const EMPTY_FORM: ConnectionForm = {
   tags: '',
   defaultSchema: '',
   initSql: '',
-  description: ''
+  description: '',
+  ssh: EMPTY_SSH_FORM
 };

@@ -1,8 +1,8 @@
-import { Button, Checkbox, Collapse, Form, Input, Select, Space, Tooltip, Typography } from 'antd';
+import { Alert, Button, Checkbox, Collapse, Form, Input, InputNumber, Select, Space, Tooltip, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { useState } from 'react';
-import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from '../constants';
-import type { ConnectionForm } from '../types';
+import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS, SSH_AUTH_MODE_OPTIONS } from '../constants';
+import type { ConnectionForm, ConnectionSshAuthMode, ConnectionSshForm } from '../types';
 import { normalizeEnvironment } from '../utils';
 
 const { Text } = Typography;
@@ -20,7 +20,15 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
   const [touched, setTouched] = useState({ name: false, jdbcUrl: false });
   const nameInvalid = form.name.trim().length === 0;
   const jdbcUrlInvalid = form.jdbcUrl.trim().length === 0 || !form.jdbcUrl.trim().startsWith('jdbc:');
-  const canSubmit = !nameInvalid && !jdbcUrlInvalid && !loading;
+  const ssh = form.ssh;
+  const sshInvalid = ssh.enabled
+    && (ssh.host.trim().length === 0
+      || ssh.username.trim().length === 0
+      || (!ssh.skipHostKeyCheck && ssh.serverFingerprint.trim().length === 0)
+      || (ssh.authMode === 'PRIVATE_KEY' && ssh.privateKey.trim().length === 0));
+  const canSubmit = !nameInvalid && !jdbcUrlInvalid && !sshInvalid && !loading;
+
+  const updateSsh = (patch: Partial<ConnectionSshForm>) => onChange({ ...form, ssh: { ...ssh, ...patch } });
 
   return (
     <section className="connection-editor-form">
@@ -55,6 +63,84 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
           size="small"
           className="connection-profile-collapse"
           items={[{
+            key: 'ssh',
+            label: ssh.enabled ? 'SSH 隧道（已启用）' : 'SSH 隧道（可选）',
+            children: (
+              <>
+                <Form.Item help="目标库只对跳板机开放时，由后端先建 SSH 隧道，再把数据库地址指向本地转发端口。">
+                  <Checkbox checked={ssh.enabled} onChange={(event) => updateSsh({ enabled: event.target.checked })}>
+                    通过 SSH 跳板机连接
+                  </Checkbox>
+                </Form.Item>
+                {ssh.enabled && (
+                  <>
+                    <Form.Item label="跳板机地址" required validateStatus={ssh.host.trim() ? undefined : 'error'}>
+                      <Input value={ssh.host} maxLength={500} placeholder="bastion.example.com" onChange={(event) => updateSsh({ host: event.target.value })} />
+                    </Form.Item>
+                    <Form.Item label="跳板机端口">
+                      <InputNumber value={ssh.port} min={1} max={65535} style={{ width: '100%' }} onChange={(value) => updateSsh({ port: value ?? 22 })} />
+                    </Form.Item>
+                    <Form.Item label="登录用户名" required validateStatus={ssh.username.trim() ? undefined : 'error'}>
+                      <Input value={ssh.username} maxLength={240} onChange={(event) => updateSsh({ username: event.target.value })} />
+                    </Form.Item>
+                    <Form.Item label="认证方式">
+                      <Select
+                        value={ssh.authMode}
+                        options={SSH_AUTH_MODE_OPTIONS}
+                        onChange={(value) => updateSsh({ authMode: value as ConnectionSshAuthMode })}
+                      />
+                    </Form.Item>
+                    {ssh.authMode === 'PASSWORD' ? (
+                      <Form.Item label="登录口令">
+                        <Input.Password value={ssh.password} onChange={(event) => updateSsh({ password: event.target.value })} />
+                      </Form.Item>
+                    ) : (
+                      <>
+                        <Form.Item label="私钥" required validateStatus={ssh.privateKey.trim() ? undefined : 'error'} help="粘贴完整的 PEM / OpenSSH 私钥内容">
+                          <Input.TextArea
+                            value={ssh.privateKey}
+                            rows={4}
+                            placeholder={'-----BEGIN OPENSSH PRIVATE KEY-----\n...'}
+                            onChange={(event) => updateSsh({ privateKey: event.target.value })}
+                          />
+                        </Form.Item>
+                        <Form.Item label="私钥口令">
+                          <Input.Password value={ssh.passphrase} onChange={(event) => updateSsh({ passphrase: event.target.value })} />
+                        </Form.Item>
+                      </>
+                    )}
+                    <Form.Item
+                      label={<Tooltip title="用 ssh-keyscan 或 ssh-keygen -lf 取得，例如 SHA256:xxxx">跳板机主机指纹</Tooltip>}
+                      required={!ssh.skipHostKeyCheck}
+                      validateStatus={!ssh.skipHostKeyCheck && !ssh.serverFingerprint.trim() ? 'error' : undefined}
+                    >
+                      <Input
+                        value={ssh.serverFingerprint}
+                        maxLength={200}
+                        placeholder="SHA256:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                        disabled={ssh.skipHostKeyCheck}
+                        onChange={(event) => updateSsh({ serverFingerprint: event.target.value })}
+                      />
+                    </Form.Item>
+                    <Form.Item>
+                      <Checkbox checked={ssh.skipHostKeyCheck} onChange={(event) => updateSsh({ skipHostKeyCheck: event.target.checked })}>
+                        跳过主机密钥校验
+                      </Checkbox>
+                    </Form.Item>
+                    {ssh.skipHostKeyCheck && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        className="form-hint-text"
+                        message="不校验主机密钥意味着无法识别中间人，仅建议在可信内网临时使用。"
+                      />
+                    )}
+                    {editing && <Text type="secondary" className="form-hint-text">****** 表示沿用已保存的口令或私钥；清空后保存会删除它。</Text>}
+                  </>
+                )}
+              </>
+            )
+          }, {
             key: 'profile',
             label: '连接档案与会话设置（可选）',
             children: (

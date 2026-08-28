@@ -59,6 +59,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   TABLE_CREATE: { label: '新建表', category: 'schema' },
   TABLE_RENAME: { label: '重命名表', category: 'schema', dangerous: true },
   TABLE_DROP: { label: '删除表', category: 'schema', dangerous: true },
+  SCHEMA_DIFF: { label: '对比 Schema 结构', category: 'schema' },
   OBJECT_INVOKE: { label: '调用数据库对象', category: 'schema' },
   OBJECT_INVOKE_FAILED: { label: '调用数据库对象失败', category: 'schema' },
   CONNECTION_CREATE: { label: '新建连接', category: 'connection' },

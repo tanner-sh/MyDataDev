@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.ApiDtos.TestConnectionRequest;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.model.SshTunnelSettings;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionRepository;
@@ -38,6 +39,8 @@ public class ConnectionService {
      */
     private final Map<Long, DbConnection> cachedConnections = new ConcurrentHashMap<>();
     private final Map<Long, String> cachedPasswords = new ConcurrentHashMap<>();
+    /** 解密后的隧道参数；只缓存真的启用了隧道的连接。 */
+    private final Map<Long, SshTunnelSpec> cachedSshSpecs = new ConcurrentHashMap<>();
 
     private final ConnectionRepository repository;
     private final CryptoService crypto;
@@ -71,7 +74,7 @@ public class ConnectionService {
     }
 
     public ConnectionResponse create(ConnectionRequest request, String actor) {
-        DbConnection c = toModel(0, request, crypto.encrypt(request.password()));
+        DbConnection c = toModel(0, request, crypto.encrypt(request.password()), null);
         long id = repository.insert(c);
         audit.log(actor, "CONNECTION_CREATE", request.name(), request.jdbcUrl());
         return toResponse(repository.findById(id).orElseThrow());
@@ -89,7 +92,7 @@ public class ConnectionService {
         String secret = reusesStoredPassword(request.password())
                 ? old.encryptedPassword()
                 : crypto.encrypt(request.password());
-        repository.update(id, toModel(id, request, secret));
+        repository.update(id, toModel(id, request, secret, old.sshTunnel()));
         evictConnection(id);
         metadataCache.evictConnection(id);
         audit.log(actor, "CONNECTION_UPDATE", request.name(), request.jdbcUrl());
@@ -131,7 +134,8 @@ public class ConnectionService {
     }
 
     public void test(TestConnectionRequest request) throws Exception {
-        dataSources.test(request.jdbcUrl().trim(), request.username(), request.password());
+        // 新连接还没有存过密钥，掩码在这里没有可沿用的旧值，等价于「没填」。
+        dataSources.test(request.jdbcUrl().trim(), request.username(), request.password(), specOf(request.ssh(), null));
     }
 
     public void testExisting(long id) throws Exception {
@@ -148,7 +152,7 @@ public class ConnectionService {
         String password = reusesStoredPassword(request.password())
                 ? crypto.decrypt(old.encryptedPassword())
                 : request.password();
-        dataSources.test(request.jdbcUrl().trim(), request.username(), password);
+        dataSources.test(request.jdbcUrl().trim(), request.username(), password, specOf(request.ssh(), old.sshTunnel()));
     }
 
     /**
@@ -166,8 +170,8 @@ public class ConnectionService {
         DbConnection configured = require(id);
         // 未指定命名空间时用连接上配置的默认值，省去每次打开连接后再手动切库。
         if (schemaName == null || schemaName.isBlank()) schemaName = configured.defaultSchema();
-        if (schemaName == null || schemaName.isBlank()) return dataSources.open(configured, password(id));
-        Connection connection = dataSources.open(configured, password(id));
+        if (schemaName == null || schemaName.isBlank()) return dataSources.open(configured, password(id), sshSpec(id));
+        Connection connection = dataSources.open(configured, password(id), sshSpec(id));
         var dialect = dialectRegistry.dialectFor(configured);
         try {
             // 池化连接上的 setCatalog/setSchema 不会被 Hikari 归还时重置，必须自己还原，
@@ -208,6 +212,28 @@ public class ConnectionService {
         return decrypted;
     }
 
+    /**
+     * 这条连接的隧道参数，未启用隧道时返回 {@code null}。
+     *
+     * <p>和密码一样缓存：每次打开连接都解一遍 AES 私钥没有意义，而连接改动一定会走
+     * {@link #evictConnection(long)}。</p>
+     */
+    private SshTunnelSpec sshSpec(long id) {
+        DbConnection connection = require(id);
+        if (!connection.usesSshTunnel()) return null;
+        return cachedSshSpecs.computeIfAbsent(id, key -> SshTunnelProfile.toSpec(connection.sshTunnel(), crypto::decrypt));
+    }
+
+    /**
+     * 把编辑器提交的隧道配置变成可用的隧道参数。
+     *
+     * <p>先按保存时的规则解释掩码、补默认值、做校验，再解密回来 —— 这样「测试连接」和真正
+     * 保存后建连走的是同一条路径，不会出现测试通过但保存后连不上。</p>
+     */
+    private SshTunnelSpec specOf(com.example.dbadmin.dto.ApiDtos.SshTunnelRequest request, SshTunnelSettings existing) {
+        return SshTunnelProfile.toSpec(SshTunnelProfile.toSettings(request, existing, crypto::encrypt), crypto::decrypt);
+    }
+
     void resetRemoteSession(long id) {
         dataSources.evict(id);
     }
@@ -219,6 +245,7 @@ public class ConnectionService {
     private void evictConnection(long id) {
         cachedConnections.remove(id);
         cachedPasswords.remove(id);
+        cachedSshSpecs.remove(id);
         dataSources.evict(id);
     }
 
@@ -228,7 +255,7 @@ public class ConnectionService {
         return password == null || PASSWORD_MASK.equals(password);
     }
 
-    private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword) {
+    private DbConnection toModel(long id, ConnectionRequest r, String encryptedPassword, SshTunnelSettings existingSsh) {
         String initSql = ConnectionProfile.normalizeInitSql(r.initSql());
         // 保存时就把初始化 SQL 校验掉：它之后会在每条物理连接上隐式执行，等到建连时才报错
         // 就变成了一条连不上的连接，用户很难定位。
@@ -247,6 +274,7 @@ public class ConnectionService {
                 ConnectionProfile.normalizeDefaultSchema(r.defaultSchema()),
                 initSql,
                 ConnectionProfile.normalizeDescription(r.description()),
+                SshTunnelProfile.toSettings(r.ssh(), existingSsh, crypto::encrypt),
                 Instant.now(),
                 Instant.now()
         );
@@ -256,6 +284,7 @@ public class ConnectionService {
         return new ConnectionResponse(
                 c.id(), c.name(), c.dbType(), c.jdbcUrl(), c.username(), normalizeEnvironment(c.environment()), c.readonly(),
                 c.groupName(), ConnectionProfile.parseTags(c.tags()), c.defaultSchema(), c.initSql(), c.description(),
+                SshTunnelProfile.summarize(c.sshTunnel()),
                 dialectRegistry.dialectFor(c).capabilities()
         );
     }

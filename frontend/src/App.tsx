@@ -6,7 +6,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS } from './constants';
-import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveOperations, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
@@ -24,17 +24,10 @@ import {
   hasMoreSqlHistory,
   INITIAL_SQL_HISTORY_QUERY,
   isSqlHistoryAtLimit,
-  nextSqlHistoryLimit,
-  sqlHistoryRequestParams,
-  type SqlHistoryQuery
+  nextSqlHistoryLimit
 } from './sqlHistoryQuery';
-import {
-  backgroundTaskCompletionMessage,
-  EMPTY_BACKGROUND_TASK_SUMMARY,
-  sameBackgroundTaskSummary,
-  summarizeBackgroundTasks,
-  type BackgroundTaskSummary
-} from './backgroundTasks';
+import { useBackgroundTasks } from './hooks/useBackgroundTasks';
+import { useSqlHistory } from './hooks/useSqlHistory';
 import { backgroundImportPrompt, importRoute, oversizedRowsRoute, type ImportRoute } from './dataImport';
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
@@ -60,7 +53,7 @@ import {
   type SqlTransaction,
   type SqlTransactionState
 } from './sqlTransaction';
-import { prefetchAllWhenIdle } from './idlePrefetch';
+import { prefetchWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
 import { AppHeader } from './components/AppHeader';
@@ -70,9 +63,9 @@ import { TypedConfirmationFields } from './components/TypedConfirmationFields';
 import type { TableLifecycleAction } from './components/TableLifecyclePanel';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 import { useStableEvent } from './hooks/useStableEvent';
-import { useVisiblePolling } from './hooks/useVisiblePolling';
 import {
   buildConnectionSaveRequest,
+  buildConnectionTestRequest,
   CLOSED_CONNECTION_EDITOR,
   createBlankConnectionEditor,
   createDuplicateConnectionEditor,
@@ -93,6 +86,7 @@ const MAX_SQL_TABS = 20;
 type ProductionConfirmationRequest = { action: string; expected: string };
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
+const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const SessionDrawer = lazy(() => import('./components/SessionDrawer').then((module) => ({ default: module.SessionDrawer })));
@@ -107,7 +101,6 @@ const loadSqlWorkspace = () => import('./components/SqlWorkspace').then((module)
 const SqlWorkspace = lazy(loadSqlWorkspace);
 // Monaco 是全站最大的块。SqlEditorSurface 只在用户点进编辑器时才 import 它，所以不预取的话
 // 那次点击要等 600+ KiB 下载完；这里在首屏空闲时先取回来。
-const loadSqlEditor = () => import('./components/SqlEditor');
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
@@ -153,22 +146,16 @@ export default function App() {
   const [tablePage, setTablePage] = useState(0);
   const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
-  const [sqlHistory, setSqlHistory] = useState<SqlHistory[]>([]);
-  const [sqlHistoryQuery, setSqlHistoryQuery] = useState<SqlHistoryQuery>(INITIAL_SQL_HISTORY_QUERY);
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyFeatureLoaded, setHistoryFeatureLoaded] = useState(false);
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | 'sessions' | null>(null);
+  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | 'sessions' | 'schema-diff' | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -177,7 +164,6 @@ export default function App() {
   const [snippetDraft, setSnippetDraft] = useState<{ draft: SqlSnippetDraft; token: number }>();
   const [explorerRequestedView, setExplorerRequestedView] = useState<{ kind: ExplorerObjectKind; keyword: string; token: number }>();
   const selectedIdRef = useRef<number | null>(null);
-  const backgroundTasksRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const metadataRef = useRef<Metadata | null>(null);
   const completionCatalogCacheRef = useRef(new AsyncResourceCache<string, CompletionCatalog>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: 300 }));
   const objectStructureCacheRef = useRef(new AsyncResourceCache<string, DbObject>({ ttlMs: METADATA_CACHE_TTL_MS, maxEntries: MAX_STRUCTURE_CACHE_ENTRIES }));
@@ -188,8 +174,6 @@ export default function App() {
   const tableRequestSeqRef = useRef(0);
   const tableRowCountSeqRef = useRef(0);
   const backupRequestSeqRef = useRef(0);
-  const sqlHistoryRequestSeqRef = useRef(0);
-  const historyInFlightRef = useRef(0);
   const objectDesignDirtyRef = useRef(false);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
@@ -252,8 +236,8 @@ export default function App() {
     refreshConnections({ retry: true });
   }, []);
 
-  // 首屏只有连接列表，用户挑连接、点进编辑器之前的这段空闲足够把重型块下完。
-  useEffect(() => prefetchAllWhenIdle([loadSqlWorkspace, loadSqlEditor], window), []);
+  // 首屏空闲时只预取工作台外壳；Monaco 等真正进入 SQL 工作台后再加载。
+  useEffect(() => prefetchWhenIdle(loadSqlWorkspace, window), []);
 
   useEffect(() => {
     if (selected) void loadObjectDetailWorkspace().catch(() => undefined);
@@ -358,35 +342,30 @@ export default function App() {
     refreshBackups(selected, 0).catch(() => showError('备份任务加载失败，可稍后刷新。'));
   }, [activeDrawer, selected?.id]);
 
-  // One poll drives both the header indicator and the live rows in the backup
-  // drawer. Background work outlives the drawer that started it — and scheduled
-  // backups start with no drawer open at all — so this must keep running
-  // whenever a connection is selected, not only while a panel is visible.
-  // useVisiblePolling already pauses it on a hidden tab.
-  useVisiblePolling({
-    enabled: Boolean(selected),
-    intervalMs: activeDrawer === 'backups' || backgroundTasks.total > 0 ? 2_000 : 20_000,
-    resetKey: selected?.id,
-    immediate: true,
-    task: async () => {
+  // 后台任务的订阅与降级轮询都在 useBackgroundTasks 里；这里只处理「拿到快照之后界面要做
+  // 什么」：更新备份抽屉里的实时行，以及播报结束提示。
+  const sqlHistoryState = useSqlHistory({
+    connectionId: selected?.id,
+    onWarning: (message) => toastApi.warning(message),
+    onError: (message) => toastApi.error(`历史记录加载失败：${localizeMessage(message)}`)
+  });
+
+  const { summary: backgroundTasks, reset: resetBackgroundTasks } = useBackgroundTasks({
+    connectionId: selected?.id,
+    watchingTasks: activeDrawer === 'backups',
+    onCompletion: (message) => toastApi.info(message),
+    onOperations: (active) => {
+      if (activeDrawer !== 'backups') return;
       const connection = selected;
       if (!connection) return;
-      try {
-        const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${connection.id}`);
-        if (selectedIdRef.current !== connection.id) return;
-        applyBackgroundTaskSummary(summarizeBackgroundTasks(active));
-        if (activeDrawer !== 'backups') return;
-        if (active.backups.length === 0) {
-          await refreshBackups(connection).catch(() => undefined);
-          return;
-        }
-        setBackups((current) => current.map((task) => {
-          const execution = active.backups.find((item) => item.taskId === task.id);
-          return execution ? { ...task, lastStatus: execution.status, lastMessage: execution.message } : task;
-        }));
-      } catch {
-        // Keep the last known state; a manual refresh remains available.
+      if (active.backups.length === 0) {
+        void refreshBackups(connection).catch(() => undefined);
+        return;
       }
+      setBackups((current) => current.map((task) => {
+        const execution = active.backups.find((item) => item.taskId === task.id);
+        return execution ? { ...task, lastStatus: execution.status, lastMessage: execution.message } : task;
+      }));
     }
   });
 
@@ -405,15 +384,6 @@ export default function App() {
    * A job leaving it only means it stopped, so the toast points at the drawer
    * rather than claiming success.
    */
-  function applyBackgroundTaskSummary(next: BackgroundTaskSummary) {
-    const previous = backgroundTasksRef.current;
-    if (sameBackgroundTaskSummary(previous, next)) return;
-    backgroundTasksRef.current = next;
-    setBackgroundTasks(next);
-    const completion = backgroundTaskCompletionMessage(previous, next);
-    if (completion) toastApi.info(completion);
-  }
-
   function showSuccess(text: string) {
     setWorkspaceStatus({ kind: 'success', text });
     toastApi.success(text);
@@ -597,46 +567,6 @@ export default function App() {
     });
   }
 
-  async function refreshSqlHistory(conn = selected, query = sqlHistoryQuery) {
-    if (!conn) {
-      setSqlHistory([]);
-      setSqlHistoryQuery(INITIAL_SQL_HISTORY_QUERY);
-      return;
-    }
-    const requestId = ++sqlHistoryRequestSeqRef.current;
-    const rows = await api<SqlHistory[]>(`/sql/history?${sqlHistoryRequestParams(conn.id, query)}`);
-    // 输入关键字时会连续发多个请求，只有最后一个的结果才作数。
-    if (requestId !== sqlHistoryRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
-    setSqlHistory(rows);
-    setSqlHistoryQuery(query);
-  }
-
-  async function refreshSqlHistoryQuietly(conn = selected) {
-    try {
-      await refreshSqlHistory(conn);
-    } catch {
-      toastApi.warning('SQL 已处理，但历史记录刷新失败，可稍后重新打开历史。');
-    }
-  }
-
-  /** 关键字搜索与「加载更多」共用同一条取数路径，只是 query 不同。 */
-  async function loadSqlHistory(query: SqlHistoryQuery): Promise<boolean> {
-    // 不能用「已在加载就直接返回」来去重：搜索是去抖触发的，丢掉的那一次正好是用户
-    // 最新输入的关键字。改成让请求都发出去，由 refreshSqlHistory 的序号丢弃过期响应。
-    historyInFlightRef.current += 1;
-    setHistoryLoading(true);
-    try {
-      await refreshSqlHistory(selected, query);
-      return true;
-    } catch (e) {
-      toastApi.error(`历史记录加载失败：${localizeError(e)}`);
-      return false;
-    } finally {
-      historyInFlightRef.current -= 1;
-      if (historyInFlightRef.current === 0) setHistoryLoading(false);
-    }
-  }
-
   async function saveConnection() {
     const editor = connectionEditor;
     if (editor.mode === 'closed') return;
@@ -688,17 +618,11 @@ export default function App() {
     const target = editor.form;
     setConnectionActionLoading(true);
     try {
-      if (editor.mode === 'edit') {
-        await api<{ ok: boolean; message: string }>(`/connections/${editor.connectionId}/test`, {
-          method: 'POST',
-          body: JSON.stringify(target)
-        });
-      } else {
-        await api<{ ok: boolean; message: string }>('/connections/test', {
-          method: 'POST',
-          body: JSON.stringify({ jdbcUrl: target.jdbcUrl, username: target.username, password: target.password })
-        });
-      }
+      const request = buildConnectionTestRequest(editor);
+      await api<{ ok: boolean; message: string }>(request.path, {
+        method: 'POST',
+        body: JSON.stringify(request.body)
+      });
       showSuccess(`连接测试成功：${target.name || target.jdbcUrl}`);
     } catch (e) {
       showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
@@ -773,9 +697,8 @@ export default function App() {
 
   function applyConnectionSelection(connection: Connection) {
     // Counts belong to one connection; carrying them over would announce the
-    // previous connection's jobs as finished on the very first poll here.
-    backgroundTasksRef.current = EMPTY_BACKGROUND_TASK_SUMMARY;
-    setBackgroundTasks(EMPTY_BACKGROUND_TASK_SUMMARY);
+    // previous connection's jobs as finished on the very first snapshot here.
+    resetBackgroundTasks();
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
     activateSqlSession(connection.id, true);
@@ -788,11 +711,9 @@ export default function App() {
     completionCatalogCacheRef.current.clear();
     objectDetailCacheRef.current.clear();
     // 历史属于某一条连接，切换后必须重新取，不能把上一条连接的记录留在抽屉里。
-    sqlHistoryRequestSeqRef.current += 1;
+    sqlHistoryState.reset();
     // 事务属于某一条连接；切换连接前 selectConnection 已经拦过未结束的事务。
     setTransactionState(IDLE_SQL_TRANSACTION);
-    setSqlHistory([]);
-    setSqlHistoryQuery(INITIAL_SQL_HISTORY_QUERY);
     setStructureLoadingKey(null);
     setActiveObjectTarget(null);
     setActiveObjectDetail(null);
@@ -1333,7 +1254,7 @@ export default function App() {
         }
         // The history drawer refreshes itself when opened, so an unconditional
         // fetch here would only lengthen the perceived execution time.
-        if (historyOpen) await refreshSqlHistoryQuietly(selected);
+        if (sqlHistoryState.open) await sqlHistoryState.refreshQuietly();
       } catch (e) {
         const errorMessage = localizeError(e);
         // 服务端已经把事务回收了（多半是空闲超时自动回滚）。不清掉本地状态的话，之后每次
@@ -1342,7 +1263,7 @@ export default function App() {
         // 结果区也要拿到原文：状态栏只有一行，长错误会被截断且无法复制。
         updateActiveSqlTab({ message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
         toastApi.error(errorMessage);
-        if (historyOpen) await refreshSqlHistoryQuietly(selected);
+        if (sqlHistoryState.open) await sqlHistoryState.refreshQuietly();
       } finally {
         if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
         setSqlCancellable(false);
@@ -1604,15 +1525,15 @@ export default function App() {
     // The drawer only opens once the first page has loaded, so without an
     // in-flight guard the button looks dead and repeated clicks pile up
     // duplicate /sql/history requests.
-    if (historyLoading) return;
+    if (sqlHistoryState.loading) return;
     // 每次打开都回到「最近一页、无关键字」，而不是沿用上次的搜索条件。
-    if (!await loadSqlHistory(INITIAL_SQL_HISTORY_QUERY)) {
-      // 具体原因已经由 loadSqlHistory 弹出，这里只让状态栏留下痕迹。
+    if (!await sqlHistoryState.load(INITIAL_SQL_HISTORY_QUERY)) {
+      // 具体原因已经由 useSqlHistory 弹出，这里只让状态栏留下痕迹。
       updateActiveSqlTab({ message: '历史记录加载失败', statusKind: 'error' });
       return;
     }
-    setHistoryFeatureLoaded(true);
-    setHistoryOpen(true);
+    sqlHistoryState.setFeatureLoaded(true);
+    sqlHistoryState.setOpen(true);
   }
 
   async function exportSql(format: ExportFormat, liveSql?: string) {
@@ -2017,7 +1938,7 @@ export default function App() {
     || connectionEditor.mode !== 'closed'
     || tableCreateOpen
     || Boolean(tableLifecycleAction)
-    || historyOpen
+    || sqlHistoryState.open
     || sqlFileTasksOpen
     || objectSearchOpen
     || snippetsOpen;
@@ -2772,6 +2693,12 @@ export default function App() {
   const openMcpFromHeader = useStableEvent(() => setActiveDrawer('mcp'));
   const openAuditFromHeader = useStableEvent(() => setActiveDrawer('audit'));
   const openSessionsFromHeader = useStableEvent(() => setActiveDrawer('sessions'));
+  const openSchemaDiffFromHeader = useStableEvent(() => setActiveDrawer('schema-diff'));
+  const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
+    // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
+    setActiveDrawer(null);
+    openSqlInNewTab(sql, title);
+  });
   const requestProductionConfirmationEvent = useStableEvent((action: string) => requestProductionConfirmation(action));
   const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
   const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
@@ -2871,14 +2798,14 @@ export default function App() {
   const reloadObjectDetailEvent = useStableEvent(() => {
     if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
   });
-  const closeSqlHistoryEvent = useStableEvent(() => setHistoryOpen(false));
+  const closeSqlHistoryEvent = useStableEvent(() => sqlHistoryState.setOpen(false));
   const searchSqlHistoryEvent = useStableEvent((keyword: string) => {
-    void loadSqlHistory({ keyword, limit: INITIAL_SQL_HISTORY_QUERY.limit });
+    void sqlHistoryState.load({ keyword, limit: INITIAL_SQL_HISTORY_QUERY.limit });
   });
   const loadMoreSqlHistoryEvent = useStableEvent(() => {
-    const limit = nextSqlHistoryLimit(sqlHistoryQuery.limit);
-    if (limit === sqlHistoryQuery.limit) return;
-    void loadSqlHistory({ ...sqlHistoryQuery, limit });
+    const limit = nextSqlHistoryLimit(sqlHistoryState.query.limit);
+    if (limit === sqlHistoryState.query.limit) return;
+    void sqlHistoryState.load({ ...sqlHistoryState.query, limit });
   });
   const pickSqlHistoryEvent = useStableEvent((historyItem: SqlHistory, mode: 'new-tab' | 'replace-current') => {
     if (mode === 'new-tab') {
@@ -2903,7 +2830,7 @@ export default function App() {
       };
       setSqlTabs([...nextTabs, historyTab]);
       setActiveSqlTabId(historyTab.id);
-      setHistoryOpen(false);
+      sqlHistoryState.setOpen(false);
       return;
     }
 
@@ -2912,7 +2839,7 @@ export default function App() {
     const replaceCurrent = () => {
       editorRef.current?.setValue(historyItem.sql);
       if (currentTab) updateSqlTab(currentTab.id, { sql: historyItem.sql, dirty: true });
-      setHistoryOpen(false);
+      sqlHistoryState.setOpen(false);
     };
     if (!currentSql.trim() || currentSql === historyItem.sql) {
       replaceCurrent();
@@ -3021,6 +2948,7 @@ export default function App() {
           onOpenMcp={openMcpFromHeader}
           onOpenAudit={openAuditFromHeader}
           onOpenSessions={openSessionsFromHeader}
+          onOpenSchemaDiff={openSchemaDiffFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -3066,7 +2994,7 @@ export default function App() {
                 loading={sqlLoading}
                 cancelling={sqlCancelling}
                 cancellable={sqlCancellable}
-                historyLoading={historyLoading}
+                historyLoading={sqlHistoryState.loading}
                 pagingResultKey={sqlPagingResultKey}
                 themeMode={layoutPreferences.themeMode}
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
@@ -3302,6 +3230,24 @@ export default function App() {
         </Suspense>
       )}
       <Drawer
+        title="结构对比与同步"
+        size={960}
+        open={activeDrawer === 'schema-diff'}
+        rootClassName="management-drawer"
+        onClose={() => setActiveDrawer(null)}
+        destroyOnHidden
+      >
+        <Suspense fallback={<div className="workspace-lazy-loading"><Spin /> 正在加载结构对比…</div>}>
+          {activeDrawer === 'schema-diff' && (
+            <SchemaDiffPanel
+              connections={connections}
+              defaultConnectionId={selected?.id}
+              onOpenInSqlTab={openSchemaDiffScript}
+            />
+          )}
+        </Suspense>
+      </Drawer>
+      <Drawer
         title="MCP Server 设置"
         size={960}
         open={activeDrawer === 'mcp'}
@@ -3327,15 +3273,15 @@ export default function App() {
           />
         </Suspense>
       )}
-      {historyFeatureLoaded && (
+      {sqlHistoryState.featureLoaded && (
         <Suspense fallback={null}>
           <SqlHistoryDrawer
-            open={historyOpen}
-            history={sqlHistory}
-            keyword={sqlHistoryQuery.keyword}
-            loading={historyLoading}
-            hasMore={hasMoreSqlHistory(sqlHistory.length, sqlHistoryQuery.limit)}
-            atLimit={isSqlHistoryAtLimit(sqlHistory.length, sqlHistoryQuery.limit)}
+            open={sqlHistoryState.open}
+            history={sqlHistoryState.rows}
+            keyword={sqlHistoryState.query.keyword}
+            loading={sqlHistoryState.loading}
+            hasMore={hasMoreSqlHistory(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
+            atLimit={isSqlHistoryAtLimit(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
             onClose={closeSqlHistoryEvent}
             onPick={pickSqlHistoryEvent}
             onSearch={searchSqlHistoryEvent}

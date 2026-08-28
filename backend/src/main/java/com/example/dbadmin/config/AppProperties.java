@@ -16,6 +16,7 @@ public class AppProperties {
     private final BackgroundTasks backgroundTasks = new BackgroundTasks();
     private final Maintenance maintenance = new Maintenance();
     private final RemotePool remotePool = new RemotePool();
+    private final Ssh ssh = new Ssh();
     private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
 
@@ -59,12 +60,48 @@ public class AppProperties {
         return remotePool;
     }
 
+    public Ssh getSsh() {
+        return ssh;
+    }
+
     public Cors getCors() {
         return cors;
     }
 
     public Mcp getMcp() {
         return mcp;
+    }
+
+    /** SSH 隧道的等待上限。跳板机不可达时这些值决定用户要等多久才看到报错。 */
+    public static class Ssh {
+        private int connectTimeoutSeconds = 10;
+        private int authTimeoutSeconds = 10;
+        /** 心跳间隔：连接池里的连接可以闲置很久，隧道不能被中间设备当成空闲会话掐掉。 */
+        private int heartbeatSeconds = 30;
+
+        public int getConnectTimeoutSeconds() {
+            return connectTimeoutSeconds;
+        }
+
+        public void setConnectTimeoutSeconds(int connectTimeoutSeconds) {
+            this.connectTimeoutSeconds = connectTimeoutSeconds;
+        }
+
+        public int getAuthTimeoutSeconds() {
+            return authTimeoutSeconds;
+        }
+
+        public void setAuthTimeoutSeconds(int authTimeoutSeconds) {
+            this.authTimeoutSeconds = authTimeoutSeconds;
+        }
+
+        public int getHeartbeatSeconds() {
+            return heartbeatSeconds;
+        }
+
+        public void setHeartbeatSeconds(int heartbeatSeconds) {
+            this.heartbeatSeconds = heartbeatSeconds;
+        }
     }
 
     public static class Sql {
@@ -200,7 +237,15 @@ public class AppProperties {
         private int backupWorkerThreads = 2;
         private int sqlFileWorkerThreads = 2;
         private int queueCapacity = 20;
+        /** SSE 推送的扫描间隔：只有存在订阅者时才会真的查库。 */
+        private int streamIntervalMs = 1_000;
+        /** 单条 SSE 连接的寿命上限，到点后浏览器的 EventSource 会自动重连。 */
+        private int streamTimeoutMinutes = 30;
 
+        public int getStreamIntervalMs() { return streamIntervalMs; }
+        public void setStreamIntervalMs(int streamIntervalMs) { this.streamIntervalMs = streamIntervalMs; }
+        public int getStreamTimeoutMinutes() { return streamTimeoutMinutes; }
+        public void setStreamTimeoutMinutes(int streamTimeoutMinutes) { this.streamTimeoutMinutes = streamTimeoutMinutes; }
         public int getCancelPollIntervalMs() { return cancelPollIntervalMs; }
         public void setCancelPollIntervalMs(int cancelPollIntervalMs) { this.cancelPollIntervalMs = cancelPollIntervalMs; }
         public int getProgressIntervalMs() { return progressIntervalMs; }

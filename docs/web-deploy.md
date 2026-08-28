@@ -32,7 +32,7 @@ JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动
 | `./sql-files` | 大 SQL 文件执行任务的上传文件。 |
 | `./logs` | 应用日志。 |
 
-`DB_ADMIN_CRYPTO_KEY` 是连接密码和文件服务凭据的加密密钥。**必须在首次启动前设置**，且此后不能更改 —— 换密钥会导致已保存的密文无法解密。默认值 `change-me-change-me-change-me-32` 只适用于本地开发。
+`DB_ADMIN_CRYPTO_KEY` 是连接密码和文件服务凭据的加密密钥。**必须在首次启动前设置**，且此后不能更改 —— 换密钥会导致已保存的密文无法解密。Web 模式不再提供默认密钥，未设置时后端会拒绝启动。
 
 常用覆盖项（全部可以用 `--key=value` 或环境变量传入）：
 
@@ -94,7 +94,8 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SQL 执行、备份与恢复都是长请求，MCP 是流式响应。
+        # SQL 执行、备份与恢复都是长请求；MCP 和后台任务进度（/api/restores/operations/stream）
+        # 是流式响应，proxy_buffering off 对它们是必需的，否则界面收不到实时进度。
         proxy_read_timeout 7200s;
         proxy_send_timeout 7200s;
         proxy_buffering off;
