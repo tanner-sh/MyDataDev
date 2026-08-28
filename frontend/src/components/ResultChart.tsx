@@ -6,6 +6,8 @@ import {
   formatChartNumber,
   MAX_SERIES,
   niceTicks,
+  ROW_NUMBER_CATEGORY,
+  suggestChartConfig,
   type ChartConfig,
   type ChartModel,
   type ChartType
@@ -20,7 +22,7 @@ const CHART_TYPES: Array<{ value: ChartType; label: string }> = [
   { value: 'pie', label: '饼图' }
 ];
 
-const HEIGHT = 320;
+const MIN_PLOT_HEIGHT = 240;
 const PLOT_PADDING = { top: 16, right: 16, bottom: 44, left: 56 };
 /** 柱子不填满整个槽位，留下的空气本身就是分隔。 */
 const MAX_BAR_WIDTH = 24;
@@ -48,17 +50,16 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
 }) {
   const options = useMemo(() => chartableColumns(columns, rows), [columns, rows]);
   const signature = useMemo(() => columns.map((column) => column.key).join('|'), [columns]);
-  const suggestion = useMemo(() => {
-    const category = options.categories[0];
-    const values = options.values.filter((column) => column.key !== category?.key).slice(0, 4);
-    return category && values.length > 0
-      ? { type: 'bar' as ChartType, categoryKey: category.key, valueKeys: values.map((column) => column.key) }
-      : null;
-  }, [options]);
+  // 猜测逻辑只有 suggestChartConfig 一份。之前组件里又抄了一遍，两处规则一旦分叉，
+  // 界面上看到的默认配置就和纯逻辑测试验证的那份对不上。
+  const suggestion = useMemo(() => suggestChartConfig(columns, rows), [columns, rows]);
   // 初值直接取猜测结果，而不是先 null 再用 effect 补：靠 effect 的话首帧会闪一下空状态。
   const [config, setConfig] = useState<ChartConfig | null>(suggestion);
   const containerRef = useRef<HTMLDivElement>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(720);
+  // 绘图区高度跟着结果区走。固定 320px 时下方会空掉一大片，而结果区本来就寸土寸金。
+  const [height, setHeight] = useState(MIN_PLOT_HEIGHT);
   const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
 
   // 列变了（换了一次查询）就重新猜一份配置，而不是把上一次的列名硬套过来。
@@ -74,9 +75,14 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
   }, [signature]);
 
   useEffect(() => {
-    const element = containerRef.current;
+    const element = plotRef.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(320, entry.contentRect.width)));
+    // 观测的是绘图区本身，而它在 CSS 里由 grid 的 1fr 定高，不会被 SVG 的高度反向撑大
+    // —— 否则「按容器定高、容器又跟着内容长」会转成一个无限循环。
+    const observer = new ResizeObserver(([entry]) => {
+      setWidth(Math.max(320, Math.round(entry.contentRect.width)));
+      setHeight(Math.max(MIN_PLOT_HEIGHT, Math.round(entry.contentRect.height)));
+    });
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
@@ -103,7 +109,11 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
           size="small"
           className="result-chart-select"
           value={config.categoryKey}
-          options={options.categories.map((column) => ({ value: column.key, label: column.label }))}
+          // 行号永远可选：只有一列数值的结果（select count(*)、单指标时序）也能画。
+          options={[
+            { value: ROW_NUMBER_CATEGORY, label: '行号' },
+            ...options.categories.map((column) => ({ value: column.key, label: column.label }))
+          ]}
           onChange={(value) => setConfig({ ...config, categoryKey: value })}
         />
         <Select
@@ -125,10 +135,10 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
       {model.series.length === 0 || model.categories.length === 0 ? (
         <Empty description="没有可绘制的数据" />
       ) : (
-        <div className="result-chart-plot">
+        <div className="result-chart-plot" ref={plotRef}>
           {model.type === 'pie'
-            ? <PieChart model={model} width={width} onHover={setHover} hover={hover} />
-            : <CartesianChart model={model} width={width} onHover={setHover} hover={hover} />}
+            ? <PieChart model={model} width={width} height={height} onHover={setHover} hover={hover} />
+            : <CartesianChart model={model} width={width} height={height} onHover={setHover} hover={hover} />}
           {hover && <ChartTooltip model={model} hover={hover} />}
         </div>
       )}
@@ -159,14 +169,15 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
 
 type HoverState = { index: number; x: number; y: number } | null;
 
-function CartesianChart({ model, width, hover, onHover }: {
+function CartesianChart({ model, width, height, hover, onHover }: {
   model: ChartModel;
   width: number;
+  height: number;
   hover: HoverState;
   onHover: (hover: HoverState) => void;
 }) {
   const plotWidth = Math.max(1, width - PLOT_PADDING.left - PLOT_PADDING.right);
-  const plotHeight = HEIGHT - PLOT_PADDING.top - PLOT_PADDING.bottom;
+  const plotHeight = height - PLOT_PADDING.top - PLOT_PADDING.bottom;
   const ticks = niceTicks(model.min, model.max);
   const domainMin = Math.min(...ticks);
   const domainMax = Math.max(...ticks);
@@ -194,7 +205,7 @@ function CartesianChart({ model, width, hover, onHover }: {
     <svg
       className="result-chart-svg"
       width={width}
-      height={HEIGHT}
+      height={height}
       role="img"
       aria-label={`${model.series.map((item) => item.label).join('、')} 按 ${model.categories.length} 个分类的图表`}
       onMouseMove={pick}
@@ -297,7 +308,7 @@ function CartesianChart({ model, width, hover, onHover }: {
             key={name + index}
             className="result-chart-axis-text"
             x={PLOT_PADDING.left + (index + 0.5) * bandWidth}
-            y={HEIGHT - PLOT_PADDING.bottom + 20}
+            y={height - PLOT_PADDING.bottom + 20}
             textAnchor="middle"
           >
             {truncate(name, Math.max(4, Math.floor((bandWidth * labelStep) / 8)))}
@@ -308,22 +319,23 @@ function CartesianChart({ model, width, hover, onHover }: {
   );
 }
 
-function PieChart({ model, width, hover, onHover }: {
+function PieChart({ model, width, height, hover, onHover }: {
   model: ChartModel;
   width: number;
+  height: number;
   hover: HoverState;
   onHover: (hover: HoverState) => void;
 }) {
   const values = model.series[0].values.map((value) => value ?? 0);
   const total = values.reduce((sum, value) => sum + value, 0);
-  const radius = Math.min(HEIGHT, width) / 2 - 24;
+  const radius = Math.min(height, width) / 2 - 24;
   const centerX = width / 2;
-  const centerY = HEIGHT / 2;
+  const centerY = height / 2;
   if (total <= 0) return <Empty description="所选列的合计为 0，无法绘制饼图" />;
 
   let angle = -Math.PI / 2;
   return (
-    <svg className="result-chart-svg" width={width} height={HEIGHT} role="img" aria-label="占比饼图">
+    <svg className="result-chart-svg" width={width} height={height} role="img" aria-label="占比饼图">
       {values.map((value, index) => {
         const sweep = (value / total) * Math.PI * 2;
         const path = arcPath(centerX, centerY, radius, angle, angle + sweep);

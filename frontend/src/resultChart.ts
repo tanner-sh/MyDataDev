@@ -29,6 +29,14 @@ export const MAX_PIE_SLICES = 6;
  */
 export const SCALE_MISMATCH_RATIO = 20;
 
+/**
+ * 「行号」这个分类轴的取值。
+ *
+ * 它不会匹配任何一列，buildChartModel 据此回落到行序号。有了它，只有一列数值的结果
+ * （select count(*)、单指标时序）也能画图，而不是被判成「没有可用于绘图的数值列」。
+ */
+export const ROW_NUMBER_CATEGORY = '__row_number__';
+
 const NUMERIC_TYPES = /(^|\s)(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|number|real|float|double|serial|bigserial|money)(\s|$|\()/i;
 const NUMERIC_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 /** 判定「这列是不是数值」时抽查的行数，全表扫描没有必要。 */
@@ -103,11 +111,15 @@ export function canChartResult(columns: ResultColumn[], rows: unknown[][]): bool
  */
 export function suggestChartConfig(columns: ResultColumn[], rows: unknown[][]): ChartConfig | null {
   const { categories, values } = chartableColumns(columns, rows);
-  if (values.length === 0 || categories.length === 0) return null;
-  const category = categories[0];
-  const valueKeys = values.filter((column) => column.key !== category.key).slice(0, 4).map((column) => column.key);
-  if (valueKeys.length === 0) return null;
-  return { type: 'bar', categoryKey: category.key, valueKeys };
+  if (values.length === 0) return null;
+  // 分类轴优先用非数值列；整张表都是数值时用行号，而不是拿一列数值去当横轴。
+  const category = categories.find((column) => !values.some((value) => value.key === column.key));
+  const categoryKey = category ? category.key : ROW_NUMBER_CATEGORY;
+  const remaining = values.filter((column) => column.key !== categoryKey);
+  if (remaining.length === 0) return null;
+  // 只默认选第一条数值列。默认全选看起来「信息更多」，但多列指标的量级往往差几个数量级
+  // （订单数 vs 订单金额），叠在同一个坐标轴上小的那条会直接贴在 0 线上看不见。
+  return { type: 'bar', categoryKey, valueKeys: [remaining[0].key] };
 }
 
 export function buildChartModel(columns: ResultColumn[], rows: unknown[][], config: ChartConfig): ChartModel {

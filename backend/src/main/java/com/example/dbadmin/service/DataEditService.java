@@ -758,7 +758,7 @@ public class DataEditService {
         if (value instanceof Float number && !Float.isFinite(number)) return number.toString();
         if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
         if (value instanceof Number || value instanceof Boolean) return value;
-        return truncateText(value.toString(), "", maxTextChars);
+        return truncateText(CellValues.text(value), "", maxTextChars);
     }
 
     private Object readDisplayValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {

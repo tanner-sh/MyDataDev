@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareResultValues, filterResultRows, matchesResultFilter, sortResultRows, suggestedResultColumnWidth } from './resultGridData';
+import { compareResultValues, filterResultRows, isNumericColumnType, matchesResultFilter, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, textUnits } from './resultGridData';
 
 describe('result grid sorting', () => {
   it('sorts numbers, booleans, natural text and null values', () => {
@@ -48,12 +48,36 @@ describe('result grid filtering', () => {
 });
 
 describe('result grid column widths', () => {
-  it('uses column types and sampled values without producing extreme widths', () => {
-    const numeric = { key: 'c1', label: 'ID', typeName: 'INTEGER' };
-    const text = { key: 'c2', label: 'description', typeName: 'VARCHAR' };
+  it('窄内容的列不再和宽内容的列一样宽', () => {
+    const id = { key: 'c1', label: 'ID', typeName: 'INTEGER' };
+    const orderNo = { key: 'c2', label: '订单号', typeName: 'VARCHAR' };
 
-    expect(suggestedResultColumnWidth(numeric, 0, [[1], [200]])).toBeGreaterThanOrEqual(124);
-    expect(suggestedResultColumnWidth(text, 0, [['a very useful description']])).toBeGreaterThan(148);
-    expect(suggestedResultColumnWidth(text, 0, [['x'.repeat(1_000)]])).toBe(320);
+    // 改之前两者都被类型下限顶到 124/148，实际渲染出来几乎一样宽。
+    expect(suggestedResultColumnWidth(id, 0, [[1], [200]]))
+      .toBeLessThan(suggestedResultColumnWidth(orderNo, 0, [['SO2025000001']]));
+  });
+
+  it('汉字按两倍宽度计算', () => {
+    const status = { key: 'c1', label: 'x', typeName: 'VARCHAR' };
+    expect(suggestedResultColumnWidth(status, 0, [['待付款处理中']]))
+      .toBeGreaterThan(suggestedResultColumnWidth(status, 0, [['abcdef']]));
+    expect(textUnits('待付款')).toBe(6);
+    expect(textUnits('abc')).toBe(3);
+  });
+
+  it('整列为空时靠类型下限兜底，超长内容裁到上限', () => {
+    const empty = { key: 'c1', label: 'note', typeName: 'VARCHAR' };
+    expect(suggestedResultColumnWidth(empty, 0, [[null], [null]])).toBeGreaterThanOrEqual(MIN_RESULT_COLUMN_WIDTH);
+    expect(suggestedResultColumnWidth(empty, 0, [['x'.repeat(1_000)]])).toBe(320);
+  });
+
+  it('识别数值列，且不把 INTERVAL 当成 INT', () => {
+    expect(isNumericColumnType('BIGINT')).toBe(true);
+    expect(isNumericColumnType('DECIMAL(14,2)')).toBe(true);
+    expect(isNumericColumnType('NUMBER')).toBe(true);
+    expect(isNumericColumnType('int unsigned')).toBe(true);
+    expect(isNumericColumnType('INTERVAL DAY TO SECOND')).toBe(false);
+    expect(isNumericColumnType('VARCHAR')).toBe(false);
+    expect(isNumericColumnType(undefined)).toBe(false);
   });
 });

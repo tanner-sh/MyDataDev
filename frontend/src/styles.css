@@ -531,6 +531,21 @@ body {
   line-height: 20px;
 }
 
+/*
+  数值靠右并用等宽数字：左对齐时 7095792.06 和 361310.32 要数位数才比得出大小。
+  只作用在数据行上 —— 表头里还有排序/筛选图标和列宽拖拽手柄，右对齐会把它们挤到一起。
+*/
+/*
+  不能写成 td.numeric-column：两张表在行数多时都会切到虚拟滚动，届时单元格是 div 而不是
+  td，按标签名写的选择器会整个落空。
+*/
+.result-grid .numeric-column,
+.editable-grid .numeric-column,
+.editable-grid .numeric-column .editable-cell-display {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 .result-grid .result-selection-column {
   padding: 0 !important;
   text-align: center !important;
@@ -729,8 +744,25 @@ body {
   font-style: italic;
 }
 
+/*
+  表数据的密度对齐到查询结果表（12px / 每行约 30px）。
+  改之前这里是 13px 字号加上更松的内边距，一行 50px —— 1440×900 一屏只能看 14 行，
+  而这恰恰是要翻上百行的地方。
+*/
+/*
+  行高必须显式给，不能只收内边距：虚拟滚动要求每行等高，antd 会按自己的 token 定一个
+  （实测 48px），单元格内容只有 24px 时那 20px 是纯空白。查询结果表早就这么写了，
+  这里对齐它。
+*/
 .editable-grid .ant-table-cell {
-  padding: 4px !important;
+  height: 30px;
+  padding: 2px 4px !important;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.editable-grid .ant-table-thead > tr > th {
+  height: 30px;
 }
 
 .editable-grid .ant-table-thead > tr > th {
@@ -803,13 +835,13 @@ body.is-resizing-column * {
 
 .editable-cell-display {
   min-width: 0;
-  min-height: 24px;
-  padding: 3px 6px;
+  min-height: 22px;
+  padding: 2px 6px;
   overflow: hidden;
   border: 1px solid transparent;
   border-radius: 4px;
   cursor: text;
-  line-height: 16px;
+  line-height: 18px;
   white-space: nowrap;
 }
 
@@ -4263,6 +4295,12 @@ body.is-resizing-column * {
   色位顺序本身就是色觉安全机制，不要随手调换。
 */
 .result-chart {
+  /*
+    用 flex 而不是 grid 定行：提示条和图例都是按需出现的，子元素个数在 2~4 之间变。
+    grid-template-rows 写死四行时，单序列（无图例无提示）只有两个子元素，绘图区会落到
+    第二行的 auto 上，于是永远只有最小高度。flex:1 与子元素个数无关。
+  */
+  height: 100%;
   --chart-series-1: #2a78d6;
   --chart-series-2: #eb6834;
   --chart-series-3: #1baf7a;
@@ -4275,10 +4313,12 @@ body.is-resizing-column * {
   --chart-axis: var(--border);
   --chart-ink-muted: var(--text-secondary);
 
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   padding: 10px 12px 14px;
   min-width: 0;
+  min-height: 0;
 }
 
 :root[data-theme="dark"] .result-chart {
@@ -4312,11 +4352,14 @@ body.is-resizing-column * {
 
 .result-chart-plot {
   position: relative;
+  flex: 1 1 auto;
   min-width: 0;
-  overflow-x: auto;
+  min-height: 240px;
 }
 
 .result-chart-svg {
+  position: absolute;
+  inset: 0;
   display: block;
 }
 

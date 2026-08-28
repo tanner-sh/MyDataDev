@@ -21,6 +21,9 @@ const { Header } = Layout;
 const { Text } = Typography;
 const EDITOR_OPTIONS = {
   minimap: { enabled: false },
+  // SQL 常常是一条很长的语句。不换行时编辑器会横向滚动，把开头的 select 滚出视野，
+  // 用户只能看到语句中段。
+  wordWrap: 'on',
   fontSize: 14,
   lineHeight: 22,
   padding: { top: 12, bottom: 12 },

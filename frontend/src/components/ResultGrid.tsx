@@ -8,7 +8,7 @@ import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
-import { filterResultRows, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { filterResultRows, isNumericColumnType, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { explainFindings, explainRowLevels } from '../explainInsights';
 import { downloadBlob } from '../api';
 import {
@@ -277,6 +277,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             ),
             key: column.key,
             width,
+            // 数值靠右：左对齐时要靠数位数才能比出 7095792.06 和 361310.32 谁大。
+            className: isNumericColumnType(column.typeName) ? 'numeric-column' : undefined,
             ellipsis: true,
             sorter: true,
             sortOrder: sortState?.key === column.key ? sortState.order : null,

@@ -759,9 +759,9 @@ public class SqlService {
         if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
         if (value instanceof Number || value instanceof Boolean) return value;
         if (value instanceof java.util.Date || value instanceof java.time.temporal.TemporalAccessor || value instanceof UUID) {
-            return truncateText(value.toString(), "", maxTextChars);
+            return truncateText(CellValues.text(value), "", maxTextChars);
         }
-        return truncateText(value.toString(), "", maxTextChars);
+        return truncateText(CellValues.text(value), "", maxTextChars);
     }
 
     private Object serializableValue(ResultSet rs, ResultSetMetaData metadata, int index, int maxTextChars) throws Exception {

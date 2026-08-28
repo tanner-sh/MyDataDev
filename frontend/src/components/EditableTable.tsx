@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { isNumericColumnType, suggestedResultColumnWidth } from '../resultGridData';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button, Empty, Input, Spin, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
@@ -118,6 +119,8 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
         ),
         key: column.name,
         width: columnWidths[column.name] || suggestedWidths.get(column.name),
+        // 与查询结果表一致：数值列靠右。
+        className: isNumericColumnType(column.typeName) ? 'numeric-column' : undefined,
         ellipsis: true,
         shouldCellUpdate: shouldEditableCellUpdate,
         render: (_: unknown, row: EditableDisplayRow, rowIndex: number) => {
@@ -290,13 +293,12 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
   );
 });
 
+/** 与查询结果表共用同一套估宽规则，两张表的列宽不该有两种算法。 */
 function suggestedColumnWidth(column: TableColumn, rows: Record<string, unknown>[]) {
-  const type = column.typeName.toLocaleUpperCase();
-  const base = /BOOL|BIT/.test(type) ? 104 : /DATE|TIME/.test(type) ? 176 : /INT|DECIMAL|NUMERIC|FLOAT|DOUBLE/.test(type) ? 132 : 156;
-  const longest = rows.slice(0, 30).reduce(
-    (length, row) => Math.max(length, String(row[column.name] ?? '').length),
-    Math.max(column.name.length, column.typeName.length)
+  return suggestedResultColumnWidth(
+    { key: column.name, label: column.name, typeName: column.typeName },
+    0,
+    rows.map((row) => [row[column.name]])
   );
-  return Math.min(300, Math.max(base, longest * 8 + 32));
 }
 

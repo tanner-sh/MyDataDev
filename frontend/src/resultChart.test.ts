@@ -7,6 +7,7 @@ import {
   MAX_CATEGORIES,
   MAX_PIE_SLICES,
   niceTicks,
+  ROW_NUMBER_CATEGORY,
   suggestChartConfig,
   toChartNumber
 } from './resultChart';
@@ -60,8 +61,31 @@ describe('result chart', () => {
     expect(suggestChartConfig(textual, [['甲']])).toBeNull();
   });
 
-  it('默认配置取第一列分类轴与前若干列数值', () => {
-    expect(suggestChartConfig(columns, rows)).toEqual({ type: 'bar', categoryKey: 'c0', valueKeys: ['c1', 'c2'] });
+  it('默认只选一条数值列，避免量级悬殊的列叠在一起', () => {
+    // 默认全选看起来「信息更多」，但订单数(百) 和 订单金额(百万) 叠在同一坐标轴上时，
+    // 小的那条会直接贴在 0 线上看不见。
+    expect(suggestChartConfig(columns, rows)).toEqual({ type: 'bar', categoryKey: 'c0', valueKeys: ['c1'] });
+  });
+
+  it('整张表都是数值时用行号当分类轴，而不是判定「没有数值列」', () => {
+    const single: ResultColumn[] = [{ key: 'c0', label: 'val', typeName: 'INTEGER' }];
+    const config = suggestChartConfig(single, [[1]]);
+    expect(config).toEqual({ type: 'bar', categoryKey: ROW_NUMBER_CATEGORY, valueKeys: ['c0'] });
+
+    // 行号分类轴不匹配任何一列，建模时回落成 1、2、3…
+    const model = buildChartModel(single, [[10], [20]], config!);
+    expect(model.categories).toEqual(['1', '2']);
+    expect(model.series[0].values).toEqual([10, 20]);
+  });
+
+  it('两列都是数值时，第一列当分类轴的位置让给行号', () => {
+    const numeric: ResultColumn[] = [
+      { key: 'c0', label: 'year', typeName: 'INT' },
+      { key: 'c1', label: 'total', typeName: 'INT' }
+    ];
+    const config = suggestChartConfig(numeric, [[2024, 10]]);
+    expect(config?.categoryKey).toBe(ROW_NUMBER_CATEGORY);
+    expect(config?.valueKeys).toEqual(['c0']);
   });
 
   it('柱状图基线固定在 0，有负值时向下延伸', () => {
