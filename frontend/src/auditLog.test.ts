@@ -57,6 +57,14 @@ describe('auditTargetLabel', () => {
 
   it('falls back to the id for deleted connections', () => {
     expect(auditTargetLabel('connection:7')).toBe('连接 #7');
+    // 连接删掉之后名字只剩 subject 里这一份，得留着。
+    expect(auditTargetLabel('connection:7 本地商城库')).toBe('连接 #7 · 本地商城库');
+  });
+
+  it('连接自身的增删改不重复显示连接名', () => {
+    // CONNECTION_CREATE/UPDATE/DELETE 把连接名写进了 subject；连接还在时前端已经解析出
+    // 同一个名字，再拼一次就成了「X · X」。
+    expect(auditTargetLabel('connection:7 本地商城库', '本地商城库')).toBe('本地商城库');
   });
 
   it('passes through targets it does not recognise', () => {

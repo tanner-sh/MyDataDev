@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty } from './PanelState';
-import { DRAWER_WIDTH } from '../constants';
-import { Button, DatePicker, Drawer, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Button, DatePicker, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
 import type { AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
@@ -21,10 +20,16 @@ import {
 
 const { Text } = Typography;
 
-export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, onClose }: {
+/**
+ * 审计日志面板。
+ *
+ * 原来自带 Drawer 外壳，现在只渲染内容 —— 管理类面板统一嵌在一个带左侧导航的抽屉里，
+ * 各面板自己再套一层抽屉的话，用户从「备份」跳到「审计」就得先关再开。
+ */
+export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: {
+  /** 面板是否可见。不可见时不取数，切回来会重新拉一次。 */
   open: boolean;
   connections: Connection[];
-  onClose: () => void;
 }) {
   const [query, setQuery] = useState<AuditQuery>(INITIAL_AUDIT_QUERY);
   const [keywordDraft, setKeywordDraft] = useState('');
@@ -114,12 +119,9 @@ export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, 
   const items = page?.items || [];
 
   return (
-    <Drawer
-      title="审计日志"
-      size={DRAWER_WIDTH.browse}
-      open={open}
-      rootClassName="management-drawer"
-      extra={
+    <div className="management-section">
+      <header className="management-section-header">
+        <Text strong>审计日志</Text>
         <Space size={4}>
           <Tooltip title="导出当前页为 CSV">
             <Button size="small" icon={<DownloadOutlined />} disabled={items.length === 0} onClick={exportVisible}>导出本页</Button>
@@ -128,9 +130,7 @@ export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, 
             <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void load(query)} />
           </Tooltip>
         </Space>
-      }
-      onClose={onClose}
-    >
+      </header>
       <div className="audit-filters">
         <Input.Search
           allowClear
@@ -250,6 +250,6 @@ export const AuditLogDrawer = memo(function AuditLogDrawer({ open, connections, 
           </Button>
         </Space>
       </div>
-    </Drawer>
+    </div>
   );
 });

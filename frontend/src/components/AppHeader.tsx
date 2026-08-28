@@ -1,14 +1,10 @@
-import { Badge, Button, Dropdown, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Badge, Button, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import {
-  ApiOutlined,
-  AuditOutlined,
   CloudServerOutlined,
   DatabaseOutlined,
-  DiffOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
-  MoreOutlined,
   ReloadOutlined,
   SettingOutlined,
   StarFilled,
@@ -32,17 +28,13 @@ type AppHeaderProps = {
   backgroundTasks: BackgroundTaskSummary;
   explorerCollapsed: boolean;
   themeMode: 'light' | 'dark';
-  /** 窄屏：低频入口收进「更多」菜单，避免一排难以分辨的纯图标。 */
-  overflowActions: boolean;
   onToggleExplorer: () => void;
   onSelectConnection: (connection: Connection) => void;
   onRefreshConnections: () => void;
-  onOpenConnections: () => void;
+  /** 打开管理抽屉（默认落在连接管理）。 */
+  onOpenManagement: () => void;
+  /** 后台任务徽标：直接落到备份分区。 */
   onOpenBackups: () => void;
-  onOpenMcp: () => void;
-  onOpenAudit: () => void;
-  onOpenSessions: () => void;
-  onOpenSchemaDiff: () => void;
   onToggleTheme: () => void;
 };
 
@@ -54,16 +46,11 @@ export const AppHeader = memo(function AppHeader({
   backgroundTasks,
   explorerCollapsed,
   themeMode,
-  overflowActions,
   onToggleExplorer,
   onSelectConnection,
   onRefreshConnections,
-  onOpenConnections,
+  onOpenManagement,
   onOpenBackups,
-  onOpenMcp,
-  onOpenAudit,
-  onOpenSessions,
-  onOpenSchemaDiff,
   onToggleTheme
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
@@ -162,55 +149,13 @@ export const AppHeader = memo(function AppHeader({
             onClick={onRefreshConnections}
           />
         </Tooltip>
-        <Tooltip title="连接管理">
-          <Button type="text" icon={<SettingOutlined />} aria-label="连接管理" onClick={onOpenConnections}>连接管理</Button>
-        </Tooltip>
-        <Tooltip title="备份任务">
-          <Button type="text" icon={<CloudServerOutlined />} aria-label="备份任务" disabled={!selected} onClick={onOpenBackups}>备份任务</Button>
-        </Tooltip>
         {/*
-          窄屏下按钮会被 CSS 收成纯图标，而 MCP / 会话 / 结构对比 / 审计 这四个图标在 16px
-          下辨识度都不高（结构对比与审计都是「一张纸」）。与其继续挑图标，不如把这四个低频
-          入口收进一个带文字的菜单 —— 文字永远比相似的字形好认。
+          管理类入口只留一个。之前这里有 6 个按钮，窄屏下会收成 6 个纯图标，其中「结构对比」
+          与「审计」的字形几乎一样；把它们收进带左侧导航的管理抽屉之后，这个问题从根上没了。
         */}
-        {overflowActions ? (
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                { key: 'mcp', icon: <ApiOutlined />, label: 'MCP Server 设置' },
-                { key: 'sessions', icon: <ThunderboltOutlined />, label: '活动会话', disabled: !selected },
-                { key: 'schema-diff', icon: <DiffOutlined />, label: '结构对比与同步' },
-                { key: 'audit', icon: <AuditOutlined />, label: '审计日志' }
-              ],
-              onClick: ({ key }) => {
-                if (key === 'mcp') onOpenMcp();
-                else if (key === 'sessions') onOpenSessions();
-                else if (key === 'schema-diff') onOpenSchemaDiff();
-                else if (key === 'audit') onOpenAudit();
-              }
-            }}
-          >
-            <Tooltip title="更多工具">
-              <Button type="text" className="header-icon-button" icon={<MoreOutlined />} aria-label="更多工具" />
-            </Tooltip>
-          </Dropdown>
-        ) : (
-          <>
-            <Tooltip title="MCP Server 设置">
-              <Button type="text" icon={<ApiOutlined />} aria-label="MCP Server 设置" onClick={onOpenMcp}>MCP</Button>
-            </Tooltip>
-            <Tooltip title="目标库活动会话">
-              <Button type="text" icon={<ThunderboltOutlined />} aria-label="活动会话" disabled={!selected} onClick={onOpenSessions}>会话</Button>
-            </Tooltip>
-            <Tooltip title="结构对比与同步">
-              <Button type="text" icon={<DiffOutlined />} aria-label="结构对比" onClick={onOpenSchemaDiff}>结构对比</Button>
-            </Tooltip>
-            <Tooltip title="审计日志">
-              <Button type="text" icon={<AuditOutlined />} aria-label="审计日志" onClick={onOpenAudit}>审计</Button>
-            </Tooltip>
-          </>
-        )}
+        <Tooltip title="管理：连接、备份、结构对比、MCP、会话、审计">
+          <Button type="text" icon={<SettingOutlined />} aria-label="打开管理面板" onClick={onOpenManagement}>管理</Button>
+        </Tooltip>
         <Tooltip title={themeMode === 'light' ? '切换深色主题' : '切换浅色主题'}>
           <Button
             type="text"

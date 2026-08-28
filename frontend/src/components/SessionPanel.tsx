@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { DRAWER_WIDTH } from '../constants';
-import { Alert, Button, Drawer, Empty, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Empty, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
 import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
@@ -27,13 +26,13 @@ const { Text } = Typography;
  * 默认自动刷新（5 秒）—— 排查锁等待时静态快照没有意义；可以关掉，避免在生产上持续查询
  * 系统视图。
  */
-export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, connectionName, productionConfirmationText, onClose, onRequestConfirmation }: {
+/** 活动会话面板。与审计日志同样改成纯内容，由管理抽屉统一承载外壳。 */
+export const SessionPanel = memo(function SessionPanel({ open, connectionId, connectionName, productionConfirmationText, onRequestConfirmation }: {
   open: boolean;
   connectionId?: number;
   connectionName?: string;
   /** 生产连接需要确认串才能终止会话。 */
   productionConfirmationText?: string;
-  onClose: () => void;
   onRequestConfirmation: (action: string) => Promise<string | undefined>;
 }) {
   const [page, setPage] = useState<DatabaseSessionPage | null>(null);
@@ -94,12 +93,9 @@ export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, c
   const sessions = orderSessions(page?.sessions || []);
 
   return (
-    <Drawer
-      title={connectionName ? `活动会话 · ${connectionName}` : '活动会话'}
-      size={DRAWER_WIDTH.browse}
-      open={open}
-      rootClassName="management-drawer"
-      extra={
+    <div className="management-section">
+      <header className="management-section-header">
+        <Text strong>{connectionName ? `活动会话 · ${connectionName}` : '活动会话'}</Text>
         <Space size={8}>
           <Tooltip title="每 5 秒自动刷新。排查锁等待时静态快照没有意义；在生产上可以关掉，避免持续查询系统视图。">
             <Space size={4}>
@@ -109,9 +105,7 @@ export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, c
           </Tooltip>
           <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
         </Space>
-      }
-      onClose={onClose}
-    >
+      </header>
       {error && <Alert className="session-alert" type="error" showIcon title="读取活动会话失败" description={error} />}
       {page && !page.supported && <Alert className="session-alert" type="info" showIcon title={sessionSummary(page)} />}
       {page?.supported && page.message && <Alert className="session-alert" type="warning" showIcon title={page.message} />}
@@ -165,6 +159,6 @@ export const SessionDrawer = memo(function SessionDrawer({ open, connectionId, c
         </Typography.Paragraph>
         {pendingKill?.sql && <pre className="session-item-sql">{pendingKill.sql}</pre>}
       </Modal>
-    </Drawer>
+    </div>
   );
 });

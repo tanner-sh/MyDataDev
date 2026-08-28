@@ -7,6 +7,9 @@ MyDataDev 是一个数据库工作台，由三个模块组成：`backend`（Spri
 ## 常用命令
 
 ```bash
+# 界面冒烟（需要先跑起前后端；用系统 Chrome，不装 Playwright）
+node scripts/ui-smoke.mjs --shots ./ui-shots
+
 # 后端（无 mvnw wrapper，直接用 mvn）
 cd backend && mvn spring-boot:run           # 启动 API，端口 8080
 cd backend && mvn test                      # 全部测试
@@ -75,7 +78,9 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 
 ### 前端结构
 
-`src/App.tsx`（约 2700 行）是唯一的状态容器：连接选择、SQL 标签页、表格工作区、后台任务轮询、生产确认弹窗都在这里。所有重型面板（`SqlWorkspace`、`ObjectDetailWorkspace`、`BackupPanel`、`McpSettingsPanel` 等）通过 `React.lazy` 懒加载 —— 这是构建体积预算能通过的前提。
+`src/App.tsx` 是唯一的状态容器：连接选择、SQL 标签页、表格工作区、生产确认弹窗都在这里。
+
+管理类面板（连接、备份与恢复、结构对比、MCP、活动会话、审计）**共用一个带左侧导航的抽屉**，分区定义在 `src/managementSections.ts`。新增管理面板 = 往那份清单里加一项 + 在抽屉里加一个分支，不要再开一个新的 `<Drawer>`。所有重型面板（`SqlWorkspace`、`ObjectDetailWorkspace`、`BackupPanel`、`McpSettingsPanel` 等）通过 `React.lazy` 懒加载 —— 这是构建体积预算能通过的前提。
 
 样式走 `src/styles.css` 顶部的令牌：间距 `--space-*`、圆角 `--radius-*`、字号 `--text-*`。**`App.tsx` 里 `ConfigProvider` 的 `borderRadius` / `fontSize` 必须和 `--radius-md` / `--text-md` 保持同值**——两套尺度一旦分叉，就会退回到用 `!important` 互相覆盖。字号下限是 11px（`--text-xs`），中文在更小的字号下笔画会糊。抽屉宽度只有 `DRAWER_WIDTH` 的三档，不要再现拍新值。空状态与加载态一律用 `components/PanelState.tsx` 的 `PanelEmpty` / `PanelLoading`，不要各自再写一套骨架。
 

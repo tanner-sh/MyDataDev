@@ -136,7 +136,10 @@ export function auditTargetLabel(target: string | null | undefined, connectionNa
   if (connectionId === undefined) return target;
   const rest = target.slice(`connection:${connectionId}`.length).trim();
   const head = connectionName || `连接 #${connectionId}`;
-  return rest ? `${head} · ${rest}` : head;
+  // 连接自身的增删改把连接名写进了 subject（连接删掉之后 id 就查不到名字了，那时它是
+  // 唯一线索）。但连接还在时前端已经解析出同一个名字，再拼一次就成了「X · X」。
+  if (!rest || rest === head) return head;
+  return `${head} · ${rest}`;
 }
 
 export function auditRequestParams(query: AuditQuery, pageSize = AUDIT_PAGE_SIZE): string {

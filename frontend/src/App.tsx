@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelLoading } from './components/PanelState';
 import type * as Monaco from 'monaco-editor';
-import { Button, ConfigProvider, Drawer, Input, Modal, Space, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
@@ -29,6 +29,13 @@ import {
 } from './sqlHistoryQuery';
 import { useBackgroundTasks } from './hooks/useBackgroundTasks';
 import { useSqlHistory } from './hooks/useSqlHistory';
+import {
+  MANAGEMENT_SECTIONS,
+  isManagementSectionAvailable,
+  managementSectionLabel,
+  resolveManagementSection,
+  type ManagementSection
+} from './managementSections';
 import { backgroundImportPrompt, importRoute, oversizedRowsRoute, type ImportRoute } from './dataImport';
 import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
 import { createUuid } from './createUuid';
@@ -90,8 +97,8 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
-const SessionDrawer = lazy(() => import('./components/SessionDrawer').then((module) => ({ default: module.SessionDrawer })));
-const AuditLogDrawer = lazy(() => import('./components/AuditLogDrawer').then((module) => ({ default: module.AuditLogDrawer })));
+const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
+const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
 const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
@@ -150,11 +157,11 @@ export default function App() {
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [activeDrawer, setActiveDrawer] = useState<'connections' | 'backups' | 'mcp' | 'audit' | 'sessions' | 'schema-diff' | null>(null);
+  // 管理类面板全部收进一个带左侧导航的抽屉。之前是 6 个头部入口通向 5 个互斥的抽屉，
+  // 从「备份」跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
+  const [activeDrawer, setActiveDrawer] = useState<ManagementSection | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
-  // 与 styles.css 里收起按钮文字的断点保持一致（--breakpoint-shell-compact）。
-  const [headerOverflow, setHeaderOverflow] = useState(false);
   const [mobileExplorerOpen, setMobileExplorerOpen] = useState(false);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
@@ -252,17 +259,10 @@ export default function App() {
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1199px)');
-    const compactMedia = window.matchMedia('(max-width: 1099px)');
-    const syncOverflow = () => setHeaderOverflow(compactMedia.matches);
-    syncOverflow();
-    compactMedia.addEventListener('change', syncOverflow);
     const syncLayout = () => setCompactLayout(media.matches);
     syncLayout();
     media.addEventListener('change', syncLayout);
-    return () => {
-      compactMedia.removeEventListener('change', syncOverflow);
-      media.removeEventListener('change', syncLayout);
-    };
+    return () => media.removeEventListener('change', syncLayout);
   }, []);
 
   useEffect(() => {
@@ -803,7 +803,7 @@ export default function App() {
     });
   }
 
-  function closeConnectionDrawer() {
+  function closeManagementDrawer() {
     setActiveDrawer(null);
   }
 
@@ -2676,7 +2676,7 @@ export default function App() {
       : null, [activeObjectTarget, activeTable, metadata?.currentSchema, metadata?.selectedSchema, mode]);
   const refreshExplorer = useStableEvent(() => requestRefreshDatabaseObjects());
   const closeMobileExplorer = useStableEvent(() => setMobileExplorerOpen(false));
-  const openConnectionsFromExplorer = useStableEvent(() => setActiveDrawer('connections'));
+  const openConnectionsFromExplorer = useStableEvent(() => setActiveDrawer('connections'));  // 资源管理器里的「选择连接」入口
   const changeExplorerSchema = useStableEvent((schema: string, kind: ExplorerObjectKind) => {
     clearMetadataSearchTimer();
     setMetadataQuery((current) => ({ ...current, schema }));
@@ -2702,12 +2702,11 @@ export default function App() {
     : layoutPreferences.toggleExplorer());
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
-  const openConnectionsFromHeader = useStableEvent(() => setActiveDrawer('connections'));
-  const openBackupsFromHeader = useStableEvent(() => setActiveDrawer('backups'));
-  const openMcpFromHeader = useStableEvent(() => setActiveDrawer('mcp'));
-  const openAuditFromHeader = useStableEvent(() => setActiveDrawer('audit'));
-  const openSessionsFromHeader = useStableEvent(() => setActiveDrawer('sessions'));
-  const openSchemaDiffFromHeader = useStableEvent(() => setActiveDrawer('schema-diff'));
+  const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
+  // 后台任务徽标点开直接落到备份分区，而不是让用户再从导航里找一次。
+  const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
+  const openManagement = useStableEvent((section: ManagementSection) =>
+    setActiveDrawer(resolveManagementSection(section, Boolean(selected))));
   const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
     // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
     setActiveDrawer(null);
@@ -2954,16 +2953,11 @@ export default function App() {
           backgroundTasks={backgroundTasks}
           explorerCollapsed={compactLayout ? !mobileExplorerOpen : layoutPreferences.explorerCollapsed}
           themeMode={layoutPreferences.themeMode}
-          overflowActions={headerOverflow}
           onToggleExplorer={toggleExplorerFromHeader}
           onSelectConnection={selectConnectionFromHeader}
           onRefreshConnections={refreshConnectionsFromHeader}
-          onOpenConnections={openConnectionsFromHeader}
+          onOpenManagement={openManagementFromHeader}
           onOpenBackups={openBackupsFromHeader}
-          onOpenMcp={openMcpFromHeader}
-          onOpenAudit={openAuditFromHeader}
-          onOpenSessions={openSessionsFromHeader}
-          onOpenSchemaDiff={openSchemaDiffFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -2992,7 +2986,7 @@ export default function App() {
                 <div className="empty-state-content">
                   <Typography.Title level={4}>选择数据库连接后加载 SQL 工作台</Typography.Title>
                   <Text type="secondary">编辑器和数据库元数据会在连接确定后按需加载。</Text>
-                  <Button type="primary" onClick={openConnectionsFromHeader}>打开连接管理</Button>
+                  <Button type="primary" onClick={openManagementFromHeader}>打开连接管理</Button>
                 </div>
               </div>
             ) : mode === 'sql' ? (
@@ -3106,174 +3100,140 @@ export default function App() {
         {explorerPanel}
       </Drawer>
 
+      {/*
+        一个抽屉，左侧导航切换分区。改之前是 6 个头部入口通向 5 个互斥的抽屉：它们不能
+        并存、没有返回路径，从「备份」跳到「审计」得先关再开；九种宽度还让右侧边界一直在跳。
+      */}
       <Drawer
-        title="连接管理"
-        size={DRAWER_WIDTH.form}
-        open={activeDrawer === 'connections' && connectionEditor.mode === 'closed'}
+        title="管理"
+        size={DRAWER_WIDTH.workspace}
+        open={activeDrawer !== null}
         rootClassName="management-drawer"
-        extra={<Button type="primary" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>}
-        onClose={closeConnectionDrawer}
+        onClose={closeManagementDrawer}
+        destroyOnHidden
       >
-        <div className="connection-management-content">
-          {activeDrawer === 'connections' && (
-            <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
-              <ConnectionList
-                connections={connections}
-                favoriteConnectionIds={favoriteConnectionIds}
-                selectedId={selected?.id}
-                connectionsLoading={connectionsLoading}
-                connectionsError={connectionsError}
-                connectionsReady={connectionsReady}
-                testingConnectionId={testingConnectionId}
-                onSwitch={(connection) => selectConnection(connection, closeConnectionDrawer)}
-                onEdit={editConnection}
-                onTest={testSavedConnection}
-                onDuplicate={duplicateConnection}
-                onDelete={deleteConnection}
-                onToggleFavorite={toggleFavoriteConnectionEvent}
-              />
-            </Suspense>
-          )}
+        <div className="management-shell">
+          <nav className="management-nav" aria-label="管理分区">
+            {MANAGEMENT_SECTIONS.map((section) => {
+              const available = isManagementSectionAvailable(section.key, Boolean(selected));
+              return (
+                <Tooltip key={section.key} title={available ? undefined : '请先选择一个数据库连接'}>
+                  <button
+                    type="button"
+                    className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
+                    aria-current={activeDrawer === section.key ? 'page' : undefined}
+                    disabled={!available}
+                    onClick={() => setActiveDrawer(section.key)}
+                  >
+                    {section.label}
+                  </button>
+                </Tooltip>
+              );
+            })}
+          </nav>
+
+          <div className="management-body">
+            {activeDrawer === 'connections' && (
+              <div className="management-section">
+                <header className="management-section-header">
+                  <Text strong>连接管理</Text>
+                  <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>
+                </header>
+                <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
+                  <ConnectionList
+                    connections={connections}
+                    favoriteConnectionIds={favoriteConnectionIds}
+                    selectedId={selected?.id}
+                    connectionsLoading={connectionsLoading}
+                    connectionsError={connectionsError}
+                    connectionsReady={connectionsReady}
+                    testingConnectionId={testingConnectionId}
+                    onSwitch={(connection) => selectConnection(connection, closeManagementDrawer)}
+                    onEdit={editConnection}
+                    onTest={testSavedConnection}
+                    onDuplicate={duplicateConnection}
+                    onDelete={deleteConnection}
+                    onToggleFavorite={toggleFavoriteConnectionEvent}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'backups' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>备份与恢复</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载备份管理…" />}>
+                  <BackupPanel
+                    connections={connections}
+                    backups={backups}
+                    taskPage={backupTaskPage}
+                    taskHasMore={backupTaskHasMore}
+                    selected={selected}
+                    activeTable={currentBackupTable}
+                    loading={backupLoading}
+                    namespaceKind={metadata?.namespaceKind}
+                    editorRequest={backupEditorRequest}
+                    onLoadNamespaces={loadBackupNamespacesEvent}
+                    onLoadTables={loadBackupTablesEvent}
+                    onPreviewSchedule={previewBackupScheduleEvent}
+                    onSave={saveBackupEvent}
+                    onToggle={toggleBackupEvent}
+                    onDelete={deleteBackupEvent}
+                    onRun={runBackupEvent}
+                    onDownload={downloadBackupEvent}
+                    onLoadHistory={loadBackupHistoryEvent}
+                    onLoadTaskPage={loadBackupTaskPageEvent}
+                    onCancelHistory={cancelBackupHistoryEvent}
+                    onDeleteHistory={deleteBackupHistoryEvent}
+                    onDownloadHistory={downloadBackupHistoryEvent}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'schema-diff' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>结构对比与同步</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载结构对比…" />}>
+                  <SchemaDiffPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    onOpenInSqlTab={openSchemaDiffScript}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'mcp' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>MCP Server 设置</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载 MCP 设置…" />}>
+                  <McpSettingsPanel />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'sessions' && (
+              <Suspense fallback={<PanelLoading text="正在读取活动会话…" />}>
+                <SessionPanel
+                  open
+                  connectionId={selected?.id}
+                  connectionName={selected?.name}
+                  productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
+                  onRequestConfirmation={requestProductionConfirmationEvent}
+                />
+              </Suspense>
+            )}
+
+            {activeDrawer === 'audit' && (
+              <Suspense fallback={<PanelLoading text="正在加载审计日志…" />}>
+                <AuditLogPanel open connections={connections} />
+              </Suspense>
+            )}
+          </div>
         </div>
       </Drawer>
 
-      <Modal
-        title={connectionEditor.mode === 'edit'
-          ? `编辑连接：${connectionEditor.connectionName}`
-          : connectionEditor.mode === 'create' && connectionEditor.origin === 'duplicate'
-            ? '复制为新连接'
-            : '新建数据库连接'}
-        width={640}
-        open={connectionEditor.mode !== 'closed'}
-        footer={null}
-        mask={{ closable: !connectionFormDirty && !connectionActionLoading }}
-        closable={!connectionActionLoading}
-        onCancel={closeConnectionEditor}
-        destroyOnHidden
-      >
-        {connectionEditor.mode !== 'closed' && (
-          <Suspense fallback={<PanelLoading text="正在加载连接表单…" />}>
-            <ConnectionFormPanel
-              form={connectionEditor.form}
-              editing={connectionEditor.mode === 'edit'}
-              loading={connectionActionLoading}
-              onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
-              onDbTypeChange={changeDbType}
-              onCancel={closeConnectionEditor}
-              onTest={testConnection}
-              onSave={requestSaveConnection}
-            />
-          </Suspense>
-        )}
-      </Modal>
-
-      <Drawer
-        title="备份与恢复"
-        size={DRAWER_WIDTH.workspace}
-        open={activeDrawer === 'backups'}
-        rootClassName="management-drawer backup-management-drawer"
-        onClose={() => setActiveDrawer(null)}
-        destroyOnHidden
-      >
-        {activeDrawer === 'backups' && (
-          <Suspense fallback={<PanelLoading text="正在加载备份管理…" />}>
-            <BackupPanel
-              connections={connections}
-              backups={backups}
-              taskPage={backupTaskPage}
-              taskHasMore={backupTaskHasMore}
-              selected={selected}
-              activeTable={currentBackupTable}
-              loading={backupLoading}
-              namespaceKind={metadata?.namespaceKind}
-              editorRequest={backupEditorRequest}
-              onLoadNamespaces={loadBackupNamespacesEvent}
-              onLoadTables={loadBackupTablesEvent}
-              onPreviewSchedule={previewBackupScheduleEvent}
-              onSave={saveBackupEvent}
-              onToggle={toggleBackupEvent}
-              onDelete={deleteBackupEvent}
-              onRun={runBackupEvent}
-              onDownload={downloadBackupEvent}
-              onLoadHistory={loadBackupHistoryEvent}
-              onLoadTaskPage={loadBackupTaskPageEvent}
-              onCancelHistory={cancelBackupHistoryEvent}
-              onDeleteHistory={deleteBackupHistoryEvent}
-              onDownloadHistory={downloadBackupHistoryEvent}
-            />
-          </Suspense>
-        )}
-      </Drawer>
-
-      {snippetsOpen && (
-        <Suspense fallback={null}>
-          <SqlSnippetDrawer
-            open
-            dbType={selected?.dbType}
-            pendingDraft={snippetDraft}
-            onClose={() => setSnippetsOpen(false)}
-            onInsert={insertSnippetEvent}
-          />
-        </Suspense>
-      )}
-      {objectSearchOpen && (
-        <Suspense fallback={null}>
-          <ObjectSearchPalette
-            open
-            connectionId={selected?.id}
-            schemaName={activeSqlSchema}
-            onClose={() => setObjectSearchOpen(false)}
-            onOpenHit={openObjectSearchHit}
-          />
-        </Suspense>
-      )}
-      {activeDrawer === 'sessions' && (
-        <Suspense fallback={null}>
-          <SessionDrawer
-            open
-            connectionId={selected?.id}
-            connectionName={selected?.name}
-            productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
-            onClose={() => setActiveDrawer(null)}
-            onRequestConfirmation={requestProductionConfirmationEvent}
-          />
-        </Suspense>
-      )}
-      {activeDrawer === 'audit' && (
-        <Suspense fallback={null}>
-          <AuditLogDrawer open connections={connections} onClose={() => setActiveDrawer(null)} />
-        </Suspense>
-      )}
-      <Drawer
-        title="结构对比与同步"
-        size={DRAWER_WIDTH.workspace}
-        open={activeDrawer === 'schema-diff'}
-        rootClassName="management-drawer"
-        onClose={() => setActiveDrawer(null)}
-        destroyOnHidden
-      >
-        <Suspense fallback={<PanelLoading text="正在加载结构对比…" />}>
-          {activeDrawer === 'schema-diff' && (
-            <SchemaDiffPanel
-              connections={connections}
-              defaultConnectionId={selected?.id}
-              onOpenInSqlTab={openSchemaDiffScript}
-            />
-          )}
-        </Suspense>
-      </Drawer>
-      <Drawer
-        title="MCP Server 设置"
-        size={DRAWER_WIDTH.workspace}
-        open={activeDrawer === 'mcp'}
-        rootClassName="management-drawer mcp-management-drawer"
-        onClose={() => setActiveDrawer(null)}
-        destroyOnHidden
-      >
-        <Suspense fallback={<PanelLoading text="正在加载 MCP 设置…" />}>
-          {activeDrawer === 'mcp' && <McpSettingsPanel />}
-        </Suspense>
-      </Drawer>
       {(tableCreateOpen || tableLifecycleAction) && (
         <Suspense fallback={null}>
           <TableLifecyclePanel

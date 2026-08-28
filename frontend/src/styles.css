@@ -4568,3 +4568,93 @@ body.is-resizing-column * {
   color: var(--primary);
   background: var(--primary-soft);
 }
+
+/*
+  管理抽屉：左侧分区导航 + 右侧内容。
+  改之前是 6 个头部入口通向 5 个互斥的抽屉，它们不能并存也没有返回路径 —— 从「备份」
+  跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
+*/
+.management-shell {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: var(--space-4);
+  height: 100%;
+  min-height: 0;
+}
+
+.management-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-inline-end: var(--space-3);
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+.management-nav-item {
+  appearance: none;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-md);
+  text-align: start;
+  cursor: pointer;
+}
+
+.management-nav-item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.management-nav-item.is-active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.management-nav-item:disabled {
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.management-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.management-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+/* 分区自己的标题行：抽屉标题只写「管理」，具体在哪个分区由这里说明。 */
+.management-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 28px;
+}
+
+@media (max-width: 860px) {
+  .management-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .management-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-inline-end: 0;
+    padding-block-end: var(--space-2);
+    border-inline-end: 0;
+    border-block-end: 1px solid var(--border-subtle);
+  }
+
+  .management-nav-item {
+    flex: none;
+  }
+}
