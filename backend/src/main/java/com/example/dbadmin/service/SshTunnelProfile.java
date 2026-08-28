@@ -41,7 +41,7 @@ public final class SshTunnelProfile {
         int port = normalizePort(request.port());
         String authMode = normalizeAuthMode(request.authMode());
         String password = secret(request.password(), previous.encryptedPassword(), encrypt);
-        String privateKey = secret(request.privateKey(), previous.encryptedPrivateKey(), encrypt);
+        String privateKey = pemSecret(request.privateKey(), previous.encryptedPrivateKey(), encrypt);
         String passphrase = secret(request.passphrase(), previous.encryptedPassphrase(), encrypt);
         String fingerprint = trimToNull(request.serverFingerprint(), MAX_FINGERPRINT_LENGTH, "跳板机主机指纹");
 
@@ -114,9 +114,25 @@ public final class SshTunnelProfile {
     }
 
     /**
-     * 解释一个密钥字段：掩码沿用旧值，空串清除，其余加密保存。
+     * 解释一个口令字段：掩码沿用旧值，空串清除，其余原样加密保存。
+     *
+     * <p>刻意不 {@code trim()}：口令的首尾空格是有效字符，抹掉之后存进去的凭据就和用户
+     * 输入的不是同一个，认证会莫名其妙地失败。数据库密码在 {@code ConnectionService} 里
+     * 也是原样保存的，两处必须一致。</p>
      */
     private static String secret(String submitted, String storedCipher, UnaryOperator<String> encrypt) {
+        if (submitted == null || SECRET_MASK.equals(submitted)) return isPresent(storedCipher) ? storedCipher : null;
+        if (submitted.isEmpty()) return null;
+        return encrypt.apply(submitted);
+    }
+
+    /**
+     * 解释私钥字段。
+     *
+     * <p>与口令相反，这里要 {@code trim()}：PEM 文本的首尾空白没有语义，而从终端或网页
+     * 复制私钥时几乎一定会带上换行。</p>
+     */
+    private static String pemSecret(String submitted, String storedCipher, UnaryOperator<String> encrypt) {
         if (submitted == null || SECRET_MASK.equals(submitted)) return isPresent(storedCipher) ? storedCipher : null;
         String trimmed = submitted.trim();
         if (trimmed.isEmpty()) return null;

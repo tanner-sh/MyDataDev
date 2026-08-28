@@ -32,6 +32,10 @@ describe('xlsx', () => {
     expect(escapeXml('<a & b>')).toBe('&lt;a &amp; b&gt;');
     expect(escapeXml('null\u0000byte\u0007')).toBe('nullbyte');
     expect(escapeXml('保留\t换行\n')).toBe('保留\t换行\n');
+    // 补充平面字符要原样留下：后端曾按 UTF-16 code unit 过滤，把 emoji 的两半各删一次。
+    expect(escapeXml('订单\u{1F600}\u{20000}')).toBe('订单\u{1F600}\u{20000}');
+    // 成不了对的代理项不是合法码点，写进去 Excel 会判定文件损坏。
+    expect(escapeXml('孤立\uD800代理')).toBe('孤立代理');
   });
 
   it('列号按 Excel 的字母进位', () => {

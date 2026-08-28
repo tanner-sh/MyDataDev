@@ -11,7 +11,8 @@ MyDataDev 是一个数据库工作台，由三个模块组成：`backend`（Spri
 node scripts/ui-smoke.mjs --shots ./ui-shots
 
 # 后端（无 mvnw wrapper，直接用 mvn）
-cd backend && mvn spring-boot:run           # 启动 API，端口 8080
+# 后端没有默认加密密钥，缺 DB_ADMIN_CRYPTO_KEY 时 CryptoService 会让上下文启动失败
+cd backend && DB_ADMIN_CRYPTO_KEY=local-dev-key mvn spring-boot:run   # 启动 API，端口 8080
 cd backend && mvn test                      # 全部测试
 cd backend && mvn test -Dtest=BackupServiceTest
 cd backend && mvn test -Dtest=BackupServiceTest#shouldQueueJob

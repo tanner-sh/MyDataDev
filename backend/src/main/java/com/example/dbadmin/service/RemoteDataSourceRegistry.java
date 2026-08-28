@@ -202,6 +202,42 @@ public class RemoteDataSourceRegistry {
         }
     }
 
+    /**
+     * 为外部进程解析一个真正连得上的 JDBC 地址。
+     *
+     * <p>{@code mysqldump}、{@code pg_dump}、{@code exp} 这些原生工具是独立进程，用不了
+     * 连接池里的隧道 —— 隧道是 {@link PoolEntry} 的私有设施。它们此前直接拿原始 URL 里的
+     * host:port，于是只能经跳板机访问的库一律连接超时。</p>
+     *
+     * <p>这里现开一条短命隧道而不是复用池里那条：一次 dump 可能跑一个小时，而池会因为闲置
+     * 被淘汰、因为改配置被 evict，隧道跟着关掉就会把 dump 拦腰截断。</p>
+     *
+     * <p>未启用隧道时不建任何东西，原样返回。</p>
+     */
+    public NativeAccess openNativeAccess(String jdbcUrl, SshTunnelSpec ssh) throws Exception {
+        if (ssh == null) return new NativeAccess(jdbcUrl, null);
+        JdbcEndpoints.Endpoint endpoint = JdbcEndpoints.locate(jdbcUrl);
+        SshTunnel tunnel = SshTunnel.open(ssh, endpoint.host(), endpoint.port(), sshTimeouts);
+        try {
+            return new NativeAccess(JdbcEndpoints.rewrite(jdbcUrl, tunnel.localHost(), tunnel.localPort()), tunnel);
+        } catch (RuntimeException error) {
+            tunnel.close();
+            throw error;
+        }
+    }
+
+    /**
+     * 一个原生工具可以直接连的地址，以及为它开的隧道（没有隧道时为 {@code null}）。
+     *
+     * <p>必须放在 try-with-resources 里：关掉它就是关掉隧道。</p>
+     */
+    public record NativeAccess(String jdbcUrl, SshTunnel tunnel) implements AutoCloseable {
+        @Override
+        public void close() {
+            if (tunnel != null) tunnel.close();
+        }
+    }
+
     public void evict(long connectionId) {
         PoolEntry removed;
         synchronized (pools) {

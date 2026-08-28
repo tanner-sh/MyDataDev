@@ -396,11 +396,19 @@ public class RestoreService {
 
     private void runNative(RestoreJob job, String toolPath, String extraArgs) throws Exception {
         if (toolPath == null || toolPath.isBlank()) throw new IllegalArgumentException("原生恢复需要填写工具路径。");
+        // mysql / pg_restore / imp 都是独立进程，用不上连接池里的隧道，得为这次恢复单独开一条。
+        // 恢复可能跑很久，隧道的生命周期跟着这个 try 走，不跟着连接池走。
+        try (RemoteDataSourceRegistry.NativeAccess access = connections.openNativeAccess(job.targetConnectionId())) {
+            runNative(job, access.jdbcUrl(), toolPath, extraArgs);
+        }
+    }
+
+    private void runNative(RestoreJob job, String jdbcUrl, String toolPath, String extraArgs) throws Exception {
         DbConnection target = connections.require(job.targetConnectionId());
         List<String> command = new ArrayList<>();
         ProcessBuilder builder;
         if ("MYSQLDUMP".equals(job.fileFormat())) {
-            MysqlTarget mysql = mysqlTarget(target.jdbcUrl());
+            MysqlTarget mysql = mysqlTarget(jdbcUrl);
             command.add(toolPath);
             command.add("--host=" + mysql.host());
             command.add("--port=" + mysql.port());
@@ -413,7 +421,7 @@ public class RestoreService {
             if (password != null) builder.environment().put("MYSQL_PWD", password);
         } else if ("PG_DUMP".equals(job.fileFormat())) {
             // custom 格式必须用 pg_restore；--clean 只在 OVERWRITE 模式下加，避免默默删掉已有对象。
-            PostgresTarget postgres = postgresTarget(target.jdbcUrl());
+            PostgresTarget postgres = postgresTarget(jdbcUrl);
             command.add(toolPath);
             command.add("--host=" + postgres.host());
             command.add("--port=" + postgres.port());
@@ -439,7 +447,7 @@ public class RestoreService {
             if (password != null) builder.environment().put("PGPASSWORD", password);
         } else {
             String password = connections.password(target.id());
-            String connect = oracleConnectName(target.jdbcUrl());
+            String connect = oracleConnectName(jdbcUrl);
             Set<PosixFilePermission> ownerOnly = Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
             Path root = restoreRoot();
             Files.createDirectories(root);

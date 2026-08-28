@@ -834,16 +834,24 @@ public class BackupService {
         // Connections are editable after a task is created. Revalidate the
         // saved method against the current dialect before invoking a tool.
         String method = validateBackupMethod(task.backupMethod(), connection);
-        return switch (method) {
-            case "MYSQLDUMP" -> runMysqlDump(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.MYSQLDUMP, task.toolPath()).path().toString());
-            case "PG_DUMP" -> runPgDump(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.PG_DUMP, task.toolPath()).path().toString());
-            case "ORACLE_EXP" -> runOracleExp(task, connection, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.ORACLE_EXP, task.toolPath()).path().toString());
-            default -> writeSqlBackup(task, connection);
-        };
+        if (!isNativeMethod(method)) return writeSqlBackup(task, connection);
+        // 原生工具是独立进程，连不上连接池里的隧道，得为这次备份单独开一条；dump 跑完才关。
+        try (RemoteDataSourceRegistry.NativeAccess access = connections.openNativeAccess(connection.id())) {
+            String url = access.jdbcUrl();
+            return switch (method) {
+                case "MYSQLDUMP" -> runMysqlDump(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.MYSQLDUMP, task.toolPath()).path().toString());
+                case "PG_DUMP" -> runPgDump(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.PG_DUMP, task.toolPath()).path().toString());
+                default -> runOracleExp(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.ORACLE_EXP, task.toolPath()).path().toString());
+            };
+        }
     }
 
-    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
-        MysqlJdbcTarget target = mysqlTarget(connection.jdbcUrl());
+    private static boolean isNativeMethod(String method) {
+        return "MYSQLDUMP".equals(method) || "PG_DUMP".equals(method) || "ORACLE_EXP".equals(method);
+    }
+
+    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
+        MysqlJdbcTarget target = mysqlTarget(jdbcUrl);
         String database = "DATABASE".equals(resolved.scope()) ? target.database() : resolved.namespace();
         if (database == null || database.isBlank()) {
             throw new IllegalArgumentException("mysqldump 备份需要 JDBC URL 中包含数据库名，或选择一个数据库。");
@@ -877,8 +885,8 @@ public class BackupService {
      * <p>用 custom 格式（-Fc）而不是纯 SQL：它是 pg_restore 唯一能做选择性恢复的格式，也自带
      * 压缩。密码通过 PGPASSWORD 环境变量传，不会出现在进程命令行里。</p>
      */
-    private BackupFile runPgDump(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
-        PostgresJdbcTarget target = postgresTarget(connection.jdbcUrl());
+    private BackupFile runPgDump(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
+        PostgresJdbcTarget target = postgresTarget(jdbcUrl);
         // 与 mysqldump 不同：MySQL 的「schema」就是数据库，而 PostgreSQL 的 schema 在库内，
         // 所以无论备份整库还是单个 schema，连的都是 JDBC URL 里的那个库，范围由 --schema 收窄。
         String database = target.database();
@@ -915,7 +923,7 @@ public class BackupService {
         return new BackupFile(file, Files.size(file));
     }
 
-    private BackupFile runOracleExp(BackupTask task, DbConnection connection, ResolvedTarget resolved, String toolPath) throws Exception {
+    private BackupFile runOracleExp(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
         validateOracleNativeTarget(resolved);
         String username = blankToNull(connection.username());
         if (username == null) {
@@ -925,7 +933,7 @@ public class BackupService {
         Path log = file.resolveSibling(file.getFileName() + ".log");
         String password = connections.password(connection.id());
         String connectName = task.nativeConnectName() == null || task.nativeConnectName().isBlank()
-                ? oracleConnectName(connection.jdbcUrl())
+                ? oracleConnectName(jdbcUrl)
                 : task.nativeConnectName();
         String userid = username + "/" + (password == null ? "" : password) + (connectName == null || connectName.isBlank() ? "" : "@" + connectName);
         validateOracleParameterValue(userid, "Oracle 用户名、密码或连接名");

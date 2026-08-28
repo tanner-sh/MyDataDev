@@ -3234,6 +3234,39 @@ export default function App() {
         </div>
       </Drawer>
 
+      {/*
+        连接表单独立于「管理」抽屉：它从抽屉里的连接列表打开，两者会同屏叠放，
+        所以只能是 Modal，不能再是一个抽屉。
+      */}
+      <Modal
+        title={connectionEditor.mode === 'edit'
+          ? `编辑连接：${connectionEditor.connectionName}`
+          : connectionEditor.mode === 'create' && connectionEditor.origin === 'duplicate'
+            ? '复制为新连接'
+            : '新建数据库连接'}
+        width={640}
+        open={connectionEditor.mode !== 'closed'}
+        footer={null}
+        mask={{ closable: !connectionFormDirty && !connectionActionLoading }}
+        closable={!connectionActionLoading}
+        onCancel={closeConnectionEditor}
+        destroyOnHidden
+      >
+        {connectionEditor.mode !== 'closed' && (
+          <Suspense fallback={<PanelLoading text="正在加载连接表单…" />}>
+            <ConnectionFormPanel
+              form={connectionEditor.form}
+              editing={connectionEditor.mode === 'edit'}
+              loading={connectionActionLoading}
+              onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
+              onDbTypeChange={changeDbType}
+              onCancel={closeConnectionEditor}
+              onTest={testConnection}
+              onSave={requestSaveConnection}
+            />
+          </Suspense>
+        )}
+      </Modal>
       {(tableCreateOpen || tableLifecycleAction) && (
         <Suspense fallback={null}>
           <TableLifecyclePanel

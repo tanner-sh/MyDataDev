@@ -152,6 +152,53 @@ try {
     check(`分区「${label}」有内容`, rendered);
     await page.shot(`02-${label}`);
   }
+
+  // 「有内容」挡不住这一类：合并抽屉时把连接表单的 <Modal> 连带删掉过一次，六个分区照样
+  // 全部通过，而点「新建连接」什么都不弹，overlayOpen 还永久为真把全局快捷键锁死。
+  // 凡是从面板里再弹一层的入口，都得真的点开、真的关掉。
+  const formOpened = await page.evaluate(`
+    (() => {
+      const item = [...document.querySelectorAll('.management-nav-item')].find((n) => (n.textContent || '').trim() === '连接管理');
+      if (!item || item.disabled) return 'skip';
+      item.click();
+      return 'ok';
+    })()
+  `);
+  if (formOpened === 'skip') {
+    console.log('  – 连接表单（分区不可用，已跳过）');
+  } else {
+    await page.sleep(1200);
+    const clicked = await page.evaluate(`
+      (() => {
+        const button = [...document.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '新建连接');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()
+    `);
+    check('「新建连接」入口存在', clicked);
+    await page.sleep(1800);
+    // 只断言弹层在是不够的：表单是懒加载的，加载失败时弹层照样带着标题出现，里面空着。
+    // 认字段文案而不是 <form> 标签 —— antd 版本之间会换类名（v5 的 .ant-modal-content 在
+    // v6 叫 .ant-modal-container），认渲染出来的字比认结构稳。
+    check('连接表单弹出', await page.evaluate(`
+      (() => {
+        const modal = document.querySelector('.ant-modal-container');
+        return Boolean(modal) && modal.textContent.includes('连接名称') && modal.textContent.includes('数据库地址');
+      })()
+    `));
+    await page.shot('03-连接表单');
+
+    await page.evaluate(`
+      (() => {
+        const close = document.querySelector('.ant-modal-container .ant-modal-close');
+        if (close) close.click();
+      })()
+    `);
+    await page.sleep(1500);
+    // 关不掉同样是故障：overlayOpen 会一直为真，把全局快捷键锁死。
+    check('连接表单可以关闭', (await page.evaluate(`document.querySelectorAll('.ant-modal-container').length`)) === 0);
+  }
 } catch (error) {
   failures.push(String(error.message || error));
   console.log(`  ✗ ${error.message || error}`);

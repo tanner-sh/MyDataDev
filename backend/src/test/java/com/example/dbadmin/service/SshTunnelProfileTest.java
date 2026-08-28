@@ -72,6 +72,34 @@ class SshTunnelProfileTest {
     }
 
     @Test
+    void keepsWhitespaceInsidePasswordsAndPassphrases() {
+        // 口令的首尾空格是有效字符。曾经对三个密钥字段一律 trim()，存进去的凭据和用户输入的
+        // 不是同一个，认证会莫名其妙失败 —— 数据库密码在 ConnectionService 里也是原样保存的。
+        SshTunnelSettings settings = SshTunnelProfile.toSettings(
+                new SshTunnelRequest(true, "bastion", 22, "ops", "PRIVATE_KEY",
+                        "  pass word  ", "key", " phrase ", "SHA256:abc", false),
+                null, ENCRYPT);
+
+        assertThat(settings.encryptedPassword()).isEqualTo("enc:  pass word  ");
+        assertThat(settings.encryptedPassphrase()).isEqualTo("enc: phrase ");
+
+        SshTunnelSpec spec = SshTunnelProfile.toSpec(settings, DECRYPT);
+        assertThat(spec.password()).isEqualTo("  pass word  ");
+        assertThat(spec.passphrase()).isEqualTo(" phrase ");
+    }
+
+    @Test
+    void trimsPrivateKeyBecausePemWhitespaceIsNoise() {
+        // 与口令相反：从终端或网页复制私钥几乎一定带上首尾换行，而 PEM 不在乎它们。
+        SshTunnelSettings settings = SshTunnelProfile.toSettings(
+                new SshTunnelRequest(true, "bastion", 22, "ops", "PRIVATE_KEY",
+                        null, "\n-----BEGIN KEY-----\nbody\n-----END KEY-----\n\n", null, "SHA256:abc", false),
+                null, ENCRYPT);
+
+        assertThat(settings.encryptedPrivateKey()).isEqualTo("enc:-----BEGIN KEY-----\nbody\n-----END KEY-----");
+    }
+
+    @Test
     void rejectsIncompleteConfigurations() {
         assertThatThrownBy(() -> SshTunnelProfile.toSettings(
                 new SshTunnelRequest(true, " ", 22, "ops", "PASSWORD", "secret", null, null, null, true), null, ENCRYPT))

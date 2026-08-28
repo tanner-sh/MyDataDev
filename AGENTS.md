@@ -21,6 +21,7 @@
 
 ```bash
 cd backend
+export DB_ADMIN_CRYPTO_KEY='local-dev-key-please-change'   # 没有默认密钥，缺失时后端拒绝启动
 mvn spring-boot:run   # 启动后端 API，默认端口 8080
 mvn test              # 运行全部后端测试
 ```

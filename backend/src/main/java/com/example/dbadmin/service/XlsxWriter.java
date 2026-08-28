@@ -144,29 +144,37 @@ final class XlsxWriter implements AutoCloseable {
      *
      * <p>数据库里存着 {@code \\u0000} 这类字符并不罕见（尤其是被当成文本读出来的二进制），
      * 原样写进去 Excel 会直接判定文件损坏、整份导出打不开。</p>
+     *
+     * <p>按码点遍历而不是按 {@code char}：emoji、扩展 B 区汉字这些补充平面字符在 Java 里
+     * 是一对代理项，逐 {@code char} 判断时两半都落在 {@code 0xD800-0xDFFF}，会被合法性
+     * 检查当成非法字符各删一次 —— 「订单😀𠀀」曾因此导出成「订单」。</p>
      */
     static String escape(String value) {
         StringBuilder result = new StringBuilder(value.length() + 16);
-        for (int index = 0; index < value.length(); index++) {
-            char current = value.charAt(index);
-            switch (current) {
+        int index = 0;
+        while (index < value.length()) {
+            int codePoint = value.codePointAt(index);
+            index += Character.charCount(codePoint);
+            switch (codePoint) {
                 case '<' -> result.append("&lt;");
                 case '>' -> result.append("&gt;");
                 case '&' -> result.append("&amp;");
                 case '"' -> result.append("&quot;");
                 case '\'' -> result.append("&apos;");
                 default -> {
-                    if (isAllowedXmlChar(current)) result.append(current);
+                    if (isAllowedXmlChar(codePoint)) result.appendCodePoint(codePoint);
                 }
             }
         }
         return result.toString();
     }
 
-    private static boolean isAllowedXmlChar(char value) {
+    /** XML 1.0 的 Char 产生式。补充平面（{@code 0x10000} 起）整段合法，孤立代理项不是码点，落不到这里。 */
+    private static boolean isAllowedXmlChar(int value) {
         return value == '\t' || value == '\n' || value == '\r'
                 || value >= 0x20 && value <= 0xD7FF
-                || value >= 0xE000 && value <= 0xFFFD;
+                || value >= 0xE000 && value <= 0xFFFD
+                || value >= 0x10000 && value <= 0x10FFFF;
     }
 
     private static final String CONTENT_TYPES = """

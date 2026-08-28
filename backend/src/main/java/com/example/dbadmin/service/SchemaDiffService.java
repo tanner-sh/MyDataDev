@@ -87,6 +87,15 @@ public class SchemaDiffService {
         }
 
         DatabaseDialect targetDialect = dialectRegistry.dialectFor(target);
+        // 表设计器在 MetadataService 里也有这道闸门。生成建表/改表语句走的是同一个方言方法，
+        // 声明不支持表设计的方言（SQL Server、ClickHouse、SQLite）没有重写它，继承的是
+        // DefaultDialect 那套 PostgreSQL 写法 —— 在 T-SQL 里 `ALTER COLUMN x TYPE y` 根本
+        // 不是合法语法。与其发一份跑不通的脚本，不如只给差异清单，让人自己写 DDL。
+        boolean canGenerateDdl = targetDialect.capabilities().tableDesign();
+        if (!canGenerateDdl) {
+            warnings.add("目标库（" + target.dbType() + "）不支持自动生成建表/改表语句，本次只列出结构差异。"
+                    + "删除语句仍会生成，其余请按差异清单手工编写 DDL。");
+        }
         List<SchemaDiffTable> tables = new ArrayList<>();
         List<String> migration = new ArrayList<>();
         int onlyInSource = 0;
@@ -102,8 +111,10 @@ public class SchemaDiffService {
                 ObjectDetail detail = detail(sourceId, sourceSchema, sourceName, warnings);
                 if (detail == null) continue;
                 onlyInSource++;
-                List<String> sql = safeDdl(warnings, sourceName, () -> targetDialect.createTableSql(
-                        targetSchema, detail.name(), SchemaComparison.creationDesign(detail, targetSchema)));
+                List<String> sql = canGenerateDdl
+                        ? safeDdl(warnings, sourceName, () -> targetDialect.createTableSql(
+                                targetSchema, detail.name(), SchemaComparison.creationDesign(detail, targetSchema)))
+                        : List.<String>of();
                 tables.add(new SchemaDiffTable(sourceName, SchemaComparison.STATUS_ONLY_IN_SOURCE, List.of(), sql));
                 appendSection(migration, sourceName, "目标端缺失，需要新建", sql);
             } else if (sourceName == null) {
@@ -125,8 +136,10 @@ public class SchemaDiffService {
                 }
                 different++;
                 TableDesignRequest design = SchemaComparison.alignmentDesign(sourceDetail, targetDetail, request.includeDrops());
-                List<String> sql = safeDdl(warnings, targetName,
-                        () -> targetDialect.alterTableSql(targetSchema, targetName, targetDetail, design));
+                List<String> sql = canGenerateDdl
+                        ? safeDdl(warnings, targetName,
+                                () -> targetDialect.alterTableSql(targetSchema, targetName, targetDetail, design))
+                        : List.<String>of();
                 tables.add(new SchemaDiffTable(targetName, SchemaComparison.STATUS_DIFFERENT, items, sql));
                 appendSection(migration, targetName, "结构不一致", sql);
             }

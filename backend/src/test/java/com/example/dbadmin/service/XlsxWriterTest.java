@@ -56,6 +56,24 @@ class XlsxWriterTest {
     }
 
     @Test
+    void keepsSupplementaryPlaneCharacters() throws Exception {
+        // emoji 与扩展 B 区汉字在 Java 里是一对代理项。按 char 遍历时两半都落在
+        // 0xD800-0xDFFF，会被 XML 合法性检查各删一次，「订单\uD83D\uDE00\uD840\uDC00」
+        // 曾因此导出成「订单」。中文数据里扩展区汉字并不罕见。
+        Map<String, String> parts = write(workbook -> workbook.row(new Object[]{"订单\uD83D\uDE00\uD840\uDC00"}));
+
+        assertThat(parts.get("xl/worksheets/sheet1.xml")).contains("订单\uD83D\uDE00\uD840\uDC00");
+    }
+
+    @Test
+    void dropsUnpairedSurrogates() throws Exception {
+        // 成不了对的代理项不是码点，写进去同样让 Excel 判定文件损坏。
+        Map<String, String> parts = write(workbook -> workbook.row(new Object[]{"孤立\uD800代理"}));
+
+        assertThat(parts.get("xl/worksheets/sheet1.xml")).contains("孤立代理").doesNotContain("\uD800");
+    }
+
+    @Test
     void numbersRowsAndColumnsTheWayExcelExpects() throws Exception {
         Map<String, String> parts = write(workbook -> {
             workbook.row(new Object[]{"a"});

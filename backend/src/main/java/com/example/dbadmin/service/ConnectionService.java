@@ -234,6 +234,16 @@ public class ConnectionService {
         return SshTunnelProfile.toSpec(SshTunnelProfile.toSettings(request, existing, crypto::encrypt), crypto::decrypt);
     }
 
+    /**
+     * 这条连接给原生工具用的地址：启用隧道时是隧道的本地入口，否则就是原地址。
+     *
+     * <p>调用方必须用 try-with-resources 包住返回值 —— 隧道要跟着这次备份/恢复一起结束。</p>
+     */
+    public RemoteDataSourceRegistry.NativeAccess openNativeAccess(long id) throws Exception {
+        DbConnection connection = require(id);
+        return dataSources.openNativeAccess(connection.jdbcUrl(), sshSpec(id));
+    }
+
     void resetRemoteSession(long id) {
         dataSources.evict(id);
     }

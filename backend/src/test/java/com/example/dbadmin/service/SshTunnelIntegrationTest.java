@@ -88,6 +88,38 @@ class SshTunnelIntegrationTest {
     }
 
     @Test
+    void nativeToolsGetATunnelledAddressOfTheirOwn() throws Exception {
+        registry = new RemoteDataSourceRegistry();
+
+        // mysqldump / pg_dump / exp 是独立进程，连不上池里的隧道，只能拿到一个改写过的地址。
+        try (RemoteDataSourceRegistry.NativeAccess access = registry.openNativeAccess(jdbcUrl, spec(SSH_PASSWORD))) {
+            assertThat(access.jdbcUrl()).isNotEqualTo(jdbcUrl).contains("127.0.0.1");
+            assertThat(access.tunnel()).isNotNull();
+            assertThat(access.tunnel().isOpen()).isTrue();
+            // 隧道是这次备份专属的，不能借用也不能留在池里 —— 一次 dump 可能跑一小时，
+            // 而池会因为闲置或改配置被淘汰，跟着关掉就会把 dump 拦腰截断。
+            assertThat(registry.size()).isZero();
+
+            // 改写后的地址得真的连得上，否则等于换了个方式失败。
+            try (Connection connection = java.sql.DriverManager.getConnection(access.jdbcUrl(), "sa", "");
+                 Statement statement = connection.createStatement();
+                 ResultSet rows = statement.executeQuery("SELECT 1")) {
+                assertThat(rows.next()).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void nativeToolsKeepTheOriginalAddressWithoutATunnel() throws Exception {
+        registry = new RemoteDataSourceRegistry();
+
+        try (RemoteDataSourceRegistry.NativeAccess access = registry.openNativeAccess(jdbcUrl, null)) {
+            assertThat(access.jdbcUrl()).isEqualTo(jdbcUrl);
+            assertThat(access.tunnel()).isNull();
+        }
+    }
+
+    @Test
     void reportsBastionAuthenticationFailures() {
         registry = new RemoteDataSourceRegistry();
 

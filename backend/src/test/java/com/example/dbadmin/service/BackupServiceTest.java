@@ -617,6 +617,9 @@ class BackupServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         try {
             when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+            // 没有隧道的连接原样返回地址；有隧道时这里会是隧道的本地入口。
+            when(connections.openNativeAccess(anyLong()))
+                    .thenAnswer(_invocation -> new RemoteDataSourceRegistry.NativeAccess(url, null));
         } catch (Exception e) {
             throw new IllegalStateException(e);
         }
@@ -638,6 +641,8 @@ class BackupServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         try {
             when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
+            when(connections.openNativeAccess(anyLong()))
+                    .thenAnswer(_invocation -> new RemoteDataSourceRegistry.NativeAccess(url, null));
         } catch (Exception error) {
             throw new IllegalStateException(error);
         }

@@ -63,6 +63,10 @@ export function columnReference(column: number): string {
 
 /**
  * XML 转义，并剔除 XML 1.0 不允许的控制字符 —— 留着它们 Excel 会判定文件损坏。
+ *
+ * `for...of` 按码点遍历，emoji 与扩展 B 区汉字这类补充平面字符会作为一个整体通过；
+ * 排除代理项区是为了挡住成不了对的孤立代理项，它们同样是非法 XML。
+ * 后端 `XlsxWriter.escape` 必须与这里保持同一套判定。
  */
 export function escapeXml(value: string): string {
   let result = '';
@@ -73,7 +77,8 @@ export function escapeXml(value: string): string {
     else if (character === '&') result += '&amp;';
     else if (character === '"') result += '&quot;';
     else if (character === "'") result += '&apos;';
-    else if (code === 0x9 || code === 0xa || code === 0xd || (code >= 0x20 && code !== 0xfffe && code !== 0xffff)) {
+    else if (code === 0x9 || code === 0xa || code === 0xd
+      || (code >= 0x20 && !(code >= 0xd800 && code <= 0xdfff) && code !== 0xfffe && code !== 0xffff)) {
       result += character;
     }
   }

@@ -90,6 +90,9 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 
 ```bash
 cd backend
+# 没有默认密钥：未设置 DB_ADMIN_CRYPTO_KEY 时后端会拒绝启动。
+# 开发环境可以随便取一个值，但一旦保存过连接就不要再改 —— 换密钥会导致已有密文无法解密。
+export DB_ADMIN_CRYPTO_KEY='local-dev-key-please-change'
 mvn spring-boot:run
 ```
 

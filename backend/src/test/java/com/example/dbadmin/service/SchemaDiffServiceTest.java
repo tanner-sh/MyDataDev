@@ -161,6 +161,47 @@ class SchemaDiffServiceTest {
                 .hasMessageContaining("超过单次对比上限");
     }
 
+    @Test
+    void skipsDdlForTargetsThatCannotBeDesigned() throws Exception {
+        // SQL Server、ClickHouse、SQLite 声明不支持表设计，也没重写 alterTableSql，继承的是
+        // DefaultDialect 那套 PostgreSQL 写法 —— `ALTER COLUMN x TYPE y` 在 T-SQL 里根本不是
+        // 合法语法。表设计器早就有这道闸门（MetadataService），结构对比曾漏抄，于是发出去一份
+        // 看起来完整、实际一条都跑不通的脚本。差异清单本身仍然有用，照常返回。
+        String source = database("""
+                CREATE TABLE orders(id BIGINT PRIMARY KEY, amount DECIMAL(12,2) NOT NULL, note VARCHAR(200));
+                CREATE TABLE audit_trail(id BIGINT PRIMARY KEY);
+                """);
+        String target = database("CREATE TABLE orders(id BIGINT PRIMARY KEY, amount DECIMAL(12,2));");
+        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlserver");
+
+        SchemaDiffResponse response = service.compare(
+                new SchemaDiffRequest(1L, "PUBLIC", 2L, "PUBLIC", List.of(), false), "admin");
+
+        assertThat(response.warnings()).anySatisfy(warning ->
+                assertThat(warning).contains("不支持自动生成建表/改表语句"));
+        assertThat(table(response, "ORDERS").status()).isEqualTo(SchemaComparison.STATUS_DIFFERENT);
+        assertThat(table(response, "ORDERS").items()).isNotEmpty();
+        assertThat(table(response, "ORDERS").migration()).isEmpty();
+        assertThat(table(response, "AUDIT_TRAIL").migration()).isEmpty();
+        assertThat(response.migration()).noneSatisfy(sql -> assertThat(sql).contains("ALTER COLUMN"));
+    }
+
+    @Test
+    void stillGeneratesDropsForTargetsThatCannotBeDesigned() throws Exception {
+        // DROP TABLE 不经过设计稿那条路径，各家写法一致，没有必要跟着一起禁掉。
+        String source = database("CREATE TABLE orders(id BIGINT PRIMARY KEY);");
+        String target = database("""
+                CREATE TABLE orders(id BIGINT PRIMARY KEY);
+                CREATE TABLE legacy_export(id BIGINT PRIMARY KEY);
+                """);
+        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlserver");
+
+        SchemaDiffResponse response = service.compare(
+                new SchemaDiffRequest(1L, "PUBLIC", 2L, "PUBLIC", List.of(), true), "admin");
+
+        assertThat(table(response, "LEGACY_EXPORT").migration()).anySatisfy(sql -> assertThat(sql).startsWith("DROP TABLE"));
+    }
+
     private static SchemaDiffTable table(SchemaDiffResponse response, String name) {
         return response.tables().stream()
                 .filter(table -> table.tableName().equalsIgnoreCase(name))
@@ -184,6 +225,10 @@ class SchemaDiffServiceTest {
     }
 
     private static SchemaDiffService service(String sourceUrl, String targetUrl, AuditRepository audit, String sourceDbType) throws Exception {
+        return service(sourceUrl, targetUrl, audit, sourceDbType, "h2");
+    }
+
+    private static SchemaDiffService service(String sourceUrl, String targetUrl, AuditRepository audit, String sourceDbType, String targetDbType) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(sourceUrl, "sa", ""));
         when(connections.open(2L)).thenAnswer(ignored -> DriverManager.getConnection(targetUrl, "sa", ""));
@@ -193,7 +238,7 @@ class SchemaDiffServiceTest {
         when(connections.require(1L)).thenReturn(new DbConnection(
                 1L, "source", sourceDbType, sourceUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
         when(connections.require(2L)).thenReturn(new DbConnection(
-                2L, "target", "h2", targetUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
+                2L, "target", targetDbType, targetUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
         MetadataService metadata = new MetadataService(
                 connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
         return new SchemaDiffService(connections, metadata, new DialectRegistry(), audit);
