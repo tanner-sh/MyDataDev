@@ -424,10 +424,9 @@ public class BackupService {
                                 runInternal(id, actor, queuedExecutionId);
                             } catch (Exception ignored) {
                                 // run records the failed history and task status.
-                            } finally {
-                                taskControl.releaseCompleted(connectionId, operationKey);
                             }
-                        }
+                        },
+                        () -> taskControl.releaseCompleted(connectionId, operationKey)
                 );
                 if (!accepted) {
                     // The task is already running; that run owns the permit and
@@ -457,8 +456,8 @@ public class BackupService {
             historyRepository.requestCancel(historyId);
             taskControl.requestCancel(backupOperationKey(taskId));
             coordinator.cancel(taskId);
-            // The permit stays with the worker until it actually stops; its
-            // finally block releases it and clears the cancellation marker.
+            // The permit stays with the coordinator wrapper until the worker
+            // has either stopped or skipped this queued task.
             boolean uploadRetry = Set.of("UPLOAD_RETRY_QUEUED", "UPLOADING").contains(history.phase()) && history.filePath() != null;
             if (uploadRetry) {
                 historyRepository.updateExecution(historyId, "FAILED", "UPLOAD_FAILED", value(history.progressCurrent()), history.fileSize(),

@@ -26,7 +26,7 @@ public class SqlFileExecutionCoordinator {
                 properties.getBackgroundTasks().getQueueCapacity(), meterRegistry.getIfAvailable());
     }
 
-    private SqlFileExecutionCoordinator(int workers, int queueCapacity, MeterRegistry meterRegistry) {
+    SqlFileExecutionCoordinator(int workers, int queueCapacity, MeterRegistry meterRegistry) {
         int safeWorkers = Math.max(1, workers);
         executor = new ThreadPoolExecutor(
             safeWorkers, safeWorkers, 30, TimeUnit.SECONDS, new ArrayBlockingQueue<>(Math.max(1, queueCapacity)), new ThreadFactory() {
@@ -46,6 +46,14 @@ public class SqlFileExecutionCoordinator {
     }
 
     public void submit(long id, Runnable task) {
+        submit(id, task, () -> { });
+    }
+
+    /**
+     * Submits work together with cleanup that must run after the worker has
+     * either executed or skipped a task cancelled while it was still queued.
+     */
+    public void submit(long id, Runnable task, Runnable afterCompletion) {
         BackgroundJobHandle handle = new BackgroundJobHandle();
         handles.put(id, handle);
         try {
@@ -56,8 +64,12 @@ public class SqlFileExecutionCoordinator {
                 try {
                     if (handle.begin()) task.run();
                 } finally {
-                    handle.finish();
-                    handles.remove(id, handle);
+                    try {
+                        afterCompletion.run();
+                    } finally {
+                        handle.finish();
+                        handles.remove(id, handle);
+                    }
                 }
             });
         } catch (RuntimeException e) {

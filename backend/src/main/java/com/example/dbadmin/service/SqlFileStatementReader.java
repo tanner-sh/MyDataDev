@@ -106,6 +106,7 @@ final class SqlFileStatementReader {
 
     private static final class Parser {
         private final boolean mysql;
+        private final boolean backslashEscapes;
         private final boolean sqlServer;
         private final boolean oracle;
         private final int maxStatementChars;
@@ -126,6 +127,7 @@ final class SqlFileStatementReader {
         private Parser(String dbType, int maxStatementChars, StatementConsumer consumer) {
             String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
             this.mysql = type.equals("mysql") || type.equals("mariadb") || type.equals("oceanbase-mysql");
+            this.backslashEscapes = mysql || type.equals("clickhouse");
             this.sqlServer = type.equals("sqlserver") || type.equals("sql-server") || type.equals("mssql");
             this.oracle = type.equals("oracle") || type.equals("dm") || type.equals("dameng") || type.equals("oceanbase-oracle");
             this.maxStatementChars = Math.max(1, maxStatementChars);
@@ -194,7 +196,7 @@ final class SqlFileStatementReader {
                     if (current == '\'' && next == '\'') {
                         append(next);
                         cursor++;
-                    } else if (current == '\'' && (cursor == 0 || line.charAt(cursor - 1) != '\\')) single = false;
+                    } else if (current == '\'' && !escapedByBackslash(line, cursor)) single = false;
                     continue;
                 }
                 if (doubleQuoted) {
@@ -256,6 +258,14 @@ final class SqlFileStatementReader {
         private void finish() throws Exception {
             if (!cleanState()) throw new IllegalArgumentException("SQL 文件存在未闭合的字符串或注释。");
             emit();
+        }
+
+        /** A quote is escaped only after an odd run of backslashes, and only in dialects that support it. */
+        private boolean escapedByBackslash(String line, int cursor) {
+            if (!backslashEscapes) return false;
+            int count = 0;
+            for (int index = cursor - 1; index >= 0 && line.charAt(index) == '\\'; index--) count++;
+            return (count & 1) == 1;
         }
 
         private boolean cleanState() {

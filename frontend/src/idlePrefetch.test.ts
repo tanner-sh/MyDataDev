@@ -10,11 +10,12 @@ import {
 function idleHost() {
   const idleCallbacks: Array<() => void> = [];
   const cancelledIdle: number[] = [];
+  let nextHandle = 0;
   const host: IdlePrefetchHost = {
     requestIdleCallback: (callback, options) => {
       expect(options?.timeout).toBe(PREFETCH_IDLE_TIMEOUT_MS);
       idleCallbacks.push(callback);
-      return idleCallbacks.length;
+      return ++nextHandle;
     },
     cancelIdleCallback: (handle) => cancelledIdle.push(handle),
     setTimeout: () => {
@@ -22,7 +23,12 @@ function idleHost() {
     },
     clearTimeout: () => undefined
   };
-  return { host, idleCallbacks, cancelledIdle, runIdle: () => idleCallbacks.forEach((callback) => callback()) };
+  return {
+    host,
+    idleCallbacks,
+    cancelledIdle,
+    runIdle: () => idleCallbacks.splice(0).forEach((callback) => callback())
+  };
 }
 
 function timerHost() {
@@ -107,12 +113,12 @@ describe('prefetchAllWhenIdle', () => {
     cancel();
     runIdle();
 
-    expect(cancelledIdle).toEqual([1, 2]);
+    expect(cancelledIdle).toEqual([1]);
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
   });
 
-  it('runs every loader when left to fire', () => {
+  it('runs loaders one at a time across separate idle periods', async () => {
     const first = vi.fn().mockResolvedValue(undefined);
     const second = vi.fn().mockResolvedValue(undefined);
     const { host, runIdle } = idleHost();
@@ -121,6 +127,20 @@ describe('prefetchAllWhenIdle', () => {
     runIdle();
 
     expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    await Promise.resolve();
+    runIdle();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips prefetch on data-saving or slow connections', () => {
+    const load = vi.fn().mockResolvedValue(undefined);
+    const { host, runIdle } = idleHost();
+    host.navigator = { connection: { saveData: true, effectiveType: '2g' } };
+
+    prefetchAllWhenIdle([load], host);
+    runIdle();
+
+    expect(load).not.toHaveBeenCalled();
   });
 });

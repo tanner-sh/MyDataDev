@@ -48,6 +48,14 @@ public class BackupExecutionCoordinator {
     }
 
     public boolean submit(long taskId, Runnable beforeStart, Runnable task) {
+        return submit(taskId, beforeStart, task, () -> { });
+    }
+
+    /**
+     * Runs completion cleanup even when cancellation happens before a queued
+     * task starts and the task body is intentionally skipped.
+     */
+    public boolean submit(long taskId, Runnable beforeStart, Runnable task, Runnable afterCompletion) {
         if (!running.add(taskId)) return false;
         BackgroundJobHandle handle = new BackgroundJobHandle();
         handles.put(taskId, handle);
@@ -61,9 +69,13 @@ public class BackupExecutionCoordinator {
                 try {
                     if (handle.begin()) task.run();
                 } finally {
-                    handle.finish();
-                    running.remove(taskId);
-                    handles.remove(taskId, handle);
+                    try {
+                        afterCompletion.run();
+                    } finally {
+                        handle.finish();
+                        running.remove(taskId);
+                        handles.remove(taskId, handle);
+                    }
                 }
             });
             return true;

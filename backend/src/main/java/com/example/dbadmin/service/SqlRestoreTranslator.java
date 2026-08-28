@@ -33,7 +33,7 @@ public class SqlRestoreTranslator {
         List<String> errors = new ArrayList<>();
         long[] count = {0};
         try {
-            SqlStatementStream.read(path, sql -> {
+            SqlStatementStream.read(path, sourceDbType, sql -> {
                 count[0]++;
                 try {
                     SQLStatement statement = parseAllowed(sql, source);
@@ -64,7 +64,7 @@ public class SqlRestoreTranslator {
         DbType target = dbType(targetDbType);
         boolean needsTypeMapping = requiresTypeMapping(source, target);
         long[] index = {0};
-        SqlStatementStream.read(path, sql -> {
+        SqlStatementStream.read(path, sourceDbType, sql -> {
             index[0]++;
 
             // Fast path for INSERT when no type mapping needed

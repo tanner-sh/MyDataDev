@@ -41,6 +41,35 @@ describe('query result serialization', () => {
     expect(() => serializeQueryResult('sql', columns, [[1, 'Alice']])).toThrow(/目标表/);
   });
 
+  it('uses database-specific string, boolean, and binary literals', () => {
+    const dialectColumns = [
+      { key: 'c1', label: 'path', typeName: 'VARCHAR' },
+      { key: 'c2', label: 'active', typeName: 'BOOLEAN' },
+      { key: 'c3', label: 'payload', typeName: 'VARBINARY' }
+    ];
+    expect(serializeQueryResult('sql', dialectColumns, [['a\\b', true, new Uint8Array([0, 255])]], {
+      dbType: 'mysql',
+      targetTableParts: ['files']
+    })).toContain("VALUES (_utf8mb4 0x615c62, 1, 0x00ff)");
+    expect(serializeQueryResult('sql', columns, [[1, '中文']], {
+      dbType: 'sqlserver',
+      targetTableParts: ['users']
+    })).toContain("VALUES (1, N'中文')");
+  });
+
+  it('refuses to turn omitted result cells into corrupt SQL data', () => {
+    const binaryColumns = [{ key: 'payload', label: 'payload', typeName: 'BLOB' }];
+    expect(() => serializeQueryResult('sql', binaryColumns, [['<BLOB 1024 bytes>']], {
+      dbType: 'mysql',
+      targetTableParts: ['files']
+    })).toThrow(/导出全部结果/);
+    const textColumns = [{ key: 'note', label: 'note', typeName: 'CLOB' }];
+    expect(() => serializeQueryResult('sql', textColumns, [['prefix… <CLOB 已截断，共 999999 字符>']], {
+      dbType: 'oracle',
+      targetTableParts: ['notes']
+    })).toThrow(/导出全部结果/);
+  });
+
   it('copies pipe data without a header and escapes separators', () => {
     expect(serializeCopiedRows('pipe', columns, [[1, 'A|B'], [2, null]])).toBe('1|A\\|B\n2|NULL');
   });

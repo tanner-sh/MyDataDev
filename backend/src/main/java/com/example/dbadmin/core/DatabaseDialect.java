@@ -10,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.sql.Statement;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
@@ -178,6 +179,12 @@ public interface DatabaseDialect {
      * 变化的方言（MySQL 系）才需要区分。</p>
      */
     default String scriptLiteral(Object value) {
+        if (value instanceof byte[] bytes) return scriptBinaryLiteral(bytes);
         return literal(value);
+    }
+
+    /** Binary literal used in generated scripts. The default is the SQL-standard form. */
+    default String scriptBinaryLiteral(byte[] value) {
+        return "X'" + HexFormat.of().formatHex(value) + "'";
     }
 }

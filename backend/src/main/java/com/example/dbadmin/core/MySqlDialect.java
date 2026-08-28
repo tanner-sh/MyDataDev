@@ -127,10 +127,16 @@ public class MySqlDialect extends DefaultDialect {
      */
     @Override
     public String scriptLiteral(Object value) {
+        if (value instanceof byte[] bytes) return scriptBinaryLiteral(bytes);
         if (value instanceof CharSequence text && text.toString().indexOf('\\') >= 0) {
             return "_utf8mb4 0x" + HexFormat.of().formatHex(text.toString().getBytes(StandardCharsets.UTF_8));
         }
         return literal(value);
+    }
+
+    @Override
+    public String scriptBinaryLiteral(byte[] value) {
+        return "0x" + HexFormat.of().formatHex(value);
     }
 
     @Override

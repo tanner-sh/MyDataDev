@@ -57,6 +57,14 @@ class MySqlDialectTest {
                 .isEqualTo("DROP TABLE `trading`.`cash_archive`");
     }
 
+    @Test
+    void generatedLiteralsAreIndependentOfMysqlBackslashMode() {
+        assertThat(dialect.scriptLiteral("path\\file"))
+                .isEqualTo("_utf8mb4 0x706174685c66696c65");
+        assertThat(dialect.scriptLiteral(true)).isEqualTo("1");
+        assertThat(dialect.scriptLiteral(new byte[]{0, (byte) 0xff})).isEqualTo("0x00ff");
+    }
+
     private DbConnection connection(String type, String url) {
         return new DbConnection(1L, type, type, url, "user", "", "dev", false, Instant.now(), Instant.now());
     }

@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.HexFormat;
 
 public class DamengDialect extends DefaultDialect {
     @Override
@@ -36,5 +37,10 @@ public class DamengDialect extends DefaultDialect {
             return bool ? "1" : "0";
         }
         return super.literal(value);
+    }
+
+    @Override
+    public String scriptBinaryLiteral(byte[] value) {
+        return "hextoraw('" + HexFormat.of().formatHex(value) + "')";
     }
 }

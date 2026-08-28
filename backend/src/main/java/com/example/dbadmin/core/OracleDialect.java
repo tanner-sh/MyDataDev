@@ -10,6 +10,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -140,6 +141,11 @@ public class OracleDialect extends DefaultDialect {
             return bool ? "1" : "0";
         }
         return super.literal(value);
+    }
+
+    @Override
+    public String scriptBinaryLiteral(byte[] value) {
+        return "hextoraw('" + HexFormat.of().formatHex(value) + "')";
     }
 
     @Override

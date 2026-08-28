@@ -21,8 +21,12 @@ public class CryptoService {
     private final SecureRandom random = new SecureRandom();
 
     public CryptoService(AppProperties properties) throws Exception {
+        String configuredKey = properties.getCryptoKey();
+        if (configuredKey == null || configuredKey.isBlank()) {
+            throw new IllegalStateException("必须通过 DB_ADMIN_CRYPTO_KEY 或 app.crypto-key 配置加密密钥。");
+        }
         byte[] digest = MessageDigest.getInstance("SHA-256")
-                .digest(properties.getCryptoKey().getBytes(StandardCharsets.UTF_8));
+                .digest(configuredKey.getBytes(StandardCharsets.UTF_8));
         this.key = new SecretKeySpec(Arrays.copyOf(digest, 32), "AES");
     }
 

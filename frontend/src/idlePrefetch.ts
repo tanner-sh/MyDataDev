@@ -17,6 +17,7 @@ export type IdlePrefetchHost = {
   cancelIdleCallback?: (handle: number) => void;
   setTimeout: (callback: () => void, delayMs: number) => number;
   clearTimeout: (handle: number) => void;
+  navigator?: object;
 };
 
 /**
@@ -27,7 +28,7 @@ export type IdlePrefetchHost = {
 export function prefetchWhenIdle(load: () => Promise<unknown>, host: IdlePrefetchHost): () => void {
   let cancelled = false;
   const run = () => {
-    if (cancelled) return;
+    if (cancelled || shouldAvoidPrefetch(host)) return;
     void load().catch(() => undefined);
   };
 
@@ -46,8 +47,28 @@ export function prefetchWhenIdle(load: () => Promise<unknown>, host: IdlePrefetc
   };
 }
 
-/** 安排多个预取，返回一个统一的取消函数。 */
+function shouldAvoidPrefetch(host: IdlePrefetchHost): boolean {
+  const connection = (host.navigator as { connection?: { saveData?: boolean; effectiveType?: string } } | undefined)?.connection;
+  return Boolean(connection?.saveData || ['slow-2g', '2g'].includes(connection?.effectiveType || ''));
+}
+
+/** 逐个安排多个预取，避免大型懒加载块同时争抢带宽和解压主线程。 */
 export function prefetchAllWhenIdle(loaders: Array<() => Promise<unknown>>, host: IdlePrefetchHost): () => void {
-  const cancels = loaders.map((load) => prefetchWhenIdle(load, host));
-  return () => cancels.forEach((cancel) => cancel());
+  let cancelled = false;
+  let cancelCurrent = () => { };
+  const schedule = (index: number) => {
+    if (cancelled || index >= loaders.length) return;
+    cancelCurrent = prefetchWhenIdle(async () => {
+      try {
+        await loaders[index]();
+      } finally {
+        schedule(index + 1);
+      }
+    }, host);
+  };
+  schedule(0);
+  return () => {
+    cancelled = true;
+    cancelCurrent();
+  };
 }

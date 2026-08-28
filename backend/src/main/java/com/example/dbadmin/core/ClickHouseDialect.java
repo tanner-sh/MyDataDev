@@ -4,6 +4,7 @@ import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.HexFormat;
 
 public class ClickHouseDialect extends DefaultDialect {
     @Override
@@ -30,5 +31,10 @@ public class ClickHouseDialect extends DefaultDialect {
             return "'" + text.toString().replace("\\", "\\\\").replace("'", "''") + "'";
         }
         return super.literal(value);
+    }
+
+    @Override
+    public String scriptBinaryLiteral(byte[] value) {
+        return "unhex('" + HexFormat.of().formatHex(value) + "')";
     }
 }

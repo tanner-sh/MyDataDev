@@ -288,8 +288,9 @@ public class MetadataService {
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, selectedSchema);
         String schemaPattern = scope.schemaPattern() == null ? null : metadataPattern(meta, scope.schemaPattern(), MatchMode.EXACT);
-        boolean loadCatalog = keyword == null || keyword.isBlank();
-        String tablePattern = loadCatalog ? "%" : metadataPattern(meta, keyword, matchMode);
+        boolean unfiltered = keyword == null || keyword.isBlank();
+        boolean loadCatalog = !physicalOnly && unfiltered;
+        String tablePattern = unfiltered ? "%" : metadataPattern(meta, keyword, matchMode);
         long offset = (long) page * pageSize;
         if (offset > MAX_METADATA_OFFSET) {
             throw new IllegalArgumentException("元数据分页偏移过大，请使用搜索条件缩小范围。");
@@ -297,16 +298,14 @@ public class MetadataService {
         long matched = 0;
         boolean exhausted = true;
         List<DbObject> objects = new ArrayList<>(pageSize + 1);
-        List<DbObject> catalogObjects = loadCatalog ? new ArrayList<>() : null;
-        String[] types = physicalOnly && !loadCatalog ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
+        List<DbObject> catalogObjects = unfiltered ? new ArrayList<>() : null;
+        String[] types = physicalOnly ? new String[]{"TABLE", "BASE TABLE"} : new String[]{"TABLE", "VIEW"};
         // The explorer needs one page before it needs an exact object count.
         // Only cache a complete catalog when it fits in that requested page;
         // otherwise stop after pageSize + 1 rows and report an inexact total.
         // This keeps a schema with thousands of objects from blocking the
         // first render merely to calculate a number for the footer.
-        // Backup target selection intentionally keeps its exact table count
-        // contract for ordinary catalogs; the explorer can return immediately.
-        int maxCatalogObjects = physicalOnly ? 20_000 : pageSize;
+        int maxCatalogObjects = physicalOnly ? pageSize + 1 : pageSize;
         try (ResultSet rs = meta.getTables(scope.catalog(), schemaPattern, tablePattern, types)) {
             while (rs.next()) {
                 String schema = dialect.resultNamespace(rs);
@@ -337,7 +336,7 @@ public class MetadataService {
             }
         }
         if (catalogObjects != null) {
-            cache.putObjectCatalog(connectionId, selectedSchema, catalogObjects);
+            if (!physicalOnly) cache.putObjectCatalog(connectionId, selectedSchema, catalogObjects);
             return pageFromCatalog(catalogObjects, keyword, matchMode, page, pageSize, physicalOnly);
         }
         boolean hasMore = objects.size() > pageSize;

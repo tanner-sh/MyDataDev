@@ -137,6 +137,23 @@ class MetadataServiceTest {
     }
 
     @Test
+    void backupTargetFirstPageAlsoStopsWithoutAnExactCatalogScan() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            for (int index = 0; index < 10; index++) {
+                connection.createStatement().execute("CREATE TABLE backup_table_" + index + "(id BIGINT PRIMARY KEY)");
+            }
+        }
+
+        var response = service(url).backupTargetTables(1L, "PUBLIC", null, 0, 2, false);
+
+        assertThat(response.items()).hasSize(2);
+        assertThat(response.hasMore()).isTrue();
+        assertThat(response.total()).isGreaterThanOrEqualTo(3);
+        assertThat(response.totalExact()).isFalse();
+    }
+
+    @Test
     void coldInspectionReusesOneJdbcConnectionForSchemasAndFirstPage() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

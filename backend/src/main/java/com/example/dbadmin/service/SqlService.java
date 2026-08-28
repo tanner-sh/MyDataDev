@@ -47,6 +47,7 @@ public class SqlService {
     private static final int MAX_SCRIPT_RESULT_ROWS = 10_000;
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final long MAX_RESULT_TEXT_CHARS = 20_000_000;
+    private static final long MAX_BINARY_LENGTH_PROBE_BYTES = 1L << 20;
     private static final int MAX_CELL_TEXT_CHARS = 100_000;
     private final ConnectionService connections;
     private final AppProperties properties;
@@ -766,28 +767,34 @@ public class SqlService {
     private Object serializableValue(ResultSet rs, ResultSetMetaData metadata, int index, int maxTextChars) throws Exception {
         int jdbcType = metadata.getColumnType(index);
         if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
-            long length = binaryLength(rs, index);
-            return truncateText("<BINARY " + length + " bytes>", "", maxTextChars);
+            String description = binaryDescription(rs, index);
+            return description == null ? null : truncateText(description, "", maxTextChars);
         }
         return serializableValue(rs.getObject(index), maxTextChars);
     }
 
-    private long binaryLength(ResultSet rs, int index) throws Exception {
+    private String binaryDescription(ResultSet rs, int index) throws Exception {
         try {
             Blob blob = rs.getBlob(index);
-            if (blob != null) return blob.length();
-            if (rs.wasNull()) return 0;
+            if (blob != null) return "<BINARY " + blob.length() + " bytes>";
+            if (rs.wasNull()) return null;
         } catch (Exception ignored) {
             // Some drivers expose VARBINARY only through a binary stream.
         }
         try (InputStream input = rs.getBinaryStream(index)) {
-            if (input == null) return 0;
-            byte[] buffer = new byte[16 * 1024];
-            long total = 0;
-            int read;
-            while ((read = input.read(buffer)) >= 0) total += read;
-            return total;
+            if (input == null) return null;
+            return describeBinaryStream(input);
         }
+    }
+
+    static String describeBinaryStream(InputStream input) throws Exception {
+        byte[] buffer = new byte[16 * 1024];
+        long total = 0;
+        int read;
+        while (total <= MAX_BINARY_LENGTH_PROBE_BYTES && (read = input.read(buffer)) >= 0) total += read;
+        return total > MAX_BINARY_LENGTH_PROBE_BYTES
+                ? "<BINARY > 1 MB>"
+                : "<BINARY " + total + " bytes>";
     }
 
     private String truncateText(String prefixSource, String marker, int maxChars) {

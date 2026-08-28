@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 
@@ -25,6 +26,20 @@ public class PostgreSqlDialect extends DefaultDialect {
     public void configureStreamingStatement(Connection connection, Statement statement, int fetchSize, int timeoutSeconds) throws java.sql.SQLException {
         if (connection.getAutoCommit()) connection.setAutoCommit(false);
         configureReadStatement(connection, statement, Math.max(fetchSize, 1), timeoutSeconds);
+    }
+
+    @Override
+    public String scriptLiteral(Object value) {
+        if (value instanceof byte[] bytes) return scriptBinaryLiteral(bytes);
+        if (value instanceof CharSequence text && text.toString().indexOf('\\') >= 0) {
+            return "E'" + text.toString().replace("\\", "\\\\").replace("'", "''") + "'";
+        }
+        return super.scriptLiteral(value);
+    }
+
+    @Override
+    public String scriptBinaryLiteral(byte[] value) {
+        return "decode('" + HexFormat.of().formatHex(value) + "', 'hex')";
     }
 
     @Override

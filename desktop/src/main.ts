@@ -110,8 +110,8 @@ async function hasActiveOperations() {
       headers: { 'X-User': 'desktop' }
     });
     if (!response.ok) return false;
-    const payload = await response.json() as { backups?: unknown[]; restores?: unknown[] };
-    return Boolean(payload.backups?.length || payload.restores?.length);
+    const payload = await response.json() as { backups?: unknown[]; restores?: unknown[]; sqlFiles?: unknown[] };
+    return Boolean(payload.backups?.length || payload.restores?.length || payload.sqlFiles?.length);
   } catch {
     return false;
   }
@@ -129,7 +129,7 @@ async function requestQuit(confirmActive: boolean) {
     const answer = await dialog.showMessageBox({
       type: 'warning',
       title: '仍有任务正在运行',
-      message: '备份或恢复任务仍在运行，退出可能中断任务。',
+      message: '备份、恢复或 SQL 文件/CSV 导入任务仍在运行，退出可能中断任务。',
       detail: '是否仍然退出 MyDataDev？',
       buttons: ['继续使用', '退出'],
       defaultId: 0,

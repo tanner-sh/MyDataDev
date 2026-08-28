@@ -37,7 +37,7 @@ class BackupExecutionCoordinatorTest {
 
         assertThat(coordinator.cancel(1L)).isTrue();
 
-        assertThat(sawInterrupt.get()).isTrue();
+        assertThat(awaitTrue(sawInterrupt)).isTrue();
         assertThat(coordinator.isRunning(1L)).isTrue();
         assertThat(coordinator.submit(1L, () -> { }, () -> { })).isFalse();
 
@@ -55,6 +55,7 @@ class BackupExecutionCoordinatorTest {
         BackupExecutionCoordinator coordinator = new BackupExecutionCoordinator(properties, NO_METRICS);
         CountDownLatch blocking = new CountDownLatch(1);
         AtomicBoolean queuedTaskRan = new AtomicBoolean(false);
+        AtomicBoolean queuedCleanupRan = new AtomicBoolean(false);
 
         // Occupy the single worker so the next task stays queued.
         coordinator.submit(1L, () -> { }, () -> {
@@ -64,13 +65,14 @@ class BackupExecutionCoordinatorTest {
                 Thread.currentThread().interrupt();
             }
         });
-        coordinator.submit(2L, () -> { }, () -> queuedTaskRan.set(true));
+        coordinator.submit(2L, () -> { }, () -> queuedTaskRan.set(true), () -> queuedCleanupRan.set(true));
 
         assertThat(coordinator.cancel(2L)).isTrue();
         blocking.countDown();
 
         assertThat(awaitStopped(coordinator, 2L)).isTrue();
         assertThat(queuedTaskRan.get()).isFalse();
+        assertThat(queuedCleanupRan.get()).isTrue();
 
         coordinator.close();
     }
@@ -79,6 +81,15 @@ class BackupExecutionCoordinatorTest {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (System.nanoTime() < deadline) {
             if (!coordinator.isRunning(taskId)) return true;
+            Thread.sleep(10);
+        }
+        return false;
+    }
+
+    private boolean awaitTrue(AtomicBoolean value) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (value.get()) return true;
             Thread.sleep(10);
         }
         return false;

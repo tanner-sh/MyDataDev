@@ -69,8 +69,8 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     if (loadRequested) void loadEditor();
   }, [loadEditor, loadRequested]);
 
-  // 挂载后立刻在空闲时拉起编辑器。App 已经在首屏空闲时预取了这个 chunk，所以这里
-  // 通常是命中缓存、瞬间完成 —— 用户不必先点一下才看到语法高亮和补全。
+  // 只有进入 SQL 工作台并挂载此组件后，才在空闲时拉起 Monaco，避免浏览表格等会话
+  // 下载全站最大的资源块；文本框仍可立即输入，编辑器就绪后会无损接管内容。
   useEffect(() => prefetchWhenIdle(async () => setAutoLoad(true), window), []);
 
   function handleFallbackShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {

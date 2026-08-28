@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SqlFileStatementReaderTest {
     @TempDir
@@ -50,6 +51,19 @@ class SqlFileStatementReaderTest {
     void readsSqlServerGoBatches() throws Exception {
         assertThat(read("sqlserver", "create table t(id int);\nGO\ninsert into t values (1);\ngo\n"))
                 .containsExactly("create table t(id int);", "insert into t values (1);");
+    }
+
+    @Test
+    void treatsBackslashesAccordingToDialectAndEscapeParity() throws Exception {
+        assertThat(read("generic", "insert into t values ('a\\'); select 2;"))
+                .containsExactly("insert into t values ('a\\')", "select 2");
+        assertThat(read("sqlserver", "insert into t values ('a\\');\nGO\n"))
+                .containsExactly("insert into t values ('a\\');");
+        assertThat(read("mysql", "insert into t values ('a\\\\'); select 2;"))
+                .containsExactly("insert into t values ('a\\\\')", "select 2");
+        assertThatThrownBy(() -> read("mysql", "insert into t values ('a\\');"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未闭合");
     }
 
     @Test

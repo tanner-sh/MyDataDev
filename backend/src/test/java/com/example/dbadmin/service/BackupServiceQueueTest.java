@@ -25,7 +25,7 @@ class BackupServiceQueueTest {
     @Test
     void restoresTerminalStatusWhenExecutionQueueIsFull() {
         Fixture fixture = fixture();
-        when(fixture.coordinator.submit(eq(1L), any(Runnable.class), any(Runnable.class)))
+        when(fixture.coordinator.submit(eq(1L), any(Runnable.class), any(Runnable.class), any(Runnable.class)))
                 .thenThrow(new RejectedExecutionException());
 
         assertThatThrownBy(() -> fixture.service.enqueue(1L, "admin"))

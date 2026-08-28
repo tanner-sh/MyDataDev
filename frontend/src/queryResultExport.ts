@@ -10,6 +10,9 @@ export type ResultSerializationOptions = {
 
 const NUMERIC_TYPES = /(^|\s)(tinyint|smallint|mediumint|int|integer|bigint|decimal|numeric|number|real|float|double|serial|bigserial)(\s|$|\()/i;
 const NUMERIC_VALUE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const BINARY_TYPES = /(^|\s)(binary|varbinary|longvarbinary|blob|bytea|raw|image)(\s|$|\()/i;
+const OMITTED_VALUE = /^<(?:BLOB|BINARY)\s/i;
+const TRUNCATED_VALUE = /<(?:CLOB\s*已截断|文本已截断)[^>]*>$/;
 const COPY_FORMAT_KEY = 'mydatadev.result-copy-format';
 
 export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null): string[] | undefined {
@@ -127,7 +130,7 @@ function serializeSql(columns: ResultColumn[], rows: unknown[][], options: Resul
   const names = uniqueColumnNames(columns).map((name) => quoteIdentifier(name, style)).join(', ');
   const table = quoteQualifiedTable(target, options.dbType);
   return `${rows.map((row) => {
-    const values = columns.map((column, index) => sqlLiteral(row[index], column.typeName)).join(', ');
+    const values = columns.map((column, index) => sqlLiteral(row[index], column.typeName, options.dbType)).join(', ');
     return `INSERT INTO ${table} (${names}) VALUES (${values});`;
   }).join('\n')}\n`;
 }
@@ -161,13 +164,50 @@ function pipeValue(value: unknown): string {
     .split('\n').join('\\n');
 }
 
-function sqlLiteral(value: unknown, typeName: string): string {
+function sqlLiteral(value: unknown, typeName: string, dbType?: string): string {
   if (value == null) return 'NULL';
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  if (value instanceof Uint8Array) return binaryLiteral(value, dbType);
+  if (typeof value === 'boolean') {
+    return booleanUsesNumericLiteral(dbType) ? (value ? '1' : '0') : (value ? 'TRUE' : 'FALSE');
+  }
   if (typeof value === 'number' || typeof value === 'bigint') return String(value);
   const text = displayValue(value);
   if (NUMERIC_TYPES.test(typeName) && NUMERIC_VALUE.test(text.trim())) return text.trim();
-  return `'${text.split("'").join("''")}'`;
+  if ((BINARY_TYPES.test(typeName) && OMITTED_VALUE.test(text)) || TRUNCATED_VALUE.test(text)) {
+    throw new Error('当前结果包含已省略或截断的单元格，请使用“导出全部结果”生成可还原的 SQL 文件');
+  }
+  return stringLiteral(text, dbType);
+}
+
+function stringLiteral(value: string, dbType?: string): string {
+  const normalized = dbType?.toLowerCase() || '';
+  if (['mysql', 'mariadb', 'oceanbase-mysql'].includes(normalized) && value.includes('\\')) {
+    return `_utf8mb4 0x${toHex(new TextEncoder().encode(value))}`;
+  }
+  const escapedQuotes = value.split("'").join("''");
+  if (normalized === 'clickhouse') return `'${escapedQuotes.split('\\').join('\\\\')}'`;
+  if (normalized === 'postgresql' && value.includes('\\')) return `E'${escapedQuotes.split('\\').join('\\\\')}'`;
+  if (['sqlserver', 'sql-server', 'mssql'].includes(normalized)) return `N'${escapedQuotes}'`;
+  return `'${escapedQuotes}'`;
+}
+
+function booleanUsesNumericLiteral(dbType?: string): boolean {
+  return ['mysql', 'mariadb', 'oceanbase-mysql', 'sqlserver', 'sql-server', 'mssql', 'oracle', 'oceanbase-oracle', 'dm', 'dameng']
+    .includes(dbType?.toLowerCase() || '');
+}
+
+function binaryLiteral(value: Uint8Array, dbType?: string): string {
+  const hex = toHex(value);
+  const normalized = dbType?.toLowerCase() || '';
+  if (['mysql', 'mariadb', 'oceanbase-mysql', 'sqlserver', 'sql-server', 'mssql'].includes(normalized)) return `0x${hex}`;
+  if (normalized === 'postgresql') return `decode('${hex}', 'hex')`;
+  if (normalized === 'clickhouse') return `unhex('${hex}')`;
+  if (['oracle', 'oceanbase-oracle', 'dm', 'dameng'].includes(normalized)) return `hextoraw('${hex}')`;
+  return `X'${hex}'`;
+}
+
+function toHex(value: Uint8Array): string {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function displayValue(value: unknown): string {

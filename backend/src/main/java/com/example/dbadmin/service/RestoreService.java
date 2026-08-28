@@ -254,15 +254,16 @@ public class RestoreService {
         preparedTables.put(id, plan.tables());
         verifiedSources.put(id, plan.fingerprint());
         try {
-            boolean accepted = coordinator.submit(-id, () -> { }, () -> {
-                try {
-                    run(id, plan.resolvedToolPath(), request.extraArgs());
-                } finally {
-                    taskControl.releaseCompleted(target.id(), operationKey);
-                    preparedTables.remove(id);
-                    verifiedSources.remove(id);
-                }
-            });
+            boolean accepted = coordinator.submit(
+                    -id,
+                    () -> { },
+                    () -> run(id, plan.resolvedToolPath(), request.extraArgs()),
+                    () -> {
+                        taskControl.releaseCompleted(target.id(), operationKey);
+                        preparedTables.remove(id);
+                        verifiedSources.remove(id);
+                    }
+            );
             if (!accepted) throw new ApiProblemException(HttpStatus.CONFLICT, "RESTORE_ALREADY_RUNNING", "该恢复任务正在执行，请勿重复启动。");
         } catch (RejectedExecutionException error) {
             taskControl.releaseCompleted(target.id(), operationKey);

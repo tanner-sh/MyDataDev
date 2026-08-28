@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.lang.ref.Cleaner;
 import java.nio.file.Files;
@@ -26,7 +27,9 @@ import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLXML;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -41,6 +44,8 @@ public class ExportService {
     public static final int EXPORT_MAX_ROWS = 10_000;
     public static final long EXPORT_MAX_BYTES = 256L * 1024 * 1024;
     private static final int EXPORT_MAX_CELL_TEXT_CHARS = 100_000;
+    private static final int SQL_EXPORT_MAX_CELL_BYTES = 64 * 1024 * 1024;
+    private static final int SQL_EXPORT_MAX_CELL_CHARS = 64 * 1024 * 1024;
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
     private final AppProperties properties;
@@ -262,7 +267,9 @@ public class ExportService {
         int rows = 0;
         while (rows < EXPORT_MAX_ROWS && rs.next()) {
             List<String> values = new ArrayList<>();
-            for (int index = 1; index <= metadata.getColumnCount(); index++) values.add(sqlLiteral(sqlExportValue(rs.getObject(index))));
+            for (int index = 1; index <= metadata.getColumnCount(); index++) {
+                values.add(dialect.scriptLiteral(sqlExportValue(rs, metadata, index)));
+            }
             writer.write("INSERT INTO " + targetTable + " (" + String.join(", ", columns) + ") VALUES (" + String.join(", ", values) + ");");
             writer.newLine();
             rows++;
@@ -329,9 +336,62 @@ public class ExportService {
         return truncateText(value.toString(), "", EXPORT_MAX_CELL_TEXT_CHARS);
     }
 
-    private Object sqlExportValue(Object value) throws Exception {
-        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) return value;
-        return exportValue(value);
+    private Object sqlExportValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {
+        int jdbcType = metadata.getColumnType(index);
+        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
+            try (InputStream input = rs.getBinaryStream(index)) {
+                if (input == null) return null;
+                return readBinaryCell(input);
+            }
+        }
+        Object value = rs.getObject(index);
+        if (value instanceof Blob blob) {
+            try (InputStream input = blob.getBinaryStream()) {
+                return readBinaryCell(input);
+            }
+        }
+        if (value instanceof byte[] bytes) {
+            requireSqlCellSize(bytes.length, "二进制");
+            return bytes;
+        }
+        if (value instanceof Clob clob) {
+            try (Reader reader = clob.getCharacterStream()) {
+                return readTextCell(reader);
+            }
+        }
+        if (value instanceof SQLXML xml) return requireSqlTextCell(xml.getString());
+        if (value instanceof CharSequence text) return requireSqlTextCell(text.toString());
+        return value;
+    }
+
+    private byte[] readBinaryCell(InputStream input) throws IOException {
+        byte[] value = input.readNBytes(SQL_EXPORT_MAX_CELL_BYTES + 1);
+        requireSqlCellSize(value.length, "二进制");
+        return value;
+    }
+
+    private String readTextCell(Reader reader) throws IOException {
+        StringBuilder value = new StringBuilder();
+        char[] buffer = new char[16 * 1024];
+        int read;
+        while ((read = reader.read(buffer)) >= 0) {
+            if (read == 0) continue;
+            if (value.length() > SQL_EXPORT_MAX_CELL_CHARS - read) {
+                throw new IOException("SQL 导出中的文本单元格超过 64 MB 限制，请缩小查询范围。");
+            }
+            value.append(buffer, 0, read);
+        }
+        return value.toString();
+    }
+
+    private String requireSqlTextCell(String value) throws IOException {
+        requireSqlCellSize(value.length(), "文本");
+        return value;
+    }
+
+    private void requireSqlCellSize(int size, String kind) throws IOException {
+        int limit = "文本".equals(kind) ? SQL_EXPORT_MAX_CELL_CHARS : SQL_EXPORT_MAX_CELL_BYTES;
+        if (size > limit) throw new IOException("SQL 导出中的" + kind + "单元格超过 64 MB 限制，请缩小查询范围。");
     }
 
     private String normalizeFormat(String format) {
@@ -351,12 +411,6 @@ public class ExportService {
     private String csvValue(Object value) {
         String text = value == null ? "" : value.toString();
         return "\"" + text.replace("\"", "\"\"") + "\"";
-    }
-
-    private String sqlLiteral(Object value) {
-        if (value == null) return "NULL";
-        if (value instanceof Number || value instanceof Boolean) return value.toString();
-        return "'" + value.toString().replace("'", "''") + "'";
     }
 
     private String xmlValue(Object value) {
@@ -460,7 +514,7 @@ public class ExportService {
             return size;
         }
 
-        public void writeTo(OutputStream output) throws Exception {
+        public void writeTo(OutputStream output) throws IOException {
             try (InputStream input = Files.newInputStream(path)) {
                 input.transferTo(output);
             } finally {

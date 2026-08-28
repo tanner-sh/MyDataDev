@@ -121,6 +121,28 @@ class ExportServiceTest {
     }
 
     @Test
+    void sqlExportKeepsCompleteClobAndBinaryValues() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+
+        exportService.stream(
+                1L,
+                "select cast(repeat('x', 120000) as clob) as note, cast(X'00FF5C' as blob) as payload",
+                "sql",
+                "admin",
+                null,
+                null,
+                java.util.List.of("copied_values"),
+                output
+        );
+
+        String body = output.toString(StandardCharsets.UTF_8);
+        assertThat(body).hasSizeGreaterThan(120_000)
+                .contains("X'00ff5c'")
+                .doesNotContain("已截断")
+                .doesNotContain("<BLOB");
+    }
+
+    @Test
     void usesExplicitQualifiedTargetForSqlExport() throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
 
