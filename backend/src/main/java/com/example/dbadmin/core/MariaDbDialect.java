@@ -24,6 +24,8 @@ public class MariaDbDialect extends MySqlDialect {
                 SELECT ID AS session_id, USER AS session_user, HOST AS session_host, DB AS session_database,
                        STATE AS session_state, COMMAND AS session_command, TIME AS duration_seconds, INFO AS session_sql
                 FROM information_schema.PROCESSLIST
+                -- 与 MySqlDialect 同理：排除工具自己这条连接。
+                WHERE ID <> CONNECTION_ID()
                 ORDER BY TIME DESC
                 """;
     }

@@ -145,6 +145,10 @@ public class MySqlDialect extends DefaultDialect {
                 SELECT ID AS session_id, USER AS session_user, HOST AS session_host, DB AS session_database,
                        STATE AS session_state, COMMAND AS session_command, TIME AS duration_seconds, INFO AS session_sql
                 FROM information_schema.PROCESSLIST
+                -- 排除工具自己这条连接。面板每 5 秒刷新一次，不排除的话「正在执行」里
+                -- 永远挂着本查询自身，反而盖住真正在跑的语句。PostgreSQL 方言一直是这么做的
+                -- （pid <> pg_backend_pid()），这里与它对齐。
+                WHERE ID <> CONNECTION_ID()
                 ORDER BY TIME DESC
                 """;
     }

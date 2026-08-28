@@ -155,7 +155,9 @@ public class OracleDialect extends DefaultDialect {
                        s.SCHEMANAME AS session_database, s.STATUS AS session_state, s.PROGRAM AS session_command,
                        s.LAST_CALL_ET AS duration_seconds, q.SQL_TEXT AS session_sql
                 FROM V$SESSION s LEFT JOIN V$SQL q ON q.SQL_ID = s.SQL_ID
-                WHERE s.TYPE = 'USER'
+                -- 同 MySQL/PostgreSQL：排除工具自己这条会话，否则自动刷新会让它常驻在
+                -- 「正在执行」的第一条。
+                WHERE s.TYPE = 'USER' AND s.SID <> SYS_CONTEXT('USERENV', 'SID')
                 ORDER BY s.LAST_CALL_ET DESC
                 """;
     }

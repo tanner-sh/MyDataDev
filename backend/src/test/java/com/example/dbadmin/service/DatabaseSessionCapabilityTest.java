@@ -3,6 +3,8 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.core.DefaultDialect;
 import com.example.dbadmin.core.MariaDbDialect;
 import com.example.dbadmin.core.MySqlDialect;
+import com.example.dbadmin.core.OceanBaseMySqlDialect;
+import com.example.dbadmin.core.OceanBaseOracleDialect;
 import com.example.dbadmin.core.OracleDialect;
 import com.example.dbadmin.core.PostgreSqlDialect;
 import org.junit.jupiter.api.Test;
@@ -32,6 +34,23 @@ class DatabaseSessionCapabilityTest {
         assertThat(new MySqlDialect().activeSessionsSql()).isNotBlank();
         assertThat(new PostgreSqlDialect().activeSessionsSql()).isNotBlank();
         assertThat(new OracleDialect().activeSessionsSql()).isNotBlank();
+    }
+
+    /**
+     * 每个能列会话的方言都必须把工具自己那条会话排除掉。
+     *
+     * <p>会话面板每 5 秒自动刷新，不排除的话「正在执行」里永远挂着本查询自身，把真正在跑
+     * 的语句挤下去。PostgreSQL 一直是这么写的，MySQL / MariaDB / Oracle 之前漏了 ——
+     * 逐个方言各写一份 SQL，就会逐个漏，所以这条断言按方言清单一起过。</p>
+     */
+    @Test
+    void everySessionListingDialectExcludesItsOwnSession() {
+        assertThat(new MySqlDialect().activeSessionsSql()).contains("CONNECTION_ID()");
+        assertThat(new MariaDbDialect().activeSessionsSql()).contains("CONNECTION_ID()");
+        assertThat(new OceanBaseMySqlDialect().activeSessionsSql()).contains("CONNECTION_ID()");
+        assertThat(new PostgreSqlDialect().activeSessionsSql()).contains("pg_backend_pid()");
+        assertThat(new OracleDialect().activeSessionsSql()).contains("SYS_CONTEXT('USERENV', 'SID')");
+        assertThat(new OceanBaseOracleDialect().activeSessionsSql()).contains("SYS_CONTEXT('USERENV', 'SID')");
     }
 
     @Test

@@ -73,6 +73,8 @@ class DatabaseSessionServiceTest {
         MySqlDialect dialect = new MySqlDialect();
 
         assertThat(dialect.activeSessionsSql()).contains("PROCESSLIST").contains("session_id");
+        // 面板每 5 秒刷新，不排除自己的话它会常驻在「正在执行」的第一条。
+        assertThat(dialect.activeSessionsSql()).contains("ID <> CONNECTION_ID()");
         assertThat(dialect.killSessionSql("42")).isEqualTo("KILL 42");
     }
 
