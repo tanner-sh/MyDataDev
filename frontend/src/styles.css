@@ -4628,7 +4628,28 @@ body.is-resizing-column * {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  min-width: 0;
   min-height: 0;
+}
+
+/*
+  flex 子项默认 min-width:auto —— 不会缩到自身 min-content 宽度以下。分区里的卡片包着
+  antd Descriptions 渲染的 <table>（最小内容宽约 800px），于是整张卡片撑破分区、右侧的
+  按钮被裁掉，而外层容器还测不到这次溢出，连横向滚动条都不会出现。
+*/
+.management-section > *,
+/* 卡片往往嵌在面板自己的 grid 里，不是分区的直接子元素，所以要单独点名。 */
+.management-section .ant-card {
+  min-width: 0;
+}
+
+/*
+  表格类内容确实缩不动（列宽由内容决定），给它自己一条横向滚动，而不是让它把整块面板顶宽。
+*/
+.management-section .ant-descriptions-view,
+.management-section .ant-table-content,
+.management-section .ant-table-body {
+  overflow-x: auto;
 }
 
 /* 分区自己的标题行：抽屉标题只写「管理」，具体在哪个分区由这里说明。 */

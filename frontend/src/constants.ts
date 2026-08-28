@@ -37,7 +37,10 @@ export const PASSWORD_MASK = '******';
 export const DRAWER_WIDTH = {
   form: 480,
   browse: 720,
-  workspace: 960
+  // 1100 而不是 960：分区导航占掉 168px，内容区只剩 733px —— 比 MCP 面板原来独占抽屉时
+  // 少了近 200px，右侧的按钮和表格会被挤出去。抽屉承载的内容变多了，宽度得跟上。
+  // antd 会把抽屉限制在视口宽度内，窄屏上不会溢出。
+  workspace: 1100
 } as const;
 
 export const SSH_AUTH_MODE_OPTIONS = [
