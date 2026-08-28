@@ -163,7 +163,7 @@ public class SqlController {
 
     private String normalizedExportFormat(String format) {
         String normalized = format == null ? "" : format.toLowerCase(java.util.Locale.ROOT);
-        if (java.util.Set.of("csv", "json", "sql", "xml").contains(normalized)) {
+        if (java.util.Set.of("csv", "json", "sql", "xml", "xlsx").contains(normalized)) {
             return normalized;
         }
         throw new IllegalArgumentException("不支持的导出格式：" + format);
@@ -174,6 +174,7 @@ public class SqlController {
             case "json" -> MediaType.APPLICATION_JSON;
             case "xml" -> MediaType.APPLICATION_XML;
             case "sql" -> MediaType.TEXT_PLAIN;
+            case "xlsx" -> MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             default -> MediaType.parseMediaType("text/csv");
         };
     }

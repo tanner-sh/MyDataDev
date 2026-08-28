@@ -70,6 +70,8 @@ export function serializeQueryResult(
     case 'json': return serializeJson(columns, rows, options);
     case 'xml': return serializeXml(columns, rows, options);
     case 'sql': return serializeSql(columns, rows, options);
+    // xlsx 是二进制，由 xlsx.ts 直接生成 Blob；调用方在分支时就该把它挑出去。
+    case 'xlsx': throw new Error('Excel 导出不走文本序列化，请调用 buildXlsx');
   }
 }
 

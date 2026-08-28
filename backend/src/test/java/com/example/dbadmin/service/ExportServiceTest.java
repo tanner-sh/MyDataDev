@@ -10,8 +10,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.UUID;
@@ -193,9 +198,30 @@ class ExportServiceTest {
 
     @Test
     void rejectsUnsupportedFormat() {
-        assertThatThrownBy(() -> export("select * from export_values", "xlsx"))
+        assertThatThrownBy(() -> export("select * from export_values", "parquet"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage("不支持的导出格式：xlsx");
+                .hasMessage("不支持的导出格式：parquet");
+    }
+
+    @Test
+    void exportsAWorkbookExcelCanOpenWithTypedCells() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        exportService.export(1L, "select id, name, active from export_values", "xlsx", "admin", output);
+
+        Map<String, String> parts = new HashMap<>();
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(output.toByteArray()))) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                parts.put(entry.getName(), new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+            }
+        }
+        assertThat(parts).containsKeys("[Content_Types].xml", "xl/workbook.xml", "xl/worksheets/sheet1.xml");
+        String sheet = parts.get("xl/worksheets/sheet1.xml");
+        // 第一行是表头，数值列按数字写，文本列按文本写。
+        assertThat(sheet).contains("preserve\">id</t>");
+        assertThat(sheet).contains("<c r=\"A2\" t=\"n\"><v>1</v></c>");
+        assertThat(sheet).contains("preserve\">Alice</t>");
+        assertThat(sheet).contains("<c r=\"C2\" t=\"b\"><v>1</v></c>");
     }
 
     @Test

@@ -213,7 +213,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           { key: 'export:csv', label: '重新查询并导出 CSV' },
           { key: 'export:json', label: '重新查询并导出 JSON' },
           { key: 'export:sql', label: '重新查询并导出 SQL' },
-          { key: 'export:xml', label: '重新查询并导出 XML' }
+          { key: 'export:xml', label: '重新查询并导出 XML' },
+          { key: 'export:xlsx', label: '重新查询并导出 Excel' }
         ]
       },
       {

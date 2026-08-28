@@ -192,6 +192,7 @@ public class ExportService {
             case "csv" -> writeCsv(rs, output);
             case "sql" -> writeSql(rs, output, dialect, targetTableParts);
             case "xml" -> writeXml(rs, output);
+            case "xlsx" -> writeXlsx(rs, output);
             default -> throw new IllegalArgumentException("不支持的导出格式：" + format);
         };
     }
@@ -279,6 +280,55 @@ public class ExportService {
         if (truncated) writer.write("-- 结果已在 " + EXPORT_MAX_ROWS + " 行处截断。\n");
         writer.flush();
         return truncated;
+    }
+
+    /**
+     * 写 xlsx。
+     *
+     * <p>相对 CSV 的意义在于类型不会被 Excel 重新猜一遍：文本列不会被解释成日期或科学
+     * 计数法。数值仍按数值写出，这样在 Excel 里能直接求和排序。</p>
+     */
+    private boolean writeXlsx(ResultSet rs, OutputStream output) throws Exception {
+        ResultSetMetaData metadata = rs.getMetaData();
+        int columnCount = metadata.getColumnCount();
+        try (XlsxWriter workbook = new XlsxWriter(output, "查询结果")) {
+            Object[] header = new Object[columnCount];
+            for (int index = 1; index <= columnCount; index++) header[index - 1] = metadata.getColumnLabel(index);
+            workbook.row(header);
+            int rows = 0;
+            while (rows < EXPORT_MAX_ROWS && rs.next()) {
+                Object[] cells = new Object[columnCount];
+                for (int index = 1; index <= columnCount; index++) cells[index - 1] = xlsxValue(rs.getObject(index));
+                workbook.row(cells);
+                rows++;
+            }
+            return rs.next();
+        }
+    }
+
+    /**
+     * xlsx 的单元格取值。
+     *
+     * <p>{@link #exportValue} 出于 JSON 精度考虑把 Long/BigInteger/BigDecimal 转成了字符串，
+     * 这里要还原成数值 —— 否则在 Excel 里既不能求和也不能按数值排序。</p>
+     *
+     * <p>但 Excel 用 IEEE 754 双精度存数字，超过 15 位有效数字的整数会被静默改写（19 位的
+     * 雪花 ID 末尾会变成 0）。这类值宁可按文本写出：导出结果和库里不一致，比不能求和严重
+     * 得多。</p>
+     */
+    private Object xlsxValue(Object value) throws Exception {
+        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) {
+            Number number = (Number) value;
+            return exceedsExcelPrecision(number) ? number.toString() : number;
+        }
+        return exportValue(value);
+    }
+
+    private static boolean exceedsExcelPrecision(Number number) {
+        BigInteger digits = number instanceof BigDecimal decimal
+                ? decimal.unscaledValue().abs()
+                : number instanceof BigInteger integer ? integer.abs() : BigInteger.valueOf(number.longValue()).abs();
+        return digits.toString().length() > 15;
     }
 
     private boolean writeXml(ResultSet rs, OutputStream output) throws Exception {
@@ -396,7 +446,7 @@ public class ExportService {
 
     private String normalizeFormat(String format) {
         String normalized = format == null ? "" : format.toLowerCase(Locale.ROOT);
-        if (!Set.of("csv", "json", "sql", "xml").contains(normalized)) throw new IllegalArgumentException("不支持的导出格式：" + format);
+        if (!Set.of("csv", "json", "sql", "xml", "xlsx").contains(normalized)) throw new IllegalArgumentException("不支持的导出格式：" + format);
         return normalized;
     }
 

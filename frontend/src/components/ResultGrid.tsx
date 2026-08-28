@@ -27,6 +27,7 @@ import {
 } from '../resultEditing';
 import { localizeError, timestamp } from '../utils';
 import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
+import { buildXlsx } from '../xlsx';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 
 const { Text } = Typography;
@@ -502,14 +503,16 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     const scopedRows = (selectedRows.length > 0 ? selectedRows : rows).map((row) => row.values);
     const perform = (targetTableParts?: string[]) => {
       try {
-        const content = serializeQueryResult(format, result.columns, scopedRows, {
-          dbType,
-          targetTableParts,
-          truncated: Boolean(result.truncated),
-          maxRows: result.maxRows
-        });
-        const mime = format === 'json' ? 'application/json' : format === 'xml' ? 'application/xml' : 'text/plain';
-        downloadBlob(new Blob([content], { type: `${mime};charset=utf-8` }), `query-result-${timestamp()}.${format}`);
+        // xlsx 是二进制，不能走字符串序列化那条路。
+        const blob = format === 'xlsx'
+          ? buildXlsx(result.columns, scopedRows)
+          : textBlob(serializeQueryResult(format, result.columns, scopedRows, {
+            dbType,
+            targetTableParts,
+            truncated: Boolean(result.truncated),
+            maxRows: result.maxRows
+          }), format);
+        downloadBlob(blob, `query-result-${timestamp()}.${format}`);
         void messageApi.success(`已导出当前结果中的 ${scopedRows.length} 行`);
       } catch (error) {
         void messageApi.error((error as Error).message);
@@ -774,8 +777,14 @@ const LOCAL_EXPORT_ITEMS = [
   { key: 'csv', label: 'CSV' },
   { key: 'json', label: 'JSON' },
   { key: 'sql', label: 'SQL 插入' },
-  { key: 'xml', label: 'XML' }
+  { key: 'xml', label: 'XML' },
+  { key: 'xlsx', label: 'Excel' }
 ];
+
+function textBlob(content: string, format: ExportFormat): Blob {
+  const mime = format === 'json' ? 'application/json' : format === 'xml' ? 'application/xml' : 'text/plain';
+  return new Blob([content], { type: `${mime};charset=utf-8` });
+}
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"]'));
