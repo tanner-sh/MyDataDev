@@ -70,14 +70,28 @@ public class SqlTransactionRegistry {
 
     public OpenTransaction require(String id) {
         OpenTransaction transaction = id == null ? null : byId.get(id);
-        if (transaction == null) {
-            throw new ApiProblemException(
-                    HttpStatus.CONFLICT,
-                    "TRANSACTION_NOT_FOUND",
-                    "事务不存在或已结束（可能因超时被自动回滚），请重新开启。"
-            );
-        }
+        if (transaction == null || transaction.isClosed()) throw notFound();
         return transaction;
+    }
+
+    /**
+     * 已经拿到事务锁之后再确认它还活着。
+     *
+     * <p>{@link #require} 取到对象和 {@code tryLock()} 拿到锁之间隔着一个窗口：另一个请求
+     * 可能正好在这段时间里提交/回滚完并把连接关掉了。不复查的话后来者会在一条已关闭的连接上
+     * 继续执行 —— 而连接是 autoCommit=false，close 已经隐式回滚过，那批语句会静默丢失而不是
+     * 报错。对调用方来说「被别人结束掉」和「不存在」是同一回事，用同一个错误码。</p>
+     */
+    public void requireOpen(OpenTransaction transaction) {
+        if (transaction.isClosed()) throw notFound();
+    }
+
+    private static ApiProblemException notFound() {
+        return new ApiProblemException(
+                HttpStatus.CONFLICT,
+                "TRANSACTION_NOT_FOUND",
+                "事务不存在或已结束（可能因超时被自动回滚），请重新开启。"
+        );
     }
 
     public OpenTransaction activeFor(long connectionId) {
@@ -90,6 +104,8 @@ public class SqlTransactionRegistry {
         OpenTransaction transaction = byId.remove(id);
         if (transaction == null) return false;
         byConnection.remove(transaction.connectionId(), id);
+        // 先立标记再关连接：只从 map 里摘除挡不住已经拿着对象引用的并发请求。
+        transaction.markClosed();
         try {
             transaction.connection().close();
         } catch (Exception error) {
@@ -162,6 +178,7 @@ public class SqlTransactionRegistry {
         private final ReentrantLock lock = new ReentrantLock();
         private volatile Instant lastUsedAt;
         private volatile int statementCount;
+        private volatile boolean closed;
 
         OpenTransaction(String id, long connectionId, Connection connection, String schemaName, String actor, Instant startedAt) {
             this.id = id;
@@ -207,6 +224,15 @@ public class SqlTransactionRegistry {
 
         public ReentrantLock lock() {
             return lock;
+        }
+
+        /** 连接已经被关掉，这个对象不能再用来执行任何语句。 */
+        public boolean isClosed() {
+            return closed;
+        }
+
+        void markClosed() {
+            this.closed = true;
         }
 
         public void recordUse(int statements) {

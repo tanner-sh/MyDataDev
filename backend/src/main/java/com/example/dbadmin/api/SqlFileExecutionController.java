@@ -60,7 +60,8 @@ public class SqlFileExecutionController {
             HttpServletRequest request
     ) throws Exception {
         try (var input = request.getInputStream()) {
-            return ResponseEntity.ok(dataImports.uploadCsv(connectionId, schemaName, tableName, fileName, input, actor));
+            return ResponseEntity.ok(dataImports.uploadCsv(
+                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor));
         }
     }
 

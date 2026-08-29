@@ -102,12 +102,7 @@ public class SqlFileExecutionService {
 
         Path root = root();
         Files.createDirectories(root);
-        if (contentLength > 0) {
-            FileStore store = Files.getFileStore(root);
-            if (store.getUsableSpace() < contentLength + 100L * 1024 * 1024) {
-                throw new IllegalStateException("服务器 SQL 文件目录剩余空间不足。");
-            }
-        }
+        requireFreeSpace(root, contentLength);
         Path target = root.resolve("sql-" + UUID.randomUUID() + ".sql").normalize();
         if (!target.startsWith(root)) throw new IllegalArgumentException("SQL 文件路径不安全。");
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -156,19 +151,30 @@ public class SqlFileExecutionService {
      * <p>与 {@link #upload} 的区别只在于内容来源：不是客户端上传的字节流，而是调用方现场写出的
      * 文本（例如 CSV 转成的批量 INSERT）。落盘、摘要、分析、排队全部复用同一套逻辑，因此生成的
      * 导入任务天然具备进度、取消与并发闸门。</p>
+     *
+     * @param estimatedBytes 预计写出的字节数，用于落盘前的剩余空间检查；估不出来传 0。生成的
+     *                       脚本通常比源文件大（列名与 INSERT 头按批重复），调用方应把这部分
+     *                       膨胀算进去。
      */
-    public SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, ScriptWriter writer,
-                                                 String actor, String auditAction, String auditDetailPrefix) throws Exception {
+    public SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, long estimatedBytes,
+                                                 ScriptWriter writer, String actor, String auditAction,
+                                                 String auditDetailPrefix) throws Exception {
         String auditDetail = auditDetailPrefix;
         DbConnection connection = connections.require(connectionId);
         String fileName = safeFileName(rawFileName);
         long maximum = properties.getSqlFile().getMaxUploadBytes();
         Path root = root();
         Files.createDirectories(root);
+        // 生成脚本同样是「一边收请求体一边往磁盘写几个 GB」，磁盘与并发这两道闸门必须和
+        // 直传 SQL 文件一视同仁：少了它们，max-concurrent-uploads 对 CSV 导入形同虚设。
+        requireFreeSpace(root, estimatedBytes);
         Path target = root.resolve("sql-" + UUID.randomUUID() + ".sql").normalize();
         if (!target.startsWith(root)) throw new IllegalArgumentException("SQL 文件路径不安全。");
         MessageDigest digest = MessageDigest.getInstance("SHA-256");
         long size;
+        if (!uploadGuard.tryAcquire()) {
+            throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "UPLOAD_BUSY", "当前大文件上传数量已达上限，请稍后重试。");
+        }
         try (OutputStream file = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW);
              BoundedOutputStream bounded = new BoundedOutputStream(file, maximum);
              DigestOutputStream digested = new DigestOutputStream(bounded, digest);
@@ -180,6 +186,8 @@ public class SqlFileExecutionService {
         } catch (Exception error) {
             Files.deleteIfExists(target);
             throw error;
+        } finally {
+            uploadGuard.release();
         }
         if (size == 0) {
             Files.deleteIfExists(target);
@@ -187,6 +195,21 @@ public class SqlFileExecutionService {
         }
         return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
                 actor, auditAction, auditDetail);
+    }
+
+    /**
+     * 落盘前的剩余空间检查。
+     *
+     * <p>{@code expectedBytes} 是这次要写多少的估算，{@code <= 0} 表示估不出来（客户端没给
+     * Content-Length），那就只做后面写入时的 BoundedOutputStream 兜底。额外留 100 MB 是给
+     * 元数据库和日志的余量 —— 把磁盘写到一个字节不剩会连 H2 都写不动。</p>
+     */
+    private void requireFreeSpace(Path root, long expectedBytes) throws Exception {
+        if (expectedBytes <= 0) return;
+        FileStore store = Files.getFileStore(root);
+        if (store.getUsableSpace() < expectedBytes + 100L * 1024 * 1024) {
+            throw new IllegalStateException("服务器 SQL 文件目录剩余空间不足。");
+        }
     }
 
     private SqlFileExecutionResponse register(DbConnection connection, String fileName, Path target, long size,

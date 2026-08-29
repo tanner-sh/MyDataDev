@@ -126,6 +126,66 @@ class NativeToolArgumentsTest {
         }
     }
 
+    /**
+     * my_getopt 与 getopt_long 都支持把多个短选项黏成一串，所以一行里可能藏着不止一个选项。
+     * 只看前两个字符时 {@code -vP3307} 会被当成无害的 {@code -v} 放行，而 mysqldump 照样把
+     * 端口设成 3307，且它排在系统拼的 --port 之后、后者生效 —— 实际备份目标就和预检、生产
+     * 确认里显示的不是同一个库了。（本机 mysqldump 9.6 实测确认过这个解析行为。）
+     */
+    @Test
+    void shouldRejectBlockedOptionsHiddenInsideACombinedShortOptionCluster() {
+        for (String arg : new String[]{"-vP3307", "-vh10.0.0.1", "-vr/tmp/hijacked.sql", "-vu root", "-cvA"}) {
+            assertThatThrownBy(() -> NativeToolArguments.parse(NativeToolLocator.Tool.MYSQLDUMP, arg, "备份"))
+                    .as(arg)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("不能覆盖系统控制参数");
+        }
+        for (String arg : new String[]{"-vp5433", "-vd other", "-vf/etc/passwd", "-vU postgres"}) {
+            assertThatThrownBy(() -> NativeToolArguments.parse(NativeToolLocator.Tool.PG_RESTORE, arg, "恢复"))
+                    .as(arg)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("不能覆盖系统控制参数");
+        }
+    }
+
+    /**
+     * 展开必须在「带值的短选项」处停下，否则值里的字母会被当成选项：pg_dump 的
+     * {@code -tpublic.users} 里有个 p，不能因此被判成改端口。
+     */
+    @Test
+    void shouldStopExpandingAtTheValueOfAShortOption() {
+        assertThat(NativeToolArguments.parse(NativeToolLocator.Tool.PG_DUMP, "-tpublic.users", "备份"))
+                .containsExactly("-tpublic.users");
+        assertThat(NativeToolArguments.parse(NativeToolLocator.Tool.PG_DUMP, "-nreporting", "备份"))
+                .containsExactly("-nreporting");
+        // 纯开关串照旧放行：mysqldump 的 -c/-q/-e/-t 都不是系统控制参数。
+        assertThat(NativeToolArguments.parse(NativeToolLocator.Tool.MYSQLDUMP, "-cqe", "备份"))
+                .containsExactly("-cqe");
+        assertThat(NativeToolArguments.optionNames(NativeToolLocator.Tool.MYSQLDUMP, "-vP3307"))
+                .containsExactly("-v", "-P");
+        assertThat(NativeToolArguments.optionNames(NativeToolLocator.Tool.PG_DUMP, "-tpublic"))
+                .containsExactly("-t");
+    }
+
+    /** -A/-B 是 --all-databases/--databases 的短写法，长写法已经拦了，短写法不能漏。 */
+    @Test
+    void shouldBlockMysqlScopeOverridesInTheirShortForm() {
+        for (String arg : new String[]{"-A", "-B", "-Bother_db"}) {
+            assertThatThrownBy(() -> NativeToolArguments.parse(NativeToolLocator.Tool.MYSQLDUMP, arg, "备份"))
+                    .as(arg)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("不能覆盖系统控制参数");
+        }
+    }
+
+    /** 光秃秃一个 "-" 会被工具当成位置参数，和裸词一样得拦。 */
+    @Test
+    void shouldRejectABareDash() {
+        assertThatThrownBy(() -> NativeToolArguments.parse(NativeToolLocator.Tool.MYSQLDUMP, "-", "备份"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("不能覆盖系统控制参数");
+    }
+
     @Test
     void shouldSkipBlocklistWhenNoNativeToolIsInvolved() {
         // SQL 备份不会拼命令行，只做通用检查。

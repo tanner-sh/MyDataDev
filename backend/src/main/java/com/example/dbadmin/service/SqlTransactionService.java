@@ -124,6 +124,8 @@ public class SqlTransactionService {
             );
         }
         try {
+            // 上面 require 之后、这里拿到锁之前，事务可能已经被并发的提交/回滚结束掉了。
+            registry.requireOpen(transaction);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             long started = System.nanoTime();
             List<SqlStatementResult> results = new ArrayList<>();
@@ -177,13 +179,18 @@ public class SqlTransactionService {
                     HttpStatus.CONFLICT, "TRANSACTION_BUSY", "该事务上还有语句正在执行，请等待完成。"
             );
         }
-        SqlTransactionResponse snapshot = describe(transaction);
+        SqlTransactionResponse snapshot;
         try {
+            registry.requireOpen(transaction);
+            snapshot = describe(transaction);
             if (commit) transaction.connection().commit();
             else transaction.connection().rollback();
         } finally {
-            transaction.lock().unlock();
+            // 摘除必须在放锁之前完成：反过来的话，从放锁到摘除之间另一个请求能取到这个事务、
+            // 拿到锁并开始执行，而连接随即被这里关掉 —— 连接是 autoCommit=false，close 会隐式
+            // 回滚，那批语句会静默丢失而不是报错。
             registry.close(transactionId);
+            transaction.lock().unlock();
         }
         audit.onConnection(
                 actor,

@@ -58,6 +58,24 @@ class CsvStreamReaderTest {
         assertThat(readAll("a\n\"\"\n")).containsExactly(List.of("a"), List.of(""));
     }
 
+    /**
+     * 引号没闭合必须报错，不能静默吞并。此前 EOF 分支不看 quoted 状态，
+     * {@code 1,"alice\n2,bob} 会被解析成一条 {@code [1, "alice\n2,bob"]} —— 字段数还和表头
+     * 对得上，于是后面所有行被吞进一个字段里「成功」导入。
+     */
+    @Test
+    void unterminatedQuoteIsRejectedInsteadOfSwallowingTheRestOfTheFile() {
+        assertThatThrownBy(() -> readAll("id,name\n1,\"alice\n2,bob\n"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("第 2 行")
+                .hasMessageContaining("双引号没有闭合");
+    }
+
+    @Test
+    void quoteClosedRightBeforeEndOfFileIsStillValid() throws Exception {
+        assertThat(readAll("id,note\n1,\"alice\"")).containsExactly(List.of("id", "note"), List.of("1", "alice"));
+    }
+
     @Test
     void returnsNullAtEndOfInput() throws Exception {
         try (CsvStreamReader reader = new CsvStreamReader(new StringReader("a\n"))) {

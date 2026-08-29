@@ -28,6 +28,8 @@ final class CsvStreamReader implements AutoCloseable {
      * 若按空行跳过，这些行会凭空消失，导入行数与文件对不上。带引号就说明是数据。</p>
      */
     private boolean blankLine;
+    /** 已经读出的物理行数，只用来把「引号没闭合」的报错定位到具体行。 */
+    private long rowsRead;
 
     CsvStreamReader(Reader reader) {
         this.reader = reader;
@@ -62,6 +64,15 @@ final class CsvStreamReader implements AutoCloseable {
             int ch = read();
             if (ch == -1) {
                 endOfInput = true;
+                // 引号还开着就到了文件末尾：这份 CSV 要么被截断，要么引号没写成对。
+                // 不报错的话，后面所有行都已经被当成这个字段的内容吞进来了 —— 字段数还和
+                // 表头对得上，于是导入会「成功」地写进一条把整个文件尾部塞在一列里的记录。
+                if (quoted) {
+                    throw new IllegalArgumentException(
+                            "CSV 第 " + (rowsRead + 1) + " 行的双引号没有闭合，文件在字段中间就结束了。"
+                                    + "请检查文件是否被截断，或字段里的双引号是否写成了两个。"
+                    );
+                }
                 return finish(fields, field, sawQuote);
             }
             if (quoted) {
@@ -104,6 +115,7 @@ final class CsvStreamReader implements AutoCloseable {
     }
 
     private List<String> finish(List<String> fields, StringBuilder field, boolean sawQuote) {
+        rowsRead++;
         fields.add(field.toString());
         blankLine = !sawQuote && fields.size() == 1 && fields.get(0).isEmpty();
         return fields;

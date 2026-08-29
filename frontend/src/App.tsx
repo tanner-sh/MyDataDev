@@ -51,6 +51,7 @@ import {
 } from './relationNavigation';
 import {
   IDLE_SQL_TRANSACTION,
+  isTransactionActive,
   isTransactionGone,
   transactionExecutePath,
   transactionFinishPrompt,
@@ -323,15 +324,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', listener);
   }, []);
 
+  // 未结束的手动事务也要拦：它活在后端，关掉页面不会结束它 —— 连接池里的那条连接和
+  // 数据库上的锁会一直被占着，直到空闲超时（默认 10 分钟）才自动回滚。
+  const hasUnsavedWork = pendingChanges.length > 0 || objectDesignDirty || isTransactionActive(transactionState);
   useEffect(() => {
-    if (pendingChanges.length === 0 && !objectDesignDirty) return;
+    if (!hasUnsavedWork) return;
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [objectDesignDirty, pendingChanges.length]);
+  }, [hasUnsavedWork]);
 
   useEffect(() => {
     selectedIdRef.current = selected?.id || null;

@@ -32,6 +32,14 @@ public class DataImportService {
     /** 每条 INSERT 携带的行数：太小语句数爆炸，太大单条语句会超出驱动的报文上限。 */
     static final int ROWS_PER_STATEMENT = 200;
     static final int MAX_COLUMNS = 500;
+    /**
+     * CSV 转成 INSERT 之后的体积膨胀系数，只用于落盘前的剩余空间预检。
+     *
+     * <p>每 {@link #ROWS_PER_STATEMENT} 行重复一次列名和 INSERT 头，每个值还要加引号和逗号，
+     * 所以脚本一定比源文件大。取 2 是个保守的经验值：宁可在磁盘将满时早一点拒绝，也不要写到
+     * 一半才 ENOSPC —— 那时请求体已经收了一大半。</p>
+     */
+    static final int SCRIPT_SIZE_FACTOR = 2;
 
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
@@ -58,12 +66,15 @@ public class DataImportService {
      *
      * <p>返回的任务还需要调用方再调 start 才会真正写库 —— 与 SQL 文件上传的两步流程一致，
      * 用户有机会先看清楚要往哪张表写多少行、有没有危险语句。</p>
+     *
+     * @param contentLength 请求体声明的字节数，交给落盘前的剩余空间预检；未知传 0。
      */
     public SqlFileExecutionResponse uploadCsv(
             long connectionId,
             String schemaName,
             String tableName,
             String fileName,
+            long contentLength,
             InputStream input,
             String actor
     ) throws Exception {
@@ -87,6 +98,7 @@ public class DataImportService {
         return sqlFiles.uploadScript(
                 connectionId,
                 importScriptName(fileName, tableName),
+                contentLength > 0 ? contentLength * SCRIPT_SIZE_FACTOR : 0,
                 out -> {
                     try (CsvStreamReader csv = new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
                         return "rows=" + convert(csv, out, dialect, schemaName, tableName, tableColumns, fileName);

@@ -16,6 +16,12 @@ import java.sql.DriverManager;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -182,6 +188,62 @@ class SqlTransactionServiceTest {
         assertThatThrownBy(() -> service.begin(1L, null, "admin", null))
                 .isInstanceOfSatisfying(ApiProblemException.class, problem ->
                         assertThat(problem.code()).isEqualTo("READONLY_CONNECTION"));
+    }
+
+    /**
+     * 提交与执行并发。
+     *
+     * <p>此前 finish 是先 unlock 再从注册表摘除，中间那个窗口里另一个请求能取到同一个事务、
+     * 拿到刚放开的锁并开始执行，紧接着连接就被 finish 关掉 —— 而连接是 autoCommit=false，
+     * close 会隐式回滚，那批语句既不生效也不报错，静默丢失。</p>
+     *
+     * <p>现在两边只可能得到明确的结论：要么正常完成，要么被 TRANSACTION_BUSY /
+     * TRANSACTION_NOT_FOUND 挡回去，绝不会落到一条已关闭的连接上（那会是 SQLException）。</p>
+     */
+    @Test
+    void concurrentCommitAndExecuteNeverTouchAClosedConnection() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            for (int attempt = 0; attempt < 100; attempt++) {
+                var transaction = service.begin(1L, null, "admin", null);
+                CyclicBarrier start = new CyclicBarrier(2);
+                Future<Throwable> committing = pool.submit(
+                        failureOf(start, () -> service.finish(transaction.id(), true, "admin")));
+                Future<Throwable> executing = pool.submit(failureOf(start, () -> service.execute(
+                        transaction.id(), "UPDATE accounts SET balance = 7 WHERE id = 1", null, "admin", false)));
+
+                assertRejectedCleanly(committing.get(10, TimeUnit.SECONDS));
+                assertRejectedCleanly(executing.get(10, TimeUnit.SECONDS));
+                // 提交被 BUSY 挡回去时事务还开着，不清掉下一轮会撞上 TRANSACTION_ALREADY_OPEN。
+                registry.close(transaction.id());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** 失败只允许是这两个明确的业务错误码；SQLException（连接已关闭）就是回归。 */
+    private static void assertRejectedCleanly(Throwable failure) {
+        if (failure == null) return;
+        assertThat(failure).isInstanceOfSatisfying(ApiProblemException.class, problem ->
+                assertThat(problem.code()).isIn("TRANSACTION_BUSY", "TRANSACTION_NOT_FOUND"));
+    }
+
+    /** 两个线程在栅栏处对齐后同时进入，把竞态窗口撞出来；返回抛出的异常，没抛就是 null。 */
+    private static Callable<Throwable> failureOf(CyclicBarrier start, ThrowingRunnable action) {
+        return () -> {
+            start.await(10, TimeUnit.SECONDS);
+            try {
+                action.run();
+                return null;
+            } catch (Throwable failure) {
+                return failure;
+            }
+        };
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     @Test
