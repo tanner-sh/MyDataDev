@@ -2,6 +2,7 @@ package com.example.dbadmin.service;
 
 import db.migration.V1__BaselineSchema;
 import db.migration.V10__ConnectionAccessAndAuditContext;
+import db.migration.V13__RestoreUploadOwnership;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
@@ -155,6 +156,35 @@ class FlywayBaselineMigrationTest {
                     """);
             assertThat(broken.next()).isTrue();
             assertThat(broken.getInt(1)).isZero();
+        }
+    }
+
+    @Test
+    void restoreUploadOwnershipMigrationPreservesLegacyUploadsWithoutGuessingAnOwner() throws Exception {
+        String url = "jdbc:h2:mem:flyway-restore-owner-" + UUID.randomUUID() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var sql = connection.createStatement();
+            sql.execute("""
+                    CREATE TABLE restore_upload(
+                        id BIGINT PRIMARY KEY,
+                        original_name VARCHAR(500),
+                        expires_at TIMESTAMP
+                    )
+                    """);
+            sql.execute("INSERT INTO restore_upload(id, original_name, expires_at) VALUES (5, 'legacy.sql', CURRENT_TIMESTAMP)");
+        }
+
+        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true)
+                .baselineVersion(MigrationVersion.fromVersion("12"))
+                .target(MigrationVersion.fromVersion("13"))
+                .javaMigrations(new V13__RestoreUploadOwnership()).load().migrate();
+
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var row = connection.createStatement().executeQuery(
+                    "SELECT original_name, owner_user_id FROM restore_upload WHERE id = 5");
+            assertThat(row.next()).isTrue();
+            assertThat(row.getString("original_name")).isEqualTo("legacy.sql");
+            assertThat(row.getObject("owner_user_id")).isNull();
         }
     }
 }

@@ -3,11 +3,13 @@ package com.example.dbadmin.access;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.auth.WebIdentity;
 import com.example.dbadmin.model.SqlFileExecution;
+import com.example.dbadmin.model.RestoreUpload;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionAccessRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
+import com.example.dbadmin.repo.RestoreUploadRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import com.example.dbadmin.service.SqlExecutionRegistry;
 import com.example.dbadmin.service.SqlScriptSplitter;
@@ -36,6 +38,7 @@ class ConnectionAccessGuardTest {
     private ConnectionAccessRepository repository;
     private SqlFileExecutionRepository sqlFiles;
     private SqlTransactionRegistry transactions;
+    private RestoreUploadRepository restoreUploads;
     private ConnectionAccessService service;
 
     @BeforeEach
@@ -43,10 +46,11 @@ class ConnectionAccessGuardTest {
         repository = mock(ConnectionAccessRepository.class);
         sqlFiles = mock(SqlFileExecutionRepository.class);
         transactions = new SqlTransactionRegistry();
+        restoreUploads = mock(RestoreUploadRepository.class);
         service = new ConnectionAccessService(
                 repository, mock(AuditRepository.class), new SqlStatementClassifier(), new SqlScriptSplitter(),
                 mock(BackupTaskRepository.class), mock(BackupHistoryRepository.class), mock(RestoreJobRepository.class),
-                sqlFiles, transactions, new SqlExecutionRegistry()
+                restoreUploads, sqlFiles, transactions, new SqlExecutionRegistry()
         );
     }
 
@@ -108,6 +112,33 @@ class ConnectionAccessGuardTest {
         assertThat(transactions.activeFor(1L).ownedBy(7L)).isTrue();
     }
 
+    @Test
+    void restoreUploadCanOnlyBeUsedByItsOwner() {
+        when(restoreUploads.findById(9L)).thenReturn(Optional.of(restoreUpload(7L)));
+        authenticate(8L, "bob", "OPERATOR");
+
+        assertThatThrownBy(() -> service.requireRestoreSource(
+                new com.example.dbadmin.dto.ApiDtos.RestoreSourceRef("UPLOAD", 9L)))
+                .isInstanceOf(ApiProblemException.class)
+                .extracting(error -> ((ApiProblemException) error).code())
+                .isEqualTo("RESTORE_UPLOAD_NOT_OWNED");
+
+        authenticate(7L, "alice", "OPERATOR");
+        assertThatCode(() -> service.requireRestoreSource(
+                new com.example.dbadmin.dto.ApiDtos.RestoreSourceRef("UPLOAD", 9L)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void administratorMayHandleLegacyRestoreUploadWithoutOwner() {
+        when(restoreUploads.findById(9L)).thenReturn(Optional.of(restoreUpload(null)));
+        authenticate(1L, "admin", "ADMIN");
+
+        assertThatCode(() -> service.requireRestoreSource(
+                new com.example.dbadmin.dto.ApiDtos.RestoreSourceRef("UPLOAD", 9L)))
+                .doesNotThrowAnyException();
+    }
+
     private void authenticate(long userId, String username, String role) {
         WebIdentity identity = new WebIdentity(userId, "LOCAL", username, username, username, role, 0L);
         SecurityContextHolder.getContext().setAuthentication(
@@ -122,5 +153,10 @@ class ConnectionAccessGuardTest {
                 null, null, null, false, false, false, "alice",
                 null, null, null, Instant.now()
         );
+    }
+
+    private RestoreUpload restoreUpload(Long ownerUserId) {
+        return new RestoreUpload(9L, "backup.sql", "/tmp/backup.sql", 10L, "sha", "SQL", "mysql",
+                ownerUserId, Instant.now(), Instant.now().plusSeconds(3600));
     }
 }

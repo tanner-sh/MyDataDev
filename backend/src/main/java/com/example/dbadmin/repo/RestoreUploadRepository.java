@@ -20,6 +20,7 @@ public class RestoreUploadRepository {
     private final RowMapper<RestoreUpload> mapper = (rs, ignored) -> new RestoreUpload(
             rs.getLong("id"), rs.getString("original_name"), rs.getString("file_path"), rs.getLong("file_size"),
             rs.getString("checksum_sha256"), rs.getString("file_format"), rs.getString("source_db_type"),
+            rs.getObject("owner_user_id", Long.class),
             instant(rs.getTimestamp("created_at")), instant(rs.getTimestamp("expires_at"))
     );
 
@@ -31,8 +32,9 @@ public class RestoreUploadRepository {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement ps = connection.prepareStatement("""
-                    INSERT INTO restore_upload(original_name, file_path, file_size, checksum_sha256, file_format, source_db_type, expires_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO restore_upload(original_name, file_path, file_size, checksum_sha256, file_format,
+                                               source_db_type, owner_user_id, expires_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, Statement.RETURN_GENERATED_KEYS);
             ps.setString(1, upload.originalName());
             ps.setString(2, upload.filePath());
@@ -40,7 +42,9 @@ public class RestoreUploadRepository {
             ps.setString(4, upload.checksumSha256());
             ps.setString(5, upload.fileFormat());
             ps.setString(6, upload.sourceDbType());
-            ps.setTimestamp(7, Timestamp.from(upload.expiresAt()));
+            if (upload.ownerUserId() == null) ps.setNull(7, java.sql.Types.BIGINT);
+            else ps.setLong(7, upload.ownerUserId());
+            ps.setTimestamp(8, Timestamp.from(upload.expiresAt()));
             return ps;
         }, keys);
         Number key = keys.getKey();

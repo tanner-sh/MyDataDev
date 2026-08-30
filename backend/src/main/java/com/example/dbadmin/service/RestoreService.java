@@ -123,6 +123,11 @@ public class RestoreService {
     }
 
     public RestoreUpload uploadStream(InputStream input, String originalFilename, String fileFormat, String sourceDbType, long declaredSize) throws Exception {
+        return uploadStream(input, originalFilename, fileFormat, sourceDbType, declaredSize, null);
+    }
+
+    public RestoreUpload uploadStream(InputStream input, String originalFilename, String fileFormat, String sourceDbType,
+                                      long declaredSize, Long ownerUserId) throws Exception {
         if (input == null) throw new IllegalArgumentException("请选择要恢复的文件。");
         if (declaredSize > properties.getRestore().getMaxUploadBytes()) throw new IllegalArgumentException("上传文件超过允许大小。");
         String format = normalizeFormat(fileFormat, originalFilename);
@@ -166,7 +171,7 @@ public class RestoreService {
         }
         Instant expires = Instant.now().plus(Math.max(1, properties.getRestore().getUploadTtlHours()), ChronoUnit.HOURS);
         RestoreUpload draft = new RestoreUpload(0, safeName(originalFilename), target.toAbsolutePath().toString(), size,
-                HexFormat.of().formatHex(digest.digest()), format, blankToNull(sourceDbType), Instant.now(), expires);
+                HexFormat.of().formatHex(digest.digest()), format, blankToNull(sourceDbType), ownerUserId, Instant.now(), expires);
         long id = uploads.insert(draft);
         return uploads.findById(id).orElseThrow();
     }

@@ -17,6 +17,7 @@ import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionAccessRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
+import com.example.dbadmin.repo.RestoreUploadRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import com.example.dbadmin.service.SqlScriptSplitter;
 import com.example.dbadmin.service.SqlStatementClassifier;
@@ -51,6 +52,7 @@ public class ConnectionAccessService {
     private final BackupTaskRepository backupTasks;
     private final BackupHistoryRepository backupHistories;
     private final RestoreJobRepository restoreJobs;
+    private final RestoreUploadRepository restoreUploads;
     private final SqlFileExecutionRepository sqlFiles;
     private final SqlTransactionRegistry transactions;
     private final SqlExecutionRegistry executions;
@@ -63,6 +65,7 @@ public class ConnectionAccessService {
             BackupTaskRepository backupTasks,
             BackupHistoryRepository backupHistories,
             RestoreJobRepository restoreJobs,
+            RestoreUploadRepository restoreUploads,
             SqlFileExecutionRepository sqlFiles,
             SqlTransactionRegistry transactions,
             SqlExecutionRegistry executions
@@ -74,6 +77,7 @@ public class ConnectionAccessService {
         this.backupTasks = backupTasks;
         this.backupHistories = backupHistories;
         this.restoreJobs = restoreJobs;
+        this.restoreUploads = restoreUploads;
         this.sqlFiles = sqlFiles;
         this.transactions = transactions;
         this.executions = executions;
@@ -131,6 +135,19 @@ public class ConnectionAccessService {
         if (!"UPLOAD".equalsIgnoreCase(source.kind())) {
             throw new IllegalArgumentException("不支持的恢复来源：" + source.kind());
         }
+        var upload = restoreUploads.findById(source.id())
+                .orElseThrow(() -> new IllegalArgumentException("恢复上传文件不存在：" + source.id()));
+        WebIdentity identity = currentIdentity().orElse(null);
+        // 桌面模式没有 Web 身份；管理员负责处理遗留上传。普通用户只能使用自己会话上传的文件。
+        if (identity == null || "ADMIN".equals(identity.role())) return;
+        if (upload.ownerUserId() != null && upload.ownerUserId() == identity.userId()) return;
+        audit.global(identity.username(), "RESTORE_UPLOAD_ACCESS_DENIED", "restore-upload:" + source.id(),
+                "reason=not_upload_owner");
+        throw new ApiProblemException(
+                HttpStatus.FORBIDDEN,
+                "RESTORE_UPLOAD_NOT_OWNED",
+                "该恢复上传文件属于其他用户或来自升级前，当前账号不能使用。"
+        );
     }
 
     public void requireSqlFile(long jobId, ConnectionPermission permission) {

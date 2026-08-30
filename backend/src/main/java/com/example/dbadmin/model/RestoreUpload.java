@@ -10,6 +10,7 @@ public record RestoreUpload(
         String checksumSha256,
         String fileFormat,
         String sourceDbType,
+        Long ownerUserId,
         Instant createdAt,
         Instant expiresAt
 ) {

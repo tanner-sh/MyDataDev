@@ -53,7 +53,9 @@ public class RestoreController {
                                 @RequestParam String fileFormat,
                                 @RequestParam(required = false) String sourceDbType) throws Exception {
         access.requireAnyConnection(ConnectionPermission.BACKUP_RESTORE);
-        return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType, request.getContentLengthLong());
+        Long ownerUserId = access.currentIdentity().map(identity -> identity.userId()).orElse(null);
+        return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType,
+                request.getContentLengthLong(), ownerUserId);
     }
 
     @PostMapping("/preflight")
