@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -31,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class WebAuthenticationIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Test
     void requiresLoginAndCreatesServerSessionWithCsrfProtection() throws Exception {
@@ -126,6 +129,42 @@ class WebAuthenticationIntegrationTest {
         mvc.perform(get("/api/connections").session(operator.session()))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("AUTH_REQUIRED"));
+    }
+
+    /**
+     * SSO 账号的用户名、显示名和角色由身份提供器同步，每次登录都会被覆写。以前这三个字段被
+     * 直接忽略再原样存回，接口照样返回成功 —— 调用方会以为改动生效了。
+     */
+    @Test
+    void ssoAccountEditsRejectFieldsOwnedByTheIdentityProvider() throws Exception {
+        LoginSession administrator = login("operator", "correct-horse-battery-staple");
+        jdbc.update("""
+                INSERT INTO app_user(provider, subject, username, display_name, role, enabled)
+                VALUES ('OIDC', 'sso-subject-1', 'sso.user', 'SSO User', 'OPERATOR', TRUE)
+                """);
+        long userId = jdbc.queryForObject("SELECT id FROM app_user WHERE username = 'sso.user'", Long.class);
+
+        mvc.perform(put("/api/admin/users/{id}", userId)
+                        .session(administrator.session()).cookie(administrator.csrfCookie())
+                        .header("X-XSRF-TOKEN", administrator.csrfToken())
+                        .contentType("application/json")
+                        .content("""
+                                {"username":"sso.user","displayName":"SSO User","role":"ADMIN","enabled":true}
+                                """))
+                .andExpect(status().isBadRequest());
+        assertThat(jdbc.queryForObject("SELECT role FROM app_user WHERE id = ?", String.class, userId))
+                .isEqualTo("OPERATOR");
+
+        // 只改启用状态仍然可以。
+        mvc.perform(put("/api/admin/users/{id}", userId)
+                        .session(administrator.session()).cookie(administrator.csrfCookie())
+                        .header("X-XSRF-TOKEN", administrator.csrfToken())
+                        .contentType("application/json")
+                        .content("""
+                                {"username":"sso.user","displayName":"SSO User","role":"OPERATOR","enabled":false}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
     }
 
     private LoginSession login(String username, String password) throws Exception {

@@ -2,6 +2,7 @@ package com.example.dbadmin.access;
 
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.auth.WebIdentity;
+import com.example.dbadmin.auth.WebIdentityContext;
 import com.example.dbadmin.dto.AccessControlDtos.ConnectionAccessResponse;
 import com.example.dbadmin.dto.AccessControlDtos.ConnectionAccessUpdateRequest;
 import com.example.dbadmin.dto.AccessControlDtos.ConnectionGrantResponse;
@@ -23,13 +24,10 @@ import com.example.dbadmin.service.SqlExecutionRegistry;
 import com.example.dbadmin.service.SqlTransactionRegistry;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -145,15 +143,40 @@ public class ConnectionAccessService {
     public void requireSqlFileExecution(long jobId) {
         var job = sqlFiles.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("SQL 文件任务不存在"));
+        // 下面三条按语句种类要权限，但 ANALYZING 期间计数全是 0，解析出零条语句的脚本也一样 ——
+        // 只靠它们的话，那个窗口里任何登录用户都能查看别人任务的文件名与连接、甚至取消它。
+        requireAnyAccess(job.connectionId());
         if (job.queryCount() > 0) require(job.connectionId(), ConnectionPermission.QUERY);
         if (job.mutationCount() > 0) require(job.connectionId(), ConnectionPermission.DATA_WRITE);
         if (job.ddlCount() > 0 || job.unknownCount() > 0) require(job.connectionId(), ConnectionPermission.DDL);
     }
 
+    /**
+     * 手动事务的执行、提交与回滚。
+     *
+     * <p>光校验连接权限是不够的：事务 id 会随「当前活动事务」接口发给同一连接上任何有查询权限
+     * 的人，拿到就能替开启者提交或回滚未完成的写入。所以这里先比归属，再按语句种类要权限。
+     * 管理员也不例外 —— 界面上没有接触别人事务 id 的路径，放行只会多一个踩坑的口子。</p>
+     */
     public void requireTransaction(String transactionId, String sql) {
-        long connectionId = transactions.require(transactionId).connectionId();
+        SqlTransactionRegistry.OpenTransaction transaction = transactions.require(transactionId);
+        requireTransactionOwner(transaction);
+        long connectionId = transaction.connectionId();
         if (sql == null) require(connectionId, ConnectionPermission.DATA_WRITE);
         else requireSql(connectionId, sql);
+    }
+
+    private void requireTransactionOwner(SqlTransactionRegistry.OpenTransaction transaction) {
+        WebIdentity identity = currentIdentity().orElse(null);
+        // 没有会话身份就是桌面/开发模式，事务开启时也没有 owner，维持原语义。
+        if (identity == null || transaction.ownedBy(identity.userId())) return;
+        audit.onConnection(identity.username(), "CONNECTION_ACCESS_DENIED", transaction.connectionId(),
+                "transaction:" + transaction.id(), "reason=not_transaction_owner");
+        throw new ApiProblemException(
+                HttpStatus.FORBIDDEN,
+                "TRANSACTION_NOT_OWNED",
+                "该手动事务由其他用户开启，只有开启者能继续执行、提交或回滚。"
+        );
     }
 
     public void requireSqlExecution(String executionId) {
@@ -215,15 +238,31 @@ public class ConnectionAccessService {
         return connections.stream().filter(connection -> visible.contains(connection.id())).toList();
     }
 
+    /**
+     * 当前账号在给定连接上的权限。前端每次刷新连接列表都会调，所以只发一条查询 ——
+     * 原来是每条连接 8 次（存在性检查 + 7 个权限各一个相关子查询）。
+     */
     public Map<Long, List<ConnectionPermission>> currentPermissions(List<Long> connectionIds) {
         if (connectionIds.size() > 500) throw new IllegalArgumentException("单次最多查询 500 条连接权限");
+        Set<Long> requested = new LinkedHashSet<>(connectionIds);
+        requested.remove(null);
+        if (requested.isEmpty()) return Map.of();
+        WebIdentity identity = currentIdentity().orElse(null);
+        List<ConnectionPermission> all = List.of(ConnectionPermission.values());
         Map<Long, List<ConnectionPermission>> result = new LinkedHashMap<>();
-        for (Long connectionId : new LinkedHashSet<>(connectionIds)) {
-            if (connectionId == null || !repository.connectionExists(connectionId)) continue;
-            List<ConnectionPermission> permissions = Arrays.stream(ConnectionPermission.values())
-                    .filter(permission -> can(connectionId, permission))
-                    .toList();
-            if (!permissions.isEmpty()) result.put(connectionId, permissions);
+        // 桌面/开发模式没有身份，管理员隐含全部权限：两种情况都只需确认连接确实存在。
+        if (identity == null || "ADMIN".equals(identity.role())) {
+            Set<Long> existing = repository.existingConnectionIds(requested);
+            for (Long connectionId : requested) {
+                if (existing.contains(connectionId)) result.put(connectionId, all);
+            }
+            return result;
+        }
+        Map<Long, Set<ConnectionPermission>> granted = repository.permissionsByConnection(identity.userId());
+        for (Long connectionId : requested) {
+            Set<ConnectionPermission> permissions = granted.get(connectionId);
+            if (permissions == null || permissions.isEmpty()) continue;
+            result.put(connectionId, permissions.stream().sorted(Comparator.comparingInt(Enum::ordinal)).toList());
         }
         return result;
     }
@@ -328,9 +367,7 @@ public class ConnectionAccessService {
     }
 
     public Optional<WebIdentity> currentIdentity() {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        return authentication != null && authentication.getPrincipal() instanceof WebIdentity identity
-                ? Optional.of(identity) : Optional.empty();
+        return WebIdentityContext.current();
     }
 
     private ConnectionAccessResponse response(ConnectionAccessPolicy policy) {
@@ -352,7 +389,8 @@ public class ConnectionAccessService {
 
     private UserGroupResponse response(UserGroup group) {
         return new UserGroupResponse(
-                group.id(), group.name(), group.description(), group.memberUserIds(), group.createdAt(), group.updatedAt()
+                group.id(), group.name(), group.description(), group.memberUserIds(), group.externalMemberUserIds(),
+                group.createdAt(), group.updatedAt()
         );
     }
 

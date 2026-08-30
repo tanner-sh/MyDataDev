@@ -58,7 +58,7 @@ class ConnectionServiceTransactionGuardTest {
     }
 
     private void openTransaction() {
-        transactions.open(7, mock(Connection.class), "public", "admin");
+        transactions.open(7, mock(Connection.class), "public", "admin", null);
     }
 
     @Test
@@ -92,7 +92,7 @@ class ConnectionServiceTransactionGuardTest {
 
     @Test
     void anotherConnectionsTransactionDoesNotBlockThisOne() {
-        transactions.open(99, mock(Connection.class), "public", "admin");
+        transactions.open(99, mock(Connection.class), "public", "admin", null);
         service.delete(7, "admin");
         verify(repository).delete(7);
     }

@@ -46,6 +46,69 @@ class AuditRepositoryQueryTest {
         assertThat(page.hasMore()).isFalse();
     }
 
+    /**
+     * event_hash 为空的行（直接改库、导入旧备份、回填中断）不能把审计写入卡死：以前取上一条
+     * 哈希时会在这里抛 NPE，而 insert 吞掉 RuntimeException，结果是之后每一条审计都静默丢失。
+     */
+    @Test
+    void keepsWritingAfterARowWithoutHash() {
+        repository.onConnection("admin", "SQL_EXECUTE", 1L, "select 1");
+        jdbc.update("UPDATE audit_log SET event_hash = NULL");
+
+        repository.onConnection("alice", "DATA_COMMIT", 1L, "table:orders", "rows=1");
+
+        assertThat(repository.findPage(query(null, null, null, null)).items())
+                .extracting("action").containsExactly("DATA_COMMIT", "SQL_EXECUTE");
+        // 链在空值那一行本来就断了，校验必须把它报出来，而不是当作没事发生。
+        assertThat(repository.verifyChain().valid()).isFalse();
+    }
+
+    /**
+     * 校验分批读表，而且不占用写入那把锁。以前是一次性物化整张表并 synchronized 在同一个
+     * monitor 上：打开一次审计面板就把所有审计写入卡住整整一趟全表扫描。
+     */
+    @Test
+    void verificationDoesNotBlockConcurrentWrites() throws Exception {
+        for (int i = 0; i < 1_200; i++) repository.onConnection("admin", "SQL_EXECUTE", 1L, "select " + i);
+
+        // insert 用的是实例 monitor。这里替写入方把它按住，校验必须照样能跑完 ——
+        // 跑不完就说明它又和写入挤在同一把锁上了。
+        java.util.concurrent.CompletableFuture<AuditRepository.ChainVerification> verified;
+        synchronized (repository) {
+            verified = java.util.concurrent.CompletableFuture.supplyAsync(repository::verifyChain);
+            assertThat(verified.get(10, java.util.concurrent.TimeUnit.SECONDS).valid()).isTrue();
+        }
+
+        assertThat(verified.get().checkedEvents()).isEqualTo(1_200);
+        assertThat(verified.get().complete()).isTrue();
+    }
+
+    @Test
+    void verificationCanBeResumedFromAnEarlierPoint() {
+        for (int i = 0; i < 5; i++) repository.onConnection("admin", "SQL_EXECUTE", 1L, "select " + i);
+        long thirdId = jdbc.queryForObject("SELECT id FROM audit_log ORDER BY id LIMIT 1 OFFSET 2", Long.class);
+
+        // 从中间接着验：上一段验过的最后一条就是这里的「上一个哈希」，结果仍然成立。
+        var resumed = repository.verifyChain(thirdId);
+
+        assertThat(resumed.valid()).isTrue();
+        assertThat(resumed.complete()).isTrue();
+        assertThat(resumed.checkedEvents()).isEqualTo(3);
+        assertThat(resumed.nextId()).isNull();
+    }
+
+    @Test
+    void completeFlagIsSetOnAFullPass() {
+        repository.onConnection("admin", "SQL_EXECUTE", 1L, "select 1");
+
+        var verification = repository.verifyChain();
+
+        assertThat(verification.complete()).isTrue();
+        assertThat(verification.nextId()).isNull();
+        assertThat(verification.headHash()).isEqualTo(
+                jdbc.queryForObject("SELECT event_hash FROM audit_log ORDER BY id DESC LIMIT 1", String.class));
+    }
+
     @Test
     void verifiesTheHashChainAndDetectsTampering() {
         repository.onConnection("admin", "SQL_EXECUTE", 1L, "select 1");

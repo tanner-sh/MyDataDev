@@ -10,7 +10,10 @@ import org.springframework.web.servlet.config.annotation.CorsRegistry;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import jakarta.annotation.PostConstruct;
+
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
@@ -37,6 +40,25 @@ public class WebConfig implements WebMvcConfigurer {
     public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
         configurer.setTaskExecutor(mvcStreamingExecutor());
         configurer.setDefaultTimeout(7_200_000);
+    }
+
+    /**
+     * 认证开着的时候，不接受能匹配任意来源的 CORS pattern。
+     *
+     * <p>跨域请求现在会带会话 Cookie，而 {@code /api/auth/status} 会返回 CSRF 令牌 ——
+     * 通配来源加上 allowCredentials 等于把整套写接口交给任意网页。见 {@link CorsOriginPolicy}。</p>
+     */
+    @PostConstruct
+    void validateCorsOrigins() {
+        if ("DISABLED".equalsIgnoreCase(properties.getAuth().getMode() == null ? "DISABLED" : properties.getAuth().getMode().trim())) return;
+        List<String> unsafe = CorsOriginPolicy.patternsMatchingAnyOrigin(properties.getCors().getAllowedOriginPatterns());
+        if (unsafe.isEmpty()) return;
+        throw new IllegalStateException(
+                "启用 Web 认证时 app.cors.allowed-origin-patterns 不能匹配任意来源："
+                        + String.join("、", unsafe)
+                        + "。跨域请求会带上会话 Cookie，通配来源等于把 CSRF 令牌和全部写接口交给任意网页；"
+                        + "请改成具体的 UI 来源，例如 https://db.example.com。"
+        );
     }
 
     @Override

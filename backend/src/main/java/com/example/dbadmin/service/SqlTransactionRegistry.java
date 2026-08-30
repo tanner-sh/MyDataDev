@@ -29,6 +29,10 @@ import java.util.concurrent.locks.ReentrantLock;
  *   <li>空闲超过 {@link #idleTimeout} 自动回滚并归还连接，避免忘记提交把池占死；</li>
  *   <li>每次执行都会刷新空闲计时，正在用的事务不会被收走。</li>
  * </ul>
+ *
+ * <p>事务还记着开启它的用户（{@code ownerUserId}，取自服务端会话而不是可伪造的 X-User 头）。
+ * 事务 id 本身不是凭证 —— 它会出现在「当前活动事务」这类接口里 —— 所以执行、提交、回滚都
+ * 必须再比一次归属，否则拿到 id 的人就能替别人提交或丢弃未提交的写入。</p>
  */
 @Component
 public class SqlTransactionRegistry {
@@ -53,9 +57,9 @@ public class SqlTransactionRegistry {
     /**
      * 开启一个事务。调用方负责已经把连接设成 autoCommit=false。
      */
-    public OpenTransaction open(long connectionId, Connection connection, String schemaName, String actor) {
+    public OpenTransaction open(long connectionId, Connection connection, String schemaName, String actor, Long ownerUserId) {
         String id = UUID.randomUUID().toString();
-        OpenTransaction transaction = new OpenTransaction(id, connectionId, connection, schemaName, actor, Instant.now());
+        OpenTransaction transaction = new OpenTransaction(id, connectionId, connection, schemaName, actor, ownerUserId, Instant.now());
         String previous = byConnection.putIfAbsent(connectionId, id);
         if (previous != null) {
             throw new ApiProblemException(
@@ -174,18 +178,21 @@ public class SqlTransactionRegistry {
         private final Connection connection;
         private final String schemaName;
         private final String actor;
+        private final Long ownerUserId;
         private final Instant startedAt;
         private final ReentrantLock lock = new ReentrantLock();
         private volatile Instant lastUsedAt;
         private volatile int statementCount;
         private volatile boolean closed;
 
-        OpenTransaction(String id, long connectionId, Connection connection, String schemaName, String actor, Instant startedAt) {
+        OpenTransaction(String id, long connectionId, Connection connection, String schemaName, String actor,
+                        Long ownerUserId, Instant startedAt) {
             this.id = id;
             this.connectionId = connectionId;
             this.connection = connection;
             this.schemaName = schemaName;
             this.actor = actor;
+            this.ownerUserId = ownerUserId;
             this.startedAt = startedAt;
             this.lastUsedAt = startedAt;
         }
@@ -208,6 +215,16 @@ public class SqlTransactionRegistry {
 
         public String actor() {
             return actor;
+        }
+
+        /** 开启事务的用户；Web 认证关闭时（桌面/开发模式）为 null，此时不做归属判定。 */
+        public Long ownerUserId() {
+            return ownerUserId;
+        }
+
+        /** 事务是否属于该用户。owner 为 null 表示开启时没有会话身份，沿用旧的无认证语义。 */
+        public boolean ownedBy(Long userId) {
+            return ownerUserId == null || ownerUserId.equals(userId);
         }
 
         public Instant startedAt() {

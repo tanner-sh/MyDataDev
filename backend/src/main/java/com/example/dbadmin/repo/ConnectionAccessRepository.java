@@ -14,6 +14,7 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -23,6 +24,10 @@ import java.util.Set;
 
 @Repository
 public class ConnectionAccessRepository {
+    /** 管理员手工维护的成员关系；其余取值是身份提供器 ID（目前只有 OIDC），由 SSO 登录同步。 */
+    private static final String LOCAL_SOURCE = "LOCAL";
+    private static final String MODE_RESTRICTED = "RESTRICTED";
+
     private final JdbcTemplate jdbc;
 
     public ConnectionAccessRepository(JdbcTemplate jdbc) {
@@ -119,6 +124,72 @@ public class ConnectionAccessRepository {
                 """, Long.class, userId, userId, userId));
     }
 
+    /**
+     * 一次查出该用户在所有连接上的权限集合。
+     *
+     * <p>原来是每条连接先 connectionExists，再对 7 个权限各跑一次 {@link #hasAccess}（每次都是
+     * 一个三层相关子查询）—— 50 条连接就是 400 条 SQL，而前端每次刷新连接列表都要调一遍。</p>
+     *
+     * <p>这里把授权行一次性 join 出来，共享/所有者/CONNECTION_ADMIN 的推导放在内存里做，
+     * 判定规则与 {@code hasAccess} 保持一致。</p>
+     */
+    public Map<Long, Set<ConnectionPermission>> permissionsByConnection(long userId) {
+        Set<ConnectionPermission> all = new LinkedHashSet<>(List.of(ConnectionPermission.values()));
+        Map<Long, Set<ConnectionPermission>> result = new LinkedHashMap<>();
+        jdbc.query("""
+                SELECT connection.id AS connection_id,
+                       COALESCE(policy.access_mode, 'SHARED') AS access_mode,
+                       policy.owner_user_id,
+                       grant_row.permission AS permission
+                FROM db_connection connection
+                LEFT JOIN connection_access_policy policy ON policy.connection_id = connection.id
+                LEFT JOIN connection_access_grant grant_row
+                       ON grant_row.connection_id = connection.id
+                      AND (
+                          (grant_row.grantee_type = 'USER' AND grant_row.grantee_id = ?)
+                          OR (grant_row.grantee_type = 'GROUP' AND EXISTS (
+                              SELECT 1 FROM app_user_group_member member
+                              WHERE member.group_id = grant_row.grantee_id AND member.user_id = ?
+                          ))
+                      )
+                ORDER BY connection.id
+                """, rs -> {
+            long connectionId = rs.getLong("connection_id");
+            Set<ConnectionPermission> permissions =
+                    result.computeIfAbsent(connectionId, ignored -> new LinkedHashSet<>());
+            Long owner = rs.getObject("owner_user_id", Long.class);
+            if (!MODE_RESTRICTED.equals(rs.getString("access_mode")) || (owner != null && owner == userId)) {
+                permissions.addAll(all);
+                return;
+            }
+            String permission = rs.getString("permission");
+            if (permission == null) return;
+            ConnectionPermission parsed = parsePermission(permission);
+            if (parsed == null) return;
+            if (parsed == ConnectionPermission.CONNECTION_ADMIN) permissions.addAll(all);
+            else permissions.add(parsed);
+        }, userId, userId);
+        result.values().removeIf(Set::isEmpty);
+        return result;
+    }
+
+    /** 一次筛出实际存在的连接，省掉逐条 connectionExists。 */
+    public Set<Long> existingConnectionIds(Collection<Long> ids) {
+        if (ids.isEmpty()) return Set.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+        return new LinkedHashSet<>(jdbc.queryForList(
+                "SELECT id FROM db_connection WHERE id IN (" + placeholders + ")", Long.class, ids.toArray()));
+    }
+
+    private static ConnectionPermission parsePermission(String value) {
+        try {
+            return ConnectionPermission.valueOf(value);
+        } catch (IllegalArgumentException unknown) {
+            // 旧版本写入的权限码在这一版可能已经不存在，忽略比让整个列表报错好。
+            return null;
+        }
+    }
+
     public Optional<ConnectionAccessPolicy> findPolicy(long connectionId) {
         List<PolicyRow> rows = jdbc.query("""
                 SELECT connection.id AS connection_id,
@@ -173,11 +244,19 @@ public class ConnectionAccessRepository {
                 instant(rs.getTimestamp("created_at")), instant(rs.getTimestamp("updated_at"))
         ));
         Map<Long, List<Long>> members = new LinkedHashMap<>();
-        jdbc.query("SELECT group_id, user_id FROM app_user_group_member ORDER BY group_id, user_id", rs -> {
-            members.computeIfAbsent(rs.getLong("group_id"), ignored -> new ArrayList<>()).add(rs.getLong("user_id"));
+        Map<Long, List<Long>> external = new LinkedHashMap<>();
+        jdbc.query("SELECT group_id, user_id, source_provider FROM app_user_group_member ORDER BY group_id, user_id", rs -> {
+            long groupId = rs.getLong("group_id");
+            long userId = rs.getLong("user_id");
+            members.computeIfAbsent(groupId, ignored -> new ArrayList<>()).add(userId);
+            // 身份提供器同步来的成员关系归它管：界面得能把这部分标出来，管理员保存时也不该动它。
+            if (!LOCAL_SOURCE.equals(rs.getString("source_provider"))) {
+                external.computeIfAbsent(groupId, ignored -> new ArrayList<>()).add(userId);
+            }
         });
         return groups.stream().map(group -> new UserGroup(
                 group.id(), group.name(), group.description(), List.copyOf(members.getOrDefault(group.id(), List.of())),
+                List.copyOf(external.getOrDefault(group.id(), List.of())),
                 group.createdAt(), group.updatedAt()
         )).toList();
     }
@@ -234,10 +313,26 @@ public class ConnectionAccessRepository {
         return count != null && count > 0;
     }
 
+    /**
+     * 用管理员提交的名单替换<b>手工</b>成员关系。
+     *
+     * <p>{@code source_provider} 决定这条成员关系归谁管：SSO 每次登录只删除并重建自己那个
+     * provider 的行。这里如果照旧全删重插，同步来的行就会变成 LOCAL —— IdP 之后把用户移出组，
+     * 下次登录的清理再也匹配不到它，用户会永久保留这个组和它挂着的全部连接授权。</p>
+     *
+     * <p>所以：只删 LOCAL 行；提交名单里已经被某个 provider 持有的用户跳过（保留它原本的归属，
+     * 也避免撞主键）。名单里少掉的外部成员不会被删 —— 那要去 IdP 里改，在这里删掉也会在下次
+     * 登录时被同步回来。</p>
+     */
     private void replaceMembers(long groupId, List<Long> memberUserIds) {
-        jdbc.update("DELETE FROM app_user_group_member WHERE group_id = ?", groupId);
+        jdbc.update("DELETE FROM app_user_group_member WHERE group_id = ? AND source_provider = ?", groupId, LOCAL_SOURCE);
+        Set<Long> external = new LinkedHashSet<>(jdbc.queryForList(
+                "SELECT user_id FROM app_user_group_member WHERE group_id = ? AND source_provider <> ?",
+                Long.class, groupId, LOCAL_SOURCE));
         for (Long userId : new LinkedHashSet<>(memberUserIds)) {
-            jdbc.update("INSERT INTO app_user_group_member(group_id, user_id) VALUES (?, ?)", groupId, userId);
+            if (external.contains(userId)) continue;
+            jdbc.update("INSERT INTO app_user_group_member(group_id, user_id, source_provider) VALUES (?, ?, ?)",
+                    groupId, userId, LOCAL_SOURCE);
         }
     }
 

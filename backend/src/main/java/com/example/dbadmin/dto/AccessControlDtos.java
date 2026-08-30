@@ -18,6 +18,7 @@ public final class AccessControlDtos {
             String name,
             String description,
             List<Long> memberUserIds,
+            List<Long> externalMemberUserIds,
             Instant createdAt,
             Instant updatedAt
     ) {}

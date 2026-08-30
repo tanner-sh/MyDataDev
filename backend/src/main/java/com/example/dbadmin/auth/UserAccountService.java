@@ -89,9 +89,17 @@ public class UserAccountService {
         return response(require(id));
     }
 
+    /**
+     * SSO 账号只能启用/停用。
+     *
+     * <p>用户名、显示名和角色每次登录都会被身份提供器同步覆写，这里改了也留不住。以前是把这三个
+     * 字段直接忽略再原样存回去，接口照样返回成功 —— 界面上它们是禁用的，但直接调接口的人会以为
+     * 改动生效了。宁可明确报错。</p>
+     */
     private UserResponse updateExternal(UserAccount existing, UserUpdateRequest request, WebIdentity actor) {
         if (actor.userId() == existing.id() && !request.enabled()) throw new IllegalArgumentException("不能停用当前账号");
         if (request.password() != null && !request.password().isBlank()) throw new IllegalArgumentException("SSO 账号不支持本地密码");
+        requireUnchangedExternalProfile(existing, request);
         protectLastAdministrator(existing, existing.role(), request.enabled());
         repository.update(existing.id(), existing.subject(), existing.username(), existing.displayName(),
                 existing.role(), request.enabled(), existing.enabled() != request.enabled());
@@ -128,6 +136,16 @@ public class UserAccountService {
 
     private UserAccount require(long id) {
         return repository.findById(id).orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+    }
+
+    private void requireUnchangedExternalProfile(UserAccount existing, UserUpdateRequest request) {
+        String username = LocalDatabaseIdentityProvider.normalizeUsername(request.username());
+        if (!existing.username().equals(username)
+                || !existing.displayName().equals(normalizeDisplayName(request.displayName()))
+                || !existing.role().equals(normalizeRole(request.role()))) {
+            throw new IllegalArgumentException(
+                    "SSO 账号的用户名、显示名与角色由身份提供器同步，请到身份提供器里修改；这里只能启用或停用账号。");
+        }
     }
 
     private String normalizeRole(String value) {

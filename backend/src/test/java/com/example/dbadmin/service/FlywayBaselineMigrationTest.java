@@ -110,4 +110,51 @@ class FlywayBaselineMigrationTest {
             assertThat(audit.getString("event_hash")).hasSize(64);
         }
     }
+
+    /**
+     * 回填要分批 executeBatch。攒满整张表再提交会把所有参数集堆在驱动内存里 —— 审计表大的
+     * 实例会在升级时 OOM，而迁移这时已被标记为失败，应用直接起不来。行数取得比 BATCH_SIZE
+     * 大，确保真的跨了多次刷新，并检查链在批次边界上仍然连得上。
+     */
+    @Test
+    void p1MigrationBackfillsALargeAuditLogInBatches() throws Exception {
+        int rowCount = 5_000;
+        String url = "jdbc:h2:mem:flyway-p1-bulk-" + UUID.randomUUID() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var sql = connection.createStatement();
+            sql.execute("CREATE TABLE db_connection(id BIGINT PRIMARY KEY, name VARCHAR(120), encrypted_password CLOB)");
+            sql.execute("CREATE TABLE sql_snippet(id BIGINT PRIMARY KEY, name VARCHAR(120), description VARCHAR(500), sql_text CLOB, db_type VARCHAR(40), tags VARCHAR(500), use_count BIGINT, last_used_at TIMESTAMP, actor VARCHAR(120), created_at TIMESTAMP, updated_at TIMESTAMP)");
+            sql.execute("CREATE UNIQUE INDEX ux_sql_snippet_name ON sql_snippet(name)");
+            sql.execute("CREATE TABLE sql_history(id BIGINT PRIMARY KEY, connection_id BIGINT)");
+            sql.execute("CREATE TABLE app_user_group_member(group_id BIGINT, user_id BIGINT)");
+            sql.execute("CREATE TABLE audit_log(id BIGINT PRIMARY KEY, actor VARCHAR(120), action VARCHAR(80), connection_id BIGINT, target VARCHAR(500), detail CLOB, remote_address VARCHAR(120), forwarded_for VARCHAR(500), user_agent VARCHAR(1000), request_id VARCHAR(120), created_at TIMESTAMP)");
+            try (var insert = connection.prepareStatement(
+                    "INSERT INTO audit_log(id, actor, action, target, detail, created_at) VALUES (?, 'admin', 'SQL_EXECUTE', 'sql', ?, CURRENT_TIMESTAMP)")) {
+                for (int i = 1; i <= rowCount; i++) {
+                    insert.setLong(1, i);
+                    insert.setString(2, "select " + i);
+                    insert.addBatch();
+                }
+                insert.executeBatch();
+            }
+        }
+
+        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true)
+                .baselineVersion(MigrationVersion.fromVersion("10"))
+                .target(MigrationVersion.fromVersion("11")).load().migrate();
+
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var unhashed = connection.createStatement().executeQuery(
+                    "SELECT COUNT(*) FROM audit_log WHERE event_hash IS NULL");
+            assertThat(unhashed.next()).isTrue();
+            assertThat(unhashed.getInt(1)).isZero();
+            // 每一条的 previous_hash 都要等于前一条的 event_hash，批次边界上也不例外。
+            var broken = connection.createStatement().executeQuery("""
+                    SELECT COUNT(*) FROM audit_log current JOIN audit_log prior ON prior.id = current.id - 1
+                    WHERE current.previous_hash IS DISTINCT FROM prior.event_hash
+                    """);
+            assertThat(broken.next()).isTrue();
+            assertThat(broken.getInt(1)).isZero();
+        }
+    }
 }

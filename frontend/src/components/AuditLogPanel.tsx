@@ -9,6 +9,8 @@ import { formatHistoryTime, localizeError } from '../utils';
 import {
   auditActionColor,
   auditActionLabel,
+  auditChainTag,
+  auditExportNotice,
   auditPageSummary,
   auditRequestParams,
   auditTargetLabel,
@@ -38,6 +40,7 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
   const [facets, setFacets] = useState<AuditFacets>({ actors: [], actions: [] });
   const [chain, setChain] = useState<AuditChainStatus>();
   const [alerts, setAlerts] = useState<AuditAlertStatus>();
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -71,6 +74,7 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
     if (!open) return;
     setKeywordDraft('');
     setExpandedId(null);
+    setExportNotice(null);
     void load(INITIAL_AUDIT_QUERY);
     api<AuditFacets>('/audit/facets').then(setFacets).catch(() => undefined);
     api<AuditChainStatus>('/audit/chain').then(setChain).catch(() => undefined);
@@ -109,7 +113,10 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
     try {
       const response = await fetch(`${API}/audit/export?${auditRequestParams({ ...query, page: 0 })}`, { credentials: 'include' });
       if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message || '导出失败');
+      const notice = auditExportNotice(response.headers.get('X-Audit-Export-Rows'), response.headers.get('X-Audit-Export-Capped'));
       downloadBlob(await response.blob(), `audit-${Date.now()}.csv`);
+      // 截断了就必须说：一份被悄悄截断的审计导出比拿不到更糟。这不是错误，所以不走 error。
+      setExportNotice(notice);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '导出审计日志失败');
     }
@@ -126,13 +133,15 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
 
   const items = page?.items || [];
 
+  const chainTag = chain && auditChainTag(chain);
+
   return (
     <div className="management-section">
       <header className="management-section-header">
         <Text strong>审计日志</Text>
         <Space size={4}>
-          {chain && <Tooltip title={chain.valid ? `已校验 ${chain.checkedEvents} 条事件` : `第 ${chain.firstInvalidId} 条附近校验失败`}>
-            <Tag color={chain.valid ? 'green' : 'red'}>{chain.valid ? '审计链完整' : '审计链异常'}</Tag>
+          {chainTag && <Tooltip title={chainTag.tooltip}>
+            <Tag color={chainTag.color}>{chainTag.label}</Tag>
           </Tooltip>}
           <Tooltip title={alerts?.enabled ? `已启用签名 Webhook，冷却 ${alerts.cooldownSeconds} 秒` : '在服务端配置 APP_AUDIT_ALERT_* 后启用'}>
             <Button size="small" disabled={!alerts?.enabled} onClick={() => void testAlert()}>测试告警</Button>
@@ -202,6 +211,7 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
       </div>
 
       {error && <Text type="danger" className="audit-error">{error}</Text>}
+      {exportNotice && <Text type="warning" className="audit-error">{exportNotice}</Text>}
 
       {loading && items.length === 0 ? (
         <div className="audit-loading"><Spin size="small" /> <Text type="secondary">正在加载审计记录…</Text></div>

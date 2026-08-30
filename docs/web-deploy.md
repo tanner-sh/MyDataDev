@@ -114,6 +114,8 @@ server {
 APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://db.example.com
 ```
 
+启用认证（`APP_AUTH_MODE` 不为 `DISABLED`）时，主机名整个通配的写法会让进程启动失败：`*`、`http://*`、`https://*`、`*://*`。跨域请求会带上会话 Cookie，而 `/api/auth/status` 的响应里就有 CSRF 令牌，通配来源等于把令牌和全部写接口交给任意网页。子域通配（`https://*.corp.example`）是正常部署需求，不受限制。
+
 前端也可以在构建期通过 `VITE_API_BASE_URL` 指向另一个后端地址，但这需要自行从源码构建前端，发行包中的资源使用默认的 `/api`。
 
 ## 安全边界
@@ -152,6 +154,10 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web \
 ```
 
 在身份平台登记回调地址 `https://<MyDataDev 地址>/login/oauth2/code/mydatadev`。`groups` 声明中命中 `admin-groups` 的用户映射为 `ADMIN`，其余用户为 `OPERATOR`；`group-mappings` 只替换 OIDC 自动同步的成员关系，不覆盖管理员手工分组。反向代理必须正确传递 `X-Forwarded-Proto` 和 `Host`。
+
+`APP_AUTH_OIDC_ADMIN_GROUPS` 在 OIDC 模式下是必填的，留空会直接让进程启动失败。角色每次登录都按这个配置重算并写回账号，组为空意味着所有人都是 `OPERATOR` —— 管理、审计与 MCP 页面从此无人可进，而 SSO 账号的角色又不接受手工修改，只能改配置重启。同理，要确认身份平台真的会在 ID Token 里下发 `groups`（或按 `APP_AUTH_OIDC_GROUPS_CLAIM` 指定实际的声明名），否则交集永远为空。
+
+用户组面板里由 SSO 同步来的成员标记为「SSO 同步」且不可增删：这类成员关系归身份提供器所有，要调整得去身份平台改组。管理员在这里删掉也不会生效，下一次登录就会同步回来。
 
 审计事件用 SHA-256 前后串联，管理员可在审计页查看链完整性；保留期清理会推进链锚点。可选 Webhook 告警示例：
 

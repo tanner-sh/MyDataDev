@@ -185,3 +185,41 @@ export function auditPageSummary(loaded: number, page: number, hasMore: boolean)
   const end = page * AUDIT_PAGE_SIZE + loaded;
   return hasMore ? `第 ${start}-${end} 条，还有更早的记录` : `第 ${start}-${end} 条，已是最后一页`;
 }
+
+/**
+ * 审计链状态标签。
+ *
+ * <p>单次校验有事件数上限，验不到表尾时返回 complete=false —— 这种情况绝不能显示成
+ * 「审计链完整」：只验了最早的一段就报完整，等于把最近可能被改过的记录说成没问题。</p>
+ */
+export function auditChainTag(chain: {
+  valid: boolean;
+  checkedEvents: number;
+  firstInvalidId?: number;
+  complete: boolean;
+}): { color: string; label: string; tooltip: string } {
+  if (!chain.valid) {
+    return { color: 'red', label: '审计链异常', tooltip: `第 ${chain.firstInvalidId} 条附近校验失败` };
+  }
+  if (!chain.complete) {
+    return {
+      color: 'gold',
+      label: '审计链部分校验',
+      tooltip: `已从最早的记录校验 ${chain.checkedEvents} 条，未到达最新记录（单次校验有上限）`
+    };
+  }
+  return { color: 'green', label: '审计链完整', tooltip: `已校验 ${chain.checkedEvents} 条事件` };
+}
+
+/**
+ * 导出被截断时的提示文案。
+ *
+ * <p>服务端单次最多导出 10000 条，超出部分直接没了。CSV 里没有任何地方能说明「后面还有」，
+ * 不在界面上讲清楚，拿到文件的人会当成完整记录来用。</p>
+ */
+export function auditExportNotice(rowsHeader: string | null, cappedHeader: string | null): string | null {
+  if (cappedHeader !== 'true') return null;
+  const rows = Number(rowsHeader);
+  const count = Number.isFinite(rows) && rows > 0 ? rows : 0;
+  return `导出已达到单次上限，只包含最新的 ${count} 条记录。请缩小时间范围或筛选条件后分批导出。`;
+}

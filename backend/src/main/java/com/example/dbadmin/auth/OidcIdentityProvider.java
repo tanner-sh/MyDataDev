@@ -2,6 +2,7 @@ package com.example.dbadmin.auth;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.repo.UserAccountRepository;
+import jakarta.annotation.PostConstruct;
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
@@ -24,11 +25,33 @@ import java.util.Set;
 public class OidcIdentityProvider implements WebIdentityProvider {
     public static final String PROVIDER = "OIDC";
     private final UserAccountRepository repository;
-    private final AppProperties.Oidc properties;
+    private final AppProperties.Auth properties;
+    private final AppProperties.Oidc oidc;
 
     public OidcIdentityProvider(UserAccountRepository repository, AppProperties appProperties) {
         this.repository = repository;
-        this.properties = appProperties.getAuth().getOidc();
+        this.properties = appProperties.getAuth();
+        this.oidc = properties.getOidc();
+    }
+
+    /**
+     * OIDC 模式下没配管理员组 = 这套部署永远不会有管理员，只能拦在启动阶段。
+     *
+     * <p>角色完全由 {@code admin-groups} 与 groups 声明的交集决定，而且每次 SSO 登录都会用
+     * 这个结果覆写 {@code app_user.role} —— 组为空时人人都是 OPERATOR，连之前从 LOCAL 模式
+     * 迁移过来的管理员都会在下一次登录时被降级。界面上又没有别的补救口子：
+     * {@code /api/admin/**}、{@code /api/audit/**}、{@code /api/mcp/**} 全要 ADMIN，而 SSO
+     * 账号的角色不接受手工修改。等到那时候只能改配置重启，不如现在就说清楚。</p>
+     */
+    @PostConstruct
+    void requireReachableAdministrator() {
+        if (!PROVIDER.equalsIgnoreCase(properties.getMode())) return;
+        boolean hasAdminGroup = oidc.getAdminGroups().stream().anyMatch(group -> group != null && !group.isBlank());
+        if (hasAdminGroup) return;
+        throw new IllegalStateException(
+                "启用 OIDC 认证时必须配置 app.auth.oidc.admin-groups（APP_AUTH_OIDC_ADMIN_GROUPS），"
+                        + "否则所有 SSO 用户都会是 OPERATOR，没有人能进入管理、审计与 MCP 功能。"
+        );
     }
 
     @Override public String id() { return PROVIDER; }
@@ -52,13 +75,13 @@ public class OidcIdentityProvider implements WebIdentityProvider {
         Optional<UserAccount> existing = repository.findByProviderSubject(PROVIDER, subject);
         if (existing.isPresent() && !existing.get().enabled()) return Optional.empty();
 
-        Set<String> externalGroups = claimValues(oidcUser.getClaims().get(properties.getGroupsClaim()));
-        String role = intersects(externalGroups, properties.getAdminGroups()) ? "ADMIN" : "OPERATOR";
-        String preferred = claim(oidcUser, properties.getUsernameClaim());
+        Set<String> externalGroups = claimValues(oidcUser.getClaims().get(oidc.getGroupsClaim()));
+        String role = intersects(externalGroups, oidc.getAdminGroups()) ? "ADMIN" : "OPERATOR";
+        String preferred = claim(oidcUser, oidc.getUsernameClaim());
         if (preferred == null) preferred = claim(oidcUser, "email");
         if (preferred == null) preferred = "oidc-" + shortHash(subject);
         String username = availableUsername(preferred, existing.map(UserAccount::id).orElse(null), subject);
-        String displayName = claim(oidcUser, properties.getDisplayNameClaim());
+        String displayName = claim(oidcUser, oidc.getDisplayNameClaim());
         if (displayName == null) displayName = username;
         if (displayName.length() > 120) displayName = displayName.substring(0, 120);
 
@@ -77,7 +100,7 @@ public class OidcIdentityProvider implements WebIdentityProvider {
 
     private List<String> mappedGroups(Set<String> externalGroups) {
         List<String> result = new ArrayList<>();
-        properties.getGroupMappings().forEach((external, local) -> {
+        oidc.getGroupMappings().forEach((external, local) -> {
             if (externalGroups.contains(external)) result.add(local);
         });
         return result;

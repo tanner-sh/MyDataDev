@@ -25,6 +25,8 @@ import java.util.Optional;
 public class AuditService {
     static final int DEFAULT_PAGE_SIZE = 50;
     static final int MAX_PAGE_SIZE = 200;
+    /** 单次导出的行数上限。 */
+    public static final int EXPORT_ROW_LIMIT = 10_000;
 
     private final AuditRepository repository;
     private final AuditAlertService alerts;
@@ -60,7 +62,7 @@ public class AuditService {
         return repository.facets();
     }
 
-    public ChainVerification verifyChain() { return repository.verifyChain(); }
+    public ChainVerification verifyChain(Long fromId) { return repository.verifyChain(fromId); }
 
     public AuditAlertService.Status alertStatus() { return alerts.status(); }
 
@@ -68,7 +70,13 @@ public class AuditService {
         repository.global(actor, "AUDIT_ALERT_TEST", "audit:webhook", "管理员发送测试安全告警");
     }
 
-    public byte[] exportCsv(
+    /**
+     * 导出结果。行数上限是 {@value #EXPORT_ROW_LIMIT} —— 命中时 {@code capped} 为真，
+     * 调用方必须把这件事告诉用户：拿到一份被悄悄截断的审计导出，比拿不到更糟。
+     */
+    public record CsvExport(byte[] content, int rows, boolean capped) {}
+
+    public CsvExport exportCsv(
             String actor,
             String action,
             Long connectionId,
@@ -79,11 +87,19 @@ public class AuditService {
     ) {
         List<AuditEventResponse> events = new ArrayList<>();
         int page = 0;
-        while (events.size() < 10_000) {
+        boolean capped = false;
+        while (events.size() < EXPORT_ROW_LIMIT) {
             AuditEventPage batch = list(actor, action, connectionId, keyword, from, to, page, MAX_PAGE_SIZE);
             events.addAll(batch.items());
             if (!batch.hasMore()) break;
             page++;
+        }
+        if (events.size() > EXPORT_ROW_LIMIT) {
+            // 最后一页会跨过上限，截齐了行数才对得上，capped 也才不会误报。
+            events = new ArrayList<>(events.subList(0, EXPORT_ROW_LIMIT));
+            capped = true;
+        } else if (events.size() == EXPORT_ROW_LIMIT) {
+            capped = list(actor, action, connectionId, keyword, from, to, page, MAX_PAGE_SIZE).hasMore();
         }
         StringBuilder csv = new StringBuilder("\uFEFFid,createdAt,actor,action,target,detail,remoteAddress,forwardedFor,userAgent,requestId\r\n");
         for (AuditEventResponse event : events) {
@@ -99,8 +115,8 @@ public class AuditService {
                     .append(csv(event.requestId())).append("\r\n");
         }
         repository.global(exportActor, "AUDIT_EXPORT", "audit",
-                "rows=" + events.size() + ", capped=" + (events.size() >= 10_000));
-        return csv.toString().getBytes(StandardCharsets.UTF_8);
+                "rows=" + events.size() + ", capped=" + capped);
+        return new CsvExport(csv.toString().getBytes(StandardCharsets.UTF_8), events.size(), capped);
     }
 
     public String detail(long id) {

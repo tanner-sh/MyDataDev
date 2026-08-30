@@ -12,7 +12,6 @@ spring:
     url: jdbc:h2:file:./data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE;FILE_LOCK=FS;TRACE_LEVEL_FILE=0
     username: sa
     password:
-    cookie-secure: false
     driver-class-name: org.h2.Driver
     hikari:
       connection-timeout: 10000
@@ -71,6 +70,9 @@ app:
     password:
     max-failed-attempts: 5
     lock-seconds: 30
+    # 会话 Cookie 的 Secure 标记。默认关闭是为了本地 http 开发；
+    # 任何走 https 的部署都应该打开（web profile 用 APP_AUTH_COOKIE_SECURE）。
+    cookie-secure: false
     oidc:
       issuer-uri:
       client-id:

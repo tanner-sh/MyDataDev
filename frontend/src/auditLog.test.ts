@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   auditActionColor,
   auditActionLabel,
+  auditChainTag,
+  auditExportNotice,
   auditPageSummary,
   auditRequestParams,
   auditTargetLabel,
@@ -100,5 +102,39 @@ describe('auditPageSummary', () => {
     expect(auditPageSummary(0, 0, false)).toBe('没有匹配的审计记录');
     expect(auditPageSummary(50, 0, true)).toBe('第 1-50 条，还有更早的记录');
     expect(auditPageSummary(12, 1, false)).toBe('第 51-62 条，已是最后一页');
+  });
+});
+
+describe('审计链状态标签', () => {
+  it('校验失败时指出出错位置', () => {
+    expect(auditChainTag({ valid: false, checkedEvents: 12, firstInvalidId: 13, complete: true }))
+      .toEqual({ color: 'red', label: '审计链异常', tooltip: '第 13 条附近校验失败' });
+  });
+
+  it('没验到表尾时不能报成完整', () => {
+    const tag = auditChainTag({ valid: true, checkedEvents: 200000, complete: false });
+    expect(tag.color).toBe('gold');
+    expect(tag.label).toBe('审计链部分校验');
+    expect(tag.tooltip).toContain('未到达最新记录');
+  });
+
+  it('验到表尾才是完整', () => {
+    expect(auditChainTag({ valid: true, checkedEvents: 42, complete: true }))
+      .toEqual({ color: 'green', label: '审计链完整', tooltip: '已校验 42 条事件' });
+  });
+});
+
+describe('审计导出截断提示', () => {
+  it('未截断时不打扰用户', () => {
+    expect(auditExportNotice('120', 'false')).toBeNull();
+    expect(auditExportNotice(null, null)).toBeNull();
+  });
+
+  it('截断时说清楚只导出了多少条', () => {
+    expect(auditExportNotice('10000', 'true')).toContain('只包含最新的 10000 条记录');
+  });
+
+  it('行数缺失也要给出提示', () => {
+    expect(auditExportNotice(null, 'true')).toContain('单次上限');
   });
 });

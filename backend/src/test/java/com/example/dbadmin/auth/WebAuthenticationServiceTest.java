@@ -37,6 +37,29 @@ class WebAuthenticationServiceTest {
         assertThat(service.authenticate("127.0.0.1", "operator", "correct-horse-battery-staple").locked()).isTrue();
     }
 
+    /**
+     * web profile 下 getRemoteAddr() 会被 X-Forwarded-For 改写，所以来源地址是攻击者可控的。
+     * 用户名维度换不掉：针对某个账号的爆破必须一直送同一个用户名。
+     */
+    @Test
+    void rotatingRemoteAddressDoesNotBypassTheLockForOneAccount() {
+        AppProperties properties = properties();
+        properties.getAuth().setMaxFailedAttempts(3);
+        WebAuthenticationService service = new WebAuthenticationService(
+                properties, List.of(localProvider()),
+                Clock.fixed(Instant.parse("2026-08-29T12:00:00Z"), ZoneOffset.UTC)
+        );
+        service.validateConfiguration();
+
+        assertThat(service.authenticate("10.0.0.1", "operator", "wrong").locked()).isFalse();
+        assertThat(service.authenticate("10.0.0.2", "operator", "wrong").locked()).isFalse();
+        assertThat(service.authenticate("10.0.0.3", "operator", "wrong").locked()).isTrue();
+        // 换一个全新的地址也拿不到尝试机会，而且正确口令同样被挡住。
+        assertThat(service.authenticate("10.0.0.4", "operator", "correct-horse-battery-staple").locked()).isTrue();
+        // 锁的是这个账号，不是整台服务器。
+        assertThat(service.authenticate("10.0.0.4", "someone-else", "wrong").locked()).isFalse();
+    }
+
     private AppProperties properties() {
         AppProperties properties = new AppProperties();
         properties.getAuth().setMode("LOCAL");

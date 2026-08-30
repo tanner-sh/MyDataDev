@@ -43,9 +43,32 @@ export type UserGroup = {
   name: string;
   description?: string | null;
   memberUserIds: number[];
+  /** memberUserIds 中由 SSO 同步而来的那部分，成员关系归身份提供器所有。 */
+  externalMemberUserIds: number[];
   createdAt: string;
   updatedAt: string;
 };
+
+/**
+ * 用户组成员下拉框的选项。
+ *
+ * <p>SSO 同步来的成员在这里是禁用的：后端保存时只替换手工成员关系，把这类成员从名单里去掉
+ * 不会有任何效果（下次登录还会被同步回来），让它可勾可去只会让人以为改动生效了。要调整得去
+ * 身份提供器那边改组。</p>
+ */
+export function groupMemberOptions(
+  users: { id: number; username: string; displayName: string }[],
+  externalMemberUserIds: number[]
+): { value: number; label: string; disabled: boolean }[] {
+  const external = new Set(externalMemberUserIds);
+  return users.map((user) => ({
+    value: user.id,
+    label: external.has(user.id)
+      ? `${user.displayName} (${user.username}) · SSO 同步`
+      : `${user.displayName} (${user.username})`,
+    disabled: external.has(user.id)
+  }));
+}
 
 export type ConnectionGrant = {
   granteeType: 'USER' | 'GROUP';

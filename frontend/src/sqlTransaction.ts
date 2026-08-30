@@ -73,8 +73,15 @@ export function transactionLeaveWarning(state: SqlTransactionState): string | nu
 /** 服务端已经没有这个事务了：空闲超时被自动回滚，或是被别处结束掉了。 */
 export const TRANSACTION_GONE_CODE = 'TRANSACTION_NOT_FOUND';
 
+/**
+ * 事务归当前账号之外的人所有。手动事务只有开启者能提交或回滚，所以对本界面来说它和
+ * 「已经不存在」是同一回事 —— 都得把本地状态清掉，否则既提交不了也回滚不了，切换连接
+ * 还会被「有未结束的事务」拦住，只能刷新页面。
+ */
+export const TRANSACTION_NOT_OWNED_CODE = 'TRANSACTION_NOT_OWNED';
+
 export function isTransactionGone(errorCode?: string): boolean {
-  return errorCode === TRANSACTION_GONE_CODE;
+  return errorCode === TRANSACTION_GONE_CODE || errorCode === TRANSACTION_NOT_OWNED_CODE;
 }
 
 /**

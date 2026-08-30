@@ -561,7 +561,7 @@ export type AuditEvent = {
 export type AuditEventPage = { items: AuditEvent[]; page: number; pageSize: number; hasMore: boolean };
 
 export type AuditFacets = { actors: string[]; actions: string[] };
-export type AuditChainStatus = { valid: boolean; checkedEvents: number; firstInvalidId?: number; anchorHash?: string; headHash?: string };
+export type AuditChainStatus = { valid: boolean; checkedEvents: number; firstInvalidId?: number; anchorHash?: string; headHash?: string; complete: boolean; nextId?: number };
 export type AuditAlertStatus = { enabled: boolean; webhookConfigured: boolean; signed: boolean; cooldownSeconds: number; actions: string[] };
 
 export type SqlTransactionScriptResult = SqlScriptResult & {

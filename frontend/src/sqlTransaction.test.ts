@@ -103,6 +103,8 @@ describe('restoredTransactionNotice', () => {
 
     it('识别 TRANSACTION_NOT_FOUND', () => {
       expect(isTransactionGone('TRANSACTION_NOT_FOUND')).toBe(true);
+      // 别人的事务同样碰不了，界面得和「已结束」一样把状态清干净。
+      expect(isTransactionGone('TRANSACTION_NOT_OWNED')).toBe(true);
       expect(isTransactionGone('PRODUCTION_CONFIRMATION_REQUIRED')).toBe(false);
       expect(isTransactionGone(undefined)).toBe(false);
     });

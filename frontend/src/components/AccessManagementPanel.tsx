@@ -7,6 +7,7 @@ import type { WebUser } from '../users';
 import {
   CONNECTION_PERMISSIONS,
   CONNECTION_PERMISSION_LABELS,
+  groupMemberOptions,
   type ConnectionAccessPolicy,
   type ConnectionGrant,
   type PermissionTemplate,
@@ -187,6 +188,8 @@ export function AccessManagementPanel({ connections }: { connections: Connection
     </div>
   );
 
+  const externalMemberUserIds = editingGroup && editingGroup !== 'new' ? editingGroup.externalMemberUserIds : [];
+
   return <div className="management-section">
     {messageContext}
     <header className="management-section-header"><div><Text strong>访问控制</Text><div><Text type="secondary">用户组用于批量授权，所有权限均由后端强制执行。</Text></div></div></header>
@@ -196,7 +199,9 @@ export function AccessManagementPanel({ connections }: { connections: Connection
       onOk={() => void saveGroup()} onCancel={() => setEditingGroup(undefined)} destroyOnHidden>
       <Form form={groupForm} layout="vertical"><Form.Item name="name" label="名称" rules={[{ required: true }, { max: 120 }]}><Input /></Form.Item>
         <Form.Item name="description" label="备注"><Input.TextArea rows={2} maxLength={500} /></Form.Item>
-        <Form.Item name="memberUserIds" label="成员"><Select mode="multiple" options={enabledUsers.map((user) => ({ value: user.id, label: `${user.displayName} (${user.username})` }))} /></Form.Item>
+        <Form.Item name="memberUserIds" label="成员" extra={externalMemberUserIds.length > 0 ? '标记为「SSO 同步」的成员由身份提供器维护，请到身份提供器里调整所属组。' : undefined}>
+          <Select mode="multiple" options={groupMemberOptions(enabledUsers, externalMemberUserIds)} />
+        </Form.Item>
       </Form>
     </Modal>
   </div>;

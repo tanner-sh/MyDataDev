@@ -44,9 +44,15 @@ public class AuditController {
         return service.facets();
     }
 
+    /**
+     * 校验审计哈希链。表很大时一次验不完，响应里的 complete/nextId 说明进度，
+     * 带上 fromId 就能接着往下验。
+     */
     @GetMapping("/chain")
-    public com.example.dbadmin.repo.AuditRepository.ChainVerification chain() {
-        return service.verifyChain();
+    public com.example.dbadmin.repo.AuditRepository.ChainVerification chain(
+            @RequestParam(required = false) Long fromId
+    ) {
+        return service.verifyChain(fromId);
     }
 
     @GetMapping("/alerts/status")
@@ -70,10 +76,15 @@ public class AuditController {
             @RequestParam(required = false) String to,
             @RequestHeader(value = "X-User", required = false) String exportActor
     ) {
+        var export = service.exportCsv(actor, action, connectionId, keyword, from, to, exportActor);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv;charset=UTF-8"))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"mydatadev-audit.csv\"")
-                .body(service.exportCsv(actor, action, connectionId, keyword, from, to, exportActor));
+                // 截断必须让浏览器端能看见：CSV 本身没地方说「后面还有」。
+                .header("X-Audit-Export-Rows", Integer.toString(export.rows()))
+                .header("X-Audit-Export-Capped", Boolean.toString(export.capped()))
+                .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "X-Audit-Export-Rows, X-Audit-Export-Capped")
+                .body(export.content());
     }
 
     /** 列表里的 detail 会被截断，这里返回单条记录的完整内容。 */

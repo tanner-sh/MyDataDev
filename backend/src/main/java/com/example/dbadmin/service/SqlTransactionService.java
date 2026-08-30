@@ -1,6 +1,8 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.auth.WebIdentity;
+import com.example.dbadmin.auth.WebIdentityContext;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
@@ -82,7 +84,8 @@ public class SqlTransactionService {
         }
         OpenTransaction transaction;
         try {
-            transaction = registry.open(connectionId, connection, schemaName, actor);
+            // 归属取自服务端会话；actor 只是审计标签，客户端可以随便填。
+            transaction = registry.open(connectionId, connection, schemaName, actor, currentUserId());
         } catch (RuntimeException error) {
             connection.close();
             throw error;
@@ -91,9 +94,18 @@ public class SqlTransactionService {
         return describe(transaction);
     }
 
+    /**
+     * 该连接上属于当前用户的事务。别人的事务一律当作不存在 —— 这个响应里带着事务 id，
+     * 泄露出去就等于把提交/回滚的能力交出去了。
+     */
     public SqlTransactionResponse active(long connectionId) {
         OpenTransaction transaction = registry.activeFor(connectionId);
-        return transaction == null ? null : describe(transaction);
+        if (transaction == null || !transaction.ownedBy(currentUserId())) return null;
+        return describe(transaction);
+    }
+
+    private Long currentUserId() {
+        return WebIdentityContext.current().map(WebIdentity::userId).orElse(null);
     }
 
     public SqlTransactionScriptResponse execute(
