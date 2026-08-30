@@ -14,14 +14,15 @@ type McpHelpPanelProps = {
 };
 
 const tools = [
-  { name: 'db_list_connections', capability: '列出当前 Agent 白名单内的连接' },
-  { name: 'db_list_namespaces', capability: '分页列出 Catalog 或 Schema' },
-  { name: 'db_search_objects', capability: '搜索表和视图' },
-  { name: 'db_describe_object', capability: '查看列、主键、索引和外键' },
-  { name: 'db_get_object_ddl', capability: '获取表或视图 DDL' },
-  { name: 'db_browse_table', capability: '使用游标分页浏览表数据' },
-  { name: 'db_query', capability: '执行一条查询语句' },
-  { name: 'db_explain', capability: '查看查询执行计划' }
+  { name: 'db_list_connections', capability: '列出白名单内的连接及各自的访问档位', level: '只读' },
+  { name: 'db_list_namespaces', capability: '分页列出 Catalog 或 Schema', level: '只读' },
+  { name: 'db_search_objects', capability: '搜索表和视图', level: '只读' },
+  { name: 'db_describe_object', capability: '查看列、主键、索引和外键', level: '只读' },
+  { name: 'db_get_object_ddl', capability: '获取表或视图 DDL', level: '只读' },
+  { name: 'db_browse_table', capability: '使用游标分页浏览表数据', level: '只读' },
+  { name: 'db_query', capability: '执行一条查询语句', level: '只读' },
+  { name: 'db_explain', capability: '查看查询执行计划', level: '只读' },
+  { name: 'db_execute', capability: '执行一条写语句（INSERT/UPDATE/DELETE，FULL 档位还可 DDL）', level: '数据读写' }
 ];
 
 export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }: McpHelpPanelProps) {
@@ -103,7 +104,8 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
             <Title level={5}>访问控制</Title>
             <ul className="mcp-help-list">
               <li>每个 AI Agent 使用独立 API Key，只能访问自己的连接白名单。</li>
-              <li>白名单可以包含只读或可写连接，但 MCP 当前只发布查询型工具。</li>
+              <li>访问档位按<strong>连接</strong>授予：同一个 Agent 可以在开发库上有写权限、在生产库上只读。</li>
+              <li>默认是「只读」。写权限必须在 Agent 编辑弹窗里逐条连接显式授予。</li>
               <li>生产连接必须在 Agent 上单独开启生产环境权限。</li>
               <li>跨主机访问应使用 HTTPS；CLI 通常不携带 Origin，无需配置浏览器 Origin。</li>
             </ul>
@@ -111,9 +113,10 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
           <div>
             <Title level={5}>SQL 防护</Title>
             <ul className="mcp-help-list">
-              <li>只接受分类为查询的一条 SQL。</li>
-              <li>拒绝 DML、DDL、调用、锁、会话修改、多语句和已知副作用查询。</li>
-              <li>执行时设置 JDBC 只读提示、关闭自动提交并在结束时回滚。</li>
+              <li>db_query 只接受分类为查询的一条 SQL，拒绝 DML、DDL、调用、锁、会话修改、多语句和已知副作用查询；执行时设置 JDBC 只读提示、关闭自动提交并在结束时回滚。</li>
+              <li>写操作必须走 db_execute，两条路径不共用。同样只接受一条语句。</li>
+              <li>无论档位多高：只读连接拒绝一切写入；生产连接上的每条写语句都要求回传连接名；不含 WHERE 的 UPDATE/DELETE 需要单独确认。</li>
+              <li>每次调用都写审计，写语句还会额外落 SQL 历史。</li>
               <li>数据库返回内容属于不可信输入，AI Agent 不应把数据当作指令执行。</li>
             </ul>
           </div>
@@ -126,6 +129,12 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
           dataSource={tools}
           columns={[
             { title: '工具', dataIndex: 'name', render: (name: string) => <Text code>{name}</Text> },
+            {
+              title: '所需档位',
+              dataIndex: 'level',
+              width: 110,
+              render: (level: string) => <Tag color={level === '只读' ? undefined : 'orange'}>{level}</Tag>
+            },
             { title: '能力', dataIndex: 'capability' }
           ]}
           scroll={{ x: 620 }}

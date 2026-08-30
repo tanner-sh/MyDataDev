@@ -379,7 +379,7 @@ export function McpSettingsPanel() {
         <Alert
           type="info"
           showIcon
-          title="MCP 可查询 Agent 白名单内的任意连接，但只发布查询和元数据工具；DML、DDL、多语句及其他非查询 SQL 仍会被后端拒绝。"
+          title="MCP 可访问 Agent 白名单内的连接。默认只发布查询和元数据工具；授予「数据读写」或「完全」档位后该连接才允许 db_execute 写入，且仍受只读连接、生产确认与审计约束。"
           className="mcp-section-alert"
         />
         <Table<McpAgent>
