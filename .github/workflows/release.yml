@@ -221,6 +221,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 发行说明由 scripts/release-notes.mjs 生成；版本与其他作业保持一致，
+      # 不依赖 runner 自带的 Node 版本。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - uses: actions/download-artifact@v4
         with:
           pattern: mydatadev-*
@@ -240,8 +246,11 @@ jobs:
           if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
             gh release upload "${{ github.ref_name }}" release-assets/* --clobber
           else
+            # 版本说明从 CHANGELOG 抽取，抽不到会直接失败 —— 宁可不发布，
+            # 也不要发出一份挂着上个版本内容的说明（0.5.0 就这么中过一次）。
+            node scripts/release-notes.mjs "${{ github.ref_name }}" > "$RUNNER_TEMP/release-notes.md"
             gh release create "${{ github.ref_name }}" release-assets/* \
               --generate-notes \
-              --notes-file docs/release-notes.md \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
               --title "MyDataDev ${{ github.ref_name }}"
           fi
