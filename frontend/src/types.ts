@@ -487,7 +487,7 @@ export type SqlFileCandidate = {
   csvImport?: { schemaName?: string; tableName: string };
 };
 export type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
-export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml' | 'xlsx';
+export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml' | 'markdown' | 'xlsx';
 export type ResultCopyFormat = 'sql' | 'pipe';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };

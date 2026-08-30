@@ -237,6 +237,42 @@ class ExportServiceTest {
         }
     }
 
+    /**
+     * Markdown 表格。
+     *
+     * <p>与前端 queryResultExport.ts 的 serializeMarkdown 写的必须是同一种表格 —— 两边任何一处
+     * 转义规则分叉，同一份结果从「导出本批」和「重新查询并导出」两条路出来就会不一样。</p>
+     */
+    @Test
+    void writesMarkdownTableWithNumericColumnsRightAligned() throws Exception {
+        String markdown = export("select id, name from export_values order by id", "markdown");
+
+        String[] lines = markdown.split("\n");
+        assertThat(lines[0]).isEqualTo("| id | name |");
+        // 数值列右对齐，和界面结果表格的规矩一致。
+        assertThat(lines[1]).isEqualTo("| ---: | --- |");
+        assertThat(lines[2]).isEqualTo("| 1 | Alice |");
+    }
+
+    @Test
+    void escapesPipesAndFoldsNewlinesInMarkdown() throws Exception {
+        String markdown = export(
+                "select 'a|b' as piped, 'line1' || CHAR(10) || 'line2' as multiline from export_values", "markdown");
+
+        String[] lines = markdown.split("\n");
+        // 裸竖线会把整行的列数撑乱，后面所有列错位。
+        assertThat(lines[2]).isEqualTo("| a\\|b | line1<br>line2 |");
+        // 单元格不能跨行：表头 + 分隔行 + 一行数据。
+        assertThat(lines).hasSize(3);
+    }
+
+    @Test
+    void rendersNullAsAnEmptyMarkdownCell() throws Exception {
+        String markdown = export("select id, empty from export_values", "markdown");
+
+        assertThat(markdown.split("\n")[2]).isEqualTo("| 1 |  |");
+    }
+
     private String export(String sql, String format) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         exportService.export(1L, sql, format, "admin", output);

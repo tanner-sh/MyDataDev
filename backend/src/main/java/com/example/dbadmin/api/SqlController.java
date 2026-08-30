@@ -192,7 +192,7 @@ public class SqlController {
         return ResponseEntity.ok()
                 .contentType(exportContentType(format))
                 .contentLength(prepared.size())
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"query-result." + format + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"query-result." + exportFileExtension(format) + "\"")
                 .header("X-Export-Row-Limit", String.valueOf(ExportService.EXPORT_MAX_ROWS))
                 .header("X-Export-Truncated", String.valueOf(prepared.truncated()))
                 .body(body);
@@ -200,10 +200,15 @@ public class SqlController {
 
     private String normalizedExportFormat(String format) {
         String normalized = format == null ? "" : format.toLowerCase(java.util.Locale.ROOT);
-        if (java.util.Set.of("csv", "json", "sql", "xml", "xlsx").contains(normalized)) {
+        if (java.util.Set.of("csv", "json", "sql", "xml", "markdown", "xlsx").contains(normalized)) {
             return normalized;
         }
         throw new IllegalArgumentException("不支持的导出格式：" + format);
+    }
+
+    /** Markdown 的惯例扩展名是 .md；写成 .markdown 会让不少工具认不出来。 */
+    private String exportFileExtension(String format) {
+        return "markdown".equals(format) ? "md" : format;
     }
 
     private MediaType exportContentType(String format) {
@@ -211,6 +216,7 @@ public class SqlController {
             case "json" -> MediaType.APPLICATION_JSON;
             case "xml" -> MediaType.APPLICATION_XML;
             case "sql" -> MediaType.TEXT_PLAIN;
+            case "markdown" -> MediaType.parseMediaType("text/markdown");
             case "xlsx" -> MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             default -> MediaType.parseMediaType("text/csv");
         };

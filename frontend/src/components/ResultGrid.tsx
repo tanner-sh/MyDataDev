@@ -27,7 +27,7 @@ import {
   type ResultEditState
 } from '../resultEditing';
 import { localizeError, timestamp } from '../utils';
-import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
 import { buildXlsx } from '../xlsx';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
@@ -548,7 +548,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             truncated: Boolean(result.truncated),
             maxRows: result.maxRows
           }), format);
-        downloadBlob(blob, `query-result-${timestamp()}.${format}`);
+        downloadBlob(blob, `query-result-${timestamp()}.${exportFileExtension(format)}`);
         void messageApi.success(`已导出当前结果中的 ${scopedRows.length} 行`);
       } catch (error) {
         void messageApi.error((error as Error).message);
@@ -832,11 +832,15 @@ const LOCAL_EXPORT_ITEMS = [
   { key: 'json', label: 'JSON' },
   { key: 'sql', label: 'SQL 插入' },
   { key: 'xml', label: 'XML' },
+  { key: 'markdown', label: 'Markdown 表格' },
   { key: 'xlsx', label: 'Excel' }
 ];
 
 function textBlob(content: string, format: ExportFormat): Blob {
-  const mime = format === 'json' ? 'application/json' : format === 'xml' ? 'application/xml' : 'text/plain';
+  const mime = format === 'json' ? 'application/json'
+    : format === 'xml' ? 'application/xml'
+    : format === 'markdown' ? 'text/markdown'
+    : 'text/plain';
   return new Blob([content], { type: `${mime};charset=utf-8` });
 }
 

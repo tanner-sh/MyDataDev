@@ -1,3 +1,4 @@
+import { isNumericColumnType } from './resultGridData';
 import { parseSqlTableReferences, tokenizeSql, type SqlQuoteStyle } from './sqlCompletion';
 import type { ExportFormat, ResultColumn, ResultCopyFormat, SqlResultSourceTable } from './types';
 
@@ -59,6 +60,16 @@ export function quoteQualifiedTable(parts: string[], dbType?: string): string {
   return parts.map((part) => quoteIdentifier(part, style)).join('.');
 }
 
+/**
+ * 导出文件的扩展名。
+ *
+ * <p>格式名不能直接当扩展名用：Markdown 的惯例扩展名是 .md，写成 .markdown 会让不少工具
+ * （GitHub 附件预览、编辑器）认不出来。</p>
+ */
+export function exportFileExtension(format: ExportFormat): string {
+  return format === 'markdown' ? 'md' : format;
+}
+
 export function serializeQueryResult(
   format: ExportFormat,
   columns: ResultColumn[],
@@ -69,6 +80,7 @@ export function serializeQueryResult(
     case 'csv': return serializeCsv(columns, rows);
     case 'json': return serializeJson(columns, rows, options);
     case 'xml': return serializeXml(columns, rows, options);
+    case 'markdown': return serializeMarkdown(columns, rows);
     case 'sql': return serializeSql(columns, rows, options);
     // xlsx 是二进制，由 xlsx.ts 直接生成 Blob；调用方在分支时就该把它挑出去。
     case 'xlsx': throw new Error('Excel 导出不走文本序列化，请调用 buildXlsx');
@@ -135,6 +147,35 @@ function serializeSql(columns: ResultColumn[], rows: unknown[][], options: Resul
     const values = columns.map((column, index) => sqlLiteral(row[index], column.typeName, options.dbType)).join(', ');
     return `INSERT INTO ${table} (${names}) VALUES (${values});`;
   }).join('\n')}\n`;
+}
+
+/**
+ * Markdown 表格。
+ *
+ * <p>贴进 issue、PR 或文档里用的，所以对齐方式要按列类型给：数值列右对齐，读起来才能对位比较，
+ * 这和结果表格里数值右对齐是同一条规矩。</p>
+ *
+ * <p>Markdown 表格的单元格不能跨行，也不能出现裸的竖线。换行折成 {@code <br>} 而不是丢弃 ——
+ * 丢掉会让多行文本看起来像是被截断了；竖线转义成 {@code \|}，否则一个值里的竖线会把整行的列
+ * 数撑乱，后面所有列都错位。</p>
+ */
+function serializeMarkdown(columns: ResultColumn[], rows: unknown[][]): string {
+  const header = `| ${columns.map((column) => markdownValue(column.label)).join(' | ')} |`;
+  const alignment = `| ${columns.map((column) => isNumericColumnType(column.typeName) ? '---:' : '---').join(' | ')} |`;
+  const body = rows.map((row) => `| ${columns.map((_column, index) => markdownValue(row[index])).join(' | ')} |`);
+  // 结果为空时仍然输出表头：贴出去的人至少能看到查了哪些列。
+  return [header, alignment, ...body].join('\n') + '\n';
+}
+
+function markdownValue(value: unknown): string {
+  const text = displayValue(value);
+  if (!text) return '';
+  return text
+    .split('\\').join('\\\\')
+    .split('|').join('\\|')
+    .split('\r\n').join('<br>')
+    .split('\n').join('<br>')
+    .split('\r').join('<br>');
 }
 
 function serializePipe(rows: unknown[][]): string {

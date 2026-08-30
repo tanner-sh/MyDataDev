@@ -24,7 +24,7 @@ import type {
   SqlEditorOnMount,
   SqlRange
 } from './sqlEditorTypes';
-import { inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
@@ -1615,7 +1615,7 @@ export default function App() {
         body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts })
       });
       const blob = await response.blob();
-      downloadBlob(blob, `query-result-${timestamp()}.${format}`);
+      downloadBlob(blob, `query-result-${timestamp()}.${exportFileExtension(format)}`);
       const rowLimit = response.headers.get('x-export-row-limit') || '10000';
       const truncated = response.headers.get('x-export-truncated') === 'true';
       const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}（最多 ${rowLimit} 行${truncated ? '，本次已截断' : ''}）`;

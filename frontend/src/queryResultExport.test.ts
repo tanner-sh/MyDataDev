@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
 
 const columns = [
   { key: 'c1', label: 'id', typeName: 'INTEGER' },
@@ -85,5 +85,55 @@ describe('copy format preference', () => {
     expect(readResultCopyFormat(storage)).toBe('pipe');
     writeResultCopyFormat('sql', storage);
     expect(readResultCopyFormat(storage)).toBe('sql');
+  });
+});
+
+describe('Markdown 表格导出', () => {
+  it('数值列右对齐，文本列左对齐', () => {
+    const output = serializeQueryResult('markdown', columns, [[1, 'a']]);
+    const [, alignment] = output.split('\n');
+    // 对齐规则与结果表格一致：数值右对齐才能对位比较大小。
+    expect(alignment).toBe('| ---: | --- |');
+  });
+
+  it('表头、分隔行、数据行的结构正确', () => {
+    const output = serializeQueryResult('markdown', columns, [[1, 'a'], [2, 'b']]);
+    expect(output).toBe('| id | name |\n| ---: | --- |\n| 1 | a |\n| 2 | b |\n');
+  });
+
+  it('结果为空时仍然输出表头', () => {
+    // 贴出去的人至少要能看到查了哪些列。
+    expect(serializeQueryResult('markdown', columns, [])).toBe('| id | name |\n| ---: | --- |\n');
+  });
+
+  it('竖线必须转义，否则整行列数被撑乱', () => {
+    const output = serializeQueryResult('markdown', columns, [[1, 'a|b']]);
+    expect(output).toContain('| 1 | a\\|b |');
+    // 转义后这一行仍然只有两列。
+    const dataRow = output.split('\n')[2];
+    expect(dataRow.split(/(?<!\\)\|/).filter((part) => part !== '').length).toBe(2);
+  });
+
+  it('换行折成 <br> 而不是丢弃', () => {
+    const output = serializeQueryResult('markdown', columns, [[1, 'line1\nline2']]);
+    expect(output).toContain('line1<br>line2');
+    // Markdown 表格的单元格不能跨行：数据行必须仍是一行。
+    expect(output.split('\n')).toHaveLength(4);
+  });
+
+  it('null 渲染成空单元格', () => {
+    expect(serializeQueryResult('markdown', columns, [[null, null]])).toContain('|  |  |');
+  });
+});
+
+describe('导出文件扩展名', () => {
+  it('Markdown 用惯例的 .md', () => {
+    expect(exportFileExtension('markdown')).toBe('md');
+  });
+
+  it('其余格式名本身就是扩展名', () => {
+    expect(exportFileExtension('csv')).toBe('csv');
+    expect(exportFileExtension('json')).toBe('json');
+    expect(exportFileExtension('xlsx')).toBe('xlsx');
   });
 });

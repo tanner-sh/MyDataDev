@@ -192,6 +192,7 @@ public class ExportService {
             case "csv" -> writeCsv(rs, output);
             case "sql" -> writeSql(rs, output, dialect, targetTableParts);
             case "xml" -> writeXml(rs, output);
+            case "markdown" -> writeMarkdown(rs, output);
             case "xlsx" -> writeXlsx(rs, output);
             default -> throw new IllegalArgumentException("不支持的导出格式：" + format);
         };
@@ -246,6 +247,57 @@ public class ExportService {
         boolean truncated = rs.next();
         writer.flush();
         return truncated;
+    }
+
+    /**
+     * Markdown 表格。
+     *
+     * <p>与前端 queryResultExport.ts 的 serializeMarkdown 写的是同一种表格，转义规则必须一致：
+     * 单元格里不能出现裸竖线（会把整行的列数撑乱，后面所有列错位），也不能跨行（换行折成
+     * {@code <br>} 而不是丢弃，丢掉会让多行文本看起来像被截断了）。</p>
+     *
+     * <p>数值列右对齐，和界面结果表格的规矩一致 —— 贴出去之后才对得上位、能比较大小。</p>
+     */
+    private boolean writeMarkdown(ResultSet rs, OutputStream output) throws Exception {
+        ResultSetMetaData metadata = rs.getMetaData();
+        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
+        int columnCount = metadata.getColumnCount();
+        List<String> header = new ArrayList<>();
+        List<String> alignment = new ArrayList<>();
+        for (int index = 1; index <= columnCount; index++) {
+            header.add(markdownValue(metadata.getColumnLabel(index)));
+            alignment.add(isNumericColumn(metadata.getColumnType(index)) ? "---:" : "---");
+        }
+        writer.write("| " + String.join(" | ", header) + " |");
+        writer.newLine();
+        writer.write("| " + String.join(" | ", alignment) + " |");
+        writer.newLine();
+        int rows = 0;
+        while (rows < EXPORT_MAX_ROWS && rs.next()) {
+            List<String> values = new ArrayList<>();
+            for (int index = 1; index <= columnCount; index++) values.add(markdownValue(exportValue(rs.getObject(index))));
+            writer.write("| " + String.join(" | ", values) + " |");
+            writer.newLine();
+            rows++;
+        }
+        boolean truncated = rs.next();
+        writer.flush();
+        return truncated;
+    }
+
+    private static boolean isNumericColumn(int jdbcType) {
+        return Set.of(Types.TINYINT, Types.SMALLINT, Types.INTEGER, Types.BIGINT, Types.FLOAT,
+                Types.REAL, Types.DOUBLE, Types.NUMERIC, Types.DECIMAL).contains(jdbcType);
+    }
+
+    private String markdownValue(Object value) {
+        if (value == null) return "";
+        return value.toString()
+                .replace("\\", "\\\\")
+                .replace("|", "\\|")
+                .replace("\r\n", "<br>")
+                .replace("\n", "<br>")
+                .replace("\r", "<br>");
     }
 
     private boolean writeSql(ResultSet rs, OutputStream output, DatabaseDialect dialect, List<String> requestedTargetTableParts) throws Exception {
@@ -446,7 +498,7 @@ public class ExportService {
 
     private String normalizeFormat(String format) {
         String normalized = format == null ? "" : format.toLowerCase(Locale.ROOT);
-        if (!Set.of("csv", "json", "sql", "xml", "xlsx").contains(normalized)) throw new IllegalArgumentException("不支持的导出格式：" + format);
+        if (!Set.of("csv", "json", "sql", "xml", "markdown", "xlsx").contains(normalized)) throw new IllegalArgumentException("不支持的导出格式：" + format);
         return normalized;
     }
 
