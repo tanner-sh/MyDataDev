@@ -15,12 +15,12 @@ class McpApiKeyRegistryTest {
     @Test
     void authenticatesAgentAndReturnsConfiguredPermissions() {
         McpConfigurationService configuration = mock(McpConfigurationService.class);
-        McpRuntimeConfig.Agent agent = agent("codex", "secret-value", Set.of(1L, 2L), true, true);
+        McpRuntimeConfig.Agent agent = agent("codex", "secret-value", Map.of(1L, McpAccessLevel.READ_ONLY, 2L, McpAccessLevel.DATA_WRITE), true, true);
         when(configuration.snapshot()).thenReturn(config(Map.of(agent.agentId(), agent)));
         McpApiKeyRegistry registry = new McpApiKeyRegistry(configuration);
 
         assertThat(registry.authenticate("codex.secret-value"))
-                .contains(new McpAgentPrincipal("codex", java.util.Set.of(1L, 2L), true));
+                .contains(new McpAgentPrincipal("codex", Map.of(1L, McpAccessLevel.READ_ONLY, 2L, McpAccessLevel.DATA_WRITE), true));
         assertThat(registry.authenticate("codex.wrong-secret")).isEmpty();
         assertThat(registry.authenticate("missing.secret-value")).isEmpty();
         assertThat(registry.authenticate("malformed")).isEmpty();
@@ -29,8 +29,8 @@ class McpApiKeyRegistryTest {
     @Test
     void readsLatestSnapshotAndRejectsDisabledAgent() {
         McpConfigurationService configuration = mock(McpConfigurationService.class);
-        McpRuntimeConfig.Agent enabled = agent("agent", "secret", Set.of(1L), false, true);
-        McpRuntimeConfig.Agent disabled = agent("agent", "secret", Set.of(1L), false, false);
+        McpRuntimeConfig.Agent enabled = agent("agent", "secret", Map.of(1L, McpAccessLevel.READ_ONLY), false, true);
+        McpRuntimeConfig.Agent disabled = agent("agent", "secret", Map.of(1L, McpAccessLevel.READ_ONLY), false, false);
         when(configuration.snapshot()).thenReturn(
                 config(Map.of(enabled.agentId(), enabled)),
                 config(Map.of(disabled.agentId(), disabled))
@@ -45,11 +45,11 @@ class McpApiKeyRegistryTest {
         return new McpRuntimeConfig(settings(), Set.of(), agents);
     }
 
-    private McpRuntimeConfig.Agent agent(String id, String secret, Set<Long> connectionIds,
+    private McpRuntimeConfig.Agent agent(String id, String secret, Map<Long, McpAccessLevel> connectionLevels,
                                          boolean allowProduction, boolean enabled) {
         return new McpRuntimeConfig.Agent(
                 1L, id, new BCryptPasswordEncoder(4).encode(secret), enabled,
-                allowProduction, connectionIds, Instant.EPOCH, Instant.EPOCH
+                allowProduction, connectionLevels, Instant.EPOCH, Instant.EPOCH
         );
     }
 

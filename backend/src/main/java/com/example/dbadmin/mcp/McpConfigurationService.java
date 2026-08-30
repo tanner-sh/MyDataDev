@@ -3,6 +3,7 @@ package com.example.dbadmin.mcp;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentCreateRequest;
+import com.example.dbadmin.dto.McpAdminDtos.McpAgentGrant;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentResponse;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentUpdateRequest;
 import com.example.dbadmin.dto.McpAdminDtos.McpConfigResponse;
@@ -91,7 +92,10 @@ public class McpConfigurationService {
                     }
                     if (existingConnectionIds.contains(connectionId)) connectionIds.add(connectionId);
                 }
-                repository.insertAgent(agentId, keyHash, true, agent.isAllowProduction(), connectionIds);
+                // 配置文件里的 Agent 没有档位字段，一律按只读导入；要写权限得在界面上显式授予。
+                Map<Long, McpAccessLevel> grants = new LinkedHashMap<>();
+                for (Long connectionId : connectionIds) grants.put(connectionId, McpAccessLevel.READ_ONLY);
+                repository.insertAgent(agentId, keyHash, true, agent.isAllowProduction(), grants);
             }
         });
         reload();
@@ -160,23 +164,26 @@ public class McpConfigurationService {
     public McpCredentialResponse createAgent(McpAgentCreateRequest request, String actor) {
         String agentId = normalizeAgentId(request.agentId());
         if (snapshot().agents().containsKey(agentId)) throw new IllegalArgumentException("MCP Agent ID 已存在");
-        Set<Long> connectionIds = validateConnections(request.connectionIds(), request.allowProduction());
+        Map<Long, McpAccessLevel> grants = validateGrants(request.grants(), request.allowProduction());
         String secret = generateSecret();
         String hash = encoder.encode(secret);
-        long id = transactions.execute(status -> repository.insertAgent(agentId, hash, true, request.allowProduction(), connectionIds));
+        long id = transactions.execute(status -> repository.insertAgent(agentId, hash, true, request.allowProduction(), grants));
         reload();
         Agent agent = requireAgent(id);
-        audit.global(actor, "MCP_AGENT_CREATE", "mcp-agent:" + agentId, "connections=" + connectionIds.size());
+        audit.global(actor, "MCP_AGENT_CREATE", "mcp-agent:" + agentId,
+                "connections=" + grants.size() + ";" + grantSummary(grants));
         return new McpCredentialResponse(toResponse(agent), agentId + "." + secret);
     }
 
     public McpAgentResponse updateAgent(long id, McpAgentUpdateRequest request, String actor) {
         Agent existing = requireAgent(id);
-        Set<Long> connectionIds = validateConnections(request.connectionIds(), request.allowProduction());
-        transactions.executeWithoutResult(ignored -> repository.updateAgent(id, request.enabled(), request.allowProduction(), connectionIds));
+        Map<Long, McpAccessLevel> grants = validateGrants(request.grants(), request.allowProduction());
+        transactions.executeWithoutResult(ignored -> repository.updateAgent(id, request.enabled(), request.allowProduction(), grants));
         reload();
+        // 档位变化是安全事件，审计里必须能看出改成了什么，而不只是「改了几条连接」。
         audit.global(actor, "MCP_AGENT_UPDATE", "mcp-agent:" + existing.agentId(),
-                "enabled=" + request.enabled() + ";connections=" + connectionIds.size());
+                "enabled=" + request.enabled() + ";connections=" + grants.size()
+                        + ";" + grantSummary(grants) + ";before=" + grantSummary(existing.connectionLevels()));
         return toResponse(requireAgent(id));
     }
 
@@ -208,19 +215,36 @@ public class McpConfigurationService {
         current.set(new McpRuntimeConfig(settings, repository.findOrigins(), agents));
     }
 
-    private Set<Long> validateConnections(List<Long> requested, boolean allowProduction) {
-        Set<Long> ids = new LinkedHashSet<>(requested == null ? List.of() : requested);
-        if (ids.isEmpty()) throw new IllegalArgumentException("MCP Agent 至少需要授权一个连接");
+    /**
+     * 校验连接授权与档位。
+     *
+     * <p>只读连接上给写档位是没有意义的：{@code ExecutionGuard} 会在执行时一律拒绝，让它保存成功
+     * 只会让管理员以为授权生效了。生产连接上的写档位则要求同时开启生产环境访问 —— 这是管理员的
+     * 一次显式决定，Agent 自己拿不到。</p>
+     */
+    private Map<Long, McpAccessLevel> validateGrants(List<McpAgentGrant> requested, boolean allowProduction) {
+        if (requested == null || requested.isEmpty()) throw new IllegalArgumentException("MCP Agent 至少需要授权一个连接");
         Map<Long, ConnectionResponse> available = connections.list().stream()
                 .collect(java.util.stream.Collectors.toMap(ConnectionResponse::id, connection -> connection));
-        for (Long id : ids) {
+        Map<Long, McpAccessLevel> grants = new LinkedHashMap<>();
+        for (McpAgentGrant grant : requested) {
+            Long id = grant == null ? null : grant.connectionId();
             ConnectionResponse connection = id == null ? null : available.get(id);
             if (connection == null) throw new IllegalArgumentException("连接不存在：" + id);
-            if ("prod".equalsIgnoreCase(connection.environment()) && !allowProduction) {
+            McpAccessLevel level = McpAccessLevel.parse(grant.accessLevel());
+            boolean production = "prod".equalsIgnoreCase(connection.environment());
+            if (production && !allowProduction) {
                 throw new IllegalArgumentException("授权生产连接必须开启生产环境访问权限");
             }
+            if (level != McpAccessLevel.READ_ONLY && connection.readonly()) {
+                throw new IllegalArgumentException(
+                        "连接「" + connection.name() + "」是只读连接，只能授予只读档位。");
+            }
+            if (grants.putIfAbsent(id, level) != null) {
+                throw new IllegalArgumentException("连接重复授权：" + connection.name());
+            }
         }
-        return ids;
+        return grants;
     }
 
     private Agent requireAgent(long id) {
@@ -315,10 +339,21 @@ public class McpConfigurationService {
     }
 
     private McpAgentResponse toResponse(Agent agent) {
+        List<McpAgentGrant> grants = agent.connectionLevels().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> new McpAgentGrant(entry.getKey(), entry.getValue().name()))
+                .toList();
         return new McpAgentResponse(
                 agent.id(), agent.agentId(), agent.enabled(), agent.allowProduction(),
-                agent.connectionIds().stream().sorted().toList(), agent.createdAt(), agent.updatedAt()
+                grants, agent.createdAt(), agent.updatedAt()
         );
+    }
+
+    private String grantSummary(Map<Long, McpAccessLevel> grants) {
+        return "levels=" + grants.entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .map(entry -> entry.getKey() + ":" + entry.getValue().name())
+                .collect(java.util.stream.Collectors.joining(","));
     }
 
     private String generateSecret() {

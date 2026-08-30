@@ -518,12 +518,15 @@ export type McpLimits = {
   maxTablePageSize: number;
   sessionTtlMinutes: number;
 };
+export type McpAccessLevel = 'READ_ONLY' | 'DATA_WRITE' | 'FULL';
+/** 一条连接授权：连接与它的档位是一体的，分开存会出现「授了连接没档位」的中间态。 */
+export type McpAgentGrant = { connectionId: number; accessLevel: McpAccessLevel };
 export type McpAgent = {
   id: number;
   agentId: string;
   enabled: boolean;
   allowProduction: boolean;
-  connectionIds: number[];
+  grants: McpAgentGrant[];
   createdAt: string;
   updatedAt: string;
 };

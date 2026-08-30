@@ -38,12 +38,16 @@ public record McpRuntimeConfig(
             String keyHash,
             boolean enabled,
             boolean allowProduction,
-            Set<Long> connectionIds,
+            Map<Long, McpAccessLevel> connectionLevels,
             Instant createdAt,
             Instant updatedAt
     ) {
         public Agent {
-            connectionIds = connectionIds == null ? Set.of() : Set.copyOf(connectionIds);
+            connectionLevels = connectionLevels == null ? Map.of() : Map.copyOf(connectionLevels);
+        }
+
+        public Set<Long> connectionIds() {
+            return connectionLevels.keySet();
         }
     }
 

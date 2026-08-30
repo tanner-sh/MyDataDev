@@ -35,12 +35,32 @@ MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接�
 一次 MCP 数据库访问必须同时通过以下检查：
 
 1. 请求携带有效的 agent API Key。
-2. 目标连接 ID 位于该 agent 的 `connection-ids` 白名单中。
+2. 目标连接位于该 agent 的白名单中。
 3. 生产连接还要求该 agent 设置 `allow-production: true`。
+4. 操作所需的访问档位不高于该连接上授予的档位。
 
-SQL 工具只接受分类为查询的单条语句，会拒绝 DML、DDL、存储过程调用、锁、会话修改、多语句和已知的有副作用查询。执行时还会设置 JDBC 只读提示、关闭自动提交并在结束时回滚。
+### 访问档位
 
-连接的 `readonly` 标记不再限制 MCP 查询资格；白名单中的只读和可写连接都可以被查询。应用层检查不能替代数据库权限，因此对生产库和其他高风险数据库仍建议使用数据库侧只读账户。
+授权按**连接**而不是按 agent 授予，因此同一个 agent 可以在开发库上有写权限、在生产库上只读：
+
+| 档位 | 能力 |
+| --- | --- |
+| `READ_ONLY` | 查看结构、浏览表、`db_query`、`db_explain` |
+| `DATA_WRITE` | 只读能力，外加通过 `db_execute` 执行 INSERT / UPDATE / DELETE |
+| `FULL` | 数据读写能力，外加 CREATE / ALTER / DROP 等结构变更 |
+
+**升级不改变任何既有 agent 的能力**：已有授权一律落到 `READ_ONLY`，从配置文件导入的 agent 也是只读，写权限只能在 Web 的 MCP 设置里显式授予。
+
+`db_query` 和 `db_explain` 只接受分类为查询的单条语句，会拒绝 DML、DDL、存储过程调用、锁、会话修改、多语句和已知的有副作用查询。执行时还会设置 JDBC 只读提示、关闭自动提交并在结束时回滚。写操作必须走 `db_execute`，两条路径不共用。
+
+无论档位多高，写操作都要经过与 Web 界面完全相同的闸门：
+
+- 标记为 `readonly` 的连接拒绝一切写入（只读连接在界面上也无法被授予写档位）。
+- 生产连接上的每条语句都要求 `productionConfirmation` 等于连接名。这对 agent 来说算不上阻力（连接名可以从 `db_list_connections` 读到），它的作用是把意图固定进这次调用和审计记录里，而不是让 agent 只凭一个连接 ID 就误写生产库。**真正的把关是授予档位时的那次决定。**
+- 不含顶层 WHERE 的 UPDATE / DELETE 需要 `unscopedMutationConfirmed=true`。
+- 每次调用都写审计，写语句还会额外落 SQL 历史。
+
+应用层检查不能替代数据库权限，因此对生产库和其他高风险数据库仍建议使用数据库侧只读账户，并只在确有需要时才授予高于 `READ_ONLY` 的档位。
 
 API Key 会出现在每次请求的 `Authorization` 请求头中。跨主机部署时应通过反向代理提供 HTTPS，不要在不可信明文网络上传输 Key。`/mcp` 不应直接暴露到公网。
 
@@ -147,8 +167,11 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 | `db_browse_table` | 使用不透明 cursor 分页浏览表数据，不返回编辑 token |
 | `db_query` | 执行一条只读查询 |
 | `db_explain` | 获取一条查询的执行计划 |
+| `db_execute` | 执行一条写语句，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
 
-所有工具都发布 `readOnlyHint: true` 和 `destructiveHint: false`。数据库返回的对象名、注释、DDL、数据和错误均属于不可信输入，agent 不应把这些内容当作指令执行。
+`db_list_connections` 会返回当前 agent 在每条连接上的档位，agent 据此知道自己能做什么。
+
+除 `db_execute` 外的所有工具都发布 `readOnlyHint: true` 和 `destructiveHint: false`；`db_execute` 发布 `readOnlyHint: false` 和 `destructiveHint: true`，客户端可以据此对它单独要求人工批准。数据库返回的对象名、注释、DDL、数据和错误均属于不可信输入，agent 不应把这些内容当作指令执行。
 
 ## 限制与可观测性
 

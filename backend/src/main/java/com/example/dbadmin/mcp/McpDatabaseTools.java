@@ -9,6 +9,7 @@ import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
 import com.example.dbadmin.mcp.McpDtos.ConnectionList;
 import com.example.dbadmin.mcp.McpDtos.ConnectionView;
+import com.example.dbadmin.mcp.McpDtos.ExecuteResult;
 import com.example.dbadmin.mcp.McpDtos.NamespaceItem;
 import com.example.dbadmin.mcp.McpDtos.NamespacePage;
 import com.example.dbadmin.mcp.McpDtos.ObjectDescription;
@@ -22,6 +23,7 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.DataEditService;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.SqlQueryLimits;
+import com.example.dbadmin.service.SqlStatementClassifier;
 import com.example.dbadmin.service.SqlService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -43,6 +45,7 @@ public class McpDatabaseTools {
     private final MetadataService metadata;
     private final DataEditService data;
     private final SqlService sql;
+    private final SqlStatementClassifier classifier;
     private final AuditRepository audit;
     private final MeterRegistry metrics;
     private final McpConfigurationService configuration;
@@ -52,6 +55,7 @@ public class McpDatabaseTools {
             MetadataService metadata,
             DataEditService data,
             SqlService sql,
+            SqlStatementClassifier classifier,
             AuditRepository audit,
             MeterRegistry metrics,
             McpConfigurationService configuration
@@ -60,6 +64,7 @@ public class McpDatabaseTools {
         this.metadata = metadata;
         this.data = data;
         this.sql = sql;
+        this.classifier = classifier;
         this.audit = audit;
         this.metrics = metrics;
         this.configuration = configuration;
@@ -68,7 +73,7 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_list_connections",
             title = "List authorized database connections",
-            description = "Lists database connections authorized for this agent. MCP exposes query-only tools even when a connection is not marked read-only.",
+            description = "Lists database connections authorized for this agent, including the access level granted on each one. READ_ONLY connections expose query tools only; DATA_WRITE and FULL additionally allow db_execute." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -81,7 +86,8 @@ public class McpDatabaseTools {
                         connection.environment(),
                         connection.readonly(),
                         connection.capabilities().tableBrowse(),
-                        connection.capabilities().explain()
+                        connection.capabilities().explain(),
+                        access.levelFor(connection.id()).name()
                 )).toList()
         ));
     }
@@ -283,6 +289,53 @@ public class McpDatabaseTools {
                     access.actor(),
                     queryLimits()
             ));
+        });
+    }
+
+    @McpTool(
+            name = "db_execute",
+            title = "Execute one writing SQL statement",
+            description = """
+                    Executes exactly one writing SQL statement (INSERT/UPDATE/DELETE, or DDL at FULL access level)                     on a connection where this agent has been granted DATA_WRITE or FULL. Read-only queries are                     rejected here; use db_query instead. Statements on a production connection additionally require                     productionConfirmation to equal the exact connection name, and an UPDATE or DELETE without a                     top-level WHERE clause requires unscopedMutationConfirmed=true. Every call is audited.""",
+            generateOutputSchema = true,
+            annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = true, idempotentHint = false, openWorldHint = true)
+    )
+    public ExecuteResult execute(
+            @McpToolParam(required = true, description = "Authorized connection id") long connectionId,
+            @McpToolParam(required = false, description = "Optional catalog or schema to activate") String schemaName,
+            @McpToolParam(required = true, description = "Exactly one writing SQL statement") String statement,
+            @McpToolParam(required = false, description = "Exact connection name; required on production connections") String productionConfirmation,
+            @McpToolParam(required = false, description = "Set true to confirm an UPDATE or DELETE without a top-level WHERE clause") Boolean unscopedMutationConfirmed
+    ) throws Exception {
+        return audited("db_execute", connectionId, () -> {
+            String safeSql = requiredSql(statement);
+            SqlStatementClassifier.Kind kind = classifier.classify(safeSql);
+            if (kind == SqlStatementClassifier.Kind.QUERY) {
+                // 读走 db_query：那条路径强制只读事务并回滚，这条不会。分开才守得住。
+                throw new IllegalArgumentException("db_execute 只接受写语句，只读查询请使用 db_query。");
+            }
+            access.requireConnection(connectionId, McpAccessLevel.requiredFor(kind));
+            // 交给和界面完全相同的执行路径：只读连接拦截、生产确认、未限定范围写确认、
+            // 审计、SQL 历史与元数据缓存失效都在里面，MCP 不该有第二套实现。
+            SqlResult result = sql.execute(
+                    connectionId,
+                    safeSql,
+                    queryLimits().defaultRows(),
+                    access.actor(),
+                    null,
+                    productionConfirmation,
+                    schemaName,
+                    Boolean.TRUE.equals(unscopedMutationConfirmed)
+            );
+            QueryResult sanitized = sanitizeQueryResult(result);
+            return new ExecuteResult(
+                    kind.name(),
+                    result.affectedRows(),
+                    result.elapsedMs(),
+                    sanitized.columns(),
+                    sanitized.rows(),
+                    sanitized.truncated()
+            );
         });
     }
 

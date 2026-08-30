@@ -121,7 +121,7 @@ class McpWebConfigurationIntegrationTest {
         mvc.perform(post("/api/mcp/agents")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"agentId":"prod-denied","connectionIds":[%d],"allowProduction":false}
+                                {"agentId":"prod-denied","grants":[{"connectionId":%d,"accessLevel":"READ_ONLY"}],"allowProduction":false}
                                 """.formatted(productionConnectionId)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("生产连接")));
@@ -130,7 +130,7 @@ class McpWebConfigurationIntegrationTest {
                         .header("X-User", "integration-test")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"agentId":"web-agent","connectionIds":[%d],"allowProduction":false}
+                                {"agentId":"web-agent","grants":[{"connectionId":%d,"accessLevel":"READ_ONLY"}],"allowProduction":false}
                                 """.formatted(connectionId)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.agent.agentId").value("web-agent"))

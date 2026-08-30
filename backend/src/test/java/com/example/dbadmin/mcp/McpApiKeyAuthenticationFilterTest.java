@@ -49,7 +49,7 @@ class McpApiKeyAuthenticationFilterTest {
             ((MockHttpServletResponse) response).setHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "session-a");
         });
         assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
-                .isEqualTo(new McpAgentPrincipal("agent-a", java.util.Set.of(1L), false));
+                .isEqualTo(new McpAgentPrincipal("agent-a", java.util.Map.of(1L, McpAccessLevel.READ_ONLY), false));
 
         SecurityContextHolder.clearContext();
         MockHttpServletRequest sameAgent = authorizedRequest("agent-a.secret-a");
@@ -87,7 +87,7 @@ class McpApiKeyAuthenticationFilterTest {
     private McpRuntimeConfig.Agent agent(long numericId, String id, String secret, long connectionId) {
         return new McpRuntimeConfig.Agent(
                 numericId, id, new BCryptPasswordEncoder(4).encode(secret), true,
-                false, Set.of(connectionId), Instant.EPOCH, Instant.EPOCH
+                false, Map.of(connectionId, McpAccessLevel.READ_ONLY), Instant.EPOCH, Instant.EPOCH
         );
     }
 

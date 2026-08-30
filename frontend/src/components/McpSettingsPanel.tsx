@@ -30,14 +30,29 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { API } from '../constants';
-import type { McpAgent, McpConfig, McpCredential, McpLimits } from '../types';
+import type { McpAccessLevel, McpAgent, McpConfig, McpCredential, McpLimits } from '../types';
+import {
+  agentGrantWarnings,
+  allowedLevelsFor,
+  buildAgentGrants,
+  grantsToFormValues,
+  mcpAccessLevelColor,
+  MCP_ACCESS_LEVEL_HINTS,
+  MCP_ACCESS_LEVEL_LABELS
+} from '../mcpAccessLevels';
 import { McpClientGuideTabs } from './McpClientGuideTabs';
 import { McpHelpPanel } from './McpHelpPanel';
 
 const { Paragraph, Text, Title } = Typography;
 
 type ConfigForm = McpLimits & { allowedOrigins: string[] };
-type AgentForm = { agentId: string; connectionIds: number[]; allowProduction: boolean; enabled: boolean };
+type AgentForm = {
+  agentId: string;
+  connectionIds: number[];
+  levels: Record<number, McpAccessLevel>;
+  allowProduction: boolean;
+  enabled: boolean;
+};
 
 export function McpSettingsPanel() {
   const [config, setConfig] = useState<McpConfig>();
@@ -117,15 +132,17 @@ export function McpSettingsPanel() {
 
   function openCreateAgent() {
     setEditingAgent(undefined);
-    agentForm.setFieldsValue({ agentId: '', connectionIds: [], allowProduction: false, enabled: true });
+    agentForm.setFieldsValue({ agentId: '', connectionIds: [], levels: {}, allowProduction: false, enabled: true });
     setAgentModalOpen(true);
   }
 
   function openEditAgent(agent: McpAgent) {
     setEditingAgent(agent);
+    const restored = grantsToFormValues(agent.grants);
     agentForm.setFieldsValue({
       agentId: agent.agentId,
-      connectionIds: agent.connectionIds,
+      connectionIds: restored.connectionIds,
+      levels: restored.levels,
       allowProduction: agent.allowProduction,
       enabled: agent.enabled
     });
@@ -133,13 +150,14 @@ export function McpSettingsPanel() {
   }
 
   async function saveAgent(values: AgentForm) {
-    const includesProduction = values.connectionIds.some((id) => connectionById.get(id)?.environment === 'prod');
-    if (includesProduction && !values.allowProduction) {
+    const grants = buildAgentGrants(values.connectionIds, values.levels, connectionById);
+    const warnings = agentGrantWarnings(grants, connectionById);
+    if (warnings.production.length > 0 && !values.allowProduction) {
       messageApi.error('选择生产连接时必须开启生产环境权限');
       return;
     }
-    if (includesProduction && values.allowProduction) {
-      const confirmed = await confirmProduction();
+    if (warnings.production.length > 0 || warnings.writable.length > 0) {
+      const confirmed = await confirmProduction(warnings);
       if (!confirmed) return;
     }
     setAgentSaving(true);
@@ -149,7 +167,7 @@ export function McpSettingsPanel() {
           method: 'PUT',
           body: JSON.stringify({
             enabled: values.enabled,
-            connectionIds: values.connectionIds,
+            grants,
             allowProduction: values.allowProduction
           })
         });
@@ -159,7 +177,7 @@ export function McpSettingsPanel() {
           method: 'POST',
           body: JSON.stringify({
             agentId: values.agentId,
-            connectionIds: values.connectionIds,
+            grants,
             allowProduction: values.allowProduction
           })
         });
@@ -212,11 +230,28 @@ export function McpSettingsPanel() {
     });
   }
 
-  function confirmProduction() {
+  /**
+   * 高风险授权的二次确认。
+   *
+   * 写档位单独点名：把写能力交给一个自动化 Agent 和交给一个人不是一回事，它不会在回车前停顿。
+   * 生产库上的写操作在执行时仍需回传连接名确认，但那道关卡对 Agent 来说算不上阻力 ——
+   * 真正的把关就在这里。
+   */
+  function confirmProduction(warnings: { production: string[]; writable: string[] }) {
     return new Promise<boolean>((resolve) => {
       modal.confirm({
-        title: '确认授权生产数据库',
-        content: '该 Agent 将能够查询所选生产连接。请确认该 Agent 确实需要这些生产数据访问权限。',
+        title: warnings.writable.length > 0 ? '确认授予写权限' : '确认授权生产数据库',
+        content: (
+          <Space orientation="vertical" size={4}>
+            {warnings.writable.length > 0 && (
+              <Text>该 Agent 将能够修改以下连接的数据：{warnings.writable.join('、')}。</Text>
+            )}
+            {warnings.production.length > 0 && (
+              <Text>其中涉及生产连接：{warnings.production.join('、')}。</Text>
+            )}
+            <Text type="secondary">请确认该 Agent 确实需要这些权限。授权即时生效。</Text>
+          </Space>
+        ),
         okText: '确认授权',
         okButtonProps: { danger: true },
         onOk: () => resolve(true),
@@ -249,10 +284,17 @@ export function McpSettingsPanel() {
       title: '连接权限',
       render: (_: unknown, agent: McpAgent) => (
         <Space size={[4, 4]} wrap>
-          {agent.connectionIds.length === 0 && <Text type="secondary">无授权</Text>}
-          {agent.connectionIds.map((id) => {
-            const connection = connectionById.get(id);
-            return <Tag key={id} color={connection?.environment === 'prod' ? 'red' : 'blue'}>{connection?.name || `#${id}`}</Tag>;
+          {agent.grants.length === 0 && <Text type="secondary">无授权</Text>}
+          {agent.grants.map((grant) => {
+            const connection = connectionById.get(grant.connectionId);
+            const name = connection?.name || `#${grant.connectionId}`;
+            // 档位比环境更值得用颜色强调：写权限才是这份授权真正的风险面。
+            const color = mcpAccessLevelColor(grant.accessLevel) || (connection?.environment === 'prod' ? 'red' : 'blue');
+            return (
+              <Tag key={grant.connectionId} color={color}>
+                {name} · {MCP_ACCESS_LEVEL_LABELS[grant.accessLevel]}
+              </Tag>
+            );
           })}
         </Space>
       )
@@ -401,7 +443,7 @@ export function McpSettingsPanel() {
           form={agentForm}
           layout="vertical"
           onFinish={(values) => void saveAgent(values)}
-          initialValues={{ connectionIds: [], allowProduction: false, enabled: true }}
+          initialValues={{ connectionIds: [], levels: {}, allowProduction: false, enabled: true }}
         >
           <Form.Item
             name="agentId"
@@ -420,6 +462,41 @@ export function McpSettingsPanel() {
               }))}
               placeholder="选择允许 Agent 访问的连接"
             />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(before, after) => before.connectionIds !== after.connectionIds}>
+            {({ getFieldValue }) => {
+              const selected: number[] = getFieldValue('connectionIds') || [];
+              if (selected.length === 0) return null;
+              return (
+                <Form.Item label="访问档位" extra="档位按连接单独授予；只读连接只能是只读。写档位仍受生产确认、未限定范围写确认与审计约束。">
+                  <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                    {selected.map((connectionId) => {
+                      const connection = connectionById.get(connectionId);
+                      const options = allowedLevelsFor(connection);
+                      return (
+                        <Space key={connectionId} size={8} wrap>
+                          <Tag color={connection?.environment === 'prod' ? 'red' : 'blue'}>
+                            {connection?.name || `#${connectionId}`}
+                          </Tag>
+                          <Form.Item name={['levels', String(connectionId)]} noStyle initialValue="READ_ONLY">
+                            <Select
+                              size="small"
+                              style={{ minWidth: 200 }}
+                              disabled={options.length === 1}
+                              options={options.map((level) => ({
+                                value: level,
+                                label: `${MCP_ACCESS_LEVEL_LABELS[level]} · ${MCP_ACCESS_LEVEL_HINTS[level]}`
+                              }))}
+                            />
+                          </Form.Item>
+                          {connection?.readonly && <Text type="secondary">只读连接</Text>}
+                        </Space>
+                      );
+                    })}
+                  </Space>
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           <Form.Item name="allowProduction" label="允许生产环境" valuePropName="checked">
             <Switch checkedChildren="允许" unCheckedChildren="禁止" />

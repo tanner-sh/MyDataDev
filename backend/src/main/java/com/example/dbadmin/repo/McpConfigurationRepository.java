@@ -1,5 +1,6 @@
 package com.example.dbadmin.repo;
 
+import com.example.dbadmin.mcp.McpAccessLevel;
 import com.example.dbadmin.mcp.McpRuntimeConfig;
 import com.example.dbadmin.mcp.McpRuntimeConfig.Agent;
 import com.example.dbadmin.mcp.McpRuntimeConfig.Settings;
@@ -99,14 +100,24 @@ public class McpConfigurationRepository {
                     rs.getTimestamp("updated_at").toInstant()
             ));
         });
-        jdbc.query("SELECT agent_id, connection_id FROM mcp_agent_connection ORDER BY agent_id, connection_id", rs -> {
+        jdbc.query("SELECT agent_id, connection_id, access_level FROM mcp_agent_connection ORDER BY agent_id, connection_id", rs -> {
             MutableAgent agent = agents.get(rs.getLong("agent_id"));
-            if (agent != null) agent.connectionIds.add(rs.getLong("connection_id"));
+            // 未知档位按只读处理：读到一个不认识的值时降级永远比升级安全。
+            if (agent != null) agent.connectionLevels.put(rs.getLong("connection_id"), level(rs.getString("access_level")));
         });
         return agents.values().stream().map(MutableAgent::toRecord).toList();
     }
 
-    public long insertAgent(String agentId, String keyHash, boolean enabled, boolean allowProduction, Set<Long> connectionIds) {
+    private static McpAccessLevel level(String value) {
+        try {
+            return McpAccessLevel.parse(value);
+        } catch (IllegalArgumentException unknown) {
+            return McpAccessLevel.READ_ONLY;
+        }
+    }
+
+    public long insertAgent(String agentId, String keyHash, boolean enabled, boolean allowProduction,
+                            Map<Long, McpAccessLevel> connectionLevels) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement("""
@@ -127,16 +138,16 @@ public class McpConfigurationRepository {
                 .findFirst()
                 .orElse(null);
         if (id == null) throw new IllegalStateException("无法获取新建 MCP Agent ID");
-        replaceAgentConnections(id.longValue(), connectionIds);
+        replaceAgentConnections(id.longValue(), connectionLevels);
         return id.longValue();
     }
 
-    public void updateAgent(long id, boolean enabled, boolean allowProduction, Set<Long> connectionIds) {
+    public void updateAgent(long id, boolean enabled, boolean allowProduction, Map<Long, McpAccessLevel> connectionLevels) {
         int updated = jdbc.update("""
                 UPDATE mcp_agent SET enabled = ?, allow_production = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
                 """, enabled, allowProduction, id);
         if (updated == 0) throw new IllegalArgumentException("MCP Agent 不存在");
-        replaceAgentConnections(id, connectionIds);
+        replaceAgentConnections(id, connectionLevels);
     }
 
     public void updateAgentKey(long id, String keyHash) {
@@ -150,11 +161,11 @@ public class McpConfigurationRepository {
         }
     }
 
-    private void replaceAgentConnections(long agentId, Set<Long> connectionIds) {
+    private void replaceAgentConnections(long agentId, Map<Long, McpAccessLevel> connectionLevels) {
         jdbc.update("DELETE FROM mcp_agent_connection WHERE agent_id = ?", agentId);
-        for (Long connectionId : connectionIds) {
-            jdbc.update("INSERT INTO mcp_agent_connection(agent_id, connection_id) VALUES (?, ?)", agentId, connectionId);
-        }
+        connectionLevels.forEach((connectionId, level) -> jdbc.update(
+                "INSERT INTO mcp_agent_connection(agent_id, connection_id, access_level) VALUES (?, ?, ?)",
+                agentId, connectionId, level.name()));
     }
 
     private static final class MutableAgent {
@@ -165,7 +176,7 @@ public class McpConfigurationRepository {
         private final boolean allowProduction;
         private final java.time.Instant createdAt;
         private final java.time.Instant updatedAt;
-        private final Set<Long> connectionIds = new LinkedHashSet<>();
+        private final Map<Long, McpAccessLevel> connectionLevels = new LinkedHashMap<>();
 
         private MutableAgent(long id, String agentId, String keyHash, boolean enabled, boolean allowProduction,
                              java.time.Instant createdAt, java.time.Instant updatedAt) {
@@ -179,7 +190,7 @@ public class McpConfigurationRepository {
         }
 
         private Agent toRecord() {
-            return new Agent(id, agentId, keyHash, enabled, allowProduction, connectionIds, createdAt, updatedAt);
+            return new Agent(id, agentId, keyHash, enabled, allowProduction, connectionLevels, createdAt, updatedAt);
         }
     }
 }

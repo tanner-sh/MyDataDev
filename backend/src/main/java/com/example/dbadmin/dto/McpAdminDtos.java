@@ -46,16 +46,23 @@ public final class McpAdminDtos {
     public record McpStatusUpdateRequest(boolean enabled) {
     }
 
+    /** 一条连接授权：授权本身与它的访问档位是一体的，分开传会出现「授了连接没档位」的中间态。 */
+    public record McpAgentGrant(
+            @NotNull Long connectionId,
+            @NotBlank @Size(max = 20) String accessLevel
+    ) {
+    }
+
     public record McpAgentCreateRequest(
             @NotBlank @Size(max = 64) String agentId,
-            @NotNull @Size(min = 1, max = 200) List<Long> connectionIds,
+            @NotNull @Size(min = 1, max = 200) List<@NotNull McpAgentGrant> grants,
             boolean allowProduction
     ) {
     }
 
     public record McpAgentUpdateRequest(
             boolean enabled,
-            @NotNull @Size(min = 1, max = 200) List<Long> connectionIds,
+            @NotNull @Size(min = 1, max = 200) List<@NotNull McpAgentGrant> grants,
             boolean allowProduction
     ) {
     }
@@ -65,7 +72,7 @@ public final class McpAdminDtos {
             String agentId,
             boolean enabled,
             boolean allowProduction,
-            List<Long> connectionIds,
+            List<McpAgentGrant> grants,
             Instant createdAt,
             Instant updatedAt
     ) {

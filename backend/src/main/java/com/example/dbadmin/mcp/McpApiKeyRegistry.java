@@ -29,7 +29,7 @@ public class McpApiKeyRegistry {
             return Optional.empty();
         }
         return Optional.of(new McpAgentPrincipal(
-                configured.agentId(), configured.connectionIds(), configured.allowProduction()
+                configured.agentId(), configured.connectionLevels(), configured.allowProduction()
         ));
     }
 }

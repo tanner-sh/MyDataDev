@@ -29,7 +29,7 @@ class McpAccessServiceTest {
 
     @Test
     void exposesAllowlistedReadonlyAndWritableNonProductionConnectionsByDefault() {
-        authenticate(new McpAgentPrincipal("agent", Set.of(1L, 2L, 3L), false));
+        authenticate(new McpAgentPrincipal("agent", java.util.Map.of(1L, McpAccessLevel.READ_ONLY, 2L, McpAccessLevel.READ_ONLY, 3L, McpAccessLevel.READ_ONLY), false));
         when(connections.list()).thenReturn(List.of(
                 response(1L, "dev-read", "dev", true),
                 response(2L, "dev-write", "dev", false),
@@ -42,7 +42,7 @@ class McpAccessServiceTest {
 
     @Test
     void permitsExplicitlyAuthorizedProductionConnectionRegardlessOfReadonlyFlag() {
-        authenticate(new McpAgentPrincipal("agent", Set.of(3L), true));
+        authenticate(new McpAgentPrincipal("agent", java.util.Map.of(3L, McpAccessLevel.READ_ONLY), true));
         DbConnection production = model(3L, "prod-write", "prod", false);
         when(connections.require(3L)).thenReturn(production);
 
@@ -52,7 +52,7 @@ class McpAccessServiceTest {
 
     @Test
     void permitsWritableConnectionAndHidesMissingAndUnauthorizedConnectionsBehindSameError() {
-        authenticate(new McpAgentPrincipal("agent", Set.of(1L, 2L), false));
+        authenticate(new McpAgentPrincipal("agent", java.util.Map.of(1L, McpAccessLevel.READ_ONLY, 2L, McpAccessLevel.READ_ONLY), false));
         DbConnection writable = model(1L, "write", "dev", false);
         when(connections.require(1L)).thenReturn(writable);
         when(connections.require(2L)).thenThrow(new IllegalArgumentException("not found"));
@@ -60,6 +60,32 @@ class McpAccessServiceTest {
         assertThat(access.requireConnection(1L)).isSameAs(writable);
         assertThatThrownBy(() -> access.requireConnection(2L)).hasMessage("连接不可用或当前 MCP agent 未获授权");
         assertThatThrownBy(() -> access.requireConnection(9L)).hasMessage("连接不可用或当前 MCP agent 未获授权");
+    }
+
+    @Test
+    void refusesOperationsAboveTheGrantedLevelAndAcceptsThoseAtOrBelow() {
+        authenticate(new McpAgentPrincipal("agent", java.util.Map.of(
+                1L, McpAccessLevel.READ_ONLY,
+                2L, McpAccessLevel.DATA_WRITE
+        ), false));
+        when(connections.require(1L)).thenReturn(model(1L, "reader", "dev", false));
+        when(connections.require(2L)).thenReturn(model(2L, "writer", "dev", false));
+
+        assertThatThrownBy(() -> access.requireConnection(1L, McpAccessLevel.DATA_WRITE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("只读")
+                .hasMessageContaining("数据读写");
+        // 档位不够与未授权是两种错误：前者该说清缺什么，后者连连接存在与否都不能透露。
+        assertThatThrownBy(() -> access.requireConnection(9L, McpAccessLevel.READ_ONLY))
+                .hasMessageContaining("未获授权");
+        assertThatThrownBy(() -> access.requireConnection(2L, McpAccessLevel.FULL))
+                .hasMessageContaining("完全");
+
+        assertThat(access.requireConnection(2L, McpAccessLevel.DATA_WRITE).id()).isEqualTo(2L);
+        assertThat(access.requireConnection(2L, McpAccessLevel.READ_ONLY).id()).isEqualTo(2L);
+        assertThat(access.levelFor(2L)).isEqualTo(McpAccessLevel.DATA_WRITE);
+        // 未授权连接的档位对外一律显示为只读，不泄露「这条连接你没有」以外的信息。
+        assertThat(access.levelFor(9L)).isEqualTo(McpAccessLevel.READ_ONLY);
     }
 
     private void authenticate(McpAgentPrincipal principal) {

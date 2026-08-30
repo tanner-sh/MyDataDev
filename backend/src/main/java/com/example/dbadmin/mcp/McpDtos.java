@@ -19,7 +19,9 @@ public final class McpDtos {
             String environment,
             boolean readonly,
             boolean tableBrowse,
-            boolean explain
+            boolean explain,
+            /** 本 agent 在这条连接上的档位：READ_ONLY / DATA_WRITE / FULL。 */
+            String accessLevel
     ) {
     }
 
@@ -80,6 +82,17 @@ public final class McpDtos {
             String navigationMode,
             String nextCursor,
             boolean hasMore,
+            boolean truncated
+    ) {
+    }
+
+    /** 写操作的结果。写语句通常没有结果集，受影响行数才是调用方要的东西。 */
+    public record ExecuteResult(
+            String statementKind,
+            int updatedRows,
+            long elapsedMs,
+            List<ResultColumn> columns,
+            List<List<Object>> rows,
             boolean truncated
     ) {
     }
