@@ -277,8 +277,9 @@ public class BackupService {
                             "COMPLETED", backup.size(), backup.size(), false, storageProfile.type(), storageProfile.id(),
                             storageProfile.name(), objectKey, null));
                 } else {
-                    historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", backup.size(), backup.size(), message,
+                    boolean completed = historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", backup.size(), backup.size(), message,
                             null, backup.size(), checksum, Instant.now(), storageProfile.type(), storageProfile.id(), objectKey, null);
+                    if (!completed) throw new InterruptedException("备份已取消。");
                 }
                 repository.updateStatus(id, "SUCCESS", message, null, backup.size(), storageProfile.type(), storageProfile.id(), objectKey);
                 Files.deleteIfExists(backup.path());
@@ -326,7 +327,15 @@ public class BackupService {
                     fileFormat(task.backupMethod()), normalizeBackupMethod(task.backupMethod()), connection.dbType(), checksum,
                     "COMPLETED", 1L, 1L, false));
         } else {
-            historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", 1, 1L, message, filePath, backup.size(), checksum, Instant.now());
+            boolean completed = historyRepository.updateExecution(executionId, "SUCCESS", "COMPLETED", 1, 1L, message,
+                    filePath, backup.size(), checksum, Instant.now());
+            if (!completed) {
+                Files.deleteIfExists(backup.path());
+                historyRepository.updateExecution(executionId, "CANCELLED", "CANCELLED", 0, 1L,
+                        "备份已取消。", null, null, null, Instant.now());
+                repository.updateStatus(id, "CANCELLED", "备份已取消。");
+                throw new InterruptedException("备份已取消。");
+            }
         }
         updateStatus(id, "SUCCESS", message, filePath, backup.size());
         audit.onConnection(actor, "BACKUP_TASK_RUN", task.connectionId(), "backup:" + task.name(), message);
@@ -492,7 +501,9 @@ public class BackupService {
                     .orElseThrow(() -> new IllegalStateException("备份使用的文件服务配置已不存在。"));
             if (!profile.enabled()) throw new ApiProblemException(HttpStatus.CONFLICT, "STORAGE_PROFILE_DISABLED", "文件服务已停用，不能重新上传。");
             if (coordinator.isRunning(taskId)) throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请稍后重试。");
-            historyRepository.updateProgress(historyId, "QUEUED", "UPLOAD_RETRY_QUEUED", 0, history.fileSize(), "重新上传已进入后台队列。");
+            if (!historyRepository.queueUploadRetry(historyId, value(history.fileSize()), "重新上传已进入后台队列。")) {
+                throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_UPLOAD_NOT_RETRYABLE", "该历史记录状态已变化，请刷新后重试。");
+            }
             try {
                 boolean accepted = coordinator.submit(taskId, () -> { }, () -> retryUploadInternal(task, history, profile, path, actor));
                 if (!accepted) throw new ApiProblemException(HttpStatus.CONFLICT, "BACKUP_ALREADY_RUNNING", "该备份任务正在执行，请稍后重试。");
@@ -518,8 +529,13 @@ public class BackupService {
             long size = storage.size(profile, history.storageObjectKey());
             if (history.fileSize() != null && size != history.fileSize()) throw new IllegalStateException("远端文件大小校验失败。");
             String message = "备份已重新上传至文件服务：" + profile.name();
-            historyRepository.updateExecution(history.id(), "SUCCESS", "COMPLETED", size, size, message, null, size,
+            boolean completed = historyRepository.updateExecution(history.id(), "SUCCESS", "COMPLETED", size, size, message, null, size,
                     history.checksumSha256(), history.finishedAt(), profile.type(), profile.id(), history.storageObjectKey(), null);
+            if (!completed) {
+                try { storage.delete(profile, history.storageObjectKey()); }
+                catch (Exception cleanupError) { log.warn("Unable to remove cancelled retry upload history={}", history.id(), cleanupError); }
+                return;
+            }
             Files.deleteIfExists(path);
             refreshTaskSummary(task.id());
             audit.onConnection(actor, "BACKUP_UPLOAD_RETRY_SUCCESS", task.connectionId(), "backup:" + task.name(), "history=" + history.id());

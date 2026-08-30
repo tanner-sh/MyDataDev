@@ -115,28 +115,42 @@ public class BackupHistoryRepository {
         return jdbc.query("SELECT * FROM backup_history WHERE connection_id = ? ORDER BY finished_at DESC, id DESC LIMIT ? OFFSET ?", mapper, connectionId, limit, offset);
     }
 
-    public void updateExecution(long id, String status, String phase, long current, Long total, String message,
-                                String filePath, Long fileSize, String checksum, Instant finishedAt) {
-        updateExecution(id, status, phase, current, total, message, filePath, fileSize, checksum, finishedAt,
+    public boolean updateExecution(long id, String status, String phase, long current, Long total, String message,
+                                   String filePath, Long fileSize, String checksum, Instant finishedAt) {
+        return updateExecution(id, status, phase, current, total, message, filePath, fileSize, checksum, finishedAt,
                 filePath == null ? null : "LOCAL", null, null, null);
     }
 
-    public void updateExecution(long id, String status, String phase, long current, Long total, String message,
-                                String filePath, Long fileSize, String checksum, Instant finishedAt,
-                                String storageType, Long storageProfileId, String storageObjectKey, Instant stagingExpiresAt) {
-        jdbc.update("""
+    public boolean updateExecution(long id, String status, String phase, long current, Long total, String message,
+                                   String filePath, Long fileSize, String checksum, Instant finishedAt,
+                                   String storageType, Long storageProfileId, String storageObjectKey, Instant stagingExpiresAt) {
+        int updated = jdbc.update("""
                 UPDATE backup_history
                 SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ?, file_path = ?,
                     file_size = ?, checksum_sha256 = ?, finished_at = ?, storage_type = ?, storage_profile_id = ?,
                     storage_object_key = ?, staging_expires_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('QUEUED','RUNNING')
+                  AND (? <> 'SUCCESS' OR cancel_requested = FALSE)
                 """, status, phase, current, total, message, filePath, fileSize, checksum, timestamp(finishedAt),
-                storageType, storageProfileId, storageObjectKey, timestamp(stagingExpiresAt), id);
+                storageType, storageProfileId, storageObjectKey, timestamp(stagingExpiresAt), id, status);
+        return updated > 0;
     }
 
-    public void updateProgress(long id, String status, String phase, long current, Long total, String message) {
-        jdbc.update("UPDATE backup_history SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ? WHERE id = ?",
-                status, phase, current, total, message, id);
+    public boolean updateProgress(long id, String status, String phase, long current, Long total, String message) {
+        return jdbc.update("""
+                UPDATE backup_history SET status = ?, phase = ?, progress_current = ?, progress_total = ?, message = ?
+                WHERE id = ? AND status IN ('QUEUED','RUNNING') AND cancel_requested = FALSE
+                """, status, phase, current, total, message, id) > 0;
+    }
+
+    /** 上传失败记录只有通过这个入口才能重新进入活动态；同时清掉上一轮的取消标记。 */
+    public boolean queueUploadRetry(long id, long total, String message) {
+        return jdbc.update("""
+                UPDATE backup_history
+                SET status = 'QUEUED', phase = 'UPLOAD_RETRY_QUEUED', progress_current = 0,
+                    progress_total = ?, message = ?, cancel_requested = FALSE
+                WHERE id = ? AND status = 'FAILED' AND phase = 'UPLOAD_FAILED'
+                """, total, message, id) > 0;
     }
 
     public List<BackupHistory> findExpiredStaging(Instant cutoff, int limit) {
@@ -152,7 +166,7 @@ public class BackupHistoryRepository {
     }
 
     public void requestCancel(long id) {
-        jdbc.update("UPDATE backup_history SET cancel_requested = TRUE WHERE id = ?", id);
+        jdbc.update("UPDATE backup_history SET cancel_requested = TRUE WHERE id = ? AND status IN ('QUEUED','RUNNING')", id);
     }
 
     public List<BackupHistory> findSuccessfulByTaskId(long taskId) {
