@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLoading } from './components/PanelState';
+import { PanelEmpty, PanelLoading } from './components/PanelState';
 import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
@@ -117,6 +117,7 @@ const SqlWorkspace = lazy(loadSqlWorkspace);
 // Monaco 是全站最大的块。SqlEditorSurface 只在用户点进编辑器时才 import 它，所以不预取的话
 // 那次点击要等 600+ KiB 下载完；这里在首屏空闲时先取回来。
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
+const ErDiagram = lazy(() => import('./components/ErDiagram').then((module) => ({ default: module.ErDiagram })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
 export default function App() {
@@ -152,7 +153,7 @@ export default function App() {
   const [backupTaskPage, setBackupTaskPage] = useState(0);
   const [backupTaskHasMore, setBackupTaskHasMore] = useState(false);
   const [connectionEditor, setConnectionEditor] = useState(CLOSED_CONNECTION_EDITOR);
-  const [mode, setMode] = useState<'sql' | 'table' | 'object'>('sql');
+  const [mode, setMode] = useState<'sql' | 'table' | 'object' | 'diagram'>('sql');
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [activeObjectTarget, setActiveObjectTarget] = useState<DbObject | null>(null);
   const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
@@ -2820,6 +2821,8 @@ export default function App() {
     applyCommittedResultEdits(request.changes);
     await refreshActiveSqlResult();
   });
+  const openDiagramEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('diagram'), '打开 ER 图'));
+  const returnFromDiagramEvent = useStableEvent(() => setMode('sql'));
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
   const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
@@ -2931,6 +2934,7 @@ export default function App() {
       activeObject={explorerActiveObject}
       namespaceLabel={namespaceLabel}
       onRefresh={refreshExplorer}
+      onOpenDiagram={openDiagramEvent}
       onClose={closeMobileExplorer}
       onOpenConnections={openConnectionsFromExplorer}
       onSchemaChange={changeExplorerSchema}
@@ -3101,6 +3105,16 @@ export default function App() {
                 foreignKeys={tableForeignKeys}
                 onFollowRelation={followRelationEvent}
               />
+            ) : mode === 'diagram' ? (
+              <div className="er-diagram-workspace">
+                <header className="er-diagram-workspace-header">
+                  <Text strong>ER 图 · {activeSqlSchema || selected?.name}</Text>
+                  <Button size="small" onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
+                </header>
+                {selected
+                  ? <ErDiagram connectionId={selected.id} schemaName={activeSqlSchema} />
+                  : <PanelEmpty title="未选择连接" description="选择一个数据库连接后才能绘制 ER 图。" />}
+              </div>
             ) : (
               <ObjectDetailWorkspace
                 connectionId={selected?.id}

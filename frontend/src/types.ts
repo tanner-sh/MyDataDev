@@ -564,6 +564,35 @@ export type AuditEvent = {
 export type AuditEventPage = { items: AuditEvent[]; page: number; pageSize: number; hasMore: boolean };
 
 export type AuditFacets = { actors: string[]; actions: string[] };
+/** ER 图数据。只包含参与关系的列，完整列定义在对象详情里。 */
+export type DiagramColumn = {
+  name: string;
+  type: string;
+  nullable: boolean;
+  primaryKey: boolean;
+  foreignKey: boolean;
+};
+export type DiagramTable = {
+  schemaName: string;
+  name: string;
+  keyColumns: DiagramColumn[];
+  columnCount: number;
+};
+export type DiagramRelation = {
+  constraintName: string | null;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+};
+export type SchemaDiagram = {
+  schemaName: string;
+  tables: DiagramTable[];
+  relations: DiagramRelation[];
+  totalTables: number;
+  truncated: boolean;
+};
+
 export type AuditChainStatus = { valid: boolean; checkedEvents: number; firstInvalidId?: number; anchorHash?: string; headHash?: string; complete: boolean; nextId?: number };
 export type AuditAlertStatus = { enabled: boolean; webhookConfigured: boolean; signed: boolean; cooldownSeconds: number; actions: string[] };
 

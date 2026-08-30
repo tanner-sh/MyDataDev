@@ -21,8 +21,10 @@ import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleRequest;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleResponse;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectPage;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectTemplateResponse;
+import com.example.dbadmin.dto.SchemaDiagramDtos.SchemaDiagram;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.ObjectSearchService;
+import com.example.dbadmin.service.SchemaDiagramService;
 import com.example.dbadmin.service.SchemaObjectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -33,13 +35,15 @@ public class MetadataController {
     private final MetadataService service;
     private final SchemaObjectService schemaObjects;
     private final ObjectSearchService objectSearch;
+    private final SchemaDiagramService diagrams;
     private final ConnectionAccessService access;
 
     public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch,
-                              ConnectionAccessService access) {
+                              SchemaDiagramService diagrams, ConnectionAccessService access) {
         this.service = service;
         this.schemaObjects = schemaObjects;
         this.objectSearch = objectSearch;
+        this.diagrams = diagrams;
         this.access = access;
     }
 
@@ -135,6 +139,17 @@ public class MetadataController {
     public ObjectRelations relations(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
         view(connectionId);
         return service.relations(connectionId, schemaName, objectName, refresh);
+    }
+
+    /** Schema 级 ER 图。只读，只返回参与关系的列；表数超过上限时按 truncated 告知调用方。 */
+    @GetMapping("/{connectionId}/diagram")
+    public SchemaDiagram diagram(
+            @PathVariable long connectionId,
+            @RequestParam(required = false) String schemaName,
+            @RequestParam(required = false) Integer limit
+    ) throws Exception {
+        view(connectionId);
+        return diagrams.build(connectionId, schemaName, limit);
     }
 
     @PostMapping("/{connectionId}/objects/design/preview")
