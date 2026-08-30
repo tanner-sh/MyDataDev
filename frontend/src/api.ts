@@ -30,7 +30,10 @@ export function apiErrorCode(error: unknown): string | undefined {
   return error instanceof ApiError ? error.code : undefined;
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * 发起带 Session、CSRF 与统一错误处理的 API 请求，并保留原始 Response 给文件下载等场景。
+ */
+export async function apiResponse(path: string, init?: RequestInit): Promise<Response> {
   const isFormData = init?.body instanceof FormData;
   const res = await fetch(`${API}${path}`, {
     ...init,
@@ -51,6 +54,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(typeof err.message === 'string' ? err.message : res.statusText, res.status, err);
   }
+  return res;
+}
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await apiResponse(path, init);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }

@@ -3,7 +3,7 @@ import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
-import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
+import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
 import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
@@ -1604,20 +1604,14 @@ export default function App() {
       setSqlLoading(true);
       setSqlCancellable(true);
       try {
-      const response = await fetch(`${API}/sql/export`, {
+      const response = await apiResponse('/sql/export', {
         method: 'POST',
         signal: controller.signal,
         headers: {
-          'Content-Type': 'application/json',
-          'X-User': 'admin',
           ...productionConfirmationHeaders(productionConfirmation)
         },
         body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts })
       });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(err.message || response.statusText);
-      }
       const blob = await response.blob();
       downloadBlob(blob, `query-result-${timestamp()}.${format}`);
       const rowLimit = response.headers.get('x-export-row-limit') || '10000';
