@@ -91,7 +91,7 @@ const config: ForgeConfig = {
           productName: 'MyDataDev',
           genericName: 'Database Workbench',
           bin: 'MyDataDev',
-          license: 'Proprietary',
+          license: 'Apache-2.0',
           categories: ['Development', 'Database'],
           icon: path.join(directory, 'assets', 'icon.png')
         }

@@ -1,0 +1,52 @@
+MyDataDev
+Copyright 2026 MyDataDev contributors
+
+本产品包含由 MyDataDev 贡献者开发的软件，依据 Apache License 2.0 授权
+（见同目录下的 LICENSE 文件）。
+
+================================================================================
+关于随发行包分发的第三方 JDBC 驱动
+================================================================================
+
+本项目自身采用 Apache License 2.0。但为了开箱即用，发行包（桌面安装包与
+mydatadev-web.jar）内置了以下第三方 JDBC 驱动，它们各自适用自己的许可条款，
+不受本项目许可证约束：
+
+  Oracle JDBC (ojdbc11, orai18n) 23.5.0.24.07
+      Oracle Free Use Terms and Conditions / OTN License。
+      Oracle 的许可条款对再分发有专门约定。
+
+  达梦 DmJdbcDriver8 8.1.5.45
+      武汉达梦数据库股份有限公司专有许可。
+
+  MySQL Connector/J
+      GPL-2.0 with FOSS License Exception。
+
+  MariaDB Connector/J 3.4.1
+      LGPL-2.1-or-later。
+
+  OceanBase Client 2.4.17
+      LGPL-2.1-or-later。
+
+  Microsoft JDBC Driver for SQL Server 12.8.1
+      MIT License。
+
+  PostgreSQL JDBC Driver
+      BSD-2-Clause。
+
+  SQLite JDBC 3.46.1.0
+      Apache License 2.0。
+
+  ClickHouse JDBC 0.9.7
+      Apache License 2.0。
+
+  H2 Database Engine
+      MPL-2.0 or EPL-1.0（双许可）。
+
+如果你要再分发本项目的构建产物，或将其纳入自己的产品，请自行核对上述各驱动的
+再分发条款 —— 尤其是 Oracle 与达梦这两个专有驱动。若这些条款不适用于你的场景，
+可以从 backend/pom.xml 中移除对应依赖后自行构建；MyDataDev 的数据库方言按运行时
+驱动可用性启用，缺少某个驱动只会让该类型的连接不可用，不影响其余功能。
+
+本项目及其贡献者与 Oracle、达梦、MySQL、MariaDB、Microsoft、ClickHouse 等
+上述任何厂商均无隶属或背书关系。

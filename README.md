@@ -13,6 +13,7 @@
     <img src="https://img.shields.io/badge/Desktop-Electron-47848F?logo=electron&logoColor=white" alt="Electron Desktop" />
     <img src="https://img.shields.io/badge/MCP-Streamable_HTTP-6F42C1" alt="MCP Server" />
     <img src="https://img.shields.io/badge/release-v0.5.0-0A7C42" alt="当前版本 0.5.0" />
+    <img src="https://img.shields.io/badge/license-Apache_2.0-D22128" alt="Apache License 2.0" />
   </p>
 
   <p>
@@ -277,6 +278,13 @@ node scripts/build-web-bundle.mjs
 - [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md)
 - [仓库结构、编码与提交规范](AGENTS.md)
 - [CHANGELOG.md](CHANGELOG.md) — 每个发行版本的新增、变更、修复与升级注意
+- [NOTICE](NOTICE) — 随发行包分发的第三方 JDBC 驱动及其许可条款
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE)。
+
+发行包为开箱即用内置了多个第三方 JDBC 驱动，它们各自适用自己的许可条款，**不受本项目许可证约束** —— 其中 Oracle 与达梦驱动为专有许可。再分发构建产物前请阅读 [NOTICE](NOTICE) 并核对相应条款。
 
 ## 当前状态
 
