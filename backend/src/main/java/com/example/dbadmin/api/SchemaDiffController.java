@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.SchemaDiffRequest;
 import com.example.dbadmin.dto.ApiDtos.SchemaDiffResponse;
 import com.example.dbadmin.service.SchemaDiffService;
@@ -14,9 +16,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/schema-diff")
 public class SchemaDiffController {
     private final SchemaDiffService service;
+    private final ConnectionAccessService access;
 
-    public SchemaDiffController(SchemaDiffService service) {
+    public SchemaDiffController(SchemaDiffService service, ConnectionAccessService access) {
         this.service = service;
+        this.access = access;
     }
 
     /**
@@ -26,6 +30,8 @@ public class SchemaDiffController {
     @PostMapping
     public SchemaDiffResponse compare(@Valid @RequestBody SchemaDiffRequest request,
                                       @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        access.require(request.sourceConnectionId(), ConnectionPermission.VIEW_METADATA);
+        access.require(request.targetConnectionId(), ConnectionPermission.VIEW_METADATA);
         return service.compare(request, actor);
     }
 }

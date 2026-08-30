@@ -23,7 +23,10 @@ class SqlControllerTest {
         ExportService.PreparedExport prepared = constructor.newInstance(Files.createTempFile("controller-export-", ".csv"), "csv", true, 123L);
         when(exports.prepare(1L, "select * from events", "csv", "admin", null, "public", List.of("events")))
                 .thenReturn(prepared);
-        SqlController controller = new SqlController(mock(SqlService.class), exports, mock(SqlTransactionService.class));
+        SqlController controller = new SqlController(
+                mock(SqlService.class), exports, mock(SqlTransactionService.class),
+                mock(com.example.dbadmin.access.ConnectionAccessService.class)
+        );
 
         try {
             var response = controller.export(

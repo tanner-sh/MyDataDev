@@ -3,6 +3,7 @@ package com.example.dbadmin.config;
 import com.example.dbadmin.auth.AuthenticatedActorHeaderFilter;
 import com.example.dbadmin.auth.WebAuthenticationService;
 import com.example.dbadmin.mcp.McpApiKeyAuthenticationFilter;
+import com.example.dbadmin.repo.AuditRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -62,7 +63,8 @@ public class SecurityConfig {
     SecurityFilterChain existingApplicationSecurity(
             HttpSecurity http,
             WebAuthenticationService authenticationService,
-            AuthenticatedActorHeaderFilter actorHeaderFilter
+            AuthenticatedActorHeaderFilter actorHeaderFilter,
+            AuditRepository audit
     ) throws Exception {
         http
                 .cors(cors -> {})
@@ -84,11 +86,19 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.csrfTokenRepository(csrfRepository))
                 .exceptionHandling(errors -> errors
                         .authenticationEntryPoint((request, response, exception) -> writeUnauthorized(response))
-                        .accessDeniedHandler((request, response, exception) -> writeForbidden(response)))
+                        .accessDeniedHandler((request, response, exception) -> {
+                            org.springframework.security.core.Authentication authentication =
+                                    org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                            String actor = authentication == null ? "anonymous" : authentication.getName();
+                            audit.global(actor, "AUTHORIZATION_DENIED", request.getMethod() + " " + request.getRequestURI(),
+                                    "reason=" + exception.getClass().getSimpleName());
+                            writeForbidden(response);
+                        }))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, "/api/auth/status", "/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
-                        .requestMatchers("/api/admin/users/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/api/storage-profiles/**").authenticated()
+                        .requestMatchers("/api/admin/**", "/api/audit/**", "/api/mcp/**", "/api/storage-profiles/**").hasRole("ADMIN")
                         .requestMatchers("/api/**").authenticated()
                         .requestMatchers("/actuator/**", "/h2-console/**").authenticated()
                         .anyRequest().permitAll())

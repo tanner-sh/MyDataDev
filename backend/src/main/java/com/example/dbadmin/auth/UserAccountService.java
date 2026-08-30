@@ -75,6 +75,14 @@ public class UserAccountService {
         }
         if (request.password() != null && !request.password().isBlank()) {
             repository.updatePassword(id, localIdentityProvider.encodePassword(request.password()));
+            audit.global(actor.username(), "USER_PASSWORD_RESET", "user:" + username, "self=" + self);
+        }
+        if (existing.enabled() != request.enabled()) {
+            audit.global(actor.username(), request.enabled() ? "USER_ENABLE" : "USER_DISABLE", "user:" + username, null);
+        }
+        if (!existing.role().equals(role)) {
+            audit.global(actor.username(), "USER_ROLE_CHANGE", "user:" + username,
+                    "from=" + existing.role() + ", to=" + role);
         }
         audit.global(actor.username(), "USER_UPDATE", "user:" + username,
                 "role=" + role + ", enabled=" + request.enabled() + ", passwordReset=" + (request.password() != null && !request.password().isBlank()));

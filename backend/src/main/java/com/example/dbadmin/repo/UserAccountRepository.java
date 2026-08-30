@@ -96,6 +96,8 @@ public class UserAccountRepository {
     }
 
     public void delete(long id) {
+        // grantee_id 是 USER/GROUP 共用的多态字段，无法用外键级联用户授权，需显式清理。
+        jdbc.update("DELETE FROM connection_access_grant WHERE grantee_type = 'USER' AND grantee_id = ?", id);
         int changed = jdbc.update("DELETE FROM app_user WHERE id = ?", id);
         if (changed == 0) throw new IllegalArgumentException("用户不存在");
     }

@@ -17,6 +17,8 @@ export type Connection = {
   /** SSH 隧道配置摘要；后端只回传「有没有配」，不回传任何密钥。 */
   ssh?: ConnectionSsh;
   capabilities: DatabaseCapabilities;
+  /** 当前登录用户在这条连接上的服务端权限。 */
+  permissions?: import('./accessControl').ConnectionPermission[];
 };
 
 export type ConnectionSshAuthMode = 'PASSWORD' | 'PRIVATE_KEY';
@@ -549,6 +551,10 @@ export type AuditEvent = {
   target?: string;
   detail?: string;
   detailTruncated: boolean;
+  remoteAddress?: string;
+  forwardedFor?: string;
+  userAgent?: string;
+  requestId?: string;
   createdAt: string;
 };
 

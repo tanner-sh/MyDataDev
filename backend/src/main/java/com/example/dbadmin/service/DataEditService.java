@@ -353,7 +353,16 @@ public class DataEditService {
                 connection.setAutoCommit(previousAutoCommit);
             }
             List<String> previews = operations.stream().map(PreparedOperation::previewSql).toList();
-            audit.onConnection(actor, "DATA_COMMIT", request.connectionId(), "table:" + request.tableName(), String.join("\n", previews));
+            java.util.List<com.example.dbadmin.dto.ApiDtos.RowChange> submittedChanges = request.changes() == null
+                    ? java.util.List.of() : request.changes();
+            java.util.Map<String, Long> changeCounts = submittedChanges.stream().collect(java.util.stream.Collectors.groupingBy(
+                    change -> change.type() == null ? "UNKNOWN" : change.type().trim().toUpperCase(java.util.Locale.ROOT),
+                    java.util.LinkedHashMap::new,
+                    java.util.stream.Collectors.counting()
+            ));
+            // 审计只保留变更类型和行数，不把单元格值或带字面量的 SQL 复制到元数据库。
+            audit.onConnection(actor, "DATA_COMMIT", request.connectionId(), "table:" + request.tableName(),
+                    "schema=" + request.schemaName() + ", changes=" + changeCounts + ", affectedRows=" + affected);
             return new DataCommitResponse(previews, affected);
         }
     }

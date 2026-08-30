@@ -60,6 +60,7 @@ import { RestoreCenter } from './RestoreCenter';
 import { nativeToolForBackup, requestedToolPath } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
 import { StorageProfilePanel } from './StorageProfilePanel';
+import { isAuthenticationEnabled, isCurrentUserAdmin } from '../auth';
 
 const { Text } = Typography;
 const TARGET_PAGE_SIZE = 30;
@@ -115,6 +116,7 @@ export function BackupPanel(props: BackupPanelProps) {
   const [nativeToolsError, setNativeToolsError] = useState('');
   const [storageProfiles, setStorageProfiles] = useState<StorageProfile[]>([]);
   const [storageProfilesLoading, setStorageProfilesLoading] = useState(false);
+  const canManageStorageProfiles = !isAuthenticationEnabled() || isCurrentUserAdmin();
 
   const loadStorageProfiles = useCallback(async () => {
     setStorageProfilesLoading(true);
@@ -151,7 +153,7 @@ export function BackupPanel(props: BackupPanelProps) {
       { key: 'tasks', label: '备份任务', children: <BackupTasksPanel {...props} storageProfiles={storageProfiles} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
       { key: 'history', label: '备份历史', children: <BackupHistoryCenter selected={props.selected} onRestore={(history) => { setRestoreHistory(history); setActiveTab('restore'); }} /> },
       { key: 'restore', label: '恢复中心', children: <RestoreCenter connections={props.connections} selected={props.selected} initialHistory={restoreHistory} nativeTools={nativeTools} nativeToolsLoading={nativeToolsLoading} nativeToolsError={nativeToolsError} onRefreshNativeTools={loadNativeTools} /> },
-      { key: 'storage', label: '文件服务', children: <StorageProfilePanel profiles={storageProfiles} loading={storageProfilesLoading} onReload={loadStorageProfiles} /> }
+      ...(canManageStorageProfiles ? [{ key: 'storage', label: '文件服务', children: <StorageProfilePanel profiles={storageProfiles} loading={storageProfilesLoading} onReload={loadStorageProfiles} /> }] : [])
     ]} />
   </div>;
 }

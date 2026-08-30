@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.ActiveOperations;
 import com.example.dbadmin.dto.ApiDtos.RestoreJobPage;
 import com.example.dbadmin.dto.ApiDtos.RestorePreflightRequest;
@@ -33,13 +35,16 @@ public class RestoreController {
     private final BackupHistoryRepository histories;
     private final SqlFileExecutionRepository sqlFiles;
     private final BackgroundTaskStream stream;
+    private final ConnectionAccessService access;
 
     public RestoreController(RestoreService service, BackupHistoryRepository histories,
-                             SqlFileExecutionRepository sqlFiles, BackgroundTaskStream stream) {
+                             SqlFileExecutionRepository sqlFiles, BackgroundTaskStream stream,
+                             ConnectionAccessService access) {
         this.service = service;
         this.histories = histories;
         this.sqlFiles = sqlFiles;
         this.stream = stream;
+        this.access = access;
     }
 
     @PostMapping(value = "/uploads", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
@@ -47,17 +52,22 @@ public class RestoreController {
                                 @RequestParam String filename,
                                 @RequestParam String fileFormat,
                                 @RequestParam(required = false) String sourceDbType) throws Exception {
+        access.requireAnyConnection(ConnectionPermission.BACKUP_RESTORE);
         return service.uploadStream(request.getInputStream(), filename, fileFormat, sourceDbType, request.getContentLengthLong());
     }
 
     @PostMapping("/preflight")
     public RestorePreflightResponse preflight(@Valid @RequestBody RestorePreflightRequest request) throws Exception {
+        access.require(request.targetConnectionId(), ConnectionPermission.BACKUP_RESTORE);
+        access.requireRestoreSource(request.source());
         return service.preflight(request);
     }
 
     @PostMapping
     public ResponseEntity<RestoreJob> start(@Valid @RequestBody RestoreStartRequest request,
                                             @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        access.require(request.targetConnectionId(), ConnectionPermission.BACKUP_RESTORE);
+        access.requireRestoreSource(request.source());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.start(request, actor));
     }
 
@@ -65,17 +75,20 @@ public class RestoreController {
     public RestoreJobPage list(@RequestParam(required = false) Long connectionId,
                                @RequestParam(required = false) Integer page,
                                @RequestParam(required = false) Integer pageSize) {
+        access.requireScopedConnection(connectionId, ConnectionPermission.BACKUP_RESTORE);
         return service.list(connectionId, page, pageSize);
     }
 
     @GetMapping("/{id}")
     public RestoreJob get(@PathVariable long id) {
+        access.requireRestoreJob(id);
         return service.get(id);
     }
 
     @PostMapping("/{id}/cancel")
     public RestoreJob cancel(@PathVariable long id,
                              @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        access.requireRestoreJob(id);
         return service.cancel(id, actor);
     }
 
@@ -86,6 +99,7 @@ public class RestoreController {
      */
     @GetMapping("/operations/active")
     public ActiveOperations active(@RequestParam(required = false) Long connectionId) {
+        access.requireScopedConnection(connectionId, ConnectionPermission.BACKUP_RESTORE);
         return service.active(connectionId, histories.findActive(connectionId), sqlFiles.findActive(connectionId));
     }
 
@@ -95,6 +109,7 @@ public class RestoreController {
      */
     @GetMapping(value = "/operations/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@RequestParam(required = false) Long connectionId) {
+        access.requireScopedConnection(connectionId, ConnectionPermission.BACKUP_RESTORE);
         return stream.subscribe(connectionId);
     }
 }

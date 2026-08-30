@@ -1,5 +1,6 @@
 package com.example.dbadmin.repo;
 
+import com.example.dbadmin.audit.AuditRequestContext;
 import com.example.dbadmin.dto.ApiDtos.AuditEventPage;
 import com.example.dbadmin.dto.ApiDtos.AuditEventResponse;
 import com.example.dbadmin.dto.ApiDtos.AuditFacets;
@@ -66,14 +67,25 @@ public class AuditRepository {
         String safeAction = truncate(action, 80);
         String safeTarget = truncate(target, 500);
         String safeDetail = truncate(detail, 100_000);
+        AuditRequestContext context = AuditRequestContext.current();
+        String remoteAddress = truncate(context == null ? null : context.remoteAddress(), 120);
+        String forwardedFor = truncate(context == null ? null : context.forwardedFor(), 500);
+        String userAgent = truncate(context == null ? null : context.userAgent(), 1_000);
+        String requestId = truncate(context == null ? null : context.requestId(), 120);
         // 审计只写不读，挪出请求线程可以省掉一次同步 H2 写；写失败的处理与之前一致。
-        writes.submit(() -> insert(safeActor, safeAction, connectionId, safeTarget, safeDetail));
+        writes.submit(() -> insert(safeActor, safeAction, connectionId, safeTarget, safeDetail,
+                remoteAddress, forwardedFor, userAgent, requestId));
     }
 
-    private void insert(String actor, String action, Long connectionId, String target, String detail) {
+    private void insert(String actor, String action, Long connectionId, String target, String detail,
+                        String remoteAddress, String forwardedFor, String userAgent, String requestId) {
         try {
-            jdbc.update("INSERT INTO audit_log(actor, action, connection_id, target, detail) VALUES (?, ?, ?, ?, ?)",
-                    actor, action, connectionId, target, detail);
+            jdbc.update("""
+                    INSERT INTO audit_log(actor, action, connection_id, target, detail,
+                                          remote_address, forwarded_for, user_agent, request_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, actor, action, connectionId, target, detail,
+                    remoteAddress, forwardedFor, userAgent, requestId);
         } catch (RuntimeException error) {
             // A local observability failure must never make an already-completed
             // remote database operation look failed to the caller.
@@ -144,7 +156,7 @@ public class AuditRepository {
         parameters.add((long) query.page() * query.pageSize());
 
         List<AuditEventResponse> rows = jdbc.query(
-                "SELECT id, actor, action, target, detail, created_at FROM audit_log"
+                "SELECT id, actor, action, target, detail, remote_address, forwarded_for, user_agent, request_id, created_at FROM audit_log"
                         + where + " ORDER BY id DESC LIMIT ? OFFSET ?",
                 (rs, rowNum) -> {
                     String detail = rs.getString("detail");
@@ -157,6 +169,10 @@ public class AuditRepository {
                             rs.getString("target"),
                             truncated ? detail.substring(0, MAX_LISTED_DETAIL_CHARS) : detail,
                             truncated,
+                            rs.getString("remote_address"),
+                            rs.getString("forwarded_for"),
+                            rs.getString("user_agent"),
+                            rs.getString("request_id"),
                             createdAt == null ? "" : createdAt.toInstant().toString()
                     );
                 },

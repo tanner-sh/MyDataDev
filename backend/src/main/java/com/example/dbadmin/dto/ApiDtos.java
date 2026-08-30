@@ -771,6 +771,10 @@ public final class ApiDtos {
             String target,
             String detail,
             boolean detailTruncated,
+            String remoteAddress,
+            String forwardedFor,
+            String userAgent,
+            String requestId,
             String createdAt
     ) {
     }

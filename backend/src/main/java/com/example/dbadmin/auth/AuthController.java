@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import com.example.dbadmin.repo.AuditRepository;
 
 import java.util.List;
 
@@ -27,10 +28,12 @@ import java.util.List;
 @RequestMapping("/api/auth")
 public class AuthController {
     private final WebAuthenticationService authenticationService;
+    private final AuditRepository audit;
     private final HttpSessionSecurityContextRepository contextRepository = new HttpSessionSecurityContextRepository();
 
-    public AuthController(WebAuthenticationService authenticationService) {
+    public AuthController(WebAuthenticationService authenticationService, AuditRepository audit) {
         this.authenticationService = authenticationService;
+        this.audit = audit;
     }
 
     @GetMapping("/status")
@@ -55,11 +58,13 @@ public class AuthController {
                 servletRequest.getRemoteAddr(), request.username(), request.password()
         );
         if (result.locked()) {
+            audit.global("anonymous", "AUTH_LOGIN_FAILED", "user:" + safeUsername(request.username()), "reason=locked");
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .header("Retry-After", Long.toString(result.retryAfterSeconds()))
                     .body(new AuthError("AUTH_LOCKED", "登录失败次数过多，请稍后重试。"));
         }
         if (!result.authenticated()) {
+            audit.global("anonymous", "AUTH_LOGIN_FAILED", "user:" + safeUsername(request.username()), "reason=invalid_credentials");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(new AuthError("INVALID_CREDENTIALS", "用户名或密码错误。"));
         }
@@ -73,12 +78,16 @@ public class AuthController {
         SecurityContextHolder.setContext(context);
         contextRepository.saveContext(context, servletRequest, servletResponse);
         CsrfToken freshToken = (CsrfToken) servletRequest.getAttribute(CsrfToken.class.getName());
+        audit.global(result.identity().username(), "AUTH_LOGIN", "user:" + result.identity().username(),
+                "provider=" + result.identity().provider() + ", role=" + result.identity().role());
         return ResponseEntity.ok(authStatus(true, result.identity(), freshToken == null ? csrfToken : freshToken));
     }
 
     @PostMapping("/logout")
-    public AuthStatus logout(HttpServletRequest request, CsrfToken csrfToken) {
+    public AuthStatus logout(HttpServletRequest request, CsrfToken csrfToken, Authentication authentication) {
         if (!authenticationService.enabled()) return authStatus(true, null, null);
+        WebIdentity current = identity(authentication);
+        if (current != null) audit.global(current.username(), "AUTH_LOGOUT", "user:" + current.username(), null);
         HttpSession session = request.getSession(false);
         if (session != null) session.invalidate();
         SecurityContextHolder.clearContext();
@@ -98,6 +107,11 @@ public class AuthController {
 
     private WebIdentity identity(Authentication authentication) {
         return authentication != null && authentication.getPrincipal() instanceof WebIdentity identity ? identity : null;
+    }
+
+    private String safeUsername(String username) {
+        String normalized = LocalDatabaseIdentityProvider.normalizeUsername(username);
+        return normalized.length() <= 120 ? normalized : normalized.substring(0, 120);
     }
 
     public record LoginRequest(@NotBlank @Size(max = 120) String username, @NotBlank @Size(max = 1_000) String password) {}

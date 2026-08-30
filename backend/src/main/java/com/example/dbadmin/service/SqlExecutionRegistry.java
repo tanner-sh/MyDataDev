@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import org.springframework.stereotype.Component;
 
 import java.sql.Statement;
+import java.util.OptionalLong;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -24,6 +25,12 @@ public class SqlExecutionRegistry {
         if (statement == null) return false;
         statement.statement().cancel();
         return true;
+    }
+
+    public OptionalLong connectionId(String executionId) {
+        if (executionId == null || executionId.isBlank()) return OptionalLong.empty();
+        RunningStatement statement = running.get(executionId);
+        return statement == null ? OptionalLong.empty() : OptionalLong.of(statement.connectionId());
     }
 
     public void unregister(String executionId, Statement statement) {

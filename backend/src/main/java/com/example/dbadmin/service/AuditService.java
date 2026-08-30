@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.dto.ApiDtos.AuditEventPage;
+import com.example.dbadmin.dto.ApiDtos.AuditEventResponse;
 import com.example.dbadmin.dto.ApiDtos.AuditFacets;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.AuditRepository.AuditQuery;
@@ -8,6 +9,9 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -53,6 +57,41 @@ public class AuditService {
         return repository.facets();
     }
 
+    public byte[] exportCsv(
+            String actor,
+            String action,
+            Long connectionId,
+            String keyword,
+            String from,
+            String to,
+            String exportActor
+    ) {
+        List<AuditEventResponse> events = new ArrayList<>();
+        int page = 0;
+        while (events.size() < 10_000) {
+            AuditEventPage batch = list(actor, action, connectionId, keyword, from, to, page, MAX_PAGE_SIZE);
+            events.addAll(batch.items());
+            if (!batch.hasMore()) break;
+            page++;
+        }
+        StringBuilder csv = new StringBuilder("\uFEFFid,createdAt,actor,action,target,detail,remoteAddress,forwardedFor,userAgent,requestId\r\n");
+        for (AuditEventResponse event : events) {
+            csv.append(event.id()).append(',')
+                    .append(csv(event.createdAt())).append(',')
+                    .append(csv(event.actor())).append(',')
+                    .append(csv(event.action())).append(',')
+                    .append(csv(event.target())).append(',')
+                    .append(csv(event.detail())).append(',')
+                    .append(csv(event.remoteAddress())).append(',')
+                    .append(csv(event.forwardedFor())).append(',')
+                    .append(csv(event.userAgent())).append(',')
+                    .append(csv(event.requestId())).append("\r\n");
+        }
+        repository.global(exportActor, "AUDIT_EXPORT", "audit",
+                "rows=" + events.size() + ", capped=" + (events.size() >= 10_000));
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
     public String detail(long id) {
         return Optional.ofNullable(repository.detail(id).orElse(null))
                 .orElseThrow(() -> new IllegalArgumentException("未找到审计记录：" + id));
@@ -72,5 +111,13 @@ public class AuditService {
         if (value == null) return null;
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String csv(String value) {
+        if (value == null) return "";
+        String safe = value;
+        String leadingTrimmed = safe.stripLeading();
+        if (!leadingTrimmed.isEmpty() && "=+-@".indexOf(leadingTrimmed.charAt(0)) >= 0) safe = "'" + safe;
+        return '"' + safe.replace("\"", "\"\"") + '"';
     }
 }

@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionPage;
 import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionStartRequest;
@@ -24,13 +26,16 @@ public class SqlFileExecutionController {
     private final SqlFileExecutionService service;
 
     private final DataImportService dataImports;
+    private final ConnectionAccessService access;
 
     public SqlFileExecutionController(
             SqlFileExecutionService service,
-            DataImportService dataImports
+            DataImportService dataImports,
+            ConnectionAccessService access
     ) {
         this.service = service;
         this.dataImports = dataImports;
+        this.access = access;
     }
 
     @PostMapping(value = "/uploads", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
@@ -40,6 +45,7 @@ public class SqlFileExecutionController {
             @RequestHeader(value = "X-User", required = false) String actor,
             HttpServletRequest request
     ) throws Exception {
+        access.requireAnyAccess(connectionId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(
                 service.upload(connectionId, fileName, request.getContentLengthLong(), request.getInputStream(), actor));
     }
@@ -59,6 +65,7 @@ public class SqlFileExecutionController {
             @RequestHeader(value = "X-User", required = false) String actor,
             HttpServletRequest request
     ) throws Exception {
+        access.require(connectionId, ConnectionPermission.DATA_WRITE);
         try (var input = request.getInputStream()) {
             return ResponseEntity.ok(dataImports.uploadCsv(
                     connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor));
@@ -71,6 +78,7 @@ public class SqlFileExecutionController {
             @RequestBody(required = false) SqlFileExecutionStartRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) throws Exception {
+        access.requireSqlFileExecution(id);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(
                 service.start(id, request == null ? null : request.productionConfirmation(), actor));
     }
@@ -78,16 +86,22 @@ public class SqlFileExecutionController {
     @PostMapping("/{id}/cancel")
     public SqlFileExecutionResponse cancel(@PathVariable long id,
                                            @RequestHeader(value = "X-User", required = false) String actor) {
+        access.requireSqlFileExecution(id);
         return service.cancel(id, actor);
     }
 
     @GetMapping("/{id}")
-    public SqlFileExecutionResponse get(@PathVariable long id) { return service.get(id); }
+    public SqlFileExecutionResponse get(@PathVariable long id) {
+        access.requireSqlFileExecution(id);
+        return service.get(id);
+    }
 
     @GetMapping
     public SqlFileExecutionPage list(@RequestParam(required = false) Long connectionId,
                                      @RequestParam(required = false) Integer page,
                                      @RequestParam(required = false) Integer pageSize) {
+        if (connectionId == null) access.requireScopedConnection(null, ConnectionPermission.QUERY);
+        else access.requireAnyAccess(connectionId);
         return service.list(connectionId, page, pageSize);
     }
 }

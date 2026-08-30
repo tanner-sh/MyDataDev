@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.MessageResponse;
 import com.example.dbadmin.dto.StorageDtos.StorageProfileRequest;
 import com.example.dbadmin.dto.StorageDtos.StorageProfileResponse;
@@ -14,10 +16,17 @@ import java.util.List;
 @RequestMapping("/api/storage-profiles")
 public class StorageProfileController {
     private final StorageProfileService service;
+    private final ConnectionAccessService access;
 
-    public StorageProfileController(StorageProfileService service) { this.service = service; }
+    public StorageProfileController(StorageProfileService service, ConnectionAccessService access) {
+        this.service = service;
+        this.access = access;
+    }
 
-    @GetMapping public List<StorageProfileResponse> list() { return service.list(); }
+    @GetMapping public List<StorageProfileResponse> list() {
+        access.requireAnyConnection(ConnectionPermission.BACKUP_RESTORE);
+        return service.list();
+    }
 
     @PostMapping public StorageProfileResponse create(@Valid @RequestBody StorageProfileRequest request,
                                                        @RequestHeader(value = "X-User", required = false) String actor) {

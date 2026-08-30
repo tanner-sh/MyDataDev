@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.ExportRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatResponse;
@@ -27,15 +29,18 @@ public class SqlController {
     private final SqlService sqlService;
     private final ExportService exportService;
     private final com.example.dbadmin.service.SqlTransactionService transactions;
+    private final ConnectionAccessService access;
 
     public SqlController(
             SqlService sqlService,
             ExportService exportService,
-            com.example.dbadmin.service.SqlTransactionService transactions
+            com.example.dbadmin.service.SqlTransactionService transactions,
+            ConnectionAccessService access
     ) {
         this.sqlService = sqlService;
         this.exportService = exportService;
         this.transactions = transactions;
+        this.access = access;
     }
 
     @PostMapping("/execute")
@@ -44,6 +49,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.requireSql(request.connectionId(), request.sql());
         return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed());
     }
 
@@ -53,6 +59,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.requireSql(request.connectionId(), request.sql());
         return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed());
     }
 
@@ -62,6 +69,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
         return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName());
     }
 
@@ -71,6 +79,7 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
         return sqlService.explain(request.connectionId(), request.sql(), actor, productionConfirmation, request.schemaName());
     }
 
@@ -81,6 +90,7 @@ public class SqlController {
 
     @PostMapping("/executions/{executionId}/cancel")
     public com.example.dbadmin.dto.ApiDtos.MessageResponse cancel(@PathVariable String executionId) throws Exception {
+        access.requireSqlExecution(executionId);
         boolean cancelled = sqlService.cancel(executionId);
         return new com.example.dbadmin.dto.ApiDtos.MessageResponse(cancelled, cancelled ? "已发送取消请求" : "SQL 已结束或不存在");
     }
@@ -91,12 +101,14 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
         return transactions.begin(request.connectionId(), request.schemaName(), actor, productionConfirmation);
     }
 
     /** 页面刷新后要能认回还开着的事务，否则那条连接会一直被占到超时。 */
     @GetMapping("/transactions/active")
     public java.util.Map<String, Object> activeTransaction(@RequestParam long connectionId) {
+        access.require(connectionId, ConnectionPermission.QUERY);
         SqlTransactionResponse active = transactions.active(connectionId);
         return active == null ? java.util.Map.of() : java.util.Map.of("transaction", active);
     }
@@ -107,6 +119,7 @@ public class SqlController {
             @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlTransactionExecuteRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) throws Exception {
+        access.requireTransaction(id, request.sql());
         return transactions.execute(id, request.sql(), request.maxRows(), actor, request.unscopedMutationConfirmed());
     }
 
@@ -115,6 +128,7 @@ public class SqlController {
             @PathVariable String id,
             @RequestHeader(value = "X-User", required = false) String actor
     ) throws Exception {
+        access.requireTransaction(id, null);
         return transactions.finish(id, true, actor);
     }
 
@@ -123,6 +137,7 @@ public class SqlController {
             @PathVariable String id,
             @RequestHeader(value = "X-User", required = false) String actor
     ) throws Exception {
+        access.requireTransaction(id, null);
         return transactions.finish(id, false, actor);
     }
 
@@ -132,11 +147,13 @@ public class SqlController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer limit
     ) {
+        access.require(connectionId, ConnectionPermission.QUERY);
         return sqlService.history(connectionId, keyword, limit);
     }
 
     @PostMapping("/completions")
     public java.util.List<SqlCompletionItem> completions(@Valid @RequestBody SqlCompletionRequest request) {
+        access.require(request.connectionId(), ConnectionPermission.VIEW_METADATA);
         return sqlService.completions(request);
     }
 
@@ -146,6 +163,8 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.EXPORT);
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
         String format = normalizedExportFormat(request.format());
         ExportService.PreparedExport prepared = exportService.prepare(
                 request.connectionId(), request.sql(), format, actor, productionConfirmation,

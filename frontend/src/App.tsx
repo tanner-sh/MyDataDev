@@ -5,7 +5,8 @@ import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typograph
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
-import { isCurrentUserAdmin } from './auth';
+import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
+import type { ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
@@ -33,6 +34,7 @@ import { useSqlHistory } from './hooks/useSqlHistory';
 import {
   MANAGEMENT_SECTIONS,
   isManagementSectionAvailable,
+  isManagementSectionVisible,
   managementSectionLabel,
   resolveManagementSection,
   type ManagementSection
@@ -101,6 +103,7 @@ const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
+const AccessManagementPanel = lazy(() => import('./components/AccessManagementPanel').then((module) => ({ default: module.AccessManagementPanel })));
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
 const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
@@ -390,10 +393,12 @@ export default function App() {
   });
 
   useEffect(() => {
-    if (selected) {
+    if (selected && selected.permissions?.includes('VIEW_METADATA') !== false) {
       loadMetadata(selected, { page: 0 }).catch(() => undefined);
+    } else if (selected) {
+      setMetadata(null);
     }
-  }, [selected?.id]);
+  }, [selected?.id, selected?.permissions]);
 
   useEffect(() => {
     metadataRef.current = metadata;
@@ -511,7 +516,14 @@ export default function App() {
         await sleep(delays[attempt]);
       }
       try {
-        const rows = await api<Connection[]>('/connections');
+        const loadedRows = await api<Connection[]>('/connections');
+        const permissionParams = new URLSearchParams();
+        loadedRows.forEach((connection) => permissionParams.append('connectionIds', String(connection.id)));
+        let permissions: Record<string, ConnectionPermission[]> = {};
+        if (loadedRows.length > 0) {
+          permissions = await api<Record<string, ConnectionPermission[]>>(`/access/me?${permissionParams.toString()}`);
+        }
+        const rows = loadedRows.map((connection) => ({ ...connection, permissions: permissions[String(connection.id)] || [] }));
         setConnections(rows);
         setSelected((current: Connection | null) => {
           const target = resolveSelectedConnection(rows, [
@@ -2721,7 +2733,7 @@ export default function App() {
   // 后台任务徽标点开直接落到备份分区，而不是让用户再从导航里找一次。
   const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
   const openManagement = useStableEvent((section: ManagementSection) =>
-    setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin())));
+    setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions)));
   const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
     // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
     setActiveDrawer(null);
@@ -3136,10 +3148,10 @@ export default function App() {
       >
         <div className="management-shell">
           <nav className="management-nav" aria-label="管理分区">
-            {MANAGEMENT_SECTIONS.filter((section) => !section.requiresAdmin || isCurrentUserAdmin()).map((section) => {
-              const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin());
+            {MANAGEMENT_SECTIONS.filter((section) => isManagementSectionVisible(section.key, isCurrentUserAdmin(), isAuthenticationEnabled())).map((section) => {
+              const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
               return (
-                <Tooltip key={section.key} title={available ? undefined : '请先选择一个数据库连接'}>
+                <Tooltip key={section.key} title={available ? undefined : selected ? '当前连接缺少该功能权限' : '请先选择一个数据库连接'}>
                   <button
                     type="button"
                     className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
@@ -3256,6 +3268,12 @@ export default function App() {
             {activeDrawer === 'users' && isCurrentUserAdmin() && (
               <Suspense fallback={<PanelLoading text="正在加载用户管理…" />}>
                 <UserManagementPanel />
+              </Suspense>
+            )}
+
+            {activeDrawer === 'access' && isCurrentUserAdmin() && (
+              <Suspense fallback={<PanelLoading text="正在加载访问控制…" />}>
+                <AccessManagementPanel connections={connections} />
               </Suspense>
             )}
           </div>

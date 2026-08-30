@@ -1413,6 +1413,18 @@ body.is-resizing-column * {
   font-size: var(--text-sm);
 }
 
+.audit-request-context {
+  display: grid;
+  gap: 2px;
+  margin-top: 7px;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+}
+
+.access-policy-editor .ant-card {
+  max-width: 920px;
+}
+
 .audit-footer {
   display: flex;
   align-items: center;

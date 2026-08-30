@@ -3,6 +3,7 @@ import { PanelEmpty } from './PanelState';
 import { Button, DatePicker, Input, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DownloadOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
+import { API } from '../constants';
 import type { AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
 import { formatHistoryTime, localizeError } from '../utils';
 import {
@@ -100,20 +101,14 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
     }
   }
 
-  function exportVisible() {
-    if (!page?.items.length) return;
-    const header = ['时间', '操作者', '动作', '目标', '详情'];
-    const rows = page.items.map((event) => [
-      event.createdAt,
-      event.actor,
-      `${auditActionLabel(event.action)}(${event.action})`,
-      event.target || '',
-      fullDetail[event.id] ?? event.detail ?? ''
-    ]);
-    const csv = [header, ...rows]
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    downloadBlob(new Blob([`﻿${csv}`], { type: 'text/csv' }), `audit-${Date.now()}.csv`);
+  async function exportAll() {
+    try {
+      const response = await fetch(`${API}/audit/export?${auditRequestParams({ ...query, page: 0 })}`, { credentials: 'include' });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message || '导出失败');
+      downloadBlob(await response.blob(), `audit-${Date.now()}.csv`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '导出审计日志失败');
+    }
   }
 
   const items = page?.items || [];
@@ -123,8 +118,8 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
       <header className="management-section-header">
         <Text strong>审计日志</Text>
         <Space size={4}>
-          <Tooltip title="导出当前页为 CSV">
-            <Button size="small" icon={<DownloadOutlined />} disabled={items.length === 0} onClick={exportVisible}>导出本页</Button>
+          <Tooltip title="按当前筛选导出，最多 10000 条">
+            <Button size="small" icon={<DownloadOutlined />} disabled={items.length === 0} onClick={() => void exportAll()}>导出筛选结果</Button>
           </Tooltip>
           <Tooltip title="刷新">
             <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void load(query)} />
@@ -217,10 +212,16 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
                   {auditTargetLabel(event.target, connectionId ? connectionNames.get(connectionId) : undefined)}
                 </Text>
                 {expanded && detail && (
-                  <pre className="audit-item-detail">
-                    {detail}
-                    {event.detailTruncated && !fullDetail[event.id] ? '\n…（正在加载完整内容）' : ''}
-                  </pre>
+                  <>
+                    <pre className="audit-item-detail">
+                      {detail}
+                      {event.detailTruncated && !fullDetail[event.id] ? '\n…（正在加载完整内容）' : ''}
+                    </pre>
+                    <div className="audit-request-context">
+                      <Text type="secondary">请求 ID：{event.requestId || '—'} · TCP 对端：{event.remoteAddress || '—'}{event.forwardedFor ? ` · X-Forwarded-For：${event.forwardedFor}` : ''}</Text>
+                      {event.userAgent && <Text type="secondary">User-Agent：{event.userAgent}</Text>}
+                    </div>
+                  </>
                 )}
               </article>
             );

@@ -46,6 +46,7 @@ MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理
 | **大 SQL 文件执行** | 上传并在后台执行 SQL 文件，跟踪语句进度、结果统计和失败位置，支持取消与异常任务恢复。 |
 | **只读 MCP Server** | 通过 Agent API Key、连接白名单和生产环境授权，为 AI 客户端提供元数据浏览、表数据浏览、只读查询和执行计划。 |
 | **Web 与桌面双模式** | Web 版内置多用户、管理员/操作员角色和服务端会话，并预留 SSO 身份提供方扩展点；桌面版内置前端、后端和 Java Runtime。 |
+| **连接权限与审计** | Web 管理员可按用户或用户组授予元数据、查询、数据修改、DDL、导出、备份恢复和连接管理权限；登录、拒绝访问、数据浏览、导出与下载均记录请求来源和请求 ID。 |
 
 ### 数据库支持
 
@@ -81,7 +82,7 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 
 打开 <http://localhost:8080>，同一个端口同时提供界面、`/api` 和 `/mcp`。数据写入启动目录下的 `data`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。前后端分离部署可使用同一 Release 中的 `MyDataDev-<version>-frontend-dist.tar.gz`，配置见[Web 发行包部署说明](docs/web-deploy.md)。
 
-`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，初始化完成后可从运行环境移除初始密码。
+`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，用户组和连接授权在“管理 → 访问控制”中维护，初始化完成后可从运行环境移除初始密码。
 
 ### Web 开发模式
 

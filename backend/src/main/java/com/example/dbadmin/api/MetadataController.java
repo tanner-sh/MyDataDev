@@ -1,5 +1,7 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.CompletionCatalogResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
@@ -31,11 +33,14 @@ public class MetadataController {
     private final MetadataService service;
     private final SchemaObjectService schemaObjects;
     private final ObjectSearchService objectSearch;
+    private final ConnectionAccessService access;
 
-    public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch) {
+    public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch,
+                              ConnectionAccessService access) {
         this.service = service;
         this.schemaObjects = schemaObjects;
         this.objectSearch = objectSearch;
+        this.access = access;
     }
 
     @GetMapping("/{connectionId}")
@@ -47,6 +52,7 @@ public class MetadataController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        view(connectionId);
         return service.inspect(connectionId, schema, keyword, page, pageSize, refresh);
     }
 
@@ -58,6 +64,7 @@ public class MetadataController {
             @RequestParam(required = false) String keyword,
             @RequestParam(required = false) Integer limit
     ) throws Exception {
+        view(connectionId);
         return objectSearch.search(connectionId, schema, keyword, limit);
     }
 
@@ -70,6 +77,7 @@ public class MetadataController {
             @RequestParam(required = false) Integer limit,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        view(connectionId);
         String requestedNamespace = namespace == null || namespace.isBlank() ? schema : namespace;
         return service.completionCatalog(connectionId, requestedNamespace, prefix, limit, refresh);
     }
@@ -82,6 +90,7 @@ public class MetadataController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        access.require(connectionId, ConnectionPermission.BACKUP_RESTORE);
         return service.backupTargetNamespaces(connectionId, keyword, page, pageSize, refresh);
     }
 
@@ -94,36 +103,43 @@ public class MetadataController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        access.require(connectionId, ConnectionPermission.BACKUP_RESTORE);
         return service.backupTargetTables(connectionId, namespaceName, keyword, page, pageSize, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/detail")
     public ObjectDetail detail(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        view(connectionId);
         return service.detail(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/ddl")
     public ObjectDdlResponse ddl(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        view(connectionId);
         return service.ddl(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/row-count")
     public ObjectRowCountResponse rowCount(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName) throws Exception {
+        access.require(connectionId, ConnectionPermission.QUERY);
         return service.rowCount(connectionId, schemaName, objectName);
     }
 
     @GetMapping("/{connectionId}/objects/structure")
     public ObjectStructure structure(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        view(connectionId);
         return service.structure(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/relations")
     public ObjectRelations relations(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        view(connectionId);
         return service.relations(connectionId, schemaName, objectName, refresh);
     }
 
     @PostMapping("/{connectionId}/objects/design/preview")
     public TableDesignResponse previewDesign(@PathVariable long connectionId, @Valid @RequestBody TableDesignRequest request) throws Exception {
+        ddlAccess(connectionId);
         return service.previewDesign(connectionId, request);
     }
 
@@ -134,6 +150,7 @@ public class MetadataController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        ddlAccess(connectionId);
         return service.executeDesign(connectionId, request, actor, productionConfirmation);
     }
 
@@ -142,6 +159,7 @@ public class MetadataController {
             @PathVariable long connectionId,
             @Valid @RequestBody TableLifecycleRequest request
     ) throws Exception {
+        ddlAccess(connectionId);
         return service.previewTableLifecycle(connectionId, request);
     }
 
@@ -152,6 +170,7 @@ public class MetadataController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        ddlAccess(connectionId);
         return service.executeTableLifecycle(connectionId, request, actor, productionConfirmation);
     }
 
@@ -165,6 +184,7 @@ public class MetadataController {
             @RequestParam(required = false) Integer pageSize,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        view(connectionId);
         return schemaObjects.list(connectionId, schemaName, kind, keyword, page, pageSize, refresh);
     }
 
@@ -174,6 +194,7 @@ public class MetadataController {
             @RequestParam String objectKey,
             @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
+        view(connectionId);
         return schemaObjects.detail(connectionId, objectKey, refresh);
     }
 
@@ -184,6 +205,7 @@ public class MetadataController {
             @RequestParam(required = false) String schemaName,
             @RequestParam String objectName
     ) {
+        view(connectionId);
         return schemaObjects.template(connectionId, kind, schemaName, objectName);
     }
 
@@ -192,6 +214,7 @@ public class MetadataController {
             @PathVariable long connectionId,
             @Valid @RequestBody SchemaObjectLifecycleRequest request
     ) throws Exception {
+        ddlAccess(connectionId);
         return schemaObjects.preview(connectionId, request);
     }
 
@@ -202,6 +225,7 @@ public class MetadataController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        ddlAccess(connectionId);
         return schemaObjects.execute(connectionId, request, actor, productionConfirmation);
     }
 
@@ -212,6 +236,15 @@ public class MetadataController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
+        access.require(connectionId, ConnectionPermission.DATA_WRITE);
         return schemaObjects.invoke(connectionId, request, actor, productionConfirmation);
+    }
+
+    private void view(long connectionId) {
+        access.require(connectionId, ConnectionPermission.VIEW_METADATA);
+    }
+
+    private void ddlAccess(long connectionId) {
+        access.require(connectionId, ConnectionPermission.DDL);
     }
 }

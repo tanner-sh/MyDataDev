@@ -91,7 +91,24 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   STORAGE_PROFILE_TEST: { label: '测试存储配置', category: 'storage' },
   USER_CREATE: { label: '新建用户', category: 'security' },
   USER_UPDATE: { label: '修改用户', category: 'security' },
-  USER_DELETE: { label: '删除用户', category: 'security', dangerous: true }
+  USER_DELETE: { label: '删除用户', category: 'security', dangerous: true },
+  USER_ENABLE: { label: '启用用户', category: 'security' },
+  USER_DISABLE: { label: '停用用户', category: 'security', dangerous: true },
+  USER_PASSWORD_RESET: { label: '重置用户密码', category: 'security', dangerous: true },
+  USER_ROLE_CHANGE: { label: '修改用户角色', category: 'security', dangerous: true },
+  USER_GROUP_CREATE: { label: '新建用户组', category: 'security' },
+  USER_GROUP_UPDATE: { label: '修改用户组', category: 'security' },
+  USER_GROUP_DELETE: { label: '删除用户组', category: 'security', dangerous: true },
+  CONNECTION_ACCESS_UPDATE: { label: '修改连接权限', category: 'security', dangerous: true },
+  CONNECTION_ACCESS_DENIED: { label: '连接访问被拒绝', category: 'security', dangerous: true },
+  AUTH_LOGIN: { label: '用户登录', category: 'security' },
+  AUTH_LOGIN_FAILED: { label: '登录失败', category: 'security', dangerous: true },
+  AUTH_LOGOUT: { label: '用户退出', category: 'security' },
+  AUTHORIZATION_DENIED: { label: '系统权限被拒绝', category: 'security', dangerous: true },
+  TABLE_VIEW: { label: '查看表数据', category: 'data' },
+  BACKUP_DOWNLOAD: { label: '下载备份', category: 'backup' },
+  BACKUP_HISTORY_DOWNLOAD: { label: '下载备份历史', category: 'backup' },
+  AUDIT_EXPORT: { label: '导出审计日志', category: 'security' }
 };
 
 export function auditActionLabel(action: string): string {

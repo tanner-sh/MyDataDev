@@ -225,13 +225,14 @@ function connectionMenu(
   onDuplicate: (connection: Connection) => void,
   onRequestDelete: () => void
 ): MenuProps {
+  const canAdminister = connection.permissions?.includes('CONNECTION_ADMIN') ?? true;
   return {
     items: [
-      { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing },
-      { key: 'edit', icon: <EditOutlined />, label: '编辑连接' },
-      { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接' },
+      { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing || !canAdminister },
+      { key: 'edit', icon: <EditOutlined />, label: '编辑连接', disabled: !canAdminister },
+      { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接', disabled: !canAdminister },
       { type: 'divider' },
-      { key: 'delete', icon: <DeleteOutlined />, label: '删除连接', danger: true }
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除连接', danger: true, disabled: !canAdminister }
     ],
     onClick: ({ key }) => {
       if (key === 'test') onTest(connection);
