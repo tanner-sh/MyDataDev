@@ -78,6 +78,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   BACKUP_UPLOAD_RETRY_FAILED: { label: '备份上传重试失败', category: 'backup' },
   RESTORE_START: { label: '开始恢复', category: 'restore', dangerous: true },
   RESTORE_CANCEL: { label: '取消恢复', category: 'restore' },
+  RESTORE_UPLOAD_ACCESS_DENIED: { label: '恢复上传文件访问被拒绝', category: 'security', dangerous: true },
   MCP_SQL_QUERY: { label: 'MCP 查询', category: 'mcp' },
   MCP_SQL_EXPLAIN: { label: 'MCP 执行计划', category: 'mcp' },
   MCP_AGENT_CREATE: { label: '新建 MCP Agent', category: 'mcp' },

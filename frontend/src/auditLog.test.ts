@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   auditActionColor,
+  auditActionCategory,
   auditActionLabel,
   auditChainTag,
   auditExportNotice,
@@ -30,6 +31,12 @@ describe('auditActionLabel', () => {
     expect(isDangerousAuditAction('TABLE_DROP')).toBe(true);
     expect(isDangerousAuditAction('CONNECTION_DELETE')).toBe(true);
     expect(isDangerousAuditAction('SQL_EXPLAIN')).toBe(false);
+  });
+
+  it('labels restore upload ownership denial as a dangerous security event', () => {
+    expect(auditActionLabel('RESTORE_UPLOAD_ACCESS_DENIED')).toBe('恢复上传文件访问被拒绝');
+    expect(auditActionCategory('RESTORE_UPLOAD_ACCESS_DENIED')).toBe('security');
+    expect(isDangerousAuditAction('RESTORE_UPLOAD_ACCESS_DENIED')).toBe(true);
   });
 });
 
