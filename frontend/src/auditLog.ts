@@ -65,6 +65,9 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   CONNECTION_CREATE: { label: '新建连接', category: 'connection' },
   CONNECTION_UPDATE: { label: '修改连接', category: 'connection' },
   CONNECTION_DELETE: { label: '删除连接', category: 'connection', dangerous: true },
+  // 导出会把全部选中连接的明文密码与 SSH 密钥打成一个文件，属于高风险操作。
+  CONNECTION_ARCHIVE_EXPORT: { label: '导出连接配置', category: 'security', dangerous: true },
+  CONNECTION_ARCHIVE_IMPORT: { label: '导入连接配置', category: 'security', dangerous: true },
   BACKUP_TASK_CREATE: { label: '新建备份任务', category: 'backup' },
   BACKUP_TASK_UPDATE: { label: '修改备份任务', category: 'backup' },
   BACKUP_TASK_DELETE: { label: '删除备份任务', category: 'backup', dangerous: true },

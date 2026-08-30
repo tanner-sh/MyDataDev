@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
 import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
@@ -107,6 +107,7 @@ const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) 
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
+const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
 const AccessManagementPanel = lazy(() => import('./components/AccessManagementPanel').then((module) => ({ default: module.AccessManagementPanel })));
@@ -174,6 +175,7 @@ export default function App() {
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
   // 管理类面板全部收进一个带左侧导航的抽屉。之前是 6 个头部入口通向 5 个互斥的抽屉，
   // 从「备份」跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
+  const [archivePanelOpen, setArchivePanelOpen] = useState(false);
   const [activeDrawer, setActiveDrawer] = useState<ManagementSection | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
@@ -2856,6 +2858,16 @@ export default function App() {
     >
       {toastContextHolder}
       {modalContextHolder}
+      <Suspense fallback={null}>
+        {archivePanelOpen && (
+          <ConnectionArchivePanel
+            open={archivePanelOpen}
+            connections={connections}
+            onClose={() => setArchivePanelOpen(false)}
+            onImported={() => void refreshConnections()}
+          />
+        )}
+      </Suspense>
       <Modal
         open={Boolean(productionConfirmationRequest)}
         title={productionConfirmationRequest ? `确认在生产连接上${productionConfirmationRequest.action}` : undefined}
@@ -3090,7 +3102,15 @@ export default function App() {
               <div className="management-section">
                 <header className="management-section-header">
                   <Text strong>连接管理</Text>
-                  <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>
+                  <Space size={8}>
+                    {/* 归档里有全部连接的密码，只对管理员开放；后端也独立校验，这里只是别把入口摆出来。 */}
+                    {isCurrentUserAdmin() && (
+                      <Tooltip title="把连接配置导出成一个口令加密的文件，或从这样的文件导入">
+                        <Button size="small" icon={<SwapOutlined />} onClick={() => setArchivePanelOpen(true)}>导出 / 导入</Button>
+                      </Tooltip>
+                    )}
+                    <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>
+                  </Space>
                 </header>
                 <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
                   <ConnectionList

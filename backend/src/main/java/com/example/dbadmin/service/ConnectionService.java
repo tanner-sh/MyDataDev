@@ -203,6 +203,16 @@ public class ConnectionService {
         return loaded;
     }
 
+    /**
+     * 解开一段本机密文。
+     *
+     * <p>只给配置导出用：归档要把 SSH 密钥材料重新用口令加密，必须先还原成明文。
+     * 其余调用方不该有解密任意密文的需要，所以这里没有更通用的入口。</p>
+     */
+    public String decryptSecret(String encrypted) {
+        return encrypted == null || encrypted.isBlank() ? null : crypto.decrypt(encrypted);
+    }
+
     public String password(long id) {
         DbConnection c = require(id);
         String cached = cachedPasswords.get(id);
