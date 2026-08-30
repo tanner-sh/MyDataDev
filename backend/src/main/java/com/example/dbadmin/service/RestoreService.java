@@ -218,7 +218,11 @@ public class RestoreService {
         // 下面两条只对可转换 SQL 成立：原生格式的策略说明由 nativeConflictNotice 给出，
         // 两套文案不能混着发，否则会承诺一个原生路径根本做不到的行为。
         if ("SQL".equals(source.format())) {
-            if ("OVERWRITE".equals(mode)) warnings.add("覆盖模式只会删除预检识别到的目标基础表，执行后无法自动撤销。");
+            warnings.add("SQL 恢复不再分批提交；数据库支持事务的语句会在失败或取消时统一回滚。");
+            if ("OVERWRITE".equals(mode)) warnings.add("覆盖模式只会删除预检识别到的目标基础表，请确认目标连接和表清单。");
+            if (ddlMayImplicitlyCommit(target.dbType())) {
+                warnings.add("目标数据库可能在 DDL（建表、删表、索引）前后隐式提交；失败或取消时，结构变更仍可能无法回滚。");
+            }
             if ("APPEND".equals(mode)) warnings.add("追加模式忽略输入文件中的建表和索引语句，仅执行 INSERT。");
         }
         boolean valid = errors.isEmpty();
@@ -354,7 +358,7 @@ public class RestoreService {
         }
     }
 
-    private void runSql(RestoreJob job) throws Exception {
+    void runSql(RestoreJob job) throws Exception {
         Map<String, String> mappings = objectMapper.readValue(job.namespaceMapping(), new TypeReference<>() { });
         DbConnection target = connections.require(job.targetConnectionId());
         DatabaseDialect dialect = dialectRegistry.dialectFor(target);
@@ -366,7 +370,6 @@ public class RestoreService {
                     throw new IllegalStateException("恢复预检结果已丢失，请重新预检后启动。");
                 }
                 dropMappedTables(connection, dialect, tables, mappings);
-                connection.commit();
             }
             long[] current = {0};
             long[] lastProgressNanos = {0};
@@ -382,7 +385,6 @@ public class RestoreService {
                             runningStatements.remove(job.id());
                         }
                         current[0] = index;
-                        if (data && current[0] % 500 == 0) connection.commit();
                         if (progressDue(lastProgressNanos)) {
                             jobs.updateProgress(job.id(), "RUNNING", data ? "RESTORING_DATA" : "RESTORING_SCHEMA", current[0], job.progressTotal(),
                                     "正在执行第 " + current[0] + " 条语句。", null, null);
@@ -397,6 +399,12 @@ public class RestoreService {
                 throw error;
             }
         }
+    }
+
+    private boolean ddlMayImplicitlyCommit(String dbType) {
+        if (dbType == null) return true;
+        return Set.of("mysql", "mariadb", "oceanbase-mysql", "oracle", "oceanbase-oracle", "dm", "dameng")
+                .contains(dbType.toLowerCase(Locale.ROOT));
     }
 
     private void runNative(RestoreJob job, String toolPath, String extraArgs) throws Exception {
