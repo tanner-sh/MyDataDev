@@ -2677,6 +2677,10 @@ export default function App() {
     setSnippetDraft(undefined);
     setSnippetsOpen(true);
   });
+  const closeSnippetsEvent = useStableEvent(() => {
+    setSnippetsOpen(false);
+    setSnippetDraft(undefined);
+  });
   const saveSnippetEvent = useStableEvent((sql: string) => {
     setSnippetDraft({ draft: snippetDraftFromSql(sql, selected?.dbType), token: Date.now() });
     setSnippetsOpen(true);
@@ -3294,6 +3298,17 @@ export default function App() {
             selected={selected}
             onClose={closeSqlFileTasksEvent}
             onMetadataChanged={handleSqlFileMetadataEvent}
+          />
+        </Suspense>
+      )}
+      {snippetsOpen && (
+        <Suspense fallback={null}>
+          <SqlSnippetDrawer
+            open
+            dbType={selected?.dbType}
+            pendingDraft={snippetDraft}
+            onClose={closeSnippetsEvent}
+            onInsert={insertSnippetEvent}
           />
         </Suspense>
       )}
