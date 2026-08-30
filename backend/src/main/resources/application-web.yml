@@ -51,6 +51,10 @@ app:
     signing-secret: ${APP_AUDIT_ALERT_SIGNING_SECRET:}
     timeout-seconds: ${APP_AUDIT_ALERT_TIMEOUT_SECONDS:5}
     cooldown-seconds: ${APP_AUDIT_ALERT_COOLDOWN_SECONDS:30}
+    max-events-per-minute: ${APP_AUDIT_ALERT_MAX_EVENTS_PER_MINUTE:60}
+    max-cooldown-entries: ${APP_AUDIT_ALERT_MAX_COOLDOWN_ENTRIES:2000}
+    worker-threads: ${APP_AUDIT_ALERT_WORKER_THREADS:2}
+    queue-capacity: ${APP_AUDIT_ALERT_QUEUE_CAPACITY:100}
 
 management:
   endpoints:

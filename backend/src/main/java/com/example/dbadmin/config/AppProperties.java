@@ -148,6 +148,10 @@ public class AppProperties {
         private String signingSecret;
         private int timeoutSeconds = 5;
         private int cooldownSeconds = 30;
+        private int maxEventsPerMinute = 60;
+        private int maxCooldownEntries = 2_000;
+        private int workerThreads = 2;
+        private int queueCapacity = 100;
         private List<String> actions = new ArrayList<>(List.of(
                 "AUTH_LOGIN_FAILED", "AUTHORIZATION_DENIED", "CONNECTION_ACCESS_DENIED",
                 "USER_ROLE_CHANGE", "USER_DISABLE", "CONNECTION_ACCESS_UPDATE", "AUDIT_ALERT_TEST"
@@ -163,6 +167,14 @@ public class AppProperties {
         public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
         public int getCooldownSeconds() { return cooldownSeconds; }
         public void setCooldownSeconds(int cooldownSeconds) { this.cooldownSeconds = cooldownSeconds; }
+        public int getMaxEventsPerMinute() { return maxEventsPerMinute; }
+        public void setMaxEventsPerMinute(int maxEventsPerMinute) { this.maxEventsPerMinute = maxEventsPerMinute; }
+        public int getMaxCooldownEntries() { return maxCooldownEntries; }
+        public void setMaxCooldownEntries(int maxCooldownEntries) { this.maxCooldownEntries = maxCooldownEntries; }
+        public int getWorkerThreads() { return workerThreads; }
+        public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }
+        public int getQueueCapacity() { return queueCapacity; }
+        public void setQueueCapacity(int queueCapacity) { this.queueCapacity = queueCapacity; }
         public List<String> getActions() { return actions; }
         public void setActions(List<String> actions) { this.actions = actions == null ? new ArrayList<>() : new ArrayList<>(actions); }
     }

@@ -41,19 +41,20 @@ class AuditAlertServiceTest {
             properties.getAuditAlert().setSigningSecret("test-secret");
             properties.getAuditAlert().setCooldownSeconds(60);
             properties.getAuditAlert().setActions(List.of("AUDIT_ALERT_TEST"));
-            AuditAlertService service = new AuditAlertService(properties);
-            AuditAlertService.Event event = new AuditAlertService.Event(
-                    "admin", "AUDIT_ALERT_TEST", "audit:webhook", "测试", "request-1",
-                    "127.0.0.1", "abc123", Instant.parse("2026-08-30T02:00:00Z"));
+            try (AuditAlertService service = new AuditAlertService(properties)) {
+                AuditAlertService.Event event = new AuditAlertService.Event(
+                        "admin", "AUDIT_ALERT_TEST", "audit:webhook", "测试", "request-1",
+                        "127.0.0.1", "abc123", Instant.parse("2026-08-30T02:00:00Z"));
 
-            service.publish(event);
-            service.publish(event);
+                service.publish(event);
+                service.publish(event);
 
-            assertThat(received.await(2, TimeUnit.SECONDS)).isTrue();
-            Thread.sleep(150);
-            assertThat(requests).hasValue(1);
-            assertThat(body.get()).contains("\"action\":\"AUDIT_ALERT_TEST\"").contains("\"detail\":\"测试\"");
-            assertThat(signature.get()).isEqualTo("sha256=" + hmac(body.get(), "test-secret"));
+                assertThat(received.await(2, TimeUnit.SECONDS)).isTrue();
+                Thread.sleep(150);
+                assertThat(requests).hasValue(1);
+                assertThat(body.get()).contains("\"action\":\"AUDIT_ALERT_TEST\"").contains("\"detail\":\"测试\"");
+                assertThat(signature.get()).isEqualTo("sha256=" + hmac(body.get(), "test-secret"));
+            }
         } finally {
             server.stop(0);
         }
@@ -62,10 +63,68 @@ class AuditAlertServiceTest {
     @Test
     void remainsDisabledUntilBothFlagAndUrlAreConfigured() {
         AppProperties properties = new AppProperties();
-        AuditAlertService service = new AuditAlertService(properties);
+        try (AuditAlertService service = new AuditAlertService(properties)) {
+            assertThat(service.status().enabled()).isFalse();
+            assertThat(service.status().webhookConfigured()).isFalse();
+        }
+    }
 
-        assertThat(service.status().enabled()).isFalse();
-        assertThat(service.status().webhookConfigured()).isFalse();
+    @Test
+    void limitsUniqueTargetsGloballyAndBoundsCooldownMemory() throws Exception {
+        AtomicInteger requests = new AtomicInteger();
+        CountDownLatch received = new CountDownLatch(3);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/audit", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            requests.incrementAndGet();
+            exchange.sendResponseHeaders(204, -1);
+            exchange.close();
+            received.countDown();
+        });
+        server.start();
+        try {
+            AppProperties properties = new AppProperties();
+            properties.getAuditAlert().setEnabled(true);
+            properties.getAuditAlert().setWebhookUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/audit");
+            properties.getAuditAlert().setCooldownSeconds(60);
+            properties.getAuditAlert().setMaxEventsPerMinute(3);
+            properties.getAuditAlert().setMaxCooldownEntries(2);
+            properties.getAuditAlert().setActions(List.of("AUTHORIZATION_DENIED"));
+            try (AuditAlertService service = new AuditAlertService(properties)) {
+                for (int index = 0; index < 100; index++) {
+                    service.publish(new AuditAlertService.Event(
+                            "attacker", "AUTHORIZATION_DENIED", "user:" + index, "denied", "request-" + index,
+                            "127.0.0.1", "hash-" + index, Instant.now()
+                    ));
+                }
+
+                assertThat(received.await(2, TimeUnit.SECONDS)).isTrue();
+                Thread.sleep(100);
+                assertThat(requests).hasValue(3);
+                assertThat(service.trackedCooldownKeys()).isLessThanOrEqualTo(2);
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void failedLoginCooldownUsesRemoteAddressInsteadOfAttackerControlledUsername() throws Exception {
+        AppProperties properties = new AppProperties();
+        properties.getAuditAlert().setEnabled(true);
+        properties.getAuditAlert().setWebhookUrl("http://127.0.0.1:9/audit");
+        properties.getAuditAlert().setCooldownSeconds(60);
+        properties.getAuditAlert().setActions(List.of("AUTH_LOGIN_FAILED"));
+        try (AuditAlertService service = new AuditAlertService(properties)) {
+            for (int index = 0; index < 100; index++) {
+                service.publish(new AuditAlertService.Event(
+                        "anonymous", "AUTH_LOGIN_FAILED", "user:guessed-" + index, "failed", "request-" + index,
+                        "192.0.2.10", "hash-" + index, Instant.now()
+                ));
+            }
+
+            assertThat(service.trackedCooldownKeys()).isEqualTo(1);
+        }
     }
 
     private static String hmac(String value, String secret) throws Exception {

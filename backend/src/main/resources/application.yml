@@ -89,6 +89,10 @@ app:
     signing-secret:
     timeout-seconds: 5
     cooldown-seconds: 30
+    max-events-per-minute: 60
+    max-cooldown-entries: 2000
+    worker-threads: 2
+    queue-capacity: 100
     actions: [AUTH_LOGIN_FAILED, AUTHORIZATION_DENIED, CONNECTION_ACCESS_DENIED, USER_ROLE_CHANGE, USER_DISABLE, CONNECTION_ACCESS_UPDATE, AUDIT_ALERT_TEST]
   cors:
     # Keep the browser UI same-origin in production; only Vite's two local
