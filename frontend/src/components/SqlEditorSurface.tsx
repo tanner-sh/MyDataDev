@@ -10,21 +10,25 @@ type SqlEditorComponent = ComponentType<SqlEditorProps>;
 export const SqlEditorSurface = memo(function SqlEditorSurface({
   value,
   themeMode,
-  options,
   executeDisabled,
   onMount,
   onChange,
   onFormat,
-  onExecute
+  onExecute,
+  completionSource,
+  onDefinitionProbe,
+  onDefinitionActivate
 }: {
   value: string;
   themeMode: 'light' | 'dark';
-  options: SqlEditorProps['options'];
   executeDisabled: boolean;
   onMount: SqlEditorOnMount;
   onChange: (value: string) => void;
   onFormat: () => void;
   onExecute: () => void;
+  completionSource: SqlEditorProps['completionSource'];
+  onDefinitionProbe: SqlEditorProps['onDefinitionProbe'];
+  onDefinitionActivate: SqlEditorProps['onDefinitionActivate'];
 }) {
   const [userRequested, setUserRequested] = useState(false);
   const [editorComponent, setEditorComponent] = useState<SqlEditorComponent>();
@@ -69,7 +73,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     if (loadRequested) void loadEditor();
   }, [loadEditor, loadRequested]);
 
-  // 只有进入 SQL 工作台并挂载此组件后，才在空闲时拉起 Monaco，避免浏览表格等会话
+  // 只有进入 SQL 工作台并挂载此组件后，才在空闲时拉起编辑器，避免浏览表格等会话
   // 下载全站最大的资源块；文本框仍可立即输入，编辑器就绪后会无损接管内容。
   useEffect(() => prefetchWhenIdle(async () => setAutoLoad(true), window), []);
 
@@ -97,32 +101,26 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
     return (
       <EditorComponent
         height="100%"
-        language="sql"
         value={value}
-        onMount={(editor, monaco) => {
-          onMount(editor, monaco);
-          if (!focusEditorRef.current) return;
-          editor.focus();
-          const model = editor.getModel();
-          const pendingSelection = pendingSelectionRef.current;
-          if (model && pendingSelection) {
-            const start = model.getPositionAt(Math.min(pendingSelection.start, model.getValueLength()));
-            const end = model.getPositionAt(Math.min(pendingSelection.end, model.getValueLength()));
-            editor.setSelection({
-              startLineNumber: start.lineNumber,
-              startColumn: start.column,
-              endLineNumber: end.lineNumber,
-              endColumn: end.column
-            });
-          } else if (model) {
-            editor.setPosition(model.getPositionAt(value.length));
+        themeMode={themeMode}
+        onMount={(handle) => {
+          const dispose = onMount(handle);
+          // 从降级文本框接管时把焦点和光标一并接过来，用户不会觉得刚打的字「跳」了一下。
+          if (focusEditorRef.current) {
+            handle.focus();
+            const pendingSelection = pendingSelectionRef.current;
+            handle.setSelection(pendingSelection ?? { start: value.length, end: value.length });
+            pendingSelectionRef.current = undefined;
+            focusEditorRef.current = false;
           }
-          pendingSelectionRef.current = undefined;
-          focusEditorRef.current = false;
+          return dispose;
         }}
-        onChange={(next) => onChange(next || '')}
-        theme={themeMode === 'dark' ? 'vs-dark' : 'vs'}
-        options={options}
+        onChange={onChange}
+        onExecute={executeDisabled ? undefined : onExecute}
+        onFormat={onFormat}
+        completionSource={completionSource}
+        onDefinitionProbe={onDefinitionProbe}
+        onDefinitionActivate={onDefinitionActivate}
       />
     );
   }

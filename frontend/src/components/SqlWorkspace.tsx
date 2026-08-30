@@ -13,32 +13,18 @@ import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from
 import { resolveEditorSplitRatio } from '../editorSplit';
 import type { ResultEditCommit } from '../resultEditing';
 import { transactionBadge, transactionTooltip, type SqlTransactionState } from '../sqlTransaction';
-import type { SqlEditorOnMount } from '../sqlEditorTypes';
+import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 
 const { Header } = Layout;
 const { Text } = Typography;
-const EDITOR_OPTIONS = {
-  minimap: { enabled: false },
-  // SQL 常常是一条很长的语句。不换行时编辑器会横向滚动，把开头的 select 滚出视野，
-  // 用户只能看到语句中段。
-  wordWrap: 'on',
-  fontSize: 14,
-  lineHeight: 22,
-  padding: { top: 12, bottom: 12 },
-  smoothScrolling: true,
-  scrollBeyondLastLine: false,
-  quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
-  suggestOnTriggerCharacters: true,
-  automaticLayout: true
-} as const;
 const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -63,6 +49,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onTabDuplicate: (tabId: string, liveSql?: string) => void;
   onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
   onEditorMount: SqlEditorOnMount;
+  completionSource: SqlEditorProps['completionSource'];
+  onDefinitionProbe: SqlEditorProps['onDefinitionProbe'];
+  onDefinitionActivate: SqlEditorProps['onDefinitionActivate'];
   onFormat: (liveSql?: string) => void;
   onExplain: (liveSql?: string) => void;
   onExecute: (liveSql?: string) => void;
@@ -160,7 +149,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   // defeats SqlEditorSurface's memo() even when `value` itself has not
   // changed — e.g. the 250ms elapsed-time ticker below re-renders this
   // component 4x/sec while a query runs, and without a stable identity that
-  // used to re-render the editor surface (and Monaco) on every tick too.
+  // used to re-render the editor surface on every tick too.
   const editorChangeEvent = useStableEvent(updateDraft);
   const editorFormatEvent = useStableEvent(() => { commitDraft(); onFormat(draftRef.current); });
   const editorExecuteEvent = useStableEvent(() => { commitDraft(); onExecute(draftRef.current); });
@@ -407,9 +396,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           <SqlEditorSurface
             value={draftSql}
             themeMode={themeMode}
-            options={EDITOR_OPTIONS}
             executeDisabled={!canExecute || loading}
             onMount={onEditorMount}
+            completionSource={completionSource}
+            onDefinitionProbe={onDefinitionProbe}
+            onDefinitionActivate={onDefinitionActivate}
             onChange={editorChangeEvent}
             onFormat={editorFormatEvent}
             onExecute={editorExecuteEvent}

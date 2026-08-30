@@ -462,11 +462,10 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         {!creation && detail && !detail.sourceAvailable && <Alert type="warning" showIcon message="无法读取对象源码" description={detail.sourceUnavailableReason} />}
         <Editor
           height="52vh"
-          language="sql"
           value={source}
-          theme={document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs'}
-          options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, readOnly: !canDdl || !creation && (!detail?.sourceAvailable || !operations.has('REPLACE')) }}
-          onChange={(value) => setSource(value || '')}
+          themeMode={document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'}
+          readOnly={!canDdl || !creation && (!detail?.sourceAvailable || !operations.has('REPLACE'))}
+          onChange={setSource}
         />
       </div>
     ) },

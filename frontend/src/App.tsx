@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
-import type * as Monaco from 'monaco-editor';
 import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
@@ -17,7 +16,14 @@ import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier, type SqlTableReference } from './sqlCompletion';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
-import type { SqlEditorOnMount } from './sqlEditorTypes';
+import type {
+  SqlCompletionItem,
+  SqlCompletionRequest,
+  SqlCompletionResult,
+  SqlEditorHandle,
+  SqlEditorOnMount,
+  SqlRange
+} from './sqlEditorTypes';
 import { inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
@@ -114,7 +120,7 @@ const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionD
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const loadSqlWorkspace = () => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace }));
 const SqlWorkspace = lazy(loadSqlWorkspace);
-// Monaco 是全站最大的块。SqlEditorSurface 只在用户点进编辑器时才 import 它，所以不预取的话
+// 编辑器是懒加载的最大一块。SqlEditorSurface 只在用户点进编辑器时才 import 它，所以不预取的话
 // 那次点击要等 600+ KiB 下载完；这里在首屏空闲时先取回来。
 const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((module) => ({ default: module.TableWorkspace })));
 const ErDiagram = lazy(() => import('./components/ErDiagram').then((module) => ({ default: module.ErDiagram })));
@@ -194,8 +200,7 @@ export default function App() {
   const tableRowCountSeqRef = useRef(0);
   const backupRequestSeqRef = useRef(0);
   const objectDesignDirtyRef = useRef(false);
-  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const completionProviderRef = useRef<Monaco.IDisposable | null>(null);
+  const editorRef = useRef<SqlEditorHandle | null>(null);
   const objectDefinitionNavigationRef = useRef<(reference: SqlTableReference) => void>(() => undefined);
   const executeRef = useRef<() => void>(() => undefined);
   const shortcutHandlerRef = useRef<(shortcut: AppShortcut, event: KeyboardEvent) => void>(() => undefined);
@@ -257,14 +262,13 @@ export default function App() {
     refreshConnections({ retry: true });
   }, []);
 
-  // 首屏空闲时只预取工作台外壳；Monaco 等真正进入 SQL 工作台后再加载。
+  // 首屏空闲时只预取工作台外壳；编辑器等真正进入 SQL 工作台后再加载。
   useEffect(() => prefetchWhenIdle(loadSqlWorkspace, window), []);
 
   useEffect(() => {
     if (selected) void loadObjectDetailWorkspace().catch(() => undefined);
   }, [selected?.id]);
 
-  useEffect(() => () => completionProviderRef.current?.dispose(), []);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 1199px)');
@@ -1412,17 +1416,12 @@ export default function App() {
 
   async function formatSql(liveSql?: string) {
     const editor = editorRef.current;
-    const model = editor?.getModel();
-    const modelVersion = model?.getVersionId();
-    const currentSql = model?.getValue() ?? liveSql ?? activeSqlTab.sql;
+    const targetTabId = activeSqlTabIdRef.current;
+    const currentSql = editor?.getValue() ?? liveSql ?? activeSqlTab.sql;
     const selection = editor?.getSelection();
-    const cursor = model && editor
-      ? model.getOffsetAt(editor.getPosition() || { lineNumber: 1, column: 1 })
-      : 0;
-    const target = getSqlFormatTarget(currentSql, cursor, selection && model && !selection.isEmpty() ? {
-      start: model.getOffsetAt(selection.getStartPosition()),
-      end: model.getOffsetAt(selection.getEndPosition())
-    } : undefined);
+    const cursor = selection?.start ?? 0;
+    const hasSelection = Boolean(selection && selection.end > selection.start);
+    const target = getSqlFormatTarget(currentSql, cursor, hasSelection ? selection : undefined);
     if (!target) {
       updateActiveSqlTab({ message: '当前语句没有可格式化的 SQL', statusKind: 'info' });
       return;
@@ -1436,39 +1435,34 @@ export default function App() {
     setSqlCancellable(false);
     try {
       const data = await api<{ sql: string }>('/sql/format', { method: 'POST', body: JSON.stringify({ sql: target.sql }) });
-      if (editor && model && editor.getModel() === model) {
-        if (modelVersion !== undefined && model.getVersionId() !== modelVersion) {
+      if (activeSqlTabIdRef.current !== targetTabId) {
+        updateSqlTab(targetTabId, { message: '已切换 SQL 标签，本次格式化结果未应用', statusKind: 'info' });
+        return;
+      }
+      if (editor && editorRef.current === editor) {
+        // 等接口返回的这段时间里用户可能又改了内容，此时按旧偏移量替换会改错地方。
+        if (editor.getValue() !== currentSql) {
           updateActiveSqlTab({ message: 'SQL 内容已变化，本次格式化结果未应用', statusKind: 'info' });
           return;
         }
-        const start = model.getPositionAt(target.start);
-        const end = model.getPositionAt(target.end);
-        editor.executeEdits('format-sql', [{
-          range: { startLineNumber: start.lineNumber, startColumn: start.column, endLineNumber: end.lineNumber, endColumn: end.column },
-          text: data.sql,
-          forceMoveMarkers: true
-        }]);
-        const formattedEnd = model.getPositionAt(target.start + data.sql.length);
+        editor.replaceRange({ start: target.start, end: target.end }, data.sql);
+        const formattedEnd = target.start + data.sql.length;
         if (target.selected) {
-          editor.setSelection({
-            startLineNumber: start.lineNumber,
-            startColumn: start.column,
-            endLineNumber: formattedEnd.lineNumber,
-            endColumn: formattedEnd.column
-          });
+          editor.setSelection({ start: target.start, end: formattedEnd });
         } else {
           const relativeCursor = Math.max(0, cursor - target.start);
-          editor.setPosition(model.getPositionAt(target.start + Math.min(relativeCursor, data.sql.length)));
+          const nextCursor = target.start + Math.min(relativeCursor, data.sql.length);
+          editor.setSelection({ start: nextCursor, end: nextCursor });
         }
         editor.focus();
-        updateActiveSqlTab({ sql: model.getValue(), message: `当前${target.selected ? '选中' : '光标所在'}语句格式化完成`, statusKind: 'success' });
+        updateActiveSqlTab({ sql: editor.getValue(), message: `当前${target.selected ? '选中' : '光标所在'}语句格式化完成`, statusKind: 'success' });
       } else {
         const nextSql = `${currentSql.slice(0, target.start)}${data.sql}${currentSql.slice(target.end)}`;
         updateActiveSqlTab({ sql: nextSql, message: '当前语句格式化完成', statusKind: 'success' });
       }
     } catch (e) {
       const errorMessage = `格式化失败：${localizeMessage((e as Error).message)}`;
-      updateActiveSqlTab({ message: errorMessage, statusKind: 'error' });
+      updateSqlTab(targetTabId, { message: errorMessage, statusKind: 'error' });
       toastApi.error(errorMessage);
     } finally {
       setSqlLoading(false);
@@ -1790,24 +1784,23 @@ export default function App() {
   function sqlExecutionTarget(liveSql?: string) {
     const editor = editorRef.current;
     const selection = editor?.getSelection();
-    const model = editor?.getModel();
-    if (selection && model && !selection.isEmpty()) {
-      const rawSelectedText = model.getValueInRange(selection);
+    if (editor && selection && selection.end > selection.start) {
+      const rawSelectedText = editor.getValue().slice(selection.start, selection.end);
       const leadingWhitespace = rawSelectedText.length - rawSelectedText.trimStart().length;
       const selectedText = rawSelectedText.trim();
       if (selectedText) {
         return {
           sql: selectedText,
           selected: true,
-          baseOffset: model.getOffsetAt(selection.getStartPosition()) + leadingWhitespace
+          baseOffset: selection.start + leadingWhitespace
         };
       }
     }
     // SqlWorkspace keeps the current editor text in a local draft to avoid
-    // re-rendering Monaco on every keystroke. Always read the live model here:
-    // React state may still contain the last committed draft when a toolbar
-    // action or Ctrl/Cmd+Enter is triggered.
-    return { sql: model?.getValue() ?? liveSql ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
+    // re-rendering the editor on every keystroke. Always read the live document
+    // here: React state may still contain the last committed draft when a
+    // toolbar action or Ctrl/Cmd+Enter is triggered.
+    return { sql: editor?.getValue() ?? liveSql ?? activeSqlTab.sql, selected: false, baseOffset: 0 };
   }
 
   function selectSqlFile(file: File) {
@@ -1835,17 +1828,9 @@ export default function App() {
 
   function selectStatementRange(startOffset: number, endOffset: number) {
     const editor = editorRef.current;
-    const model = editor?.getModel();
-    if (!editor || !model) return;
-    const start = model.getPositionAt(startOffset);
-    const end = model.getPositionAt(endOffset);
-    editor.setSelection({
-      startLineNumber: start.lineNumber,
-      startColumn: start.column,
-      endLineNumber: end.lineNumber,
-      endColumn: end.column
-    });
-    editor.revealPositionInCenter(start);
+    if (!editor) return;
+    // setSelection 自带 scrollIntoView，不再需要单独一次「滚到视野中央」。
+    editor.setSelection({ start: startOffset, end: endOffset });
     editor.focus();
   }
 
@@ -1875,27 +1860,35 @@ export default function App() {
     return loadCachedObjectStructure(connectionId, object);
   }
 
-  async function sqlCompletionItems(
-    model: Monaco.editor.ITextModel,
-    position: Monaco.Position,
-    monaco: Parameters<SqlEditorOnMount>[1],
-    token: Monaco.CancellationToken,
-    context: ReturnType<typeof analyzeSqlCompletion> = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position))
-  ) {
-    if (context.insideCommentOrString || context.mode === 'none') return [];
-    const start = model.getPositionAt(context.replacement.start);
-    const end = model.getPositionAt(context.replacement.end);
-    const range = {
-      startLineNumber: start.lineNumber,
-      startColumn: start.column,
-      endLineNumber: end.lineNumber,
-      endColumn: end.column
+  /**
+   * 一次补全请求的结果。
+   *
+   * <p>全部按字符偏移量工作：analyzeSqlCompletion 本来就是这么算的，以前还要把它换算成
+   * 编辑器的行列坐标再换回来，现在这层中间商没了。</p>
+   */
+  async function sqlCompletionResult(request: SqlCompletionRequest): Promise<SqlCompletionResult | null> {
+    const context = analyzeSqlCompletion(request.text, request.offset);
+    if (context.insideCommentOrString || context.mode === 'none') return null;
+    // 空格触发时只有「条件里该补列名」这一种情况值得弹窗，否则每敲一个空格都会打断输入。
+    if (request.triggerCharacter === ' ' && !shouldTriggerSqlConditionColumnCompletion(context)) return null;
+    const items = await sqlCompletionItems(request, context);
+    if (items.length === 0) return null;
+    return {
+      range: { start: context.replacement.start, end: context.replacement.end },
+      items,
+      incomplete: isSqlCompletionListIncomplete(context)
     };
-    const keywords = sqlKeywordCompletionItems(monaco, range);
+  }
+
+  async function sqlCompletionItems(
+    request: SqlCompletionRequest,
+    context: ReturnType<typeof analyzeSqlCompletion>
+  ): Promise<SqlCompletionItem[]> {
+    const keywords = sqlKeywordCompletionItems();
     const connectionId = selectedIdRef.current;
     if (!connectionId) return keywords;
     await sleep(80);
-    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
+    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
     const schemaName = metadataRef.current?.selectedSchema || '';
     const prefix = context.replacement.prefix.toLowerCase();
     let catalog: CompletionCatalog;
@@ -1904,14 +1897,13 @@ export default function App() {
     } catch {
       catalog = { selectedSchema: schemaName, objects: metadataRef.current?.objects || [] };
     }
-    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
+    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
     const matchingObjects = catalog.objects.filter((object) => !prefix || object.name.toLowerCase().startsWith(prefix));
-    const tableItems = matchingObjects.map((object) => ({
+    const tableItems: SqlCompletionItem[] = matchingObjects.map((object) => ({
       label: object.name,
-      kind: monaco.languages.CompletionItemKind.Class,
+      kind: 'table',
       insertText: quoteSqlIdentifier(object.name, context.replacement.quoteStyle),
       detail: `${object.schemaName || catalog.selectedSchema || schemaName} · ${object.type.toUpperCase().includes('VIEW') ? '视图' : '表'}`,
-      range,
       sortText: `1-${object.name.toLowerCase()}`
     }));
     if (context.mode === 'table') return tableItems;
@@ -1935,20 +1927,19 @@ export default function App() {
         return { table, object };
       }
     }));
-    if (token.isCancellationRequested || selectedIdRef.current !== connectionId) return [];
+    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
 
     const qualify = context.mode === 'column' && context.qualifyColumns;
-    const columnItems = structures.flatMap(({ table, object }) => object.columns
+    const columnItems: SqlCompletionItem[] = structures.flatMap(({ table, object }) => object.columns
       .filter((column) => !prefix || column.name.toLowerCase().startsWith(prefix))
       .map((column) => {
         const columnName = quoteSqlIdentifier(column.name, context.replacement.quoteStyle);
         const insertText = qualify ? `${sqlTableQualifier(table)}.${columnName}` : columnName;
         return {
           label: qualify ? `${sqlTableQualifier(table)}.${column.name}` : column.name,
-          kind: monaco.languages.CompletionItemKind.Field,
+          kind: 'column' as const,
           insertText,
           detail: `${object.name} 字段 · ${column.type}`,
-          range,
           sortText: `0-${column.name.toLowerCase()}`
         };
       }));
@@ -2018,136 +2009,43 @@ export default function App() {
     }
   };
 
-  const handleEditorMount: SqlEditorOnMount = (editor, monaco) => {
-    editorRef.current = editor;
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => executeRef.current());
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => formatRef.current());
-    completionProviderRef.current?.dispose();
-    const provider = monaco.languages.registerCompletionItemProvider('sql', {
-      triggerCharacters: ['.', ' '],
-      provideCompletionItems: async (
-        model: Monaco.editor.ITextModel,
-        position: Monaco.Position,
-        providerContext: Monaco.languages.CompletionContext,
-        token: Monaco.CancellationToken
-      ) => {
-        const completionContext = analyzeSqlCompletion(model.getValue(), model.getOffsetAt(position));
-        if (providerContext.triggerCharacter === ' ' && !shouldTriggerSqlConditionColumnCompletion(completionContext)) {
-          return { suggestions: [] };
-        }
-        return {
-          suggestions: await sqlCompletionItems(model, position, monaco, token, completionContext),
-          incomplete: isSqlCompletionListIncomplete(completionContext)
-        };
-      }
-    });
-    completionProviderRef.current = provider;
-    const definitionLink = editor.createDecorationsCollection();
-    let hoveredPosition: Monaco.Position | null = null;
-    // Ctrl/Cmd+悬停的定义跳转装饰挂在两个高频事件上：window 级别的 keydown/keyup（编辑器里
-    // 每敲一个字符就是两次）和 onMouseMove。没有下面这三个状态位时，每一次事件都会跑一遍
-    // deltaDecorations，命中时还要把整篇 SQL 重新词法扫描一遍。
-    let definitionLinkActive = false;
-    let linkedRange: { start: number; end: number } | null = null;
-    let modifierPressed = false;
+  /**
+   * 编辑器挂载。
+   *
+   * <p>剩下的只有「拿到句柄、存起来」和定义跳转的两个语义回调。以前这里还有一百多行是
+   * 鼠标事件、修饰键状态和装饰集合的增删 —— 那些是编辑器的琐事，现在留在 SqlEditor 里，
+   * 上层只回答「这个偏移量上有没有可跳转的对象」。</p>
+   */
+  const handleEditorMount: SqlEditorOnMount = (handle) => {
+    editorRef.current = handle;
+    return () => {
+      if (editorRef.current === handle) editorRef.current = null;
+      clearObjectDetailPrefetchTimer();
+    };
+  };
 
-    const clearDefinitionLinkDecoration = () => {
-      if (!definitionLinkActive) return;
-      definitionLink.clear();
-      definitionLinkActive = false;
-      linkedRange = null;
-    };
-    const objectReferenceAt = (position: Monaco.Position | null) => {
-      const model = editor.getModel();
-      if (!model || !position) return undefined;
-      return findSqlObjectReferenceAtOffset(model.getValue(), model.getOffsetAt(position));
-    };
-    const updateDefinitionLink = (position: Monaco.Position | null) => {
-      if (!modifierPressed) {
-        clearDefinitionLinkDecoration();
-        clearObjectDetailPrefetchTimer();
-        return;
-      }
-      const model = editor.getModel();
-      // 指针还停在已经高亮的那个对象名上时，结果不会变，无需重新扫描。
-      if (model && position && linkedRange) {
-        const offset = model.getOffsetAt(position);
-        if (offset >= linkedRange.start && offset < linkedRange.end) return;
-      }
-      const reference = objectReferenceAt(position);
-      if (!model || !reference) {
-        clearDefinitionLinkDecoration();
-        clearObjectDetailPrefetchTimer();
-        return;
-      }
-      const objectName = reference.parts[reference.parts.length - 1];
-      const start = model.getPositionAt(objectName.start);
-      const end = model.getPositionAt(objectName.end);
-      definitionLink.set([{
-        range: {
-          startLineNumber: start.lineNumber,
-          startColumn: start.column,
-          endLineNumber: end.lineNumber,
-          endColumn: end.column
-        },
-        options: { inlineClassName: 'sql-object-definition-link' }
-      }]);
-      definitionLinkActive = true;
-      linkedRange = { start: objectName.start, end: objectName.end };
-      queueSqlObjectDetailPrefetch(reference);
-    };
-    const mouseMoveListener = editor.onMouseMove((event) => {
-      hoveredPosition = event.target.position;
-      modifierPressed = event.event.ctrlKey || event.event.metaKey;
-      updateDefinitionLink(hoveredPosition);
-    });
-    const mouseLeaveListener = editor.onMouseLeave(() => {
-      hoveredPosition = null;
-      clearDefinitionLinkDecoration();
+  /** 按住 Ctrl/Cmd 悬停时，这个位置上的对象引用占哪一段。顺便预取它的详情。 */
+  const probeObjectDefinition = (offset: number | null): SqlRange | null => {
+    const handle = editorRef.current;
+    if (!handle || offset == null) {
       clearObjectDetailPrefetchTimer();
-    });
-    const mouseDownListener = editor.onMouseDown((event) => {
-      if (!event.event.leftButton || (!event.event.ctrlKey && !event.event.metaKey)) return;
-      const reference = objectReferenceAt(event.target.position);
-      if (!reference) return;
-      event.event.preventDefault();
-      event.event.stopPropagation();
-      clearDefinitionLinkDecoration();
-      objectDefinitionNavigationRef.current(reference);
-    });
-    const contentListener = editor.onDidChangeModelContent(() => {
-      // 内容一变，记下来的偏移量就失效了。
-      clearDefinitionLinkDecoration();
+      return null;
+    }
+    const reference = findSqlObjectReferenceAtOffset(handle.getValue(), offset);
+    if (!reference) {
       clearObjectDetailPrefetchTimer();
-    });
-    const handleModifierChange = (event: KeyboardEvent) => {
-      const pressed = event.ctrlKey || event.metaKey;
-      // 普通输入的 keydown/keyup 不改变修饰键状态，直接返回。
-      if (pressed === modifierPressed) return;
-      modifierPressed = pressed;
-      updateDefinitionLink(hoveredPosition);
-    };
-    const clearDefinitionLink = () => {
-      modifierPressed = false;
-      clearDefinitionLinkDecoration();
-      clearObjectDetailPrefetchTimer();
-    };
-    window.addEventListener('keydown', handleModifierChange);
-    window.addEventListener('keyup', handleModifierChange);
-    window.addEventListener('blur', clearDefinitionLink);
-    editor.onDidDispose(() => {
-      provider.dispose();
-      mouseMoveListener.dispose();
-      mouseLeaveListener.dispose();
-      mouseDownListener.dispose();
-      contentListener.dispose();
-      clearObjectDetailPrefetchTimer();
-      window.removeEventListener('keydown', handleModifierChange);
-      window.removeEventListener('keyup', handleModifierChange);
-      window.removeEventListener('blur', clearDefinitionLink);
-      if (completionProviderRef.current === provider) completionProviderRef.current = null;
-      if (editorRef.current === editor) editorRef.current = null;
-    });
+      return null;
+    }
+    queueSqlObjectDetailPrefetch(reference);
+    const objectName = reference.parts[reference.parts.length - 1];
+    return { start: objectName.start, end: objectName.end };
+  };
+
+  const activateObjectDefinition = (offset: number) => {
+    const handle = editorRef.current;
+    if (!handle) return;
+    const reference = findSqlObjectReferenceAtOffset(handle.getValue(), offset);
+    if (reference) objectDefinitionNavigationRef.current(reference);
   };
 
   function findCompletionObject(objects: DbObject[], requestedSchema: string | undefined, requestedName: string) {
@@ -2822,6 +2720,9 @@ export default function App() {
     await refreshActiveSqlResult();
   });
   const openDiagramEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('diagram'), '打开 ER 图'));
+  const sqlCompletionSourceEvent = useStableEvent((request: SqlCompletionRequest) => sqlCompletionResult(request));
+  const probeObjectDefinitionEvent = useStableEvent((offset: number | null) => probeObjectDefinition(offset));
+  const activateObjectDefinitionEvent = useStableEvent((offset: number) => activateObjectDefinition(offset));
   const returnFromDiagramEvent = useStableEvent(() => setMode('sql'));
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
@@ -3055,6 +2956,9 @@ export default function App() {
                 onTabDuplicate={duplicateSqlTabEvent}
                 onSqlChange={changeSqlEvent}
                 onEditorMount={mountSqlEditorEvent}
+                completionSource={sqlCompletionSourceEvent}
+                onDefinitionProbe={probeObjectDefinitionEvent}
+                onDefinitionActivate={activateObjectDefinitionEvent}
                 onFormat={formatSqlEvent}
                 onExplain={explainSqlEvent}
                 onExecute={executeSqlEvent}

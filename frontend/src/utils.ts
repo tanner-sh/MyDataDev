@@ -1,7 +1,6 @@
-import type * as Monaco from 'monaco-editor';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from './constants';
 import type { BackupTask, LegacyBackupScope, RowChange, SqlTab, TableRow } from './types';
-import type { SqlEditorOnMount } from './sqlEditorTypes';
+import type { SqlCompletionItem } from './sqlEditorTypes';
 
 export function createSqlTab(index: number): SqlTab {
   return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', dirty: false, results: [], message: '' };
@@ -127,24 +126,18 @@ export function formatFileSize(size?: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function sqlKeywordCompletionItems(monaco: Parameters<SqlEditorOnMount>[1], range: Monaco.IRange) {
+export function sqlKeywordCompletionItems(): SqlCompletionItem[] {
   return [
     'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN',
     'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'INSERT', 'UPDATE', 'DELETE'
   ].map((keyword) => ({
     label: keyword,
-    kind: monaco.languages.CompletionItemKind.Keyword,
+    kind: 'keyword' as const,
     insertText: keyword,
     detail: 'SQL 关键字',
-    range
+    // 关键字排在表和列之后：用户已经知道 SELECT 怎么写，需要提示的是库里有什么。
+    sortText: `2-${keyword.toLowerCase()}`
   }));
-}
-
-export function completionKind(monaco: Parameters<SqlEditorOnMount>[1], kind: string) {
-  if (kind === 'TABLE') return monaco.languages.CompletionItemKind.Class;
-  if (kind === 'COLUMN') return monaco.languages.CompletionItemKind.Field;
-  if (kind === 'SCHEMA') return monaco.languages.CompletionItemKind.Module;
-  return monaco.languages.CompletionItemKind.Keyword;
 }
 
 export function formatHistoryTime(value: string) {

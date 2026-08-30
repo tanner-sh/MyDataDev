@@ -246,7 +246,7 @@ export function tokenizeSql(sql: string, baseOffset = 0): SqlToken[] {
  * 语句切分的单条缓存。
  *
  * 切分必须从文档开头开始词法扫描 —— 否则无法判断一个分号是不是落在字符串或注释里 ——
- * 所以对一份大脚本来说每次调用都是 O(文档)。而调用非常频繁：Monaco 每次按键都请求补全，
+ * 所以对一份大脚本来说每次调用都是 O(文档)。而调用非常频繁：编辑器每次按键都请求补全，
  * Ctrl/Cmd+悬停时每次 mousemove 都要解析对象引用。只要文档没变、光标仍落在同一条语句的
  * 区间内，上一次算出的边界就依然成立（区间内不存在别的分号，边界只可能是同一对）。
  */
@@ -347,7 +347,7 @@ export function analyzeSqlCompletion(sql: string, cursorPosition: number): SqlCo
   };
 }
 
-/** Monaco must ask the provider again as a table prefix grows instead of fuzzy-filtering a capped list. */
+/** The editor must ask the provider again as a table prefix grows instead of fuzzy-filtering a capped list. */
 export function isSqlCompletionListIncomplete(context: SqlCompletionContext): boolean {
   return context.mode === 'table';
 }

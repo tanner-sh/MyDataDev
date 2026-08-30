@@ -43,7 +43,7 @@ describe('resolveAppShortcut', () => {
   });
 
   it('leaves the editor shortcuts alone', () => {
-    // Ctrl+Enter and Ctrl+Shift+F belong to the Monaco surface, not here.
+    // Ctrl+Enter and Ctrl+Shift+F belong to the editor surface, not here.
     expect(resolveAppShortcut(press({ key: 'Enter', code: 'Enter', ctrlKey: true }))).toBeUndefined();
     expect(resolveAppShortcut(press({ key: 'f', code: 'KeyF', ctrlKey: true, shiftKey: true }))).toBeUndefined();
   });
