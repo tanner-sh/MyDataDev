@@ -19,4 +19,15 @@ describe('CodeMirror SQL 扩展', () => {
     expect(tree).toContain('Operator');
     expect(tree).toContain('Bool');
   });
+
+  it('允许建立非空文本选区', () => {
+    const state = EditorState.create({
+      doc: 'SELECT id FROM users',
+      extensions: sqlEditorExtensions({})
+    });
+
+    const selected = state.update({ selection: { anchor: 0, head: 9 } }).state.selection.main;
+    expect(selected.empty).toBe(false);
+    expect({ from: selected.from, to: selected.to }).toEqual({ from: 0, to: 9 });
+  });
 });

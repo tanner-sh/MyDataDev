@@ -3259,6 +3259,12 @@ body.is-resizing-column * {
   height: 100%;
 }
 
+.sql-editor-host .cm-content {
+  /* 表格列宽拖动会临时在 body 上禁用文本选择；即使鼠标在窗口外释放导致状态延迟清理，
+     SQL 编辑器也必须仍然可以选择文本。 */
+  user-select: text !important;
+}
+
 .sql-editor-host .cm-editor.cm-focused {
   outline: none;
 }

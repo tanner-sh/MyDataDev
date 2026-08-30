@@ -53,7 +53,8 @@ const appearance = EditorView.theme({
     padding: '12px 0',
     lineHeight: '22px',
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
-    caretColor: 'var(--text)'
+    caretColor: 'var(--text)',
+    userSelect: 'text'
   },
   '.cm-scroller': { overflow: 'auto', lineHeight: '22px' },
   '.cm-gutters': {
@@ -62,10 +63,15 @@ const appearance = EditorView.theme({
     border: 'none'
   },
   '.cm-activeLineGutter': { backgroundColor: 'var(--surface-hover)' },
-  '.cm-activeLine': { backgroundColor: 'var(--surface-hover)' },
+  // CodeMirror 的自绘选区位于内容层下方。当前行如果使用不透明背景，单行选区会被完全
+  // 盖住，看起来像鼠标没有选中任何文字；保留 CodeMirror 自带的半透明当前行底色。
   '&.cm-focused .cm-cursor': { borderLeftColor: 'var(--text)' },
-  '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+  '.cm-selectionBackground, ::selection': {
     backgroundColor: 'var(--primary-soft)'
+  },
+  // 与 CodeMirror 基础主题的完整选择器保持同等特异性，确保聚焦时使用足够清晰的颜色。
+  '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground': {
+    backgroundColor: 'color-mix(in srgb, var(--primary) 38%, transparent)'
   },
   '.cm-tooltip': {
     backgroundColor: 'var(--surface-raised)',
