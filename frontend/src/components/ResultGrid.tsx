@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
-import type { MouseEvent as ReactMouseEvent, Ref } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
 import { Button, Dropdown, Input, InputNumber, Modal, Segmented, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, QuestionCircleOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
@@ -31,6 +31,7 @@ import { inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, ser
 import { buildXlsx } from '../xlsx';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
+import { startColumnResizeInteraction } from '../columnResize';
 
 const { Text } = Typography;
 
@@ -83,6 +84,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const copySelectedRowsRef = useRef<() => void>(() => undefined);
   const resultRowCheckboxChangeRef = useRef<(rowKey: string, checked: boolean) => void>(() => undefined);
   const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const [view, setView] = useState<'table' | 'chart'>('table');
   const rowCount = result?.resultSet ? result.rows.length : 0;
@@ -146,20 +148,37 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     }));
   }, []);
 
-  const beginColumnResize = useCallback((event: ReactMouseEvent, key: string, initialWidth: number) => {
+  const stopColumnResize = useCallback(() => {
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => stopColumnResize, [stopColumnResize]);
+
+  const beginColumnResize = useCallback((event: ReactPointerEvent<HTMLSpanElement>, key: string, initialWidth: number) => {
     event.preventDefault();
     event.stopPropagation();
+    stopColumnResize();
+    const handle = event.currentTarget;
     const startX = event.clientX;
-    const handleMove = (moveEvent: MouseEvent) => resizeColumn(key, initialWidth + moveEvent.clientX - startX);
-    const handleUp = () => {
-      document.removeEventListener('mousemove', handleMove);
-      document.removeEventListener('mouseup', handleUp);
-      document.body.classList.remove('is-resizing-column');
-    };
+    if (typeof handle.setPointerCapture === 'function') handle.setPointerCapture(event.pointerId);
+    let cleanup: () => void = () => undefined;
+    cleanup = startColumnResizeInteraction({
+      target: window,
+      pointerId: event.pointerId,
+      startX,
+      onMove: (deltaX) => resizeColumn(key, initialWidth + deltaX),
+      onFinish: () => {
+        if (typeof handle.hasPointerCapture === 'function' && handle.hasPointerCapture(event.pointerId)) {
+          handle.releasePointerCapture(event.pointerId);
+        }
+        if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
+        document.body.classList.remove('is-resizing-column');
+      }
+    });
+    resizeCleanupRef.current = cleanup;
     document.body.classList.add('is-resizing-column');
-    document.addEventListener('mousemove', handleMove);
-    document.addEventListener('mouseup', handleUp);
-  }, [resizeColumn]);
+  }, [resizeColumn, stopColumnResize]);
 
   const editInfo = result?.edit;
   const editingEnabled = isResultEditable(editInfo) && Boolean(onCommitEdits);
@@ -260,7 +279,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
                   aria-label={`调整 ${column.label} 列宽`}
                   aria-orientation="vertical"
                   tabIndex={0}
-                  onMouseDown={(event) => beginColumnResize(event, column.key, width)}
+                  onPointerDown={(event) => beginColumnResize(event, column.key, width)}
                   onDoubleClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
