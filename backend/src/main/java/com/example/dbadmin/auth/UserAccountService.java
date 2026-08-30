@@ -129,7 +129,7 @@ public class UserAccountService {
     private void protectLastAdministrator(UserAccount existing, String newRole, boolean enabled) {
         boolean removesEnabledAdmin = existing.enabled() && "ADMIN".equals(existing.role())
                 && (!enabled || !"ADMIN".equals(newRole));
-        if (removesEnabledAdmin && repository.countEnabledAdmins() <= 1) {
+        if (removesEnabledAdmin && repository.lockEnabledAdministrators() <= 1) {
             throw new IllegalArgumentException("系统至少需要保留一个启用的管理员账号");
         }
     }

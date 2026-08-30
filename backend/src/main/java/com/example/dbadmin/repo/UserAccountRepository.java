@@ -31,9 +31,17 @@ public class UserAccountRepository {
         return value == null ? 0 : value;
     }
 
-    public long countEnabledAdmins() {
-        Long value = jdbc.queryForObject("SELECT COUNT(*) FROM app_user WHERE enabled = TRUE AND role = 'ADMIN'", Long.class);
-        return value == null ? 0 : value;
+    /**
+     * 锁住当前所有启用管理员，调用方必须处于事务中。并发降权/删除会按同一行顺序串行执行，
+     * 后到的事务会在拿到锁后看到最新管理员集合。
+     */
+    public long lockEnabledAdministrators() {
+        return jdbc.queryForList("""
+                SELECT id FROM app_user
+                WHERE enabled = TRUE AND role = 'ADMIN'
+                ORDER BY id
+                FOR UPDATE
+                """, Long.class).size();
     }
 
     public List<UserAccount> findAll() {

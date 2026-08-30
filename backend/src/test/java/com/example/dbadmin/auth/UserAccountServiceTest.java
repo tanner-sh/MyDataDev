@@ -37,7 +37,7 @@ class UserAccountServiceTest {
     void keepsAtLeastOneEnabledAdministrator() {
         UserAccount lastAdmin = account(2L, "backup-admin", "ADMIN", true);
         when(repository.findById(2L)).thenReturn(Optional.of(lastAdmin));
-        when(repository.countEnabledAdmins()).thenReturn(1L);
+        when(repository.lockEnabledAdministrators()).thenReturn(1L);
 
         assertThatThrownBy(() -> service.update(
                 2L, new UserUpdateRequest("backup-admin", "Backup Admin", "OPERATOR", null, true), administrator
