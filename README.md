@@ -233,6 +233,7 @@ node scripts/build-web-bundle.mjs
 - [MCP Server 配置、客户端接入与安全边界](docs/mcp-server.md)
 - [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md)
 - [仓库结构、编码与提交规范](AGENTS.md)
+- [CHANGELOG.md](CHANGELOG.md) — 每个发行版本的新增、变更、修复与升级注意
 
 ## 当前状态
 
