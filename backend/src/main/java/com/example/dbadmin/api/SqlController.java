@@ -154,7 +154,18 @@ public class SqlController {
         access.require(connectionId, ConnectionPermission.QUERY);
         WebIdentity identity = authentication != null && authentication.getPrincipal() instanceof WebIdentity webIdentity
                 ? webIdentity : null;
-        Long actorUserId = identity != null && !"all".equalsIgnoreCase(scope) ? identity.userId() : null;
+        boolean allUsers = "all".equalsIgnoreCase(scope);
+        if (!allUsers && !"mine".equalsIgnoreCase(scope)) {
+            throw new IllegalArgumentException("不支持的 SQL 历史范围：" + scope);
+        }
+        if (allUsers && identity != null && !"ADMIN".equals(identity.role())) {
+            throw new ApiProblemException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "SQL_HISTORY_ALL_ADMIN_REQUIRED",
+                    "只有管理员可以查看该连接中全部用户的 SQL 历史。"
+            );
+        }
+        Long actorUserId = identity != null && !allUsers ? identity.userId() : null;
         return sqlService.history(connectionId, keyword, limit, actorUserId);
     }
 

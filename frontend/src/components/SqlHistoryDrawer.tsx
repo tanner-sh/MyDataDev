@@ -13,6 +13,7 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
   history,
   keyword,
   scope,
+  allowAll,
   loading,
   hasMore,
   atLimit,
@@ -26,6 +27,7 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
   history: SqlHistory[];
   keyword: string;
   scope: 'mine' | 'all';
+  allowAll: boolean;
   loading: boolean;
   hasMore: boolean;
   atLimit: boolean;
@@ -69,13 +71,15 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
 
   return (
     <Drawer title="SQL 执行历史" size={DRAWER_WIDTH.form} open={open} onClose={onClose}>
-      <Segmented
-        block
-        className="history-scope"
-        value={scope}
-        options={[{ value: 'mine', label: '我的历史' }, { value: 'all', label: '连接全部' }]}
-        onChange={(value) => onScopeChange(value as 'mine' | 'all')}
-      />
+      {allowAll && (
+        <Segmented
+          block
+          className="history-scope"
+          value={scope}
+          options={[{ value: 'mine', label: '我的历史' }, { value: 'all', label: '连接全部' }]}
+          onChange={(value) => onScopeChange(value as 'mine' | 'all')}
+        />
+      )}
       <Input.Search
         allowClear
         className="history-search"

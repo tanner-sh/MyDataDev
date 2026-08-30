@@ -3259,6 +3259,7 @@ export default function App() {
             history={sqlHistoryState.rows}
             keyword={sqlHistoryState.query.keyword}
             scope={sqlHistoryState.query.scope || 'mine'}
+            allowAll={!isAuthenticationEnabled() || isCurrentUserAdmin()}
             loading={sqlHistoryState.loading}
             hasMore={hasMoreSqlHistory(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
             atLimit={isSqlHistoryAtLimit(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
