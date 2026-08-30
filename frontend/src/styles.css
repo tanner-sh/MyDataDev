@@ -1013,6 +1013,10 @@ body.is-resizing-column * {
   font-size: var(--text-sm);
 }
 
+.history-scope {
+  margin-bottom: 12px;
+}
+
 .history-search {
   margin-bottom: 12px;
 }

@@ -49,6 +49,7 @@ export type ObjectTreeProps = {
   onPrefetchDetail?: (object: DbObject) => void;
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
+  tableBrowseEnabled?: boolean;
   onBackupTable?: (object: DbObject) => void;
   isObjectFavorite?: (object: DbObject) => boolean;
   onToggleFavorite?: (object: DbObject) => void;
@@ -132,6 +133,7 @@ export const ObjectTree = memo(function ObjectTree({
   onPrefetchDetail,
   onOpenDetail,
   onOpenTable,
+  tableBrowseEnabled = true,
   onBackupTable,
   isObjectFavorite,
   onToggleFavorite,
@@ -152,14 +154,16 @@ export const ObjectTree = memo(function ObjectTree({
   // 单击看结构、双击看数据。回调经由 ref 读取，activation 本身只建一次。
   const openDetailRef = useRef(onOpenDetail);
   const openTableRef = useRef(onOpenTable);
+  const tableBrowseEnabledRef = useRef(tableBrowseEnabled);
   openDetailRef.current = onOpenDetail;
   openTableRef.current = onOpenTable;
+  tableBrowseEnabledRef.current = tableBrowseEnabled;
   const activationRef = useRef<ObjectRowActivation<DbObject> | null>(null);
   if (activationRef.current === null) {
     activationRef.current = createObjectRowActivation<DbObject>(
       {
         openDetail: (object) => openDetailRef.current(object),
-        openData: (object) => openTableRef.current(object)
+        openData: (object) => { if (tableBrowseEnabledRef.current) openTableRef.current(object); }
       },
       {
         setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
@@ -407,7 +411,7 @@ export const ObjectTree = memo(function ObjectTree({
             <span className="object-tree-object-name"><HighlightedName name={row.object.name} keyword={keyword} /></span>
           </button>
           <span className="object-tree-actions">
-            {!isView && <Tooltip title="打开表数据（双击行同样可以）"><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} onClick={() => onOpenTable(row.object)} /></Tooltip>}
+            {!isView && <Tooltip title={tableBrowseEnabled ? '打开表数据（双击行同样可以）' : '当前连接缺少查询权限'}><Button className="object-tree-action" type="text" size="small" icon={<TableOutlined />} aria-label={`打开 ${displayName} 的表数据`} disabled={!tableBrowseEnabled} onClick={() => onOpenTable(row.object)} /></Tooltip>}
             <Dropdown trigger={['click']} menu={{ items: objectMenuItems(row.object, row.expanded), onClick: ({ key }) => { if (key === 'detail') onOpenDetail(row.object); if (key === 'structure') setObjectExpanded(row.object, row.key, !row.expanded); if (key === 'favorite') onToggleFavorite?.(row.object); if (key === 'backup') onBackupTable?.(row.object); if (key === 'rename') onRenameTable?.(row.object); if (key === 'drop') onDropTable?.(row.object); } }}>
               <Tooltip title="更多操作"><Button className="object-tree-action" type="text" size="small" icon={<MoreOutlined />} aria-label={`${displayName} 更多操作`} /></Tooltip>
             </Dropdown>

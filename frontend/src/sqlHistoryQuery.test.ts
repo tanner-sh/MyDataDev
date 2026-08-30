@@ -48,18 +48,23 @@ describe('historyLoadedSummary', () => {
 
 describe('sqlHistoryRequestParams', () => {
   it('omits a blank keyword', () => {
-    expect(sqlHistoryRequestParams(7, INITIAL_SQL_HISTORY_QUERY)).toBe('connectionId=7&limit=50');
-    expect(sqlHistoryRequestParams(7, { keyword: '   ', limit: 50 })).toBe('connectionId=7&limit=50');
+    expect(sqlHistoryRequestParams(7, INITIAL_SQL_HISTORY_QUERY)).toBe('connectionId=7&limit=50&scope=mine');
+    expect(sqlHistoryRequestParams(7, { keyword: '   ', limit: 50 })).toBe('connectionId=7&limit=50&scope=mine');
   });
 
   it('trims and encodes the keyword', () => {
     expect(sqlHistoryRequestParams(7, { keyword: '  select * ', limit: 50 }))
-      .toBe('connectionId=7&limit=50&keyword=select+*');
+      .toBe('connectionId=7&limit=50&keyword=select+*&scope=mine');
   });
 
   it('clamps the limit to what the backend accepts', () => {
     expect(sqlHistoryRequestParams(7, { keyword: '', limit: 10_000 }))
-      .toBe(`connectionId=7&limit=${SQL_HISTORY_MAX_LIMIT}`);
-    expect(sqlHistoryRequestParams(7, { keyword: '', limit: 0 })).toBe('connectionId=7&limit=1');
+      .toBe(`connectionId=7&limit=${SQL_HISTORY_MAX_LIMIT}&scope=mine`);
+    expect(sqlHistoryRequestParams(7, { keyword: '', limit: 0 })).toBe('connectionId=7&limit=1&scope=mine');
+  });
+
+  it('requests all visible history when explicitly selected', () => {
+    expect(sqlHistoryRequestParams(7, { keyword: '', limit: 50, scope: 'all' }))
+      .toBe('connectionId=7&limit=50&scope=all');
   });
 });

@@ -20,6 +20,9 @@ export type SqlSnippet = {
   lastUsedAt?: string;
   actor?: string;
   updatedAt?: string;
+  visibility?: 'PERSONAL' | 'SHARED';
+  ownerUserId?: number;
+  editable?: boolean;
 };
 
 export type SqlSnippetDraft = {
@@ -30,9 +33,10 @@ export type SqlSnippetDraft = {
   /** 空串表示「适用于所有数据库类型」。 */
   dbType: string;
   tags: string;
+  visibility: 'PERSONAL' | 'SHARED';
 };
 
-export const EMPTY_SNIPPET_DRAFT: SqlSnippetDraft = { name: '', description: '', sql: '', dbType: '', tags: '' };
+export const EMPTY_SNIPPET_DRAFT: SqlSnippetDraft = { name: '', description: '', sql: '', dbType: '', tags: '', visibility: 'PERSONAL' };
 
 export function snippetDraftFrom(snippet: SqlSnippet): SqlSnippetDraft {
   return {
@@ -41,7 +45,8 @@ export function snippetDraftFrom(snippet: SqlSnippet): SqlSnippetDraft {
     description: snippet.description || '',
     sql: snippet.sql,
     dbType: snippet.dbType || '',
-    tags: snippet.tags || ''
+    tags: snippet.tags || '',
+    visibility: snippet.visibility || 'SHARED'
   };
 }
 
@@ -94,7 +99,8 @@ export function snippetRequestBody(draft: SqlSnippetDraft) {
     sql: draft.sql,
     // 空串在后端表示「通用」，别把它当成一个叫 "" 的数据库类型。
     dbType: draft.dbType.trim() || undefined,
-    tags: parseSnippetTags(draft.tags).join(',') || undefined
+    tags: parseSnippetTags(draft.tags).join(',') || undefined,
+    visibility: draft.visibility
   };
 }
 
@@ -112,6 +118,7 @@ export function snippetSubtitle(snippet: SqlSnippet): string {
   if (snippet.dbType) parts.push(snippet.dbType.toUpperCase());
   else parts.push('通用');
   if (snippet.useCount > 0) parts.push(`用过 ${snippet.useCount} 次`);
+  parts.push(snippet.visibility === 'PERSONAL' ? '仅自己' : '团队共享');
   return parts.join(' · ');
 }
 

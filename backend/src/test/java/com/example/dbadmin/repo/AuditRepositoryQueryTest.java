@@ -47,6 +47,18 @@ class AuditRepositoryQueryTest {
     }
 
     @Test
+    void verifiesTheHashChainAndDetectsTampering() {
+        repository.onConnection("admin", "SQL_EXECUTE", 1L, "select 1");
+        repository.onConnection("alice", "DATA_COMMIT", 1L, "table:orders", "rows=1");
+
+        assertThat(repository.verifyChain().valid()).isTrue();
+        jdbc.update("UPDATE audit_log SET detail = 'tampered' WHERE action = 'SQL_EXECUTE'");
+
+        assertThat(repository.verifyChain().valid()).isFalse();
+        assertThat(repository.verifyChain().firstInvalidId()).isNotNull();
+    }
+
+    @Test
     void filtersByActorAndAction() {
         repository.onConnection("admin", "SQL_EXECUTE", 1L, "select 1");
         repository.onConnection("alice", "SQL_EXECUTE", 1L, "select 2");

@@ -61,7 +61,14 @@ describe('validateSnippetDraft', () => {
 describe('snippetRequestBody', () => {
   it('sends undefined rather than empty strings for the optional fields', () => {
     const body = snippetRequestBody({ ...EMPTY_SNIPPET_DRAFT, name: ' 对账 ', sql: 'select 1' });
-    expect(body).toEqual({ name: '对账', description: undefined, sql: 'select 1', dbType: undefined, tags: undefined });
+    expect(body).toEqual({
+      name: '对账',
+      description: undefined,
+      sql: 'select 1',
+      dbType: undefined,
+      tags: undefined,
+      visibility: 'PERSONAL'
+    });
   });
 
   it('normalises the tags into a comma list', () => {
@@ -73,7 +80,15 @@ describe('snippetRequestBody', () => {
 describe('snippetDraftFrom', () => {
   it('round-trips a saved snippet into an editable draft', () => {
     const draft = snippetDraftFrom(snippet({ description: '说明', dbType: 'mysql', tags: 'a,b' }));
-    expect(draft).toEqual({ id: 1, name: '每日对账', description: '说明', sql: 'select 1', dbType: 'mysql', tags: 'a,b' });
+    expect(draft).toEqual({
+      id: 1,
+      name: '每日对账',
+      description: '说明',
+      sql: 'select 1',
+      dbType: 'mysql',
+      tags: 'a,b',
+      visibility: 'SHARED'
+    });
   });
 
   it('turns null-ish fields into empty strings so the form stays controlled', () => {
@@ -96,8 +111,9 @@ describe('snippetListParams', () => {
 
 describe('snippetSubtitle', () => {
   it('says 通用 when no database type is pinned', () => {
-    expect(snippetSubtitle(snippet())).toBe('通用');
-    expect(snippetSubtitle(snippet({ dbType: 'mysql', useCount: 3 }))).toBe('MYSQL · 用过 3 次');
+    expect(snippetSubtitle(snippet())).toBe('通用 · 团队共享');
+    expect(snippetSubtitle(snippet({ dbType: 'mysql', useCount: 3, visibility: 'PERSONAL' })))
+      .toBe('MYSQL · 用过 3 次 · 仅自己');
   });
 });
 

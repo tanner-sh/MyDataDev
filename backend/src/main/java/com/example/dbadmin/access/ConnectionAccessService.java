@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.AccessControlDtos.ConnectionAccessUpdateRequest;
 import com.example.dbadmin.dto.AccessControlDtos.ConnectionGrantResponse;
 import com.example.dbadmin.dto.AccessControlDtos.UserGroupRequest;
 import com.example.dbadmin.dto.AccessControlDtos.UserGroupResponse;
+import com.example.dbadmin.dto.AccessControlDtos.PermissionTemplateResponse;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.RestoreSourceRef;
 import com.example.dbadmin.model.BackupTask;
@@ -274,6 +275,21 @@ public class ConnectionAccessService {
 
     public List<UserGroupResponse> groups() {
         return repository.findGroups().stream().map(this::response).toList();
+    }
+
+    public List<PermissionTemplateResponse> permissionTemplates() {
+        return List.of(
+                new PermissionTemplateResponse("READ_ONLY", "只读分析", "查看结构、查询并导出结果",
+                        List.of(ConnectionPermission.VIEW_METADATA, ConnectionPermission.QUERY, ConnectionPermission.EXPORT)),
+                new PermissionTemplateResponse("DEVELOPER", "开发人员", "查询、修改数据和维护数据库对象",
+                        List.of(ConnectionPermission.VIEW_METADATA, ConnectionPermission.QUERY, ConnectionPermission.DATA_WRITE,
+                                ConnectionPermission.DDL, ConnectionPermission.EXPORT)),
+                new PermissionTemplateResponse("OPERATIONS", "运维人员", "开发权限加备份与恢复",
+                        List.of(ConnectionPermission.VIEW_METADATA, ConnectionPermission.QUERY, ConnectionPermission.DATA_WRITE,
+                                ConnectionPermission.DDL, ConnectionPermission.EXPORT, ConnectionPermission.BACKUP_RESTORE)),
+                new PermissionTemplateResponse("CONNECTION_OWNER", "连接管理员", "管理连接及其全部功能",
+                        List.of(ConnectionPermission.CONNECTION_ADMIN))
+        );
     }
 
     @Transactional

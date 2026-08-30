@@ -84,6 +84,12 @@ public class AccessControlController {
         return Arrays.asList(ConnectionPermission.values());
     }
 
+    @GetMapping("/api/admin/access/templates")
+    public List<com.example.dbadmin.dto.AccessControlDtos.PermissionTemplateResponse> templates(Authentication authentication) {
+        requireAdministrator(authentication);
+        return service.permissionTemplates();
+    }
+
     private WebIdentity requireAdministrator(Authentication authentication) {
         if (authentication == null || !(authentication.getPrincipal() instanceof WebIdentity identity)
                 || !"ADMIN".equals(identity.role())) {

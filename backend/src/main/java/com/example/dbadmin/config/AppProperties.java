@@ -3,7 +3,9 @@ package com.example.dbadmin.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @ConfigurationProperties(prefix = "app")
 public class AppProperties {
@@ -20,6 +22,7 @@ public class AppProperties {
     private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
     private final Auth auth = new Auth();
+    private final AuditAlert auditAlert = new AuditAlert();
 
     public String getCryptoKey() {
         return cryptoKey;
@@ -77,6 +80,10 @@ public class AppProperties {
         return auth;
     }
 
+    public AuditAlert getAuditAlert() {
+        return auditAlert;
+    }
+
     /** Web 发行包的本地账号认证；桌面端和本地开发默认关闭。 */
     public static class Auth {
         private String mode = "DISABLED";
@@ -85,6 +92,7 @@ public class AppProperties {
         private boolean cookieSecure;
         private int maxFailedAttempts = 5;
         private int lockSeconds = 30;
+        private final Oidc oidc = new Oidc();
 
         public String getMode() { return mode; }
         public void setMode(String mode) { this.mode = mode; }
@@ -98,6 +106,65 @@ public class AppProperties {
         public void setMaxFailedAttempts(int maxFailedAttempts) { this.maxFailedAttempts = maxFailedAttempts; }
         public int getLockSeconds() { return lockSeconds; }
         public void setLockSeconds(int lockSeconds) { this.lockSeconds = lockSeconds; }
+        public Oidc getOidc() { return oidc; }
+    }
+
+    /** 通用 OpenID Connect 配置，不绑定具体身份平台。 */
+    public static class Oidc {
+        private String issuerUri;
+        private String clientId;
+        private String clientSecret;
+        private List<String> scopes = new ArrayList<>(List.of("openid", "profile", "email"));
+        private String usernameClaim = "preferred_username";
+        private String displayNameClaim = "name";
+        private String groupsClaim = "groups";
+        private List<String> adminGroups = new ArrayList<>();
+        private Map<String, String> groupMappings = new LinkedHashMap<>();
+
+        public String getIssuerUri() { return issuerUri; }
+        public void setIssuerUri(String issuerUri) { this.issuerUri = issuerUri; }
+        public String getClientId() { return clientId; }
+        public void setClientId(String clientId) { this.clientId = clientId; }
+        public String getClientSecret() { return clientSecret; }
+        public void setClientSecret(String clientSecret) { this.clientSecret = clientSecret; }
+        public List<String> getScopes() { return scopes; }
+        public void setScopes(List<String> scopes) { this.scopes = scopes == null ? new ArrayList<>() : new ArrayList<>(scopes); }
+        public String getUsernameClaim() { return usernameClaim; }
+        public void setUsernameClaim(String usernameClaim) { this.usernameClaim = usernameClaim; }
+        public String getDisplayNameClaim() { return displayNameClaim; }
+        public void setDisplayNameClaim(String displayNameClaim) { this.displayNameClaim = displayNameClaim; }
+        public String getGroupsClaim() { return groupsClaim; }
+        public void setGroupsClaim(String groupsClaim) { this.groupsClaim = groupsClaim; }
+        public List<String> getAdminGroups() { return adminGroups; }
+        public void setAdminGroups(List<String> adminGroups) { this.adminGroups = adminGroups == null ? new ArrayList<>() : new ArrayList<>(adminGroups); }
+        public Map<String, String> getGroupMappings() { return groupMappings; }
+        public void setGroupMappings(Map<String, String> groupMappings) { this.groupMappings = groupMappings == null ? new LinkedHashMap<>() : new LinkedHashMap<>(groupMappings); }
+    }
+
+    /** 安全事件 Webhook。默认关闭，发送失败不会影响数据库操作。 */
+    public static class AuditAlert {
+        private boolean enabled;
+        private String webhookUrl;
+        private String signingSecret;
+        private int timeoutSeconds = 5;
+        private int cooldownSeconds = 30;
+        private List<String> actions = new ArrayList<>(List.of(
+                "AUTH_LOGIN_FAILED", "AUTHORIZATION_DENIED", "CONNECTION_ACCESS_DENIED",
+                "USER_ROLE_CHANGE", "USER_DISABLE", "CONNECTION_ACCESS_UPDATE", "AUDIT_ALERT_TEST"
+        ));
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getWebhookUrl() { return webhookUrl; }
+        public void setWebhookUrl(String webhookUrl) { this.webhookUrl = webhookUrl; }
+        public String getSigningSecret() { return signingSecret; }
+        public void setSigningSecret(String signingSecret) { this.signingSecret = signingSecret; }
+        public int getTimeoutSeconds() { return timeoutSeconds; }
+        public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+        public int getCooldownSeconds() { return cooldownSeconds; }
+        public void setCooldownSeconds(int cooldownSeconds) { this.cooldownSeconds = cooldownSeconds; }
+        public List<String> getActions() { return actions; }
+        public void setActions(List<String> actions) { this.actions = actions == null ? new ArrayList<>() : new ArrayList<>(actions); }
     }
 
     /** SSH 隧道的等待上限。跳板机不可达时这些值决定用户要等多久才看到报错。 */

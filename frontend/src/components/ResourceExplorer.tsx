@@ -15,6 +15,7 @@ import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
 import { useStableEvent } from '../hooks/useStableEvent';
 import type { SchemaObjectListSummary } from './SchemaObjectManager';
+import { hasConnectionPermission } from '../accessControl';
 import {
   objectPreferenceKey,
   readFavoriteObjectKeys,
@@ -50,7 +51,7 @@ export type ResourceExplorerProps = {
   onPrefetchDetail?: (object: DbObject) => void;
   onOpenDetail: (object: DbObject) => void;
   onOpenTable: (object: DbObject) => void;
-  onBackupTable: (object: DbObject) => void;
+  onBackupTable?: (object: DbObject) => void;
   tableLifecycleEnabled: boolean;
   /** 由全局搜索驱动：把资源管理器切到某个对象类型并预填关键字。token 变化即生效。 */
   requestedView?: { kind: ExplorerObjectKind; keyword: string; token: number };
@@ -246,7 +247,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   // visible row — each one carrying a Dropdown, Tooltip and Button.
   const openObjectDetailEvent = useStableEvent(openObjectDetail);
   const openTableDataEvent = useStableEvent(openTableData);
-  const onBackupTableEvent = useStableEvent(onBackupTable);
+  const canBrowseData = hasConnectionPermission(selected, 'QUERY');
+  const canBackup = hasConnectionPermission(selected, 'BACKUP_RESTORE');
+  const canDdl = hasConnectionPermission(selected, 'DDL');
   const toggleFavoriteObjectEvent = useStableEvent(toggleFavoriteObject);
   const isObjectFavoriteEvent = useStableEvent(
     (object: DbObject) => Boolean(selected && favoriteObjectKeySet.has(objectPreferenceKey(selected.id, object)))
@@ -427,10 +430,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             onPrefetchDetail={onPrefetchDetail}
             onOpenDetail={openObjectDetailEvent}
             onOpenTable={openTableDataEvent}
-            onBackupTable={onBackupTableEvent}
+            onBackupTable={canBackup ? onBackupTable : undefined}
+            tableBrowseEnabled={canBrowseData}
             isObjectFavorite={isObjectFavoriteEvent}
             onToggleFavorite={toggleFavoriteObjectEvent}
-            tableLifecycleEnabled={tableLifecycleEnabled}
+            tableLifecycleEnabled={tableLifecycleEnabled && canDdl}
             onRenameTable={onRenameTable}
             onDropTable={onDropTable}
           />

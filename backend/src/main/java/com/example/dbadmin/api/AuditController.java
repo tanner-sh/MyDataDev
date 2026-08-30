@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.PostMapping;
 
 import java.util.Map;
 
@@ -41,6 +42,22 @@ public class AuditController {
     @GetMapping("/facets")
     public AuditFacets facets() {
         return service.facets();
+    }
+
+    @GetMapping("/chain")
+    public com.example.dbadmin.repo.AuditRepository.ChainVerification chain() {
+        return service.verifyChain();
+    }
+
+    @GetMapping("/alerts/status")
+    public com.example.dbadmin.service.AuditAlertService.Status alertStatus() {
+        return service.alertStatus();
+    }
+
+    @PostMapping("/alerts/test")
+    public Map<String, Object> testAlert(@RequestHeader(value = "X-User", required = false) String actor) {
+        service.testAlert(actor);
+        return Map.of("ok", true);
     }
 
     @GetMapping("/export")

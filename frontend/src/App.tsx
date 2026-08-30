@@ -6,7 +6,7 @@ import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
 import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
-import type { ConnectionPermission } from './accessControl';
+import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
@@ -2845,7 +2845,10 @@ export default function App() {
   });
   const closeSqlHistoryEvent = useStableEvent(() => sqlHistoryState.setOpen(false));
   const searchSqlHistoryEvent = useStableEvent((keyword: string) => {
-    void sqlHistoryState.load({ keyword, limit: INITIAL_SQL_HISTORY_QUERY.limit });
+    void sqlHistoryState.load({ keyword, limit: INITIAL_SQL_HISTORY_QUERY.limit, scope: sqlHistoryState.query.scope || 'mine' });
+  });
+  const changeSqlHistoryScopeEvent = useStableEvent((scope: 'mine' | 'all') => {
+    void sqlHistoryState.load({ ...sqlHistoryState.query, scope, limit: INITIAL_SQL_HISTORY_QUERY.limit });
   });
   const loadMoreSqlHistoryEvent = useStableEvent(() => {
     const limit = nextSqlHistoryLimit(sqlHistoryState.query.limit);
@@ -2938,8 +2941,8 @@ export default function App() {
       onPrefetchDetail={prefetchExplorerObjectDetail}
       onOpenDetail={openExplorerObjectDetail}
       onOpenTable={openExplorerTable}
-      onBackupTable={backupExplorerTable}
-      tableLifecycleEnabled={Boolean(selected?.capabilities?.tableDesign && !selected.readonly)}
+      onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupExplorerTable : undefined}
+      tableLifecycleEnabled={Boolean(selected?.capabilities?.tableDesign && !selected.readonly && hasConnectionPermission(selected, 'DDL'))}
       requestedView={explorerRequestedView}
       onCreateTable={openCreateTableEvent}
       onRenameTable={renameTableEvent}
@@ -3081,9 +3084,9 @@ export default function App() {
                 status={tableStatus}
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
-                editingSupported={selected?.capabilities?.tableEdit ?? false}
+                editingSupported={Boolean(selected?.capabilities?.tableEdit && hasConnectionPermission(selected, 'DATA_WRITE'))}
                 onBackToSql={returnFromTableEvent}
-                onBackupTable={backupCurrentTableEvent}
+                onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
                 onReload={reloadTableEvent}
                 onPageChange={changeTablePageEvent}
                 onPageSizeChange={changeTablePageSizeEvent}
@@ -3102,7 +3105,11 @@ export default function App() {
               <ObjectDetailWorkspace
                 connectionId={selected?.id}
                 readonlyConnection={selected?.readonly}
-                capabilities={selected?.capabilities}
+                capabilities={selected?.capabilities ? {
+                  ...selected.capabilities,
+                  tableBrowse: selected.capabilities.tableBrowse && hasConnectionPermission(selected, 'QUERY'),
+                  tableDesign: selected.capabilities.tableDesign && hasConnectionPermission(selected, 'DDL')
+                } : undefined}
                 productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
                 target={activeObjectTarget}
                 detail={activeObjectDetail}
@@ -3111,9 +3118,9 @@ export default function App() {
                 onBackToSql={returnFromObjectEvent}
                 onOpenTable={openExplorerTable}
                 onReloadDetail={reloadObjectDetailEvent}
-                onBackupTable={backupCurrentTableEvent}
-                onRenameTable={renameTableEvent}
-                onDropTable={dropTableEvent}
+                onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
+                onRenameTable={selected && hasConnectionPermission(selected, 'DDL') ? renameTableEvent : undefined}
+                onDropTable={selected && hasConnectionPermission(selected, 'DDL') ? dropTableEvent : undefined}
                 onDesignDirtyChange={updateObjectDesignDirty}
                 onOpenRelation={openRelationEvent}
               />
@@ -3333,12 +3340,14 @@ export default function App() {
             open={sqlHistoryState.open}
             history={sqlHistoryState.rows}
             keyword={sqlHistoryState.query.keyword}
+            scope={sqlHistoryState.query.scope || 'mine'}
             loading={sqlHistoryState.loading}
             hasMore={hasMoreSqlHistory(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
             atLimit={isSqlHistoryAtLimit(sqlHistoryState.rows.length, sqlHistoryState.query.limit)}
             onClose={closeSqlHistoryEvent}
             onPick={pickSqlHistoryEvent}
             onSearch={searchSqlHistoryEvent}
+            onScopeChange={changeSqlHistoryScopeEvent}
             onLoadMore={loadMoreSqlHistoryEvent}
           />
         </Suspense>

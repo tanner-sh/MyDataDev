@@ -475,7 +475,11 @@ public final class ApiDtos {
     public record SqlStatementResult(int index, String sql, int startOffset, int endOffset, String status, String errorMessage, SqlResult result) {
     }
 
-    public record SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs, String errorMessage, String actor, String createdAt) {
+    public record SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs, String errorMessage, String actor, Long actorUserId, String createdAt) {
+        public SqlHistoryResponse(long id, long connectionId, String sql, String type, String status, long elapsedMs,
+                                  String errorMessage, String actor, String createdAt) {
+            this(id, connectionId, sql, type, status, elapsedMs, errorMessage, actor, null, createdAt);
+        }
     }
 
     public record SqlFileExecutionStartRequest(String productionConfirmation) {
@@ -751,7 +755,10 @@ public final class ApiDtos {
             long useCount,
             String lastUsedAt,
             String actor,
-            String updatedAt
+            String updatedAt,
+            String visibility,
+            Long ownerUserId,
+            boolean editable
     ) {
     }
 
@@ -760,8 +767,12 @@ public final class ApiDtos {
             @Size(max = 500) String description,
             @NotBlank @Size(max = 200_000) String sql,
             @Size(max = 40) String dbType,
-            @Size(max = 500) String tags
+            @Size(max = 500) String tags,
+            @jakarta.validation.constraints.Pattern(regexp = "PERSONAL|SHARED", message = "片段范围只支持 PERSONAL 或 SHARED") String visibility
     ) {
+        public SqlSnippetRequest(String name, String description, String sql, String dbType, String tags) {
+            this(name, description, sql, dbType, tags, null);
+        }
     }
 
     public record AuditEventResponse(

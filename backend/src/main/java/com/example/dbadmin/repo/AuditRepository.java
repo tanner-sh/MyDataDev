@@ -1,6 +1,7 @@
 package com.example.dbadmin.repo;
 
 import com.example.dbadmin.audit.AuditRequestContext;
+import com.example.dbadmin.audit.AuditChain;
 import com.example.dbadmin.dto.ApiDtos.AuditEventPage;
 import com.example.dbadmin.dto.ApiDtos.AuditEventResponse;
 import com.example.dbadmin.dto.ApiDtos.AuditFacets;
@@ -8,6 +9,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
+import com.example.dbadmin.service.AuditAlertService;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -23,10 +27,20 @@ public class AuditRepository {
     private static final String CONNECTION_TARGET_PREFIX = "connection:";
     private final JdbcTemplate jdbc;
     private final MetadataWriteQueue writes;
+    private final AuditAlertService alerts;
 
+    @Autowired
+    public AuditRepository(JdbcTemplate jdbc, MetadataWriteQueue writes, AuditAlertService alerts) {
+        this.jdbc = jdbc;
+        this.writes = writes;
+        this.alerts = alerts;
+    }
+
+    /** 测试和嵌入式调用兼容入口。 */
     public AuditRepository(JdbcTemplate jdbc, MetadataWriteQueue writes) {
         this.jdbc = jdbc;
         this.writes = writes;
+        this.alerts = null;
     }
 
     /**
@@ -72,20 +86,29 @@ public class AuditRepository {
         String forwardedFor = truncate(context == null ? null : context.forwardedFor(), 500);
         String userAgent = truncate(context == null ? null : context.userAgent(), 1_000);
         String requestId = truncate(context == null ? null : context.requestId(), 120);
+        Timestamp createdAt = Timestamp.from(Instant.now());
         // 审计只写不读，挪出请求线程可以省掉一次同步 H2 写；写失败的处理与之前一致。
         writes.submit(() -> insert(safeActor, safeAction, connectionId, safeTarget, safeDetail,
-                remoteAddress, forwardedFor, userAgent, requestId));
+                remoteAddress, forwardedFor, userAgent, requestId, createdAt));
     }
 
-    private void insert(String actor, String action, Long connectionId, String target, String detail,
-                        String remoteAddress, String forwardedFor, String userAgent, String requestId) {
+    private synchronized void insert(String actor, String action, Long connectionId, String target, String detail,
+                        String remoteAddress, String forwardedFor, String userAgent, String requestId, Timestamp createdAt) {
         try {
+            String previousHash = jdbc.query("SELECT event_hash FROM audit_log ORDER BY id DESC LIMIT 1",
+                    (rs, row) -> rs.getString(1)).stream().findFirst().orElseGet(() -> jdbc.queryForObject(
+                    "SELECT anchor_hash FROM audit_chain_state WHERE id = 1", String.class));
+            String eventHash = AuditChain.hash(previousHash, actor, action, connectionId, target, detail,
+                    remoteAddress, forwardedFor, userAgent, requestId, createdAt);
             jdbc.update("""
                     INSERT INTO audit_log(actor, action, connection_id, target, detail,
-                                          remote_address, forwarded_for, user_agent, request_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                          remote_address, forwarded_for, user_agent, request_id, created_at,
+                                          previous_hash, event_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, actor, action, connectionId, target, detail,
-                    remoteAddress, forwardedFor, userAgent, requestId);
+                    remoteAddress, forwardedFor, userAgent, requestId, createdAt, previousHash, eventHash);
+            if (alerts != null) alerts.publish(new AuditAlertService.Event(actor, action, target, detail,
+                    requestId, remoteAddress, eventHash, createdAt.toInstant()));
         } catch (RuntimeException error) {
             // A local observability failure must never make an already-completed
             // remote database operation look failed to the caller.
@@ -201,6 +224,44 @@ public class AuditRepository {
                 .stream().findFirst();
     }
 
+    /** 从保留期锚点开始逐条重算，能检测删除、插入、字段修改和顺序篡改。 */
+    public synchronized ChainVerification verifyChain() {
+        String expectedPrevious = jdbc.queryForObject("SELECT anchor_hash FROM audit_chain_state WHERE id = 1", String.class);
+        List<ChainRow> rows = jdbc.query("""
+                SELECT id, actor, action, connection_id, target, detail, remote_address, forwarded_for,
+                       user_agent, request_id, created_at, previous_hash, event_hash
+                FROM audit_log ORDER BY id
+                """, (rs, row) -> new ChainRow(rs.getLong("id"), rs.getString("actor"), rs.getString("action"),
+                rs.getObject("connection_id", Long.class), rs.getString("target"), rs.getString("detail"),
+                rs.getString("remote_address"), rs.getString("forwarded_for"), rs.getString("user_agent"),
+                rs.getString("request_id"), rs.getTimestamp("created_at"), rs.getString("previous_hash"), rs.getString("event_hash")));
+        long checked = 0;
+        for (ChainRow row : rows) {
+            String calculated = AuditChain.hash(expectedPrevious, row.actor(), row.action(), row.connectionId(), row.target(),
+                    row.detail(), row.remoteAddress(), row.forwardedFor(), row.userAgent(), row.requestId(), row.createdAt());
+            if (!java.util.Objects.equals(expectedPrevious, row.previousHash()) || !calculated.equals(row.eventHash())) {
+                return new ChainVerification(false, checked, row.id(), expectedPrevious, rows.isEmpty() ? expectedPrevious : rows.get(rows.size() - 1).eventHash());
+            }
+            expectedPrevious = row.eventHash();
+            checked++;
+        }
+        return new ChainVerification(true, checked, null,
+                jdbc.queryForObject("SELECT anchor_hash FROM audit_chain_state WHERE id = 1", String.class), expectedPrevious);
+    }
+
+    @Transactional
+    public synchronized int purgeBefore(Timestamp cutoff, int batch) {
+        // 只能裁掉连续前缀，否则锚点会跨过仍保留的事件，链校验将失去意义。
+        List<PrunedRow> prefix = jdbc.query("SELECT id, event_hash, created_at FROM audit_log ORDER BY id LIMIT ?",
+                (rs, row) -> new PrunedRow(rs.getLong("id"), rs.getString("event_hash"), rs.getTimestamp("created_at")), batch);
+        List<PrunedRow> rows = prefix.stream().takeWhile(row -> row.createdAt() != null && row.createdAt().before(cutoff)).toList();
+        if (rows.isEmpty()) return 0;
+        long lastId = rows.get(rows.size() - 1).id();
+        jdbc.update("UPDATE audit_chain_state SET anchor_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                rows.get(rows.size() - 1).hash());
+        return jdbc.update("DELETE FROM audit_log WHERE id <= ?", lastId);
+    }
+
     private String likePattern(String keyword) {
         return "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
     }
@@ -222,4 +283,10 @@ public class AuditRepository {
             int pageSize
     ) {
     }
+
+    public record ChainVerification(boolean valid, long checkedEvents, Long firstInvalidId, String anchorHash, String headHash) {}
+    private record PrunedRow(long id, String hash, Timestamp createdAt) {}
+    private record ChainRow(long id, String actor, String action, Long connectionId, String target, String detail,
+                            String remoteAddress, String forwardedFor, String userAgent, String requestId,
+                            Timestamp createdAt, String previousHash, String eventHash) {}
 }

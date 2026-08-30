@@ -17,9 +17,10 @@ export const SQL_HISTORY_SEARCH_DEBOUNCE_MS = 300;
 export type SqlHistoryQuery = {
   keyword: string;
   limit: number;
+  scope?: 'mine' | 'all';
 };
 
-export const INITIAL_SQL_HISTORY_QUERY: SqlHistoryQuery = { keyword: '', limit: SQL_HISTORY_PAGE_SIZE };
+export const INITIAL_SQL_HISTORY_QUERY: SqlHistoryQuery = { keyword: '', limit: SQL_HISTORY_PAGE_SIZE, scope: 'mine' };
 
 /**
  * 判断是否还可能有更多记录。
@@ -56,5 +57,6 @@ export function sqlHistoryRequestParams(connectionId: number, query: SqlHistoryQ
   });
   const keyword = query.keyword.trim();
   if (keyword) params.set('keyword', keyword);
+  params.set('scope', query.scope || 'mine');
   return params.toString();
 }

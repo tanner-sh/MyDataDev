@@ -484,7 +484,11 @@ public class SqlService {
     }
 
     public List<SqlHistoryResponse> history(long connectionId, String keyword, Integer limit) {
-        return history.findRecent(connectionId, keyword, limit == null ? 50 : limit);
+        return history(connectionId, keyword, limit, null);
+    }
+
+    public List<SqlHistoryResponse> history(long connectionId, String keyword, Integer limit, Long actorUserId) {
+        return history.findRecent(connectionId, keyword, limit == null ? 50 : limit, actorUserId);
     }
 
     public List<SqlCompletionItem> completions(SqlCompletionRequest request) {

@@ -34,19 +34,24 @@ public class AuthenticatedActorHeaderFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
-        if (authentication.getPrincipal() instanceof WebIdentity identity) {
-            java.util.Optional<WebIdentity> refreshed = authenticationService.refresh(identity);
-            if (refreshed.isEmpty()) {
-                SecurityContextHolder.clearContext();
-                filterChain.doFilter(request, response);
-                return;
-            }
-            WebIdentity current = refreshed.get();
-            authentication = org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(
-                    current, null, List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + current.role()))
-            );
-            SecurityContextHolder.getContext().setAuthentication(authentication);
+        if (!(authentication.getPrincipal() instanceof WebIdentity identity)) {
+            // Web API 只接受应用统一身份。OIDC 回调成功后会显式换成 WebIdentity；
+            // 任何残留或第三方 Authentication 都不能直接越过应用账号启停和角色刷新。
+            SecurityContextHolder.clearContext();
+            filterChain.doFilter(request, response);
+            return;
         }
+        java.util.Optional<WebIdentity> refreshed = authenticationService.refresh(identity);
+        if (refreshed.isEmpty()) {
+            SecurityContextHolder.clearContext();
+            filterChain.doFilter(request, response);
+            return;
+        }
+        WebIdentity current = refreshed.get();
+        authentication = org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(
+                current, null, List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + current.role()))
+        );
+        SecurityContextHolder.getContext().setAuthentication(authentication);
         String actor = authentication.getName();
         filterChain.doFilter(new HttpServletRequestWrapper(request) {
             @Override

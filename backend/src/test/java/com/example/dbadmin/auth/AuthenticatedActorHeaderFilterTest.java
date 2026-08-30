@@ -57,4 +57,23 @@ class AuthenticatedActorHeaderFilterTest {
 
         assertThat(((HttpServletRequest) chain.getRequest()).getHeader("X-User")).isEqualTo("operator");
     }
+
+    @Test
+    void clearsThirdPartyAuthenticationUntilOidcIsMappedToWebIdentity() throws Exception {
+        AppProperties properties = new AppProperties();
+        properties.getAuth().setMode("LOCAL");
+        WebIdentityProvider provider = new WebIdentityProvider() {
+            @Override public String id() { return "LOCAL"; }
+            @Override public Optional<WebIdentity> authenticate(String username, String credential) { return Optional.empty(); }
+        };
+        WebAuthenticationService service = new WebAuthenticationService(properties, List.of(provider), Clock.systemUTC());
+        service.validateConfiguration();
+        SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(
+                "foreign-principal", null, List.of(new SimpleGrantedAuthority("ROLE_ADMIN"))));
+
+        new AuthenticatedActorHeaderFilter(service).doFilterInternal(
+                new MockHttpServletRequest("GET", "/api/connections"), new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
 }

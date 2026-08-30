@@ -4,7 +4,7 @@ import { Button, DatePicker, Input, Select, Space, Spin, Tag, Tooltip, Typograph
 import { DownloadOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
 import { API } from '../constants';
-import type { AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
+import type { AuditAlertStatus, AuditChainStatus, AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
 import { formatHistoryTime, localizeError } from '../utils';
 import {
   auditActionColor,
@@ -36,6 +36,8 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
   const [keywordDraft, setKeywordDraft] = useState('');
   const [page, setPage] = useState<AuditEventPage | null>(null);
   const [facets, setFacets] = useState<AuditFacets>({ actors: [], actions: [] });
+  const [chain, setChain] = useState<AuditChainStatus>();
+  const [alerts, setAlerts] = useState<AuditAlertStatus>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -71,6 +73,8 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
     setExpandedId(null);
     void load(INITIAL_AUDIT_QUERY);
     api<AuditFacets>('/audit/facets').then(setFacets).catch(() => undefined);
+    api<AuditChainStatus>('/audit/chain').then(setChain).catch(() => undefined);
+    api<AuditAlertStatus>('/audit/alerts/status').then(setAlerts).catch(() => undefined);
   }, [load, open]);
 
   useEffect(() => () => {
@@ -111,6 +115,15 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
     }
   }
 
+  async function testAlert() {
+    try {
+      await api('/audit/alerts/test', { method: 'POST' });
+      await load(query);
+    } catch (cause) {
+      setError(localizeError(cause));
+    }
+  }
+
   const items = page?.items || [];
 
   return (
@@ -118,6 +131,12 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
       <header className="management-section-header">
         <Text strong>审计日志</Text>
         <Space size={4}>
+          {chain && <Tooltip title={chain.valid ? `已校验 ${chain.checkedEvents} 条事件` : `第 ${chain.firstInvalidId} 条附近校验失败`}>
+            <Tag color={chain.valid ? 'green' : 'red'}>{chain.valid ? '审计链完整' : '审计链异常'}</Tag>
+          </Tooltip>}
+          <Tooltip title={alerts?.enabled ? `已启用签名 Webhook，冷却 ${alerts.cooldownSeconds} 秒` : '在服务端配置 APP_AUDIT_ALERT_* 后启用'}>
+            <Button size="small" disabled={!alerts?.enabled} onClick={() => void testAlert()}>测试告警</Button>
+          </Tooltip>
           <Tooltip title="按当前筛选导出，最多 10000 条">
             <Button size="small" icon={<DownloadOutlined />} disabled={items.length === 0} onClick={() => void exportAll()}>导出筛选结果</Button>
           </Tooltip>

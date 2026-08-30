@@ -62,6 +62,7 @@ import { ResultGrid } from './ResultGrid';
 import { SqlPreview } from './SqlPreview';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
 import { productionConfirmationHeaders } from '../productionConfirmation';
+import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 
 const { Text, Title } = Typography;
 
@@ -330,6 +331,8 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   const kind = creation?.kind || object?.kind;
   const dirty = source !== initialSource;
   const operations = new Set(detail?.operations || []);
+  const canDdl = hasConnectionPermission(connection, 'DDL');
+  const canInvoke = hasAnyConnectionPermission(connection, ['QUERY', 'DATA_WRITE', 'DDL']);
   const production = connection.environment === 'prod';
 
   async function loadDetail(refresh: boolean) {
@@ -445,11 +448,11 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   }
 
   const menuItems: NonNullable<MenuProps['items']> = detail ? [
-    operations.has('REFRESH') ? { key: 'REFRESH', icon: <ReloadOutlined />, label: '刷新物化视图' } : null,
-    operations.has('ENABLE') ? { key: 'ENABLE', icon: <PlayCircleOutlined />, label: '启用触发器' } : null,
-    operations.has('DISABLE') ? { key: 'DISABLE', icon: <PauseCircleOutlined />, label: '禁用触发器' } : null,
+    operations.has('REFRESH') ? { key: 'REFRESH', icon: <ReloadOutlined />, label: '刷新物化视图', disabled: !canDdl } : null,
+    operations.has('ENABLE') ? { key: 'ENABLE', icon: <PlayCircleOutlined />, label: '启用触发器', disabled: !canDdl } : null,
+    operations.has('DISABLE') ? { key: 'DISABLE', icon: <PauseCircleOutlined />, label: '禁用触发器', disabled: !canDdl } : null,
     operations.has('DROP') ? { type: 'divider' as const } : null,
-    operations.has('DROP') ? { key: 'DROP', icon: <DeleteOutlined />, label: '删除对象', danger: true } : null
+    operations.has('DROP') ? { key: 'DROP', icon: <DeleteOutlined />, label: '删除对象', danger: true, disabled: !canDdl } : null
   ].filter(Boolean) as NonNullable<MenuProps['items']> : [];
 
   const tabs = [
@@ -462,7 +465,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
           language="sql"
           value={source}
           theme={document.documentElement.dataset.theme === 'dark' ? 'vs-dark' : 'vs'}
-          options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, readOnly: !creation && (!detail?.sourceAvailable || !operations.has('REPLACE')) }}
+          options={{ minimap: { enabled: false }, fontSize: 13, automaticLayout: true, readOnly: !canDdl || !creation && (!detail?.sourceAvailable || !operations.has('REPLACE')) }}
           onChange={(value) => setSource(value || '')}
         />
       </div>
@@ -482,10 +485,10 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         title={<Space><SchemaObjectIcon kind={kind!} /><span>{creation ? `新建${schemaObjectKindLabel(kind!)}` : object?.displayName}</span>{object?.status && <Tag>{schemaObjectDisplayStatus(object.status)}</Tag>}</Space>}
         extra={(
           <Space>
-            {!creation && object?.kind === 'VIEW' && <Button icon={<EyeOutlined />} onClick={() => { onClose(); onOpenViewData({ schemaName: object.schemaName, name: object.name, type: 'VIEW', columns: [], indexes: [] }); }}>查看数据</Button>}
-            {!creation && operations.has('INVOKE') && !connection.readonly && <Button type="primary" icon={<ThunderboltOutlined />} onClick={() => setInvokeOpen(true)}>调用</Button>}
-            {creation && !connection.readonly && <Button type="primary" icon={<PlayCircleOutlined />} loading={executing} onClick={() => void previewLifecycle('CREATE')}>预览并创建</Button>}
-            {!creation && operations.has('REPLACE') && detail?.sourceAvailable && !connection.readonly && <Button type="primary" icon={<CodeOutlined />} disabled={!dirty} loading={executing} onClick={() => void previewLifecycle('REPLACE')}>预览并保存</Button>}
+            {!creation && object?.kind === 'VIEW' && <Button icon={<EyeOutlined />} disabled={!hasConnectionPermission(connection, 'QUERY')} onClick={() => { onClose(); onOpenViewData({ schemaName: object.schemaName, name: object.name, type: 'VIEW', columns: [], indexes: [] }); }}>查看数据</Button>}
+            {!creation && operations.has('INVOKE') && !connection.readonly && <Button type="primary" icon={<ThunderboltOutlined />} disabled={!canInvoke} onClick={() => setInvokeOpen(true)}>调用</Button>}
+            {creation && !connection.readonly && <Button type="primary" icon={<PlayCircleOutlined />} disabled={!canDdl} loading={executing} onClick={() => void previewLifecycle('CREATE')}>预览并创建</Button>}
+            {!creation && operations.has('REPLACE') && detail?.sourceAvailable && !connection.readonly && <Button type="primary" icon={<CodeOutlined />} disabled={!dirty || !canDdl} loading={executing} onClick={() => void previewLifecycle('REPLACE')}>预览并保存</Button>}
             {!creation && <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadDetail(true)}>刷新</Button>}
             {!creation && menuItems.length > 0 && !connection.readonly && <Dropdown menu={{ items: menuItems, onClick: ({ key }) => void previewLifecycle(key as SchemaObjectLifecycleOperation) }}><Button icon={<MoreOutlined />} /></Dropdown>}
           </Space>

@@ -55,7 +55,7 @@ public class UserAccountService {
     public UserResponse update(long id, UserUpdateRequest request, WebIdentity actor) {
         UserAccount existing = require(id);
         if (!LocalDatabaseIdentityProvider.PROVIDER.equals(existing.provider())) {
-            throw new IllegalArgumentException("外部身份账号应由对应 SSO 提供器管理");
+            return updateExternal(existing, request, actor);
         }
         String username = LocalDatabaseIdentityProvider.normalizeUsername(request.username());
         String displayName = normalizeDisplayName(request.displayName());
@@ -89,11 +89,31 @@ public class UserAccountService {
         return response(require(id));
     }
 
+    private UserResponse updateExternal(UserAccount existing, UserUpdateRequest request, WebIdentity actor) {
+        if (actor.userId() == existing.id() && !request.enabled()) throw new IllegalArgumentException("不能停用当前账号");
+        if (request.password() != null && !request.password().isBlank()) throw new IllegalArgumentException("SSO 账号不支持本地密码");
+        protectLastAdministrator(existing, existing.role(), request.enabled());
+        repository.update(existing.id(), existing.subject(), existing.username(), existing.displayName(),
+                existing.role(), request.enabled(), existing.enabled() != request.enabled());
+        if (existing.enabled() != request.enabled()) {
+            audit.global(actor.username(), request.enabled() ? "USER_ENABLE" : "USER_DISABLE",
+                    "user:" + existing.username(), "provider=" + existing.provider());
+        }
+        return response(require(existing.id()));
+    }
+
     @Transactional
     public void delete(long id, WebIdentity actor) {
         UserAccount existing = require(id);
         if (actor.userId() == id) throw new IllegalArgumentException("不能删除当前登录账号");
+        if (!LocalDatabaseIdentityProvider.PROVIDER.equals(existing.provider())) {
+            throw new IllegalArgumentException("SSO 账号请停用而不要删除，避免下次登录重新创建");
+        }
+        if (repository.countOwnedSqlSnippets(id) > 0) {
+            throw new IllegalArgumentException("该用户仍拥有 SQL 片段，请先由管理员转为团队共享或删除片段");
+        }
         protectLastAdministrator(existing, null, false);
+        repository.releaseSharedSqlSnippets(id);
         repository.delete(id);
         audit.global(actor.username(), "USER_DELETE", "user:" + existing.username(), "role=" + existing.role());
     }

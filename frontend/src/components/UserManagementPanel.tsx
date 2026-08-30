@@ -111,7 +111,7 @@ export function UserManagementPanel() {
             render: (_, user) => <Space>
               <Button type="link" size="small" onClick={() => openEdit(user)}>编辑</Button>
               <Popconfirm title={`删除用户 ${user.username}？`} okText="删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void remove(user)}>
-                <Button type="link" size="small" danger disabled={user.username === currentUsername}>删除</Button>
+                <Button type="link" size="small" danger disabled={user.username === currentUsername || user.provider !== 'LOCAL'}>删除</Button>
               </Popconfirm>
             </Space>
           }
@@ -127,21 +127,24 @@ export function UserManagementPanel() {
         onCancel={() => setEditing(undefined)}
         destroyOnHidden
       >
+        {editing !== 'new' && editing?.provider !== 'LOCAL' && (
+          <Alert type="info" showIcon message="SSO 账号资料和角色由身份平台声明同步；这里可以停用账号。" />
+        )}
         <Form form={form} layout="vertical" requiredMark={false}>
-          <Form.Item name="username" label="用户名" rules={[{ required: true }, { pattern: /^[A-Za-z0-9._-]+$/, message: '仅支持字母、数字、点、下划线和连字符' }]}>
-            <Input autoComplete="off" disabled={editing !== 'new' && editing?.username === currentUsername} />
+          <Form.Item name="username" label="用户名" rules={editing !== 'new' && editing?.provider !== 'LOCAL' ? [] : [{ required: true }, { pattern: /^[A-Za-z0-9._-]+$/, message: '仅支持字母、数字、点、下划线和连字符' }]}>
+            <Input autoComplete="off" disabled={editing !== 'new' && (editing?.username === currentUsername || editing?.provider !== 'LOCAL')} />
           </Form.Item>
-          <Form.Item name="displayName" label="显示名称" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="displayName" label="显示名称" rules={[{ required: true }]}><Input disabled={editing !== 'new' && editing?.provider !== 'LOCAL'} /></Form.Item>
           <Form.Item name="role" label="角色" rules={[{ required: true }]}>
-            <Select disabled={editing !== 'new' && editing?.username === currentUsername} options={[
+            <Select disabled={editing !== 'new' && (editing?.username === currentUsername || editing?.provider !== 'LOCAL')} options={[
               { value: 'ADMIN', label: '管理员：可管理用户及全部功能' },
               { value: 'OPERATOR', label: '操作员：可使用数据库功能，不能管理用户' }
             ]} />
           </Form.Item>
-          <Form.Item name="password" label={editing === 'new' ? '初始密码' : '重置密码（留空则不修改）'}
+          {(editing === 'new' || editing?.provider === 'LOCAL') && <Form.Item name="password" label={editing === 'new' ? '初始密码' : '重置密码（留空则不修改）'}
             rules={editing === 'new' ? [{ required: true }, { min: 12, message: '密码至少需要 12 位' }] : [{ min: 12, message: '密码至少需要 12 位' }]}>
             <Input.Password autoComplete="new-password" />
-          </Form.Item>
+          </Form.Item>}
           <Form.Item name="enabled" label="账号状态" valuePropName="checked">
             <Switch checkedChildren="启用" unCheckedChildren="停用" disabled={editing !== 'new' && editing?.username === currentUsername} />
           </Form.Item>

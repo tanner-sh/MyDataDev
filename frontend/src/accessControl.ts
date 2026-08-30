@@ -21,6 +21,23 @@ export const CONNECTION_PERMISSION_LABELS: Record<ConnectionPermission, string> 
   CONNECTION_ADMIN: '管理连接（含全部权限）'
 };
 
+export function hasConnectionPermission(
+  connection: { permissions?: ConnectionPermission[] } | null | undefined,
+  permission: ConnectionPermission
+): boolean {
+  // 未启用 Web 认证的桌面模式没有 permissions 字段，保持原有全部可用行为。
+  return connection?.permissions == null
+    || connection.permissions.includes('CONNECTION_ADMIN')
+    || connection.permissions.includes(permission);
+}
+
+export function hasAnyConnectionPermission(
+  connection: { permissions?: ConnectionPermission[] } | null | undefined,
+  permissions: ConnectionPermission[]
+): boolean {
+  return permissions.some((permission) => hasConnectionPermission(connection, permission));
+}
+
 export type UserGroup = {
   id: number;
   name: string;
@@ -42,4 +59,11 @@ export type ConnectionAccessPolicy = {
   ownerUserId?: number | null;
   grants: ConnectionGrant[];
   availablePermissions: ConnectionPermission[];
+};
+
+export type PermissionTemplate = {
+  key: string;
+  name: string;
+  description: string;
+  permissions: ConnectionPermission[];
 };

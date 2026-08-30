@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import com.example.dbadmin.auth.WebIdentity;
 
 class SqlSnippetServiceTest {
     private SqlSnippetService service;
@@ -129,5 +130,19 @@ class SqlSnippetServiceTest {
         service.create(request("普通", "select 2", null), "admin");
 
         assertThat(service.list("100%", null)).hasSize(1);
+    }
+
+    @Test
+    void isolatesPersonalSnippetsButKeepsTeamSnippetsVisible() {
+        WebIdentity alice = new WebIdentity(11, "LOCAL", "alice", "alice", "Alice", "OPERATOR", 0);
+        WebIdentity bob = new WebIdentity(12, "LOCAL", "bob", "bob", "Bob", "OPERATOR", 0);
+        service.create(new SqlSnippetRequest("Alice 私有", null, "select 1", null, null, "PERSONAL"), alice, null);
+        service.create(new SqlSnippetRequest("团队脚本", null, "select 2", null, null, "SHARED"), alice, null);
+
+        assertThat(service.list(null, null, alice)).extracting(SqlSnippetResponse::name)
+                .containsExactly("Alice 私有", "团队脚本");
+        assertThat(service.list(null, null, bob)).extracting(SqlSnippetResponse::name)
+                .containsExactly("团队脚本");
+        assertThat(service.list(null, null, bob).get(0).editable()).isFalse();
     }
 }

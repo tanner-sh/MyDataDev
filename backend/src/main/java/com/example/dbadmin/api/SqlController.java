@@ -16,6 +16,8 @@ import com.example.dbadmin.dto.ApiDtos.SqlScriptRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
 import com.example.dbadmin.service.ExportService;
 import com.example.dbadmin.service.SqlService;
+import com.example.dbadmin.auth.WebIdentity;
+import org.springframework.security.core.Authentication;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -145,10 +147,15 @@ public class SqlController {
     public java.util.List<SqlHistoryResponse> history(
             @RequestParam long connectionId,
             @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false, defaultValue = "mine") String scope,
+            Authentication authentication
     ) {
         access.require(connectionId, ConnectionPermission.QUERY);
-        return sqlService.history(connectionId, keyword, limit);
+        WebIdentity identity = authentication != null && authentication.getPrincipal() instanceof WebIdentity webIdentity
+                ? webIdentity : null;
+        Long actorUserId = identity != null && !"all".equalsIgnoreCase(scope) ? identity.userId() : null;
+        return sqlService.history(connectionId, keyword, limit, actorUserId);
     }
 
     @PostMapping("/completions")

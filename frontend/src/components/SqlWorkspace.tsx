@@ -16,6 +16,7 @@ import { transactionBadge, transactionTooltip, type SqlTransactionState } from '
 import type { SqlEditorOnMount } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
+import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -79,6 +80,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   onBeginTransaction: () => void;
   onFinishTransaction: (commit: boolean) => void;
 }) {
+  const canQuery = Boolean(selected && hasConnectionPermission(selected, 'QUERY'));
+  const canWrite = Boolean(selected && hasConnectionPermission(selected, 'DATA_WRITE'));
+  const canExecute = Boolean(selected && hasAnyConnectionPermission(selected, ['QUERY', 'DATA_WRITE', 'DDL']));
+  const canExport = canQuery && Boolean(selected && hasConnectionPermission(selected, 'EXPORT'));
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
@@ -184,11 +189,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           onPaneModeChange={setResultPaneMode}
           onPageChange={handleResultPageChange}
           connectionId={selected?.id}
-          onCommitEdits={onCommitResultEdits}
+          onCommitEdits={canWrite ? onCommitResultEdits : undefined}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -201,8 +206,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   const splitLimits = editorSplitLimits(splitHeight, preferredSplitRatio);
   const moreMenu: MenuProps = {
     items: [
-      { key: 'sql-file', icon: <FileTextOutlined />, label: '执行本地 SQL 文件', disabled: !selected },
-      { key: 'sql-file-tasks', icon: <ProfileOutlined />, label: '查看 SQL 文件任务' },
+      { key: 'sql-file', icon: <FileTextOutlined />, label: '执行本地 SQL 文件', disabled: !canExecute },
+      { key: 'sql-file-tasks', icon: <ProfileOutlined />, label: '查看 SQL 文件任务', disabled: !canExecute },
       { type: 'divider' },
       { key: 'snippets', icon: <BookOutlined />, label: 'SQL 片段库' },
       { key: 'save-snippet', icon: <SaveOutlined />, label: '把当前 SQL 保存为片段', disabled: !draftSql.trim() },
@@ -211,7 +216,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         key: 'export',
         icon: <DownloadOutlined />,
         label: '重新查询并导出',
-        disabled: !selected || loading,
+        disabled: !canExport || loading,
         children: [
           { key: 'export:csv', label: '重新查询并导出 CSV' },
           { key: 'export:json', label: '重新查询并导出 JSON' },
@@ -224,7 +229,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         key: 'explain',
         icon: <FundProjectionScreenOutlined />,
         label: '查看执行计划',
-        disabled: !selected || loading || !selected.capabilities?.explain
+        disabled: !canQuery || loading || !selected?.capabilities?.explain
       },
       { type: 'divider' },
       { key: 'rename-tab', label: '重命名当前标签' },
@@ -290,7 +295,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
               </Button>
             </Tooltip>
             <Tooltip title="SQL 历史">
-              <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!selected || historyLoading} loading={historyLoading} onClick={onOpenHistory}>
+              <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!canQuery || historyLoading} loading={historyLoading} onClick={onOpenHistory}>
                 <span className="sql-toolbar-label">历史</span>
               </Button>
             </Tooltip>
@@ -330,7 +335,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
                   className="sql-toolbar-button"
                   size="small"
                   icon={<BranchesOutlined />}
-                  disabled={!selected || selected.readonly || loading}
+                  disabled={!canWrite || selected?.readonly || loading}
                   loading={transactionState.pending}
                   onClick={onBeginTransaction}
                 >
@@ -350,7 +355,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
                   <span className="sql-toolbar-label">处理中 {formatElapsed(executionElapsedMs)}</span>
                 </Button>
               ) : (
-                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<PlayCircleOutlined />} aria-label={selected?.environment === 'prod' ? '在生产环境执行当前或选中 SQL' : '执行当前或选中 SQL'} disabled={!selected} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
+                <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<PlayCircleOutlined />} aria-label={selected?.environment === 'prod' ? '在生产环境执行当前或选中 SQL' : '执行当前或选中 SQL'} disabled={!canExecute} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
                   <span className="sql-toolbar-label">{selected?.environment === 'prod' ? '生产执行' : '执行'}</span>
                 </Button>
               )}
@@ -403,7 +408,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             value={draftSql}
             themeMode={themeMode}
             options={EDITOR_OPTIONS}
-            executeDisabled={!selected || loading}
+            executeDisabled={!canExecute || loading}
             onMount={onEditorMount}
             onChange={editorChangeEvent}
             onFormat={editorFormatEvent}
@@ -428,7 +433,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
           {activeTab.errorDetail && activeTab.results.length > 0 && resultPaneMode !== 'collapsed' && (
             <SqlExecutionErrorBanner
               detail={activeTab.errorDetail}
-              retryDisabled={!selected || loading || !draftSql.trim()}
+              retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
             />
           )}
@@ -436,14 +441,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={onCommitResultEdits} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
           ) : activeTab.errorDetail ? (
             <SqlExecutionErrorPanel
               detail={activeTab.errorDetail}
-              retryDisabled={!selected || loading || !draftSql.trim()}
+              retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
             />
           ) : (
@@ -451,10 +456,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无执行结果" />
               <Text type="secondary">选中 SQL 后按 Ctrl/Cmd+Enter，或直接执行光标所在语句。</Text>
               <Space wrap>
-                <Button type="primary" icon={<PlayCircleOutlined />} danger={selected?.environment === 'prod'} disabled={!selected || !draftSql.trim()} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
+                <Button type="primary" icon={<PlayCircleOutlined />} danger={selected?.environment === 'prod'} disabled={!canExecute || !draftSql.trim()} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
                   {selected?.environment === 'prod' ? '在生产环境执行' : '执行当前 SQL'}
                 </Button>
-                <Button icon={<HistoryOutlined />} disabled={!selected} onClick={onOpenHistory}>查看历史</Button>
+                <Button icon={<HistoryOutlined />} disabled={!canQuery} onClick={onOpenHistory}>查看历史</Button>
                 <Button icon={<FileTextOutlined />} onClick={appendSelectTemplate}>追加 SELECT 模板</Button>
                 <Button icon={<BookOutlined />} onClick={onOpenSnippets}>SQL 片段库</Button>
               </Space>

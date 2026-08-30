@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { DRAWER_WIDTH } from '../constants';
-import { Button, Drawer, Empty, Input, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Button, Drawer, Empty, Input, Segmented, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DownOutlined, PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import type { SqlHistory } from '../types';
 import { formatHistoryTime } from '../utils';
@@ -12,23 +12,27 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
   open,
   history,
   keyword,
+  scope,
   loading,
   hasMore,
   atLimit,
   onClose,
   onPick,
   onSearch,
+  onScopeChange,
   onLoadMore
 }: {
   open: boolean;
   history: SqlHistory[];
   keyword: string;
+  scope: 'mine' | 'all';
   loading: boolean;
   hasMore: boolean;
   atLimit: boolean;
   onClose: () => void;
   onPick: (history: SqlHistory, mode: 'new-tab' | 'replace-current') => void;
   onSearch: (keyword: string) => void;
+  onScopeChange: (scope: 'mine' | 'all') => void;
   onLoadMore: () => void;
 }) {
   const [draft, setDraft] = useState(keyword);
@@ -65,6 +69,13 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
 
   return (
     <Drawer title="SQL 执行历史" size={DRAWER_WIDTH.form} open={open} onClose={onClose}>
+      <Segmented
+        block
+        className="history-scope"
+        value={scope}
+        options={[{ value: 'mine', label: '我的历史' }, { value: 'all', label: '连接全部' }]}
+        onChange={(value) => onScopeChange(value as 'mine' | 'all')}
+      />
       <Input.Search
         allowClear
         className="history-search"

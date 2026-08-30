@@ -166,6 +166,17 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
           </label>
           <div className="snippet-field-row">
             <label className="snippet-field">
+              <Text strong>可见范围</Text>
+              <Select
+                value={editing.visibility}
+                options={[
+                  { value: 'PERSONAL', label: '仅自己' },
+                  { value: 'SHARED', label: '团队共享' }
+                ]}
+                onChange={(visibility) => setEditing({ ...editing, visibility })}
+              />
+            </label>
+            <label className="snippet-field">
               <Text strong>适用数据库</Text>
               <Select
                 allowClear
@@ -245,12 +256,12 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
                       <Tooltip title="插入到当前编辑器">
                         <Button size="small" type="primary" ghost onClick={() => void insert(snippet)}>插入</Button>
                       </Tooltip>
-                      <Tooltip title="编辑">
+                      {snippet.editable !== false && <Tooltip title="编辑">
                         <Button size="small" type="text" icon={<EditOutlined />} aria-label={`编辑 ${snippet.name}`} onClick={() => setEditing(snippetDraftFrom(snippet))} />
-                      </Tooltip>
-                      <Tooltip title="删除">
+                      </Tooltip>}
+                      {snippet.editable !== false && <Tooltip title="删除">
                         <Button size="small" type="text" icon={<DeleteOutlined />} aria-label={`删除 ${snippet.name}`} onClick={() => setPendingDelete(snippet)} />
-                      </Tooltip>
+                      </Tooltip>}
                     </Space>
                   </div>
                   {snippet.description && <Text type="secondary" className="snippet-item-description">{snippet.description}</Text>}

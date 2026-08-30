@@ -14,6 +14,8 @@ import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 
 @Repository
 public class UserAccountRepository {
@@ -93,6 +95,53 @@ public class UserAccountRepository {
 
     public void recordLogin(long id) {
         jdbc.update("UPDATE app_user SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?", id);
+    }
+
+    /** SSO 登录只同步身份提供器声明的资料和角色；管理员手工停用的账号不会被重新启用。 */
+    public void updateExternalProfile(long id, String username, String displayName, String role) {
+        jdbc.update("""
+                UPDATE app_user
+                SET username = ?, display_name = ?, role = ?,
+                    auth_version = auth_version + CASE WHEN role <> ? THEN 1 ELSE 0 END,
+                    last_login_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """, username, displayName, role, role, id);
+    }
+
+    public boolean usernameBelongsToOther(String username, Long userId) {
+        Integer count = jdbc.queryForObject("SELECT COUNT(*) FROM app_user WHERE username = ? AND (? IS NULL OR id <> ?)",
+                Integer.class, username, userId, userId == null ? 0L : userId);
+        return count != null && count > 0;
+    }
+
+    public long countOwnedSqlSnippets(long userId) {
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM sql_snippet WHERE owner_user_id = ? AND visibility = 'PERSONAL'", Long.class, userId);
+        return count == null ? 0 : count;
+    }
+
+    public void releaseSharedSqlSnippets(long userId) {
+        jdbc.update("UPDATE sql_snippet SET owner_user_id = NULL WHERE owner_user_id = ? AND visibility = 'SHARED'", userId);
+    }
+
+    /** 用 source_provider 标记自动成员关系，SSO 重登时只替换自身同步的数据，保留管理员手工分组。 */
+    public void syncExternalGroups(long userId, String provider, Collection<String> localGroupNames) {
+        jdbc.update("DELETE FROM app_user_group_member WHERE user_id = ? AND source_provider = ?", userId, provider);
+        for (String rawName : new LinkedHashSet<>(localGroupNames)) {
+            String name = rawName == null ? "" : rawName.trim();
+            if (name.isEmpty()) continue;
+            List<Long> ids = jdbc.queryForList("SELECT id FROM app_user_group WHERE name = ?", Long.class, name);
+            long groupId;
+            if (ids.isEmpty()) {
+                jdbc.update("INSERT INTO app_user_group(name, description) VALUES (?, ?)", name, "由 " + provider + " 自动同步");
+                groupId = jdbc.queryForObject("SELECT id FROM app_user_group WHERE name = ?", Long.class, name);
+            } else groupId = ids.get(0);
+            Integer exists = jdbc.queryForObject("SELECT COUNT(*) FROM app_user_group_member WHERE group_id = ? AND user_id = ?",
+                    Integer.class, groupId, userId);
+            if (exists == null || exists == 0) {
+                jdbc.update("INSERT INTO app_user_group_member(group_id, user_id, source_provider) VALUES (?, ?, ?)",
+                        groupId, userId, provider);
+            }
+        }
     }
 
     public void delete(long id) {

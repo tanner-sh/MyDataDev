@@ -445,7 +445,7 @@ export type SqlTab = {
    */
   errorDetail?: string;
 };
-export type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; createdAt: string };
+export type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; actorUserId?: number; createdAt: string };
 export type SqlFileExecutionStatus = 'ANALYZING' | 'READY' | 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
 export type SqlFileExecution = {
   id: number;
@@ -561,6 +561,8 @@ export type AuditEvent = {
 export type AuditEventPage = { items: AuditEvent[]; page: number; pageSize: number; hasMore: boolean };
 
 export type AuditFacets = { actors: string[]; actions: string[] };
+export type AuditChainStatus = { valid: boolean; checkedEvents: number; firstInvalidId?: number; anchorHash?: string; headHash?: string };
+export type AuditAlertStatus = { enabled: boolean; webhookConfigured: boolean; signed: boolean; cooldownSeconds: number; actions: string[] };
 
 export type SqlTransactionScriptResult = SqlScriptResult & {
   transaction: import("./sqlTransaction").SqlTransaction;

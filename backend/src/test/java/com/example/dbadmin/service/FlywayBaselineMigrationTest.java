@@ -56,6 +56,7 @@ class FlywayBaselineMigrationTest {
                 .dataSource(url, "sa", "")
                 .baselineOnMigrate(true)
                 .baselineVersion(MigrationVersion.fromVersion("9"))
+                .target(MigrationVersion.fromVersion("10"))
                 .javaMigrations(new V10__ConnectionAccessAndAuditContext())
                 .load()
                 .migrate();
@@ -73,6 +74,40 @@ class FlywayBaselineMigrationTest {
                 assertThat(row.getObject("owner_user_id")).isNull();
             }
             assertThat(connection.getMetaData().getColumns(null, null, "AUDIT_LOG", "REQUEST_ID").next()).isTrue();
+        }
+    }
+
+    @Test
+    void p1MigrationPreservesConnectionsAndKeepsHistoricalSnippetsShared() throws Exception {
+        String url = "jdbc:h2:mem:flyway-p1-" + UUID.randomUUID() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var sql = connection.createStatement();
+            sql.execute("CREATE TABLE db_connection(id BIGINT PRIMARY KEY, name VARCHAR(120), encrypted_password CLOB)");
+            sql.execute("INSERT INTO db_connection VALUES (7, 'legacy-prod', 'encrypted-value')");
+            sql.execute("CREATE TABLE sql_snippet(id BIGINT PRIMARY KEY, name VARCHAR(120), description VARCHAR(500), sql_text CLOB, db_type VARCHAR(40), tags VARCHAR(500), use_count BIGINT, last_used_at TIMESTAMP, actor VARCHAR(120), created_at TIMESTAMP, updated_at TIMESTAMP)");
+            sql.execute("CREATE UNIQUE INDEX ux_sql_snippet_name ON sql_snippet(name)");
+            sql.execute("INSERT INTO sql_snippet(id, name, sql_text, use_count, actor) VALUES (3, '旧片段', 'select 1', 0, 'admin')");
+            sql.execute("CREATE TABLE sql_history(id BIGINT PRIMARY KEY, connection_id BIGINT)");
+            sql.execute("CREATE TABLE app_user_group_member(group_id BIGINT, user_id BIGINT)");
+            sql.execute("CREATE TABLE audit_log(id BIGINT PRIMARY KEY, actor VARCHAR(120), action VARCHAR(80), connection_id BIGINT, target VARCHAR(500), detail CLOB, remote_address VARCHAR(120), forwarded_for VARCHAR(500), user_agent VARCHAR(1000), request_id VARCHAR(120), created_at TIMESTAMP)");
+            sql.execute("INSERT INTO audit_log VALUES (1, 'admin', 'CONNECTION_UPDATE', 7, 'connection:7', 'before upgrade', NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP)");
+        }
+
+        Flyway.configure().dataSource(url, "sa", "").baselineOnMigrate(true)
+                .baselineVersion(MigrationVersion.fromVersion("10"))
+                .target(MigrationVersion.fromVersion("11")).load().migrate();
+
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            var snippet = connection.createStatement().executeQuery("SELECT visibility, owner_user_id FROM sql_snippet WHERE id = 3");
+            assertThat(snippet.next()).isTrue();
+            assertThat(snippet.getString("visibility")).isEqualTo("SHARED");
+            assertThat(snippet.getObject("owner_user_id")).isNull();
+            var savedConnection = connection.createStatement().executeQuery("SELECT encrypted_password FROM db_connection WHERE id = 7");
+            assertThat(savedConnection.next()).isTrue();
+            assertThat(savedConnection.getString("encrypted_password")).isEqualTo("encrypted-value");
+            var audit = connection.createStatement().executeQuery("SELECT event_hash FROM audit_log WHERE id = 1");
+            assertThat(audit.next()).isTrue();
+            assertThat(audit.getString("event_hash")).hasSize(64);
         }
     }
 }

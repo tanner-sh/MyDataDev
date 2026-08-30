@@ -9,6 +9,7 @@ import {
   CONNECTION_PERMISSION_LABELS,
   type ConnectionAccessPolicy,
   type ConnectionGrant,
+  type PermissionTemplate,
   type UserGroup
 } from '../accessControl';
 
@@ -18,6 +19,7 @@ type GroupFields = { name: string; description?: string; memberUserIds: number[]
 export function AccessManagementPanel({ connections }: { connections: Connection[] }) {
   const [groups, setGroups] = useState<UserGroup[]>([]);
   const [users, setUsers] = useState<WebUser[]>([]);
+  const [templates, setTemplates] = useState<PermissionTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editingGroup, setEditingGroup] = useState<UserGroup | 'new'>();
@@ -38,12 +40,14 @@ export function AccessManagementPanel({ connections }: { connections: Connection
     setLoading(true);
     setError('');
     try {
-      const [nextGroups, nextUsers] = await Promise.all([
+      const [nextGroups, nextUsers, nextTemplates] = await Promise.all([
         api<UserGroup[]>('/admin/access/groups'),
-        api<WebUser[]>('/admin/users')
+        api<WebUser[]>('/admin/users'),
+        api<PermissionTemplate[]>('/admin/access/templates')
       ]);
       setGroups(nextGroups);
       setUsers(nextUsers);
+      setTemplates(nextTemplates);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '访问控制数据加载失败');
     } finally {
@@ -158,6 +162,16 @@ export function AccessManagementPanel({ connections }: { connections: Connection
                     <Select mode="multiple" className="full-width" placeholder="选择权限" value={grant.permissions}
                       options={CONNECTION_PERMISSIONS.map((permission) => ({ value: permission, label: CONNECTION_PERMISSION_LABELS[permission] }))}
                       onChange={(permissions) => updateGrant(index, { permissions })} />
+                    <Select
+                      allowClear
+                      className="full-width"
+                      placeholder="从权限模板快速填充"
+                      options={templates.map((template) => ({ value: template.key, label: `${template.name} · ${template.description}` }))}
+                      onChange={(key) => {
+                        const template = templates.find((item) => item.key === key);
+                        if (template) updateGrant(index, { permissions: template.permissions });
+                      }}
+                    />
                   </Space>
                 </Card>)}
               </Space>

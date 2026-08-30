@@ -128,15 +128,40 @@ Web 模式与桌面模式的安全模型不同，部署前必须确认：
 - 应用层的生产确认与只读连接保护不能替代数据库权限，目标库仍应使用最小权限账号。
 - H2 控制台在 `web` profile 下是关闭的，不要为了排查问题把它打开。
 
-### 内置账号与 SSO 扩展
+### 内置账号与 OIDC SSO
 
 首个管理员登录后，在“管理 → 用户与权限”中创建每个人的独立账号，不要共享管理员密码。操作时的审计人来自已认证会话，因此可以区分真实用户。
 
-在“管理 → 访问控制”中可创建用户组，并为每条连接选择共享或受限模式。受限模式可分别授予查看元数据、执行查询、修改数据、执行 DDL、导出、备份恢复和连接管理权限；连接管理权限隐含该连接的全部权限。Web 用户新建的连接默认是受限模式且归创建者所有，管理员始终具有全部连接权限。
+在“管理 → 访问控制”中可创建用户组，并为每条连接选择共享或受限模式。受限模式可分别授予查看元数据、执行查询、修改数据、执行 DDL、导出、备份恢复和连接管理权限；也可以用“只读分析、开发人员、运维人员、连接管理员”模板快速填充。连接管理权限隐含该连接的全部权限。Web 用户新建的连接默认是受限模式且归创建者所有，管理员始终具有全部连接权限。
+
+SQL 片段支持“仅自己”和“团队共享”；升级前已有片段统一保留为团队共享，不会猜测或改写所有者。SQL 历史新增“我的历史 / 连接全部”范围，升级后的记录使用稳定用户 ID 归属，旧历史仍保留在“连接全部”中。
 
 审计日志记录登录成功/失败、权限拒绝、表数据浏览、导出和备份下载等事件，并附带实际 TCP 对端、单独保存的 `X-Forwarded-For`、User-Agent 与请求 ID。`X-Forwarded-For` 仅用于排查，不作为可信身份或授权依据；反向代理可传入合法的 `X-Request-ID` 便于串联代理日志。
 
-后端的 `WebIdentityProvider` 是身份提供方扩展点：实现方负责验证身份、返回统一的 `WebIdentity` 并在请求时刷新账号状态；现有 Session、角色授权和审计链路不需要感知是 OIDC、SAML 还是反向代理 SSO。`app.auth.mode` 用来选择与提供方 `id()` 同名的实现。当前发行包只内置 `LOCAL`，尚未携带具体组织 SSO 协议实现。
+发行包内置通用 OIDC Authorization Code 登录。身份使用 `issuer + sub` 稳定关联，不会因为用户名声明变化创建重复账号；与本地账号同名时不会自动合并，而是给 OIDC 用户追加稳定后缀，避免错误绑定。示例：
+
+```bash
+export APP_AUTH_MODE=OIDC
+export APP_AUTH_OIDC_ISSUER_URI='https://id.example.com/realms/company'
+export APP_AUTH_OIDC_CLIENT_ID='mydatadev'
+export APP_AUTH_OIDC_CLIENT_SECRET='<client-secret>'
+export APP_AUTH_OIDC_ADMIN_GROUPS='db-admins'
+java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web \
+  --app.auth.oidc.group-mappings.finance='财务组' \
+  --app.auth.oidc.group-mappings.dba='数据库运维组'
+```
+
+在身份平台登记回调地址 `https://<MyDataDev 地址>/login/oauth2/code/mydatadev`。`groups` 声明中命中 `admin-groups` 的用户映射为 `ADMIN`，其余用户为 `OPERATOR`；`group-mappings` 只替换 OIDC 自动同步的成员关系，不覆盖管理员手工分组。反向代理必须正确传递 `X-Forwarded-Proto` 和 `Host`。
+
+审计事件用 SHA-256 前后串联，管理员可在审计页查看链完整性；保留期清理会推进链锚点。可选 Webhook 告警示例：
+
+```bash
+export APP_AUDIT_ALERT_ENABLED=true
+export APP_AUDIT_ALERT_WEBHOOK_URL='https://security.example.com/hooks/mydatadev'
+export APP_AUDIT_ALERT_SIGNING_SECRET='<shared-secret>'
+```
+
+Webhook 使用 `X-MyDataDev-Signature-256: sha256=<HMAC>` 验签。发送失败只写应用日志，不会让已经完成的数据库操作回滚。
 
 ## 升级
 

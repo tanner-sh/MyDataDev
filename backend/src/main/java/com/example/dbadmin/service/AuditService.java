@@ -5,6 +5,7 @@ import com.example.dbadmin.dto.ApiDtos.AuditEventResponse;
 import com.example.dbadmin.dto.ApiDtos.AuditFacets;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.AuditRepository.AuditQuery;
+import com.example.dbadmin.repo.AuditRepository.ChainVerification;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -26,9 +27,11 @@ public class AuditService {
     static final int MAX_PAGE_SIZE = 200;
 
     private final AuditRepository repository;
+    private final AuditAlertService alerts;
 
-    public AuditService(AuditRepository repository) {
+    public AuditService(AuditRepository repository, AuditAlertService alerts) {
         this.repository = repository;
+        this.alerts = alerts;
     }
 
     public AuditEventPage list(
@@ -55,6 +58,14 @@ public class AuditService {
 
     public AuditFacets facets() {
         return repository.facets();
+    }
+
+    public ChainVerification verifyChain() { return repository.verifyChain(); }
+
+    public AuditAlertService.Status alertStatus() { return alerts.status(); }
+
+    public void testAlert(String actor) {
+        repository.global(actor, "AUDIT_ALERT_TEST", "audit:webhook", "管理员发送测试安全告警");
     }
 
     public byte[] exportCsv(

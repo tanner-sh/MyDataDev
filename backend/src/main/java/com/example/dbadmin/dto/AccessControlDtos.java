@@ -53,4 +53,11 @@ public final class AccessControlDtos {
             List<ConnectionGrantResponse> grants,
             List<ConnectionPermission> availablePermissions
     ) {}
+
+    public record PermissionTemplateResponse(
+            String key,
+            String name,
+            String description,
+            List<ConnectionPermission> permissions
+    ) {}
 }

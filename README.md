@@ -203,6 +203,8 @@ node scripts/build-web-bundle.mjs
 | `spring.datasource.*` | MyDataDev 自身的 H2 元数据库连接。 |
 | `app.crypto-key` | 连接密码加密密钥，生产部署应通过 `DB_ADMIN_CRYPTO_KEY` 注入强密钥。 |
 | `app.auth.*` | Web Session 认证。Web 包默认 `LOCAL`，`DB_ADMIN_WEB_USERNAME` / `DB_ADMIN_WEB_PASSWORD` 仅用于初始化第一个管理员；桌面和本地开发默认关闭。 |
+| `app.auth.oidc.*` | 标准 OIDC SSO 的 issuer、客户端凭据、声明名、管理员组和本地用户组映射。 |
+| `app.audit-alert.*` | 高风险审计事件的 Webhook、HMAC 签名、冷却时间与动作白名单；默认关闭。 |
 | `app.sql.*` | SQL 行数、语句数量与执行超时限制。 |
 | `app.ssh.*` | SSH 隧道的连接、认证超时与心跳间隔。 |
 | `app.backup.*` | 备份目录、超时、SQL 批量写入，以及远端上传失败暂存文件的保留天数。 |

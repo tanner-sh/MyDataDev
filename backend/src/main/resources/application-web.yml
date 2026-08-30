@@ -3,6 +3,7 @@
 # 独立部署时必须收紧或补齐的部分，数据目录仍相对于 JAR 的工作目录。
 server:
   shutdown: graceful
+  forward-headers-strategy: framework
   servlet:
     session:
       timeout: ${APP_AUTH_SESSION_TIMEOUT:8h}
@@ -35,6 +36,21 @@ app:
     cookie-secure: ${APP_AUTH_COOKIE_SECURE:false}
     max-failed-attempts: ${APP_AUTH_MAX_FAILED_ATTEMPTS:5}
     lock-seconds: ${APP_AUTH_LOCK_SECONDS:30}
+    oidc:
+      issuer-uri: ${APP_AUTH_OIDC_ISSUER_URI:}
+      client-id: ${APP_AUTH_OIDC_CLIENT_ID:}
+      client-secret: ${APP_AUTH_OIDC_CLIENT_SECRET:}
+      scopes: ${APP_AUTH_OIDC_SCOPES:openid,profile,email}
+      username-claim: ${APP_AUTH_OIDC_USERNAME_CLAIM:preferred_username}
+      display-name-claim: ${APP_AUTH_OIDC_DISPLAY_NAME_CLAIM:name}
+      groups-claim: ${APP_AUTH_OIDC_GROUPS_CLAIM:groups}
+      admin-groups: ${APP_AUTH_OIDC_ADMIN_GROUPS:}
+  audit-alert:
+    enabled: ${APP_AUDIT_ALERT_ENABLED:false}
+    webhook-url: ${APP_AUDIT_ALERT_WEBHOOK_URL:}
+    signing-secret: ${APP_AUDIT_ALERT_SIGNING_SECRET:}
+    timeout-seconds: ${APP_AUDIT_ALERT_TIMEOUT_SECONDS:5}
+    cooldown-seconds: ${APP_AUDIT_ALERT_COOLDOWN_SECONDS:30}
 
 management:
   endpoints:

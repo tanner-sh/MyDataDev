@@ -71,6 +71,23 @@ app:
     password:
     max-failed-attempts: 5
     lock-seconds: 30
+    oidc:
+      issuer-uri:
+      client-id:
+      client-secret:
+      scopes: [openid, profile, email]
+      username-claim: preferred_username
+      display-name-claim: name
+      groups-claim: groups
+      admin-groups: []
+      group-mappings: {}
+  audit-alert:
+    enabled: false
+    webhook-url:
+    signing-secret:
+    timeout-seconds: 5
+    cooldown-seconds: 30
+    actions: [AUTH_LOGIN_FAILED, AUTHORIZATION_DENIED, CONNECTION_ACCESS_DENIED, USER_ROLE_CHANGE, USER_DISABLE, CONNECTION_ACCESS_UPDATE, AUDIT_ALERT_TEST]
   cors:
     # Keep the browser UI same-origin in production; only Vite's two local
     # development origins are allowed by default. Deployments that serve the UI
