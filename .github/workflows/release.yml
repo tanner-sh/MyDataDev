@@ -182,6 +182,7 @@ jobs:
           workdir=$(mktemp -d "$RUNNER_TEMP/mydatadev-web.XXXXXX")
           cd "$workdir"
           DB_ADMIN_CRYPTO_KEY=smoke-key-smoke-key-smoke-key-32 \
+          DB_ADMIN_WEB_PASSWORD=smoke-password-at-least-12 \
             java -jar "$GITHUB_WORKSPACE/$jar" \
             --spring.profiles.active=web --server.port=8099 > server.log 2>&1 &
           pid=$!
@@ -195,9 +196,16 @@ jobs:
 
           # 同源提供 UI 与 API 是 Web 发行包的全部意义，两条路径都要真的可用。
           curl -fsS http://127.0.0.1:8099/ | grep -q '<div id="root">'
-          curl -fsS -H 'X-User: admin' http://127.0.0.1:8099/api/connections > /dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/api/connections)" = "401"
+          auth_status=$(curl -fsS -c cookies.txt http://127.0.0.1:8099/api/auth/status)
+          csrf_token=$(printf '%s' "$auth_status" | jq -r '.csrfToken')
+          curl -fsS -b cookies.txt -c cookies.txt -H 'Content-Type: application/json' \
+            -H "X-XSRF-TOKEN: $csrf_token" \
+            --data '{"username":"admin","password":"smoke-password-at-least-12"}' \
+            http://127.0.0.1:8099/api/auth/login > /dev/null
+          curl -fsS -b cookies.txt http://127.0.0.1:8099/api/connections > /dev/null
           # 元数据库控制台在发行包中必须是关闭的。
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/h2-console)" = "404"
+          test "$(curl -s -b cookies.txt -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/h2-console)" = "404"
 
       - uses: actions/upload-artifact@v4
         with:

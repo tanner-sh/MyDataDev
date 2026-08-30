@@ -19,6 +19,7 @@ public class AppProperties {
     private final Ssh ssh = new Ssh();
     private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
+    private final Auth auth = new Auth();
 
     public String getCryptoKey() {
         return cryptoKey;
@@ -70,6 +71,33 @@ public class AppProperties {
 
     public Mcp getMcp() {
         return mcp;
+    }
+
+    public Auth getAuth() {
+        return auth;
+    }
+
+    /** Web 发行包的本地账号认证；桌面端和本地开发默认关闭。 */
+    public static class Auth {
+        private String mode = "DISABLED";
+        private String username = "admin";
+        private String password;
+        private boolean cookieSecure;
+        private int maxFailedAttempts = 5;
+        private int lockSeconds = 30;
+
+        public String getMode() { return mode; }
+        public void setMode(String mode) { this.mode = mode; }
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+        public boolean isCookieSecure() { return cookieSecure; }
+        public void setCookieSecure(boolean cookieSecure) { this.cookieSecure = cookieSecure; }
+        public int getMaxFailedAttempts() { return maxFailedAttempts; }
+        public void setMaxFailedAttempts(int maxFailedAttempts) { this.maxFailedAttempts = maxFailedAttempts; }
+        public int getLockSeconds() { return lockSeconds; }
+        public void setLockSeconds(int lockSeconds) { this.lockSeconds = lockSeconds; }
     }
 
     /** SSH 隧道的等待上限。跳板机不可达时这些值决定用户要等多久才看到报错。 */

@@ -25,6 +25,8 @@ import { summarizeRowChanges } from '../utils';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { canCountTableRows, IDLE_TABLE_ROW_COUNT, tablePageSummary, type TableRowCountState } from '../tableRowCount';
 import type { RelationTarget } from '../relationNavigation';
+import type { TableQuery } from '../tableQuery';
+import { TableQueryBuilder } from './TableQueryBuilder';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -44,6 +46,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   pageSize = 100,
   hasMore = false,
   rowCount = IDLE_TABLE_ROW_COUNT,
+  tableQuery,
   onCountRows,
   onBackToSql,
   onBackupTable,
@@ -58,7 +61,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   foreignKeys,
   onFollowRelation,
   onPageChange,
-  onPageSizeChange
+  onPageSizeChange,
+  onTableQueryChange
 }: {
   activeTable: ActiveTable | null;
   tableData: TableData | null;
@@ -73,6 +77,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   pageSize?: number;
   hasMore?: boolean;
   rowCount?: TableRowCountState;
+  tableQuery: TableQuery;
   onCountRows?: () => void;
   onBackToSql: () => void;
   onBackupTable?: () => void;
@@ -88,6 +93,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
   onPageChange?: (page: number) => void;
   onPageSizeChange?: (pageSize: number) => void;
+  onTableQueryChange: (query: TableQuery) => void;
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -137,10 +143,13 @@ export const TableWorkspace = memo(function TableWorkspace({
               : tableData?.editable
                 ? `可编辑，行定位字段：${tableData.keyColumns.join(', ')}`
                 : '当前表没有主键或全非空唯一索引，只允许新增数据'}
-            {tableData?.navigationMode === 'OFFSET' ? ' · 当前使用偏移分页，深页浏览受限' : ''}
+            {tableData?.navigationMode === 'OFFSET'
+              ? tableQuery.sorts.length > 0 ? ' · 自定义排序使用偏移分页' : ' · 当前使用偏移分页，深页浏览受限'
+              : ''}
           </Text>
         </div>
         <div className="table-toolbar-actions">
+          <TableQueryBuilder columns={tableData?.columns || []} value={tableQuery} disabled={!tableData || loading} onApply={onTableQueryChange} />
           <Space size={8} className="table-secondary-actions">
             <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading || !onBackupTable} onClick={onBackupTable}>备份此表</Button>
             <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>

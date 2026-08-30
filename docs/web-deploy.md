@@ -18,21 +18,22 @@ Web 模式的发行产物有两个，随桌面安装包一起发布在同一个 
 
 ```bash
 export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
+export DB_ADMIN_WEB_PASSWORD='<至少 12 位的强密码>'
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 ```
 
-打开 <http://localhost:8080>。`--spring.profiles.active=web` 不是可选项：它关闭 H2 控制台、启用优雅停机并写出 `./logs/mydatadev.log`，缺少它会退回面向本地开发的默认配置。
+打开 <http://localhost:8080>。`--spring.profiles.active=web` 不是可选项：它启用 Web 登录、关闭 H2 控制台、启用优雅停机并写出 `./logs/mydatadev.log`，缺少它会退回面向本地开发的默认配置。
 
 JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动：
 
 | 目录 | 内容 |
 | --- | --- |
-| `./data` | H2 元数据库：连接配置、加密后的密码、SQL 历史、审计、MCP Agent、任务记录。 |
+| `./data` | H2 元数据库：Web 用户、连接配置、加密后的密码、SQL 历史、审计、MCP Agent、任务记录。 |
 | `./backups` | 备份文件与远端上传失败的暂存文件。 |
 | `./sql-files` | 大 SQL 文件执行任务的上传文件。 |
 | `./logs` | 应用日志。 |
 
-`DB_ADMIN_CRYPTO_KEY` 是连接密码和文件服务凭据的加密密钥。**必须在首次启动前设置**，且此后不能更改 —— 换密钥会导致已保存的密文无法解密。Web 模式不再提供默认密钥，未设置时后端会拒绝启动。
+`DB_ADMIN_CRYPTO_KEY` 是连接密码和文件服务凭据的加密密钥。**必须在首次启动前设置**，且此后不能更改 —— 换密钥会导致已保存的密文无法解密。`DB_ADMIN_WEB_PASSWORD` 只是首个 Web 管理员的初始化密码，用户表为空时必须至少 12 位；已有用户后再启动不依赖这个环境变量。首次登录并确认账号可用后，建议将它从运行环境移除。
 
 常用覆盖项（全部可以用 `--key=value` 或环境变量传入）：
 
@@ -57,6 +58,8 @@ After=network-online.target
 User=mydatadev
 WorkingDirectory=/opt/mydatadev
 Environment=DB_ADMIN_CRYPTO_KEY=<32 位以上的强随机字符串>
+# 仅第一次初始化管理员需要；确认可登录后从 unit 中删除。
+Environment=DB_ADMIN_WEB_PASSWORD=<至少 12 位的强密码>
 ExecStart=/usr/bin/java -jar /opt/mydatadev/MyDataDev-web.jar --spring.profiles.active=web
 Restart=on-failure
 # 大 SQL 文件与恢复任务可能长时间运行，停机时给足退出时间。
@@ -117,11 +120,19 @@ APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://db.example.com
 
 Web 模式与桌面模式的安全模型不同，部署前必须确认：
 
-- **`/api` 没有用户认证。** 前端发送的 `X-User: admin` 只是审计标签，不是身份凭证。任何能访问端口的人都拥有全部权限，因此必须部署在可信网络中，并由外层反向代理承担身份认证（如 OIDC、Basic Auth 或 mTLS）。
+- Web 包默认启用内置多用户认证，使用服务端 Session 和 CSRF 保护；审计用户由服务端登录主体写入，不信任浏览器的 `X-User`。`DB_ADMIN_WEB_USERNAME` 只决定空用户库中首个管理员的用户名。
+- `ADMIN` 可管理账号；`OPERATOR` 可使用数据库功能，但不能打开用户管理。停用用户、修改角色/用户名或重置密码会使该用户已有会话在下一次请求时失效。
+- HTTPS 终止在反向代理时设置 `APP_AUTH_COOKIE_SECURE=true`。只有外层已经提供可靠身份认证且网络完全可信时，才可显式设置 `APP_AUTH_MODE=DISABLED`。
 - **不要把 `/api` 或 `/mcp` 直接暴露到公网。** 跨主机访问一律使用 HTTPS。
 - `/mcp` 由 Agent API Key 认证，工具全部只读，但仍受连接白名单和生产连接授权约束，详见 [MCP Server 说明](mcp-server.md)。
 - 应用层的生产确认与只读连接保护不能替代数据库权限，目标库仍应使用最小权限账号。
 - H2 控制台在 `web` profile 下是关闭的，不要为了排查问题把它打开。
+
+### 内置账号与 SSO 扩展
+
+首个管理员登录后，在“管理 → 用户与权限”中创建每个人的独立账号，不要共享管理员密码。操作时的审计人来自已认证会话，因此可以区分真实用户。
+
+后端的 `WebIdentityProvider` 是身份提供方扩展点：实现方负责验证身份、返回统一的 `WebIdentity` 并在请求时刷新账号状态；现有 Session、角色授权和审计链路不需要感知是 OIDC、SAML 还是反向代理 SSO。`app.auth.mode` 用来选择与提供方 `id()` 同名的实现。当前发行包只内置 `LOCAL`，尚未携带具体组织 SSO 协议实现。
 
 ## 升级
 
@@ -130,6 +141,8 @@ Web 模式与桌面模式的安全模型不同，部署前必须确认：
 3. 换上新版本 JAR，用同一个工作目录和同一个 `DB_ADMIN_CRYPTO_KEY` 启动。
 
 元数据库 schema 由 Flyway 在启动时自动迁移，不需要手动执行 SQL。迁移不支持回退，降级到旧版本前请从备份恢复数据目录。
+
+引入多用户的 V9 迁移只新建 `app_user` 表，不修改或删除原有连接、密码、SQL 历史、审计、备份任务或备份文件。升级后第一次启动会在该表为空时插入一个初始管理员；已有审计记录的操作人文本保持不变。
 
 ## 本地构建
 

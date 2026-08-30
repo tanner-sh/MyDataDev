@@ -4,13 +4,14 @@
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'schema-diff' | 'mcp' | 'sessions' | 'audit';
+export type ManagementSection = 'connections' | 'backups' | 'schema-diff' | 'mcp' | 'sessions' | 'audit' | 'users';
 
 export type ManagementSectionMeta = {
   key: ManagementSection;
   label: string;
   /** 需要先选中一条连接才有意义的分区。 */
   requiresConnection?: boolean;
+  requiresAdmin?: boolean;
 };
 
 export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
@@ -19,16 +20,17 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'schema-diff', label: '结构对比' },
   { key: 'mcp', label: 'MCP Server' },
   { key: 'sessions', label: '活动会话', requiresConnection: true },
-  { key: 'audit', label: '审计日志' }
+  { key: 'audit', label: '审计日志' },
+  { key: 'users', label: '用户与权限', requiresAdmin: true }
 ];
 
 export function managementSectionLabel(section: ManagementSection): string {
   return MANAGEMENT_SECTIONS.find((item) => item.key === section)?.label ?? '管理';
 }
 
-export function isManagementSectionAvailable(section: ManagementSection, hasConnection: boolean): boolean {
+export function isManagementSectionAvailable(section: ManagementSection, hasConnection: boolean, isAdmin = true): boolean {
   const meta = MANAGEMENT_SECTIONS.find((item) => item.key === section);
-  return Boolean(meta) && (!meta?.requiresConnection || hasConnection);
+  return Boolean(meta) && (!meta?.requiresConnection || hasConnection) && (!meta?.requiresAdmin || isAdmin);
 }
 
 /**
@@ -37,7 +39,7 @@ export function isManagementSectionAvailable(section: ManagementSection, hasConn
  * 没选连接时「备份」「会话」是不可用的，直接落上去只会看到一片禁用状态，
  * 所以退回第一个可用分区而不是硬开。
  */
-export function resolveManagementSection(requested: ManagementSection, hasConnection: boolean): ManagementSection {
-  if (isManagementSectionAvailable(requested, hasConnection)) return requested;
-  return MANAGEMENT_SECTIONS.find((item) => !item.requiresConnection || hasConnection)?.key ?? 'connections';
+export function resolveManagementSection(requested: ManagementSection, hasConnection: boolean, isAdmin = true): ManagementSection {
+  if (isManagementSectionAvailable(requested, hasConnection, isAdmin)) return requested;
+  return MANAGEMENT_SECTIONS.find((item) => (!item.requiresConnection || hasConnection) && (!item.requiresAdmin || isAdmin))?.key ?? 'connections';
 }

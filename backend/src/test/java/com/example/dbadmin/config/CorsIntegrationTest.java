@@ -10,6 +10,9 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -27,6 +30,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CorsIntegrationTest {
     @Autowired
     private MockMvc mvc;
+
+    @Test
+    void defaultDevelopmentModeKeepsWebLoginDisabled() throws Exception {
+        mvc.perform(get("/api/auth/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.authenticated").value(true));
+        mvc.perform(post("/api/auth/login")
+                        .contentType("application/json")
+                        .content("{\"username\":\"admin\",\"password\":\"unused-in-development\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false));
+    }
 
     @ParameterizedTest
     @ValueSource(strings = {

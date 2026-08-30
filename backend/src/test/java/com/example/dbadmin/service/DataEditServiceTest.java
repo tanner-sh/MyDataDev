@@ -5,6 +5,9 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewRequest;
 import com.example.dbadmin.dto.ApiDtos.RowChange;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
+import com.example.dbadmin.dto.ApiDtos.TableDataRequest;
+import com.example.dbadmin.dto.ApiDtos.TableFilterRule;
+import com.example.dbadmin.dto.ApiDtos.TableSortRule;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +30,72 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class DataEditServiceTest {
+    @Test
+    void filtersWithBoundTypedValuesAndSortsOnServer() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(40), score INT)");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 'Alice', 20), (2, 'Bob', 30), (3, 'Alicia', 40), (4, 'Mallory', 50)");
+        }
+
+        TableDataResponse page = service(url).table(new TableDataRequest(
+                1L, null, "people", null, 10,
+                List.of(
+                        new TableFilterRule("name", "CONTAINS", "Ali", null, null),
+                        new TableFilterRule("score", "GTE", "20", null, null)
+                ),
+                List.of(new TableSortRule("score", "DESC")),
+                "AND"
+        ));
+
+        assertThat(page.navigationMode()).isEqualTo("OFFSET");
+        assertThat(page.rows()).extracting(row -> row.get("id")).containsExactly(3, 1);
+    }
+
+    @Test
+    void bindsFilterPayloadInsteadOfTreatingItAsSql() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(80))");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 'Alice'), (2, 'Bob')");
+        }
+
+        TableDataResponse page = service(url).table(new TableDataRequest(
+                1L, null, "people", null, 10,
+                List.of(new TableFilterRule("name", "EQ", "' OR 1=1 --", null, null)),
+                List.of(), "AND"
+        ));
+
+        assertThat(page.rows()).isEmpty();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "");
+             var resultSet = connection.createStatement().executeQuery("SELECT COUNT(*) FROM people")) {
+            assertThat(resultSet.next()).isTrue();
+            assertThat(resultSet.getInt(1)).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void rejectsCursorWhenFilterChanges() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, score INT)");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 10), (2, 20), (3, 30)");
+        }
+        DataEditService service = service(url);
+        TableDataRequest firstQuery = new TableDataRequest(1L, null, "people", null, 1,
+                List.of(new TableFilterRule("score", "GTE", "10", null, null)), List.of(), "AND");
+        String cursor = service.table(firstQuery).nextCursor();
+
+        TableDataResponse second = service.table(new TableDataRequest(1L, null, "people", cursor, 1,
+                firstQuery.filters(), firstQuery.sorts(), firstQuery.filterLogic()));
+        assertThat(second.rows()).extracting(row -> row.get("id")).containsExactly(2);
+
+        assertThatThrownBy(() -> service.table(new TableDataRequest(1L, null, "people", cursor, 1,
+                List.of(new TableFilterRule("score", "GTE", "20", null, null)), List.of(), "AND")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("游标");
+    }
+
     @Test
     void browsesTableWithSignedKeysetCursorAndServerSideHasMore() throws Exception {
         String url = databaseUrl();

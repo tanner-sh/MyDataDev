@@ -9,7 +9,7 @@
 export const AUDIT_PAGE_SIZE = 50;
 export const AUDIT_SEARCH_DEBOUNCE_MS = 300;
 
-export type AuditCategory = 'sql' | 'data' | 'schema' | 'connection' | 'backup' | 'restore' | 'mcp' | 'storage' | 'file';
+export type AuditCategory = 'sql' | 'data' | 'schema' | 'connection' | 'backup' | 'restore' | 'mcp' | 'storage' | 'file' | 'security';
 
 export type AuditQuery = {
   actor?: string;
@@ -88,7 +88,10 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   STORAGE_PROFILE_CREATE: { label: '新建存储配置', category: 'storage' },
   STORAGE_PROFILE_UPDATE: { label: '修改存储配置', category: 'storage' },
   STORAGE_PROFILE_DELETE: { label: '删除存储配置', category: 'storage', dangerous: true },
-  STORAGE_PROFILE_TEST: { label: '测试存储配置', category: 'storage' }
+  STORAGE_PROFILE_TEST: { label: '测试存储配置', category: 'storage' },
+  USER_CREATE: { label: '新建用户', category: 'security' },
+  USER_UPDATE: { label: '修改用户', category: 'security' },
+  USER_DELETE: { label: '删除用户', category: 'security', dangerous: true }
 };
 
 export function auditActionLabel(action: string): string {
@@ -112,7 +115,8 @@ const CATEGORY_COLORS: Readonly<Record<AuditCategory, string>> = {
   restore: 'gold',
   mcp: 'magenta',
   storage: 'green',
-  file: 'orange'
+  file: 'orange',
+  security: 'red'
 };
 
 export function auditActionColor(action: string): string | undefined {

@@ -2,6 +2,7 @@ package com.example.dbadmin.dto;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -542,6 +543,33 @@ public final class ApiDtos {
     }
 
     public record DataPreviewResponse(List<String> sql) {
+    }
+
+    public record TableDataRequest(
+            @NotNull Long connectionId,
+            @Size(max = 240) String schemaName,
+            @NotBlank @Size(max = 240) String tableName,
+            @Size(max = 8_192) String cursor,
+            @Min(1) @Max(200) Integer pageSize,
+            @Size(max = 20) List<@NotNull @Valid TableFilterRule> filters,
+            @Size(max = 10) List<@NotNull @Valid TableSortRule> sorts,
+            @Size(max = 3) String filterLogic
+    ) {
+    }
+
+    public record TableFilterRule(
+            @NotBlank @Size(max = 240) String column,
+            @NotBlank @Size(max = 24) String operator,
+            @Size(max = 10_000) String value,
+            @Size(max = 10_000) String secondValue,
+            @Size(max = 100) List<@NotNull @Size(max = 10_000) String> values
+    ) {
+    }
+
+    public record TableSortRule(
+            @NotBlank @Size(max = 240) String column,
+            @NotBlank @Size(max = 4) String direction
+    ) {
     }
 
     public record TableColumn(String name, String typeName, int jdbcType, boolean nullable, boolean editable, boolean truncated) {

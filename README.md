@@ -38,14 +38,14 @@ MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理
 | **SSH 隧道** | 目标库只对跳板机开放时，由后端建立本地端口转发再连库；支持口令与私钥认证、主机指纹校验，元数据、备份、MCP 等功能无需感知。 |
 | **SQL 工作台** | Monaco 多标签编辑器、SQL 格式化、智能补全、多语句执行、分页结果、执行计划、任务取消与 SQL 历史。 |
 | **结果图表** | 查询结果可切换为柱状图、折线图或饼图，自动识别数值列；色板经色觉障碍校验，量级悬殊时提示拆开查看而不是叠加第二个坐标轴。 |
-| **数据浏览与维护** | 游标分页浏览表数据，新增、编辑和删除行；提交前预览 SQL，对无稳定行标识和危险更新进行保护。 |
+| **数据浏览与维护** | 游标分页浏览表数据，支持服务端多条件筛选和多字段排序；新增、编辑和删除行，提交前预览 SQL，对无稳定行标识和危险更新进行保护。 |
 | **导入与导出** | 将 CSV、JSON、SQL 数据导入为待提交记录；查询结果可导出为 CSV、JSON、SQL、XML 或 Excel（.xlsx）。 |
 | **结构对比与同步** | 选定两个连接/Schema 比较表、字段、索引与主键差异，生成把目标端对齐到源端的迁移 DDL，脚本送进 SQL 工作台后照常经过生产确认与审计。 |
 | **表与数据库对象** | 查看字段、主键、索引、外键、行数和 DDL；按方言管理表、视图、物化视图、序列、触发器、存储过程和函数。 |
 | **备份与恢复** | SQL 逻辑备份、定时任务、保留策略、历史与校验值；支持 MySQL/MariaDB 和 Oracle 原生工具、SMB/NFS/FTP/SFTP 文件服务以及后台恢复任务。 |
 | **大 SQL 文件执行** | 上传并在后台执行 SQL 文件，跟踪语句进度、结果统计和失败位置，支持取消与异常任务恢复。 |
 | **只读 MCP Server** | 通过 Agent API Key、连接白名单和生产环境授权，为 AI 客户端提供元数据浏览、表数据浏览、只读查询和执行计划。 |
-| **Web 与桌面双模式** | Web 前后端可独立部署；桌面版内置前端、后端和 Java Runtime，支持 macOS、Windows 与 Linux。 |
+| **Web 与桌面双模式** | Web 版内置多用户、管理员/操作员角色和服务端会话，并预留 SSO 身份提供方扩展点；桌面版内置前端、后端和 Java Runtime。 |
 
 ### 数据库支持
 
@@ -75,12 +75,13 @@ MyDataDev 内置以下数据库类型及对应 JDBC 驱动：
 
 ```bash
 export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
+export DB_ADMIN_WEB_PASSWORD='<至少 12 位的强密码>'
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 ```
 
 打开 <http://localhost:8080>，同一个端口同时提供界面、`/api` 和 `/mcp`。数据写入启动目录下的 `data`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。前后端分离部署可使用同一 Release 中的 `MyDataDev-<version>-frontend-dist.tar.gz`，配置见[Web 发行包部署说明](docs/web-deploy.md)。
 
-`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改；`/api` 没有用户认证，Web 模式必须部署在可信网络中并由反向代理承担鉴权。
+`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，初始化完成后可从运行环境移除初始密码。
 
 ### Web 开发模式
 
@@ -200,6 +201,7 @@ node scripts/build-web-bundle.mjs
 | `server.port` | 后端监听端口，默认 `8080`。 |
 | `spring.datasource.*` | MyDataDev 自身的 H2 元数据库连接。 |
 | `app.crypto-key` | 连接密码加密密钥，生产部署应通过 `DB_ADMIN_CRYPTO_KEY` 注入强密钥。 |
+| `app.auth.*` | Web Session 认证。Web 包默认 `LOCAL`，`DB_ADMIN_WEB_USERNAME` / `DB_ADMIN_WEB_PASSWORD` 仅用于初始化第一个管理员；桌面和本地开发默认关闭。 |
 | `app.sql.*` | SQL 行数、语句数量与执行超时限制。 |
 | `app.ssh.*` | SSH 隧道的连接、认证超时与心跳间隔。 |
 | `app.backup.*` | 备份目录、超时、SQL 批量写入，以及远端上传失败暂存文件的保留天数。 |

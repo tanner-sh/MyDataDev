@@ -5,6 +5,7 @@ import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typograph
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, downloadBlob, downloadFromUrl } from './api';
+import { isCurrentUserAdmin } from './auth';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
@@ -65,6 +66,7 @@ import {
 import { prefetchWhenIdle } from './idlePrefetch';
 import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
+import { EMPTY_TABLE_QUERY, type TableQuery } from './tableQuery';
 import { AppHeader } from './components/AppHeader';
 import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
@@ -98,6 +100,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
+const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
 const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
@@ -154,6 +157,7 @@ export default function App() {
   const [tableRows, setTableRows] = useState<TableRow[]>([]);
   const [tablePage, setTablePage] = useState(0);
   const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
+  const [tableQuery, setTableQuery] = useState<TableQuery>(EMPTY_TABLE_QUERY);
   const [previewSql, setPreviewSql] = useState<string[]>([]);
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
@@ -823,6 +827,7 @@ export default function App() {
     setTableRows([]);
     setTablePage(0);
     setTableCursorStack([null]);
+    setTableQuery(EMPTY_TABLE_QUERY);
     setPreviewSql([]);
     resetTableRowCount();
   }
@@ -2170,6 +2175,7 @@ export default function App() {
     setActiveTable(next);
     setTablePage(0);
     setTableCursorStack([null]);
+    setTableQuery(EMPTY_TABLE_QUERY);
     setMode('table');
     setActiveTableRelations(null);
     // 外键关系用于数据网格里的跳转；拿不到就只是没有跳转按钮，不影响浏览。
@@ -2182,7 +2188,7 @@ export default function App() {
         })
         .catch(() => undefined);
     }
-    await loadTable(next, { page: 0, reset: true });
+    await loadTable(next, { page: 0, reset: true, query: EMPTY_TABLE_QUERY });
   }
 
   function openObjectDetail(object: DbObject) {
@@ -2292,7 +2298,7 @@ export default function App() {
     }
   }
 
-  async function loadTable(table = activeTable, options: { page?: number; pageSize?: number; reset?: boolean } = {}) {
+  async function loadTable(table = activeTable, options: { page?: number; pageSize?: number; reset?: boolean; query?: TableQuery } = {}) {
     if (!selected || !table) return;
     tableAbortRef.current?.abort();
     const controller = new AbortController();
@@ -2301,6 +2307,7 @@ export default function App() {
     const requestId = ++tableRequestSeqRef.current;
     const requestedPage = Math.max(options.page ?? tablePage, 0);
     const requestedPageSize = options.pageSize ?? layoutPreferences.tablePageSize;
+    const requestedQuery = options.query ?? tableQuery;
     let cursor: string | null | undefined = options.reset || requestedPage === 0 ? null : tableCursorStack[requestedPage];
     if (cursor === undefined && requestedPage === tablePage + 1) cursor = tableData?.nextCursor || undefined;
     if (cursor === undefined) {
@@ -2311,14 +2318,18 @@ export default function App() {
     }
     setTableLoading(true);
     try {
-      const params = new URLSearchParams({
-        connectionId: String(connectionId),
-        tableName: table.tableName,
-        pageSize: String(requestedPageSize)
+      const data = await api<TableData>('/data/table/query', {
+        method: 'POST',
+        signal: controller.signal,
+        body: JSON.stringify({
+          connectionId,
+          schemaName: table.schemaName,
+          tableName: table.tableName,
+          pageSize: requestedPageSize,
+          cursor: cursor || undefined,
+          ...requestedQuery
+        })
       });
-      if (table.schemaName) params.set('schemaName', table.schemaName);
-      if (cursor) params.set('cursor', cursor);
-      const data = await api<TableData>(`/data/table?${params.toString()}`, { signal: controller.signal });
       if (requestId !== tableRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
       setTableData(data);
       setTablePage(requestedPage);
@@ -2329,7 +2340,7 @@ export default function App() {
       });
       setTableRows(data.rows.map((row, index) => ({ id: `row-${requestedPage}-${index}`, values: { ...row }, original: { ...row }, keyToken: data.rowKeyTokens?.[index] })));
       setPreviewSql([]);
-      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${requestedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}${data.navigationMode === 'OFFSET' ? '；当前表无稳定行键，深页浏览受限' : ''}` });
+      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${requestedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}${data.navigationMode === 'OFFSET' ? requestedQuery.sorts.length ? '；自定义排序采用偏移分页' : '；当前表无稳定行键，深页浏览受限' : ''}` });
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       if (requestId === tableRequestSeqRef.current) showError(localizeMessage((e as Error).message));
@@ -2710,7 +2721,7 @@ export default function App() {
   // 后台任务徽标点开直接落到备份分区，而不是让用户再从导航里找一次。
   const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
   const openManagement = useStableEvent((section: ManagementSection) =>
-    setActiveDrawer(resolveManagementSection(section, Boolean(selected))));
+    setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin())));
   const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
     // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
     setActiveDrawer(null);
@@ -2805,6 +2816,11 @@ export default function App() {
     layoutPreferences.setTablePageSize(pageSize);
     void loadTable(activeTable, { page: 0, pageSize, reset: true });
   }, `将每页行数调整为 ${pageSize}`));
+  const changeTableQueryEvent = useStableEvent((query: TableQuery) => confirmDiscardTableChanges(() => {
+    setTableQuery(query);
+    resetTableRowCount();
+    void loadTable(activeTable, { page: 0, reset: true, query });
+  }, '应用新的筛选或排序条件'));
   const addTableRowEvent = useStableEvent(() => addRow());
   const importTableRowsEvent = useStableEvent((file: File) => importRows(file));
   const previewTableChangesEvent = useStableEvent(() => previewChanges());
@@ -3048,7 +3064,8 @@ export default function App() {
                 pageSize={layoutPreferences.tablePageSize}
                 hasMore={tableData?.hasMore ?? false}
                 rowCount={tableRowCount}
-                onCountRows={countTableRowsEvent}
+                tableQuery={tableQuery}
+                onCountRows={tableQuery.filters.length === 0 ? countTableRowsEvent : undefined}
                 status={tableStatus}
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
@@ -3058,6 +3075,7 @@ export default function App() {
                 onReload={reloadTableEvent}
                 onPageChange={changeTablePageEvent}
                 onPageSizeChange={changeTablePageSizeEvent}
+                onTableQueryChange={changeTableQueryEvent}
                 onAddRow={addTableRowEvent}
                 onImportFile={importTableRowsEvent}
                 onPreview={previewTableChangesEvent}
@@ -3118,8 +3136,8 @@ export default function App() {
       >
         <div className="management-shell">
           <nav className="management-nav" aria-label="管理分区">
-            {MANAGEMENT_SECTIONS.map((section) => {
-              const available = isManagementSectionAvailable(section.key, Boolean(selected));
+            {MANAGEMENT_SECTIONS.filter((section) => !section.requiresAdmin || isCurrentUserAdmin()).map((section) => {
+              const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin());
               return (
                 <Tooltip key={section.key} title={available ? undefined : '请先选择一个数据库连接'}>
                   <button
@@ -3232,6 +3250,12 @@ export default function App() {
             {activeDrawer === 'audit' && (
               <Suspense fallback={<PanelLoading text="正在加载审计日志…" />}>
                 <AuditLogPanel open connections={connections} />
+              </Suspense>
+            )}
+
+            {activeDrawer === 'users' && isCurrentUserAdmin() && (
+              <Suspense fallback={<PanelLoading text="正在加载用户管理…" />}>
+                <UserManagementPanel />
               </Suspense>
             )}
           </div>

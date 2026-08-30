@@ -59,11 +59,13 @@ public class TableCursorCodec {
             String tableName,
             List<String> keyColumns,
             List<String> keyValues,
-            long offset
+            long offset,
+            String queryFingerprint
     ) {
         public CursorState {
             keyColumns = keyColumns == null ? List.of() : List.copyOf(keyColumns);
             keyValues = keyValues == null ? List.of() : List.copyOf(keyValues);
+            queryFingerprint = queryFingerprint == null ? "" : queryFingerprint;
         }
     }
 }

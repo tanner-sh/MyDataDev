@@ -12,6 +12,7 @@ spring:
     url: jdbc:h2:file:./data/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE;FILE_LOCK=FS;TRACE_LEVEL_FILE=0
     username: sa
     password:
+    cookie-secure: false
     driver-class-name: org.h2.Driver
     hikari:
       connection-timeout: 10000
@@ -64,6 +65,12 @@ spring:
 
 app:
   crypto-key: ${DB_ADMIN_CRYPTO_KEY:}
+  auth:
+    mode: DISABLED
+    username: admin
+    password:
+    max-failed-attempts: 5
+    lock-seconds: 30
   cors:
     # Keep the browser UI same-origin in production; only Vite's two local
     # development origins are allowed by default. Deployments that serve the UI

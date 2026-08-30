@@ -5,6 +5,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
+  LogoutOutlined,
   ReloadOutlined,
   SettingOutlined,
   StarFilled,
@@ -17,6 +18,7 @@ import { dbTypeLabel, environmentLabel } from '../utils';
 import { backgroundTaskLabel, type BackgroundTaskSummary } from '../backgroundTasks';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { memo, useMemo } from 'react';
+import { authenticatedDisplayName, authenticatedUsername, isAuthenticationEnabled, logout } from '../auth';
 
 const { Text } = Typography;
 
@@ -153,7 +155,7 @@ export const AppHeader = memo(function AppHeader({
           管理类入口只留一个。之前这里有 6 个按钮，窄屏下会收成 6 个纯图标，其中「结构对比」
           与「审计」的字形几乎一样；把它们收进带左侧导航的管理抽屉之后，这个问题从根上没了。
         */}
-        <Tooltip title="管理：连接、备份、结构对比、MCP、会话、审计">
+        <Tooltip title="管理：连接、备份、结构对比、MCP、会话、审计、用户权限">
           <Button type="text" icon={<SettingOutlined />} aria-label="打开管理面板" onClick={onOpenManagement}>管理</Button>
         </Tooltip>
         <Tooltip title={themeMode === 'light' ? '切换深色主题' : '切换浅色主题'}>
@@ -165,6 +167,11 @@ export const AppHeader = memo(function AppHeader({
             onClick={onToggleTheme}
           />
         </Tooltip>
+        {isAuthenticationEnabled() && (
+          <Tooltip title={`${authenticatedDisplayName()}（${authenticatedUsername()}），点击退出`}>
+            <Button type="text" className="header-icon-button" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logout()} />
+          </Tooltip>
+        )}
       </Space>
     </header>
   );

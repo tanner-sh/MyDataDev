@@ -1946,6 +1946,71 @@ body.is-resizing-column * {
 }
 
 /* Application workspace */
+.auth-loading,
+.auth-page {
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  place-items: center;
+}
+
+.auth-page {
+  padding: 24px;
+  background:
+    radial-gradient(circle at 25% 15%, rgb(65 132 234 / 18%), transparent 34%),
+    var(--app-bg);
+}
+
+.auth-card {
+  width: min(400px, 100%);
+  box-shadow: var(--shadow-lg);
+}
+
+.auth-card .ant-card-body {
+  padding: 36px;
+}
+
+.auth-brand {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 20px;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  font-size: 22px;
+  background: linear-gradient(145deg, #397fea, #1d5fc9);
+}
+
+.auth-error {
+  margin: 18px 0;
+}
+
+.auth-retry {
+  margin-top: 18px;
+}
+
+.table-query-section {
+  width: 100%;
+}
+
+.table-query-rule {
+  width: 100%;
+}
+
+.table-query-rule > .ant-select:first-child {
+  width: 190px;
+}
+
+.table-query-rule > .ant-select:nth-child(2) {
+  width: 130px;
+}
+
+.table-query-rule > .ant-input {
+  min-width: 120px;
+}
+
 .app-shell {
   width: 100%;
   height: 100vh;

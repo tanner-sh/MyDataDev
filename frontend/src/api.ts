@@ -1,4 +1,5 @@
 import { API } from './constants';
+import { AUTH_REQUIRED_EVENT, authHeaders } from './auth';
 
 export class ApiError extends Error {
   code?: string;
@@ -33,9 +34,13 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
   const res = await fetch(`${API}${path}`, {
     ...init,
-    headers: { ...(!isFormData ? { 'Content-Type': 'application/json' } : {}), 'X-User': 'admin', ...(init?.headers || {}) }
+    credentials: 'include',
+    headers: { ...(!isFormData ? { 'Content-Type': 'application/json' } : {}), 'X-User': 'admin', ...authHeaders(init?.method), ...(init?.headers || {}) }
   });
   if (!res.ok) {
+    if (res.status === 401 && !path.startsWith('/auth/')) {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
+    }
     const responseText = await res.text();
     let err: Record<string, unknown>;
     try {
@@ -55,8 +60,10 @@ export function uploadBinary<T>(path: string, file: File, onProgress: (percent: 
     const request = new XMLHttpRequest();
     request.open('POST', `${API}${path}`);
     request.responseType = 'json';
+    request.withCredentials = true;
     request.setRequestHeader('Content-Type', 'application/octet-stream');
     request.setRequestHeader('X-User', 'admin');
+    Object.entries(authHeaders('POST')).forEach(([name, value]) => request.setRequestHeader(name, value));
     request.upload.onprogress = (event) => {
       if (event.lengthComputable && event.total > 0) onProgress(Math.round(event.loaded * 100 / event.total));
     };

@@ -4,6 +4,7 @@ import com.example.dbadmin.dto.ApiDtos.DataCommitResponse;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewRequest;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
+import com.example.dbadmin.dto.ApiDtos.TableDataRequest;
 import com.example.dbadmin.service.DataEditService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -26,6 +27,11 @@ public class DataController {
             @RequestParam(defaultValue = "100") int pageSize
     ) throws Exception {
         return service.table(connectionId, schemaName, tableName, cursor, pageSize);
+    }
+
+    @PostMapping("/table/query")
+    public TableDataResponse queryTable(@Valid @RequestBody TableDataRequest request) throws Exception {
+        return service.table(request);
     }
 
     @PostMapping("/preview")

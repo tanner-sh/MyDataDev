@@ -14,6 +14,8 @@ describe('management sections', () => {
     // 连接管理本身不依赖已选连接，否则就没法选第一条连接了。
     expect(isManagementSectionAvailable('connections', false)).toBe(true);
     expect(isManagementSectionAvailable('audit', false)).toBe(true);
+    expect(isManagementSectionAvailable('users', false, true)).toBe(true);
+    expect(isManagementSectionAvailable('users', true, false)).toBe(false);
   });
 
   it('打开不可用的分区时退回第一个可用分区，而不是显示一片禁用', () => {
