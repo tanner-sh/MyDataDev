@@ -13,6 +13,11 @@ export interface PaneResizerProps {
   ariaLabel: string;
   onChange: (value: number) => void;
   onChangeEnd?: (value: number) => void;
+  /**
+   * Move only the separator while dragging and commit the layout once on release.
+   * Useful when resizing a child (for example a virtual table) is expensive.
+   */
+  commitOnRelease?: boolean;
   unit?: PaneResizerUnit;
   step?: number;
   disabled?: boolean;
@@ -35,6 +40,7 @@ export function PaneResizer({
   ariaLabel,
   onChange,
   onChangeEnd,
+  commitOnRelease = false,
   unit = 'px',
   step = unit === 'ratio' ? 0.02 : 8,
   disabled = false,
@@ -46,9 +52,10 @@ export function PaneResizer({
   const pendingValueRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [previewOffset, setPreviewOffset] = useState<number | null>(null);
 
   useEffect(() => {
-    lastValueRef.current = value;
+    if (!dragRef.current) lastValueRef.current = value;
   }, [value]);
 
   useEffect(() => () => {
@@ -80,6 +87,7 @@ export function PaneResizer({
       trackSize
     };
     lastValueRef.current = value;
+    setPreviewOffset(null);
     setDragging(true);
   }
 
@@ -100,13 +108,16 @@ export function PaneResizer({
       return;
     }
 
-    dragRef.current = null;
     flushScheduledChange();
+    const finalValue = lastValueRef.current;
+    dragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    setPreviewOffset(null);
     setDragging(false);
-    onChangeEnd?.(lastValueRef.current);
+    if (commitOnRelease && finalValue !== drag.startValue) onChange(finalValue);
+    onChangeEnd?.(finalValue);
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -156,7 +167,7 @@ export function PaneResizer({
       animationFrameRef.current = null;
       const pending = pendingValueRef.current;
       pendingValueRef.current = null;
-      if (pending !== null) emitChange(pending);
+      if (pending !== null) applyDragChange(pending);
     });
   }
 
@@ -167,16 +178,34 @@ export function PaneResizer({
     }
     const pending = pendingValueRef.current;
     pendingValueRef.current = null;
-    if (pending !== null) emitChange(pending);
+    if (pending !== null) applyDragChange(pending);
+  }
+
+  function applyDragChange(nextValue: number) {
+    if (!commitOnRelease) {
+      emitChange(nextValue);
+      return;
+    }
+
+    lastValueRef.current = nextValue;
+    const drag = dragRef.current;
+    if (!drag) return;
+    setPreviewOffset(resizerPreviewOffset(drag.startValue, nextValue, drag.trackSize, unit));
   }
 
   const classes = [
     'pane-resizer',
     `pane-resizer--${direction}`,
     dragging ? 'is-dragging' : '',
+    commitOnRelease ? 'is-commit-on-release' : '',
     disabled ? 'is-disabled' : '',
     className ?? ''
   ].filter(Boolean).join(' ');
+  const previewTransform = commitOnRelease && previewOffset !== null
+    ? direction === 'horizontal'
+      ? `translate3d(${previewOffset}px, 0, 0)`
+      : `translate3d(0, ${previewOffset}px, 0)`
+    : undefined;
 
   return (
     <div
@@ -193,7 +222,7 @@ export function PaneResizer({
       aria-valuetext={formatValue(value, unit)}
       data-direction={direction}
       data-unit={unit}
-      style={{ touchAction: 'none' }}
+      style={{ touchAction: 'none', transform: previewTransform }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
@@ -202,6 +231,18 @@ export function PaneResizer({
       onKeyDown={handleKeyDown}
     />
   );
+}
+
+export function resizerPreviewOffset(
+  startValue: number,
+  nextValue: number,
+  trackSize: number,
+  unit: PaneResizerUnit
+): number {
+  const offset = unit === 'ratio'
+    ? (nextValue - startValue) * trackSize
+    : nextValue - startValue;
+  return Math.round(offset * 100) / 100;
 }
 
 function pointerCoordinate(

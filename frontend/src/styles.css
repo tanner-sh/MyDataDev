@@ -3056,6 +3056,13 @@ body.is-resizing-column * {
   background: color-mix(in srgb, var(--primary) 22%, var(--border-subtle));
 }
 
+/* 大结果集下实时改变面板高度会让虚拟表格逐帧重新测量。延迟提交模式只移动
+   分隔线作为预览，松手后再进行一次真实布局。 */
+.pane-resizer.is-commit-on-release.is-dragging {
+  will-change: transform;
+  box-shadow: var(--shadow-sm);
+}
+
 .pane-resizer:hover::after,
 .pane-resizer:focus-visible::after,
 .pane-resizer.is-dragging::after {

@@ -409,6 +409,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         {resultPaneMode === 'normal' && <PaneResizer
           direction="vertical"
           unit="ratio"
+          commitOnRelease
           value={splitLimits.value}
           min={splitLimits.min}
           max={splitLimits.max}
