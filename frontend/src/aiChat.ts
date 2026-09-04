@@ -97,3 +97,76 @@ export function streamErrorMessage(payload: string, statusText: string): string 
   }
   return statusText || 'AI 调用失败';
 }
+
+/**
+ * 回答的分块渲染。
+ *
+ * <p>回答的固定形状是「一段说明 + 一个 ```sql 代码块」，而代码块按纯文本渲染时，反引号会原样
+ * 显示、SQL 挤在正文字体里 —— 恰恰是这一屏最该看清的东西最难读。这里只解析代码围栏和两个行内
+ * 标记，不做完整 Markdown：仓库一贯不为渲染引依赖（图表、XLSX、冒烟脚本都是手写的），而回答
+ * 里实际会出现的也就这几种。</p>
+ */
+export type AnswerBlock =
+  | { kind: 'text'; text: string }
+  | { kind: 'code'; language: string; code: string };
+
+const FENCE = /^```([\w+-]*)[ \t]*$/;
+
+export function splitAnswerBlocks(answer: string): AnswerBlock[] {
+  const blocks: AnswerBlock[] = [];
+  if (!answer) return blocks;
+  const lines = answer.split('\n');
+  let text: string[] = [];
+  let code: string[] | undefined;
+  let language = '';
+
+  const flushText = () => {
+    const joined = text.join('\n').replace(/^\n+|\n+$/g, '');
+    if (joined.trim()) blocks.push({ kind: 'text', text: joined });
+    text = [];
+  };
+
+  for (const line of lines) {
+    const fence = FENCE.exec(line.trim());
+    if (code) {
+      if (fence) {
+        blocks.push({ kind: 'code', language, code: code.join('\n') });
+        code = undefined;
+        continue;
+      }
+      code.push(line);
+      continue;
+    }
+    if (fence) {
+      flushText();
+      language = fence[1] || '';
+      code = [];
+      continue;
+    }
+    text.push(line);
+  }
+  // 还没收尾的围栏照样按代码渲染：流式输出时收尾的 ``` 本来就还没到，
+  // 若退回纯文本，用户会看着 SQL 先以正文字体出现再整段跳成代码块。
+  if (code) blocks.push({ kind: 'code', language, code: code.join('\n') });
+  else flushText();
+  return blocks;
+}
+
+/** 行内标记：只认 `**加粗**` 和 `` `代码` ``，其余原样保留。 */
+export type InlineSpan = { kind: 'plain' | 'strong' | 'code'; text: string };
+
+const INLINE = /(\*\*(?!\s)(?:[^*]|\*(?!\*))+?\*\*)|(`[^`\n]+`)/g;
+
+export function splitInlineSpans(text: string): InlineSpan[] {
+  const spans: InlineSpan[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(INLINE)) {
+    const index = match.index ?? 0;
+    if (index > cursor) spans.push({ kind: 'plain', text: text.slice(cursor, index) });
+    if (match[1]) spans.push({ kind: 'strong', text: match[1].slice(2, -2) });
+    else spans.push({ kind: 'code', text: match[2].slice(1, -1) });
+    cursor = index + match[0].length;
+  }
+  if (cursor < text.length) spans.push({ kind: 'plain', text: text.slice(cursor) });
+  return spans.length ? spans : [{ kind: 'plain', text }];
+}

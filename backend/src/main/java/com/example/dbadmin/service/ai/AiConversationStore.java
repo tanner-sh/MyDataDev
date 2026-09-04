@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.AiDtos.AiChatMessageResponse;
 import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
 import com.example.dbadmin.dto.AiDtos.AiGroundingReport;
 import com.example.dbadmin.dto.AiDtos.AiExecutionFailure;
+import com.example.dbadmin.dto.AiDtos.AiExecutionOutcome;
 import com.example.dbadmin.dto.AiDtos.AiGroundingReference;
 import com.example.dbadmin.service.ai.llm.LlmAgentMessage;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -52,7 +53,8 @@ public class AiConversationStore {
             long metadataVersion,
             String question,
             String currentSql,
-            AiExecutionFailure failure
+            AiExecutionFailure failure,
+            AiExecutionOutcome outcome
     ) {
         Conversation conversation = requestedId == null || requestedId.isBlank()
                 ? create(ownerKey, connectionId, schemaName, metadataVersion)
@@ -70,11 +72,11 @@ public class AiConversationStore {
                     conversation.metadataVersion = metadataVersion;
                     requireInspection = true;
                 }
-                // 执行失败意味着此前对结构的理解就是错的（字段名不对、表不对、类型不对），
-                // 所以带着失败现场进来时一律重新查一遍结构，不沿用会话里已有的结论。
-                if (failure != null) requireInspection = true;
+                // 执行失败或结果不对，都意味着此前对结构的理解就是错的（字段名不对、表不对、
+                // 关联方向不对），所以带着执行现场进来时一律重新查一遍结构，不沿用已有结论。
+                if (failure != null || outcome != null) requireInspection = true;
                 List<LlmAgentMessage> messages = new ArrayList<>(conversation.internalMessages);
-                messages.add(LlmAgentMessage.user(AiChatPrompt.compose(question, currentSql, failure)));
+                messages.add(LlmAgentMessage.user(AiChatPrompt.compose(question, currentSql, failure, outcome)));
                 return new Turn(conversation, question, messages, requireInspection,
                         new ArrayList<>(conversation.evidence));
             }

@@ -103,7 +103,7 @@ public class AiSqlAgentService {
         AiConversationStore.Turn turn = conversations.begin(
                 request.conversationId(), ownerKey, request.connectionId(), request.schemaName(),
                 metadataCache.directoryVersion(request.connectionId()), request.message(), request.currentSql(),
-                request.failure());
+                request.failure(), request.outcome());
         SseEmitter emitter = new SseEmitter(streamTimeoutMs);
         CountDownLatch responseReady = new CountDownLatch(1);
         String requestId;
@@ -286,7 +286,7 @@ public class AiSqlAgentService {
             // 取消同样要落审计：工具在被打断之前，往往已经把库结构发给外部模型了。
             audit.onConnection(actor, ACTION_CHAT, request.connectionId(),
                     "outcome=" + outcome
-                            + " mode=" + (request.failure() == null ? "generate" : "diagnose")
+                            + " mode=" + mode(request)
                             + (failure == null ? "" : " failure=" + failure)
                             + " sharing=" + policy.sharing()
                             + " conversation=" + conversationTurn.id()
@@ -299,6 +299,13 @@ public class AiSqlAgentService {
                             + " model=" + current.model());
             Thread.interrupted();
         }
+    }
+
+    /** 审计里区分这一轮是在生成、诊断报错，还是复盘一个结果不对的查询。 */
+    private static String mode(AiChatRequest request) {
+        if (request.failure() != null) return "diagnose";
+        if (request.outcome() != null) return "review";
+        return "generate";
     }
 
     private String retryReason(
@@ -410,6 +417,8 @@ public class AiSqlAgentService {
                   外键说明的是可以怎么关联，历史说明的是实际怎么关联 —— 主表选哪张、状态用哪个值过滤、金额取明细还是订单头，
                   这些口径只有跑过的语句里有。历史只作写法参考，表名和字段名一律以 describe_objects 的结果为准。
                 - 后续修正若引入了新的业务实体或字段，继续调用结构工具；仅修改已有条件时可沿用本会话已验证的工具结果。
+                - 用户带着「结果不对」的现场来时：结果形状里只有计数，没有数据。零行通常是过滤条件过严或关联方向反了，
+                  某列全为空通常是外连接没匹配上，行数远超预期通常是缺了关联条件。先核对结构再给修正后的 SQL。
                 - 用户带着执行失败的现场来时：先按错误原文判断是哪一类问题（对象名或字段名不存在、类型不匹配、语法、权限、
                   超时），再用结构工具核对真实名称，然后说明原因并给出修正后的完整 SQL。不要照着报错里的名字猜，
                   那个名字本来就是错的。如果失败的是写入或 DDL 语句，只解释原因和该怎么改，不要生成语句。

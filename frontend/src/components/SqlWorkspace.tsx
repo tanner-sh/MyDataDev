@@ -1,9 +1,11 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Empty, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
-import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
+import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
+} from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import type { AiExecutionFailure, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import type { AiExecutionFailure, AiExecutionOutcome, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
+import { resultShape, resultShapeText } from '../aiResultShape';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
@@ -96,6 +98,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
   const [aiChatOpen, setAiChatOpen] = useState(false);
   const [aiChatFailure, setAiChatFailure] = useState<AiExecutionFailure>();
+  const [aiChatOutcome, setAiChatOutcome] = useState<AiExecutionOutcome>();
   const [aiDocumentOpen, setAiDocumentOpen] = useState(false);
   const [aiDocumentTables, setAiDocumentTables] = useState<string[]>([]);
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
@@ -178,6 +181,21 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   const editorExecuteEvent = useStableEvent(() => { commitDraft(); onExecute(draftRef.current); });
 
   /**
+   * 结果跑通了但看着不对，交给 AI 复盘。
+   *
+   * 只发形状不发数据：行数、耗时、每列有多少空值和多少个不同取值。查错真正需要的信号本来就是
+   * 计数 —— 零行、某列全空、行数爆炸，说的都是关联写错了，不是某一行的值是什么。所以这条路
+   * 在「只发结构」档下就能用，不像结果解读那样要求连接开到样本档。
+   */
+  const askAiToReviewResult = useStableEvent((result: SqlStatementResult) => {
+    const shape = resultShape(result.result);
+    if (!shape) return;
+    setAiChatFailure(undefined);
+    setAiChatOutcome({ sql: result.sql, shape: resultShapeText(shape) });
+    setAiChatOpen(true);
+  });
+
+  /**
    * 把失败的这一次交给 AI SQL 助手。
    *
    * 走的是 Agent 那条路而不是单次问答：最常见的报错就是「字段/表不存在」，而报错里提到的名字
@@ -188,6 +206,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
    */
   function askAiToDiagnose() {
     if (!selected || !activeTab.errorDetail) return;
+    setAiChatOutcome(undefined);
     setAiChatFailure({
       sql: draftRef.current || activeTab.sql,
       errorMessage: activeTab.errorDetail
@@ -291,6 +310,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
           onCommitEdits={canWrite ? onCommitResultEdits : undefined}
           onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined}
           onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined}
+          onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined}
         />
       )
     };
@@ -573,7 +593,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -636,8 +656,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
             schemaName={activeSchema}
             currentSql={draftSql}
             failure={aiChatFailure}
-            onFailureConsumed={() => setAiChatFailure(undefined)}
-            onClose={() => { setAiChatOpen(false); setAiChatFailure(undefined); }}
+            outcome={aiChatOutcome}
+            onFailureConsumed={() => { setAiChatFailure(undefined); setAiChatOutcome(undefined); }}
+            onClose={() => { setAiChatOpen(false); setAiChatFailure(undefined); setAiChatOutcome(undefined); }}
             onInsertSql={onOpenSqlInNewTab}
           />
         </Suspense>
@@ -722,7 +743,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain, onAskAiInterpret }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain, onAskAiInterpret, onAskAiReview }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -738,6 +759,8 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   onAskAiExplain?: (result: SqlStatementResult, findings: ExplainFinding[]) => void;
   /** 把这批结果交给 AI 解读；连接没开样本档时不传。 */
   onAskAiInterpret?: (result: SqlStatementResult) => void;
+  /** 结果跑通了但看着不对：把形状交给 AI 复盘。零行也要能点，那恰恰是最需要复盘的一种。 */
+  onAskAiReview?: (result: SqlStatementResult) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
   const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
@@ -763,6 +786,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
           {onAskAiInterpret && result.result.resultSet && result.result.rows.length > 0 && (
             <Tooltip title="把前几行结果发给模型解读，并推荐合适的图表">
               <Button type="text" size="small" icon={<BulbOutlined />} aria-label="AI 解读查询结果" onClick={() => onAskAiInterpret(result)} />
+            </Tooltip>
+          )}
+          {onAskAiReview && result.result.resultSet && (
+            <Tooltip title="结果不对？把行数与各列的空值、取值个数交给 AI 复盘 —— 只发计数，不发数据">
+              <Button type="text" size="small" icon={<QuestionCircleOutlined />} aria-label="结果不对，交给 AI 复盘" onClick={() => onAskAiReview(result)} />
             </Tooltip>
           )}
           <StatementSqlButton result={result} />

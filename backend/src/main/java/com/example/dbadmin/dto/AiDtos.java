@@ -93,7 +93,8 @@ public final class AiDtos {
             @Size(max = 36) String conversationId,
             @NotBlank @Size(max = 20000) String message,
             @Size(max = 20000) String currentSql,
-            @jakarta.validation.Valid AiExecutionFailure failure
+            @jakarta.validation.Valid AiExecutionFailure failure,
+            @jakarta.validation.Valid AiExecutionOutcome outcome
     ) {
     }
 
@@ -106,6 +107,19 @@ public final class AiDtos {
     public record AiExecutionFailure(
             @NotBlank @Size(max = 20000) String sql,
             @NotBlank @Size(max = 8000) String errorMessage
+    ) {
+    }
+
+    /**
+     * 一次执行成功但结果可疑的现场：跑的是哪条 SQL，结果长什么形状。
+     *
+     * <p>只收计数，不收数据行 —— 查错真正需要的信号本来就是计数（0 行、某列全空、行数爆炸，
+     * 说的都是关联写错了），所以这条路留在「只发结构」这一档里。要看真实样本行是另一件事，
+     * 走结果解读那个入口，那边要求连接开到「结构 + 样本行」。</p>
+     */
+    public record AiExecutionOutcome(
+            @NotBlank @Size(max = 20000) String sql,
+            @Size(max = 4000) String shape
     ) {
     }
 

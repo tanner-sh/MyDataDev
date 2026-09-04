@@ -165,6 +165,37 @@ class AiSqlAgentLoopTest {
         }
     }
 
+    /**
+     * 编译校验挡得住拼错的字段，挡不住语义写错 —— 关联方向反了照样编译通过、返回零行。
+     * 执行结果是唯一能暴露这类错误的信号，所以要能回到同一段会话里复盘。
+     */
+    @Test
+    void reviewsAQueryThatCompiledFineButCameBackEmpty() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"客户\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                answer("""
+                        ```sql
+                        SELECT CUST_NM FROM T_CRM_0021 WHERE ENABLED = TRUE
+                        ```
+                        零行是因为过滤条件写反了，未启用的才是 FALSE。""")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.ask("结果是空的，不应该啊", null,
+                    new com.example.dbadmin.dto.AiDtos.AiExecutionOutcome(
+                            "SELECT CUST_NM FROM T_CRM_0021 WHERE ENABLED = FALSE",
+                            "共返回 0 行，耗时 6 毫秒。\n没有任何行返回。"));
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.stats()).containsEntry("mode", "review");
+
+            String firstUserMessage = model.seen().get(0).messages().get(0).text();
+            assertThat(firstUserMessage).contains("不可信数据").contains("共返回 0 行");
+            // 结果形状里只有计数，任何一行数据都不该出现在上下文里。
+            assertThat(firstUserMessage).doesNotContain("张三").doesNotContain("13800");
+        }
+    }
+
     @Test
     void rejectsAWriteStatementAndAsksForASelectInstead() throws Exception {
         ScriptedLlmClient model = new ScriptedLlmClient(List.of(

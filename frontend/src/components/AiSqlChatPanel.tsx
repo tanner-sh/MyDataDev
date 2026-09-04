@@ -5,9 +5,16 @@ import { API } from '../constants';
 import { api, apiErrorCode } from '../api';
 import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
-import { applyAgentEvent, conversationStorageKey, initialAgentStreamState, streamErrorMessage } from '../aiChat';
+import {
+  applyAgentEvent,
+  conversationStorageKey,
+  initialAgentStreamState,
+  splitAnswerBlocks,
+  splitInlineSpans,
+  streamErrorMessage
+} from '../aiChat';
 import { checkSqlSuggestion } from '../sqlSuggestion';
-import type { AiChatMessage, AiConversation, AiExecutionFailure, AiGroundingReport } from '../types';
+import type { AiChatMessage, AiConversation, AiExecutionFailure, AiExecutionOutcome, AiGroundingReport } from '../types';
 
 const { Paragraph, Text } = Typography;
 
@@ -19,13 +26,14 @@ type PendingRequest = {
   requestId?: string;
 };
 
-export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, failure, onFailureConsumed, onClose, onInsertSql }: {
+export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, failure, outcome, onFailureConsumed, onClose, onInsertSql }: {
   open: boolean;
   connectionId: number;
   schemaName?: string;
   currentSql: string;
-  /** 从结果区「AI 分析」进来时带上的执行失败现场；面板会自动把它作为一轮发出去。 */
+  /** 从结果区进来时带上的执行现场：跑挂的报错，或跑通但结果不对的形状。面板会自动发出一轮。 */
   failure?: AiExecutionFailure;
+  outcome?: AiExecutionOutcome;
   onFailureConsumed?: () => void;
   onClose: () => void;
   onInsertSql: (sql: string, title: string) => void;
@@ -93,13 +101,20 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
 
   useEffect(() => () => stopCurrent(false), []);
 
-  // 从结果区点进来时不用再让用户敲一遍「这条为什么跑不起来」：等会话恢复完就自动发一轮。
+  // 从结果区点进来时不用再让用户敲一遍「这条为什么不对」：等会话恢复完就自动发一轮。
   useEffect(() => {
-    if (!open || !failure || busy || !restored) return;
-    onFailureConsumed?.();
-    void send({ question: '这条 SQL 执行失败了，请找出原因并给出修正后的 SQL。', failure });
+    if (!open || busy || !restored) return;
+    if (failure) {
+      onFailureConsumed?.();
+      void send({ question: '这条 SQL 执行失败了，请找出原因并给出修正后的 SQL。', failure });
+      return;
+    }
+    if (outcome) {
+      onFailureConsumed?.();
+      void send({ question: '这条 SQL 跑通了，但结果看起来不对。请判断写法哪里与需求不符，并给出修正后的 SQL。', outcome });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, failure, restored]);
+  }, [open, failure, outcome, restored]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -150,9 +165,10 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     setError('');
   }
 
-  async function send(preset?: { question: string; failure: AiExecutionFailure }) {
+  async function send(preset?: { question: string; failure?: AiExecutionFailure; outcome?: AiExecutionOutcome }) {
     const question = preset ? preset.question : input.trim();
     const failedExecution = preset?.failure;
+    const reviewedExecution = preset?.outcome;
     if (!question || busy || restoring) return;
     const previousMessages = messages;
     setMessages([...messages, { role: 'USER', text: question }]);
@@ -180,10 +196,11 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
           conversationId,
           message: question,
           // 带着失败现场时不再附带编辑器草稿：要诊断的是跑挂的那一条。
-          currentSql: !failedExecution && !conversationId && previousMessages.length === 0
+          currentSql: !preset && !conversationId && previousMessages.length === 0
             ? currentSql.trim() || undefined
             : undefined,
-          failure: failedExecution
+          failure: failedExecution,
+          outcome: reviewedExecution
         })
       });
       if (!response.ok || !response.body) {
@@ -270,7 +287,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
         {messages.map((message, index) => (
           <div key={`${message.role}-${index}`} className={`ai-chat-message is-${message.role.toLowerCase()}`}>
             <Text type="secondary">{message.role === 'USER' ? '你' : 'AI'}</Text>
-            <Paragraph>{message.text}</Paragraph>
+            <AnswerBody text={message.text} />
             {message.role === 'ASSISTANT' && message.grounding && <Grounding report={message.grounding} />}
           </div>
         ))}
@@ -287,7 +304,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
         {answer && (
           <div className="ai-chat-message is-assistant">
             <Text type="secondary">AI</Text>
-            <Paragraph>{answer}</Paragraph>
+            <AnswerBody text={answer} />
             {grounding && <Grounding report={grounding} />}
           </div>
         )}
@@ -323,6 +340,34 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
         </div>
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * 回答正文：说明按段落走，```sql 块按等宽代码渲染。
+ *
+ * 之前整段当纯文本渲染，反引号原样显示、SQL 挤在正文字体里 —— 这一屏最该看清的东西反而最难读。
+ */
+function AnswerBody({ text }: { text: string }) {
+  const blocks = useMemo(() => splitAnswerBlocks(text), [text]);
+  return (
+    <>
+      {blocks.map((block, index) => (block.kind === 'code'
+        ? <pre key={index} className="ai-chat-code"><code>{block.code}</code></pre>
+        : <Paragraph key={index}><Inline text={block.text} /></Paragraph>))}
+    </>
+  );
+}
+
+function Inline({ text }: { text: string }) {
+  return (
+    <>
+      {splitInlineSpans(text).map((span, index) => {
+        if (span.kind === 'strong') return <strong key={index}>{span.text}</strong>;
+        if (span.kind === 'code') return <code key={index} className="ai-chat-inline-code">{span.text}</code>;
+        return <span key={index}>{span.text}</span>;
+      })}
+    </>
   );
 }
 

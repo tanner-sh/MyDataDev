@@ -686,6 +686,12 @@ export type AiExecutionFailure = {
   errorMessage: string;
 };
 
+/** 一次执行成功但结果可疑的现场；只带计数，不带数据行。 */
+export type AiExecutionOutcome = {
+  sql: string;
+  shape: string;
+};
+
 export type AiChatMessage = {
   role: 'USER' | 'ASSISTANT';
   text: string;

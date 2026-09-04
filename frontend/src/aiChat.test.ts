@@ -4,6 +4,8 @@ import {
   conversationStorageKey,
   initialAgentStreamState,
   parseGrounding,
+  splitAnswerBlocks,
+  splitInlineSpans,
   streamErrorMessage
 } from './aiChat';
 import { consumeSseBuffer } from './aiSuggestion';
@@ -121,5 +123,68 @@ describe('streamErrorMessage', () => {
     expect(streamErrorMessage('nginx 502', 'Bad Gateway')).toBe('nginx 502');
     expect(streamErrorMessage('', 'Bad Gateway')).toBe('Bad Gateway');
     expect(streamErrorMessage('', '')).toBe('AI 调用失败');
+  });
+});
+
+describe('splitAnswerBlocks', () => {
+  it('把说明和 SQL 代码块分开，反引号不再出现在正文里', () => {
+    const blocks = splitAnswerBlocks('原因是字段名不对。\n\n```sql\nSELECT CUST_NM\nFROM T_CRM_0021\n```\n\n已通过校验。');
+
+    expect(blocks).toEqual([
+      { kind: 'text', text: '原因是字段名不对。' },
+      { kind: 'code', language: 'sql', code: 'SELECT CUST_NM\nFROM T_CRM_0021' },
+      { kind: 'text', text: '已通过校验。' }
+    ]);
+  });
+
+  it('流式时还没收尾的围栏也按代码渲染，避免整段从正文跳成代码块', () => {
+    const blocks = splitAnswerBlocks('先看结构：\n```sql\nSELECT CUST_NM FROM');
+
+    expect(blocks).toEqual([
+      { kind: 'text', text: '先看结构：' },
+      { kind: 'code', language: 'sql', code: 'SELECT CUST_NM FROM' }
+    ]);
+  });
+
+  it('没有代码块时整段就是一块正文', () => {
+    expect(splitAnswerBlocks('这条 SQL 的问题在权限，不在结构。'))
+      .toEqual([{ kind: 'text', text: '这条 SQL 的问题在权限，不在结构。' }]);
+    expect(splitAnswerBlocks('')).toEqual([]);
+    expect(splitAnswerBlocks('   \n  ')).toEqual([]);
+  });
+
+  it('不给语言的围栏也认，代码块内部的空行保留', () => {
+    expect(splitAnswerBlocks('```\nline1\n\nline2\n```'))
+      .toEqual([{ kind: 'code', language: '', code: 'line1\n\nline2' }]);
+  });
+
+  it('多个代码块按出现顺序保留', () => {
+    const blocks = splitAnswerBlocks('一：\n```sql\nSELECT 1\n```\n二：\n```sql\nSELECT 2\n```');
+
+    expect(blocks.filter((block) => block.kind === 'code')).toHaveLength(2);
+    expect(blocks.map((block) => block.kind)).toEqual(['text', 'code', 'text', 'code']);
+  });
+});
+
+describe('splitInlineSpans', () => {
+  it('识别加粗与行内代码，其余原样', () => {
+    expect(splitInlineSpans('真实表名是 `T_CRM_0021`，**不是** customer')).toEqual([
+      { kind: 'plain', text: '真实表名是 ' },
+      { kind: 'code', text: 'T_CRM_0021' },
+      { kind: 'plain', text: '，' },
+      { kind: 'strong', text: '不是' },
+      { kind: 'plain', text: ' customer' }
+    ]);
+  });
+
+  it('落单的星号和反引号不当作标记', () => {
+    expect(splitInlineSpans('SELECT * FROM t -- 3 ** 2')).toEqual([
+      { kind: 'plain', text: 'SELECT * FROM t -- 3 ** 2' }
+    ]);
+    expect(splitInlineSpans('未闭合的 `反引号')).toEqual([{ kind: 'plain', text: '未闭合的 `反引号' }]);
+  });
+
+  it('空文本返回一段空的纯文本而不是空数组', () => {
+    expect(splitInlineSpans('')).toEqual([{ kind: 'plain', text: '' }]);
   });
 });
