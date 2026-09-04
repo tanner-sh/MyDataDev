@@ -4975,6 +4975,22 @@ body.is-resizing-column * {
   padding-left: 4px;
 }
 
+.ai-chat-grounding {
+  margin-top: 4px;
+  min-width: min(520px, 86vw);
+}
+
+.ai-chat-grounding-item {
+  display: grid;
+  grid-template-columns: auto minmax(120px, max-content) 1fr;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-chat-grounding-item .ant-tag {
+  margin-inline-end: 0;
+}
+
 .ai-chat-composer {
   border-top: 1px solid var(--border);
   padding: 12px 16px 16px;

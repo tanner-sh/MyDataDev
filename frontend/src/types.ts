@@ -660,6 +660,39 @@ export type AiConnectionPolicy = {
   sampleRowLimit: number;
 };
 
+export type AiGlossaryEntry = {
+  id: number;
+  term: string;
+  aliases: string[];
+  objectNames: string[];
+  description?: string | null;
+};
+
+export type AiGroundingReference = {
+  kind: 'TABLE' | 'COLUMN' | 'FOREIGN_KEY';
+  label: string;
+  detail?: string | null;
+};
+
+export type AiGroundingReport = {
+  validated: boolean;
+  validationMessage: string;
+  references: AiGroundingReference[];
+};
+
+export type AiChatMessage = {
+  role: 'USER' | 'ASSISTANT';
+  text: string;
+  grounding?: AiGroundingReport | null;
+};
+
+export type AiConversation = {
+  id: string;
+  connectionId: number;
+  schemaName: string;
+  messages: AiChatMessage[];
+};
+
 export type AiProbeResult = {
   ok: boolean;
   provider: string;

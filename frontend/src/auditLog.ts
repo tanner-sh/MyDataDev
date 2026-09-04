@@ -63,6 +63,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   AI_SETTINGS_UPDATE: { label: '修改 AI 设置', category: 'ai' },
   AI_SETTINGS_TEST: { label: '测试 AI 连通性', category: 'ai' },
   AI_POLICY_UPDATE: { label: '修改连接 AI 共享策略', category: 'ai' },
+  AI_GLOSSARY_UPDATE: { label: '修改 AI 业务词典', category: 'ai' },
   DATA_COMMIT: { label: '提交表数据变更', category: 'data', dangerous: true },
   TABLE_DESIGN_EXECUTE: { label: '执行表结构变更', category: 'schema', dangerous: true },
   TABLE_CREATE: { label: '新建表', category: 'schema' },

@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectDdlResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelation;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
+import com.example.dbadmin.dto.AiDtos.AiGroundingReference;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.service.ConnectionService;
 import com.example.dbadmin.service.MetadataCacheService;
@@ -58,6 +59,8 @@ public class AiSchemaTools {
     private final DialectRegistry dialects;
     private final MetadataService metadata;
     private final MetadataCacheService metadataCache;
+    private final AiGlossaryService glossary;
+    private final AiSqlValidationService validator;
     private final ObjectMapper json;
     private final Cache<CatalogKey, Catalog> catalogs = Caffeine.newBuilder()
             .maximumSize(100)
@@ -69,12 +72,16 @@ public class AiSchemaTools {
             DialectRegistry dialects,
             MetadataService metadata,
             MetadataCacheService metadataCache,
+            AiGlossaryService glossary,
+            AiSqlValidationService validator,
             ObjectMapper json
     ) {
         this.connections = connections;
         this.dialects = dialects;
         this.metadata = metadata;
         this.metadataCache = metadataCache;
+        this.glossary = glossary;
+        this.validator = validator;
         this.json = json;
     }
 
@@ -96,11 +103,25 @@ public class AiSchemaTools {
                         ), List.of("names"))
                 ),
                 new LlmToolDefinition(
+                        "find_related_objects",
+                        "沿真实外键查找指定对象的一跳邻接表，并返回可用的关联列。需要跨表查询时，在 describe_objects 后调用。",
+                        schema(Map.of(
+                                "names", arrayProperty("要扩展关系的精确对象名，一次最多 8 个")
+                        ), List.of("names"))
+                ),
+                new LlmToolDefinition(
                         "get_object_ddl",
                         "读取当前命名空间内一个表或视图的可用 DDL。只有 describe_objects 仍不足以理解视图或复杂结构时才调用。",
                         schema(Map.of(
                                 "name", property("string", "精确对象名")
                         ), List.of("name"))
+                ),
+                new LlmToolDefinition(
+                        "validate_sql",
+                        "在目标数据库上对一条只读候选 SQL 做编译校验，不执行查询也不读取行。生成最终回答前应调用。",
+                        schema(Map.of(
+                                "sql", property("string", "一条完整的 SELECT、WITH 或只读 EXPLAIN 查询")
+                        ), List.of("sql"))
                 )
         );
     }
@@ -110,23 +131,39 @@ public class AiSchemaTools {
             return switch (call.name()) {
                 case "search_schema" -> search(connectionId, schemaName, call.arguments());
                 case "describe_objects" -> describe(connectionId, schemaName, call.arguments());
+                case "find_related_objects" -> related(connectionId, schemaName, call.arguments());
                 case "get_object_ddl" -> ddl(connectionId, schemaName, call.arguments());
-                default -> new ToolExecution("未知工具：" + call.name(), "工具调用被拒绝", true, 0);
+                case "validate_sql" -> validate(connectionId, schemaName, call.arguments());
+                default -> new ToolExecution("未知工具：" + call.name(), "工具调用被拒绝", true, 0, List.of());
             };
         } catch (Exception e) {
             log.debug("AI 元数据工具 {} 调用失败：{}", call.name(), e.toString());
-            return new ToolExecution("工具调用失败：" + safeMessage(e), label(call.name()) + "失败", true, 0);
+            return new ToolExecution("工具调用失败：" + safeMessage(e), label(call.name()) + "失败", true, 0, List.of());
         }
     }
 
     private ToolExecution search(long connectionId, String schemaName, JsonNode arguments) throws Exception {
         String query = text(arguments, "query", 300);
-        if (query.isBlank()) return new ToolExecution("请提供搜索词。", "没有可搜索的关键词", true, 0);
+        if (query.isBlank()) return new ToolExecution("请提供搜索词。", "没有可搜索的关键词", true, 0, List.of());
         int limit = Math.min(Math.max(arguments.path("limit").asInt(20), 1), MAX_SEARCH_RESULTS);
         Catalog catalog = catalog(connectionId, schemaName);
         Set<String> terms = searchTerms(query);
+        List<AiBusinessTerm> glossaryMatches = glossary.terms(connectionId).stream()
+                .filter(term -> matchesGlossary(query, term))
+                .limit(10)
+                .toList();
+        Set<String> mappedObjects = new LinkedHashSet<>();
+        for (AiBusinessTerm term : glossaryMatches) {
+            terms.addAll(searchTerms(term.term()));
+            term.aliases().forEach(alias -> terms.addAll(searchTerms(alias)));
+            term.objectNames().forEach(name -> {
+                terms.addAll(searchTerms(name));
+                mappedObjects.add(normalize(objectName(name)));
+            });
+        }
         List<ScoredEntry> matches = catalog.entries().stream()
-                .map(entry -> new ScoredEntry(entry, score(entry, terms)))
+                .map(entry -> new ScoredEntry(entry, score(entry, terms)
+                        + (mappedObjects.contains(normalize(entry.name())) ? 100 : 0)))
                 .filter(item -> item.score() > 0 || terms.isEmpty())
                 .sorted(Comparator.comparingInt(ScoredEntry::score).reversed()
                         .thenComparing(item -> item.entry().name()))
@@ -138,6 +175,14 @@ public class AiSchemaTools {
         root.put("schema", catalog.schemaName());
         root.put("catalogObjects", catalog.entries().size());
         root.put("catalogTruncated", catalog.truncated());
+        ArrayNode glossaryResults = root.putArray("glossaryMatches");
+        for (AiBusinessTerm term : glossaryMatches) {
+            ObjectNode item = glossaryResults.addObject();
+            item.put("term", term.term());
+            item.set("aliases", json.valueToTree(term.aliases()));
+            item.set("objectNames", json.valueToTree(term.objectNames()));
+            putIfPresent(item, "description", term.description());
+        }
         ArrayNode results = root.putArray("results");
         for (ScoredEntry item : matches) {
             CatalogEntry entry = item.entry();
@@ -157,7 +202,8 @@ public class AiSchemaTools {
                     });
         }
         String summary = matches.isEmpty() ? "没有找到相关对象" : "找到 " + matches.size() + " 个候选对象";
-        return new ToolExecution(root.toString(), summary, false, matches.size());
+        if (!glossaryMatches.isEmpty()) summary += "，命中 " + glossaryMatches.size() + " 条业务词典";
+        return new ToolExecution(root.toString(), summary, false, matches.size(), List.of());
     }
 
     private ToolExecution describe(long connectionId, String schemaName, JsonNode arguments) throws Exception {
@@ -166,12 +212,13 @@ public class AiSchemaTools {
             if (value.isTextual() && !value.asText().isBlank()) names.add(value.asText().trim());
             if (names.size() >= MAX_DESCRIBE_OBJECTS) break;
         }
-        if (names.isEmpty()) return new ToolExecution("请提供至少一个对象名。", "没有可读取的对象", true, 0);
+        if (names.isEmpty()) return new ToolExecution("请提供至少一个对象名。", "没有可读取的对象", true, 0, List.of());
         Catalog currentCatalog = catalog(connectionId, schemaName);
 
         ObjectNode root = json.createObjectNode();
         root.put("notice", UNTRUSTED);
         ArrayNode objects = root.putArray("objects");
+        List<AiGroundingReference> evidence = new ArrayList<>();
         int described = 0;
         for (String rawName : names) {
             CatalogEntry catalogEntry = resolveEntry(currentCatalog, rawName);
@@ -200,6 +247,16 @@ public class AiSchemaTools {
                         .limit(MAX_RELATIONS_PER_OBJECT).map(AiSchemaTools::relationView).toList()));
                 object.set("exportedKeys", json.valueToTree(relations.exportedKeys().stream()
                         .limit(MAX_RELATIONS_PER_OBJECT).map(AiSchemaTools::relationView).toList()));
+                evidence.add(new AiGroundingReference("TABLE", detail.name(),
+                        catalogEntry.remarks() == null ? detail.type() : clamp(catalogEntry.remarks(), 200)));
+                detail.columns().stream().limit(MAX_COLUMNS_PER_OBJECT).forEach(column -> evidence.add(
+                        new AiGroundingReference("COLUMN", detail.name() + "." + column.name(),
+                                column.remarks() == null || column.remarks().isBlank()
+                                        ? column.type() : clamp(column.remarks(), 200))));
+                relations.importedKeys().stream().limit(MAX_RELATIONS_PER_OBJECT).forEach(relation -> evidence.add(
+                        new AiGroundingReference("FOREIGN_KEY", relationLabel(relation), relation.constraintName())));
+                relations.exportedKeys().stream().limit(MAX_RELATIONS_PER_OBJECT).forEach(relation -> evidence.add(
+                        new AiGroundingReference("FOREIGN_KEY", relationLabel(relation), relation.constraintName())));
                 described++;
             } catch (Exception e) {
                 ObjectNode error = objects.addObject();
@@ -207,17 +264,50 @@ public class AiSchemaTools {
                 error.put("error", safeMessage(e));
             }
         }
-        return new ToolExecution(root.toString(), "读取了 " + described + " 个对象的字段与关系", false, described);
+        return new ToolExecution(root.toString(), "读取了 " + described + " 个对象的字段与关系", false, described,
+                distinctEvidence(evidence));
+    }
+
+    private ToolExecution related(long connectionId, String schemaName, JsonNode arguments) throws Exception {
+        List<String> names = names(arguments, MAX_DESCRIBE_OBJECTS);
+        if (names.isEmpty()) return new ToolExecution("请提供至少一个对象名。", "没有可扩展的对象", true, 0, List.of());
+        Catalog currentCatalog = catalog(connectionId, schemaName);
+        ObjectNode root = json.createObjectNode();
+        root.put("notice", UNTRUSTED);
+        ArrayNode relationNodes = root.putArray("relations");
+        Set<String> relatedNames = new LinkedHashSet<>();
+        List<AiGroundingReference> evidence = new ArrayList<>();
+        Set<String> relationKeys = new LinkedHashSet<>();
+        for (String rawName : names) {
+            CatalogEntry entry = resolveEntry(currentCatalog, rawName);
+            if (entry == null) continue;
+            ObjectRelations relations = metadata.relations(connectionId, currentCatalog.schemaName(), entry.name(), false);
+            List<ObjectRelation> all = new ArrayList<>(relations.importedKeys());
+            all.addAll(relations.exportedKeys());
+            for (ObjectRelation relation : all) {
+                String label = relationLabel(relation);
+                if (!relationKeys.add(label)) continue;
+                relationNodes.add(json.valueToTree(relationView(relation)));
+                evidence.add(new AiGroundingReference("FOREIGN_KEY", label, relation.constraintName()));
+                addRelated(currentCatalog, entry.name(), relation.pkTableName(), relatedNames, evidence);
+                addRelated(currentCatalog, entry.name(), relation.fkTableName(), relatedNames, evidence);
+                if (relationKeys.size() >= MAX_RELATIONS_PER_OBJECT) break;
+            }
+        }
+        root.set("relatedObjects", json.valueToTree(relatedNames));
+        return new ToolExecution(root.toString(),
+                relatedNames.isEmpty() ? "没有找到外键邻接对象" : "找到 " + relatedNames.size() + " 个外键邻接对象",
+                false, relatedNames.size(), distinctEvidence(evidence));
     }
 
     private ToolExecution ddl(long connectionId, String schemaName, JsonNode arguments) throws Exception {
         String rawName = text(arguments, "name", 300);
-        if (rawName.isBlank()) return new ToolExecution("请提供对象名。", "没有可读取的对象", true, 0);
+        if (rawName.isBlank()) return new ToolExecution("请提供对象名。", "没有可读取的对象", true, 0, List.of());
         Catalog currentCatalog = catalog(connectionId, schemaName);
         CatalogEntry entry = resolveEntry(currentCatalog, rawName);
         if (entry == null) {
             return new ToolExecution("对象不在当前命名空间的搜索目录中，请先调用 search_schema。",
-                    "拒绝读取当前命名空间以外的对象", true, 0);
+                    "拒绝读取当前命名空间以外的对象", true, 0, List.of());
         }
         ObjectDdlResponse result = metadata.ddl(connectionId, currentCatalog.schemaName(), entry.name(), false);
         String ddl = clamp(result.ddl(), 16_000);
@@ -226,7 +316,18 @@ public class AiSchemaTools {
         root.put("name", rawName);
         root.put("source", result.source());
         root.put("ddl", ddl);
-        return new ToolExecution(root.toString(), "读取了 " + rawName + " 的 DDL", false, 1);
+        return new ToolExecution(root.toString(), "读取了 " + rawName + " 的 DDL", false, 1,
+                List.of(new AiGroundingReference("TABLE", entry.name(), entry.type())));
+    }
+
+    private ToolExecution validate(long connectionId, String schemaName, JsonNode arguments) {
+        String sql = text(arguments, "sql", 20_000);
+        AiSqlValidationService.ValidationResult result = validator.validate(connectionId, schemaName, sql);
+        ObjectNode root = json.createObjectNode();
+        root.put("valid", result.valid());
+        root.put("message", result.message());
+        return new ToolExecution(root.toString(), result.valid() ? "候选 SQL 编译校验通过" : "候选 SQL 编译校验失败",
+                !result.valid(), 0, List.of());
     }
 
     private Catalog catalog(long connectionId, String requestedSchema) throws Exception {
@@ -320,6 +421,18 @@ public class AiSchemaTools {
         return terms;
     }
 
+    private static boolean matchesGlossary(String query, AiBusinessTerm term) {
+        String normalizedQuery = normalize(query);
+        if (containsPhrase(normalizedQuery, term.term())) return true;
+        return term.aliases().stream().anyMatch(alias -> containsPhrase(normalizedQuery, alias));
+    }
+
+    private static boolean containsPhrase(String query, String phrase) {
+        String normalizedPhrase = normalize(phrase);
+        return !normalizedPhrase.isBlank()
+                && (query.contains(normalizedPhrase) || (query.length() >= 2 && normalizedPhrase.contains(query)));
+    }
+
     private static boolean containsCjk(String value) {
         return value.codePoints().anyMatch(code -> code >= 0x3400 && code <= 0x9fff);
     }
@@ -382,6 +495,35 @@ public class AiSchemaTools {
         return dot < 0 ? value : value.substring(dot + 1);
     }
 
+    private static List<String> names(JsonNode arguments, int limit) {
+        List<String> result = new ArrayList<>();
+        for (JsonNode value : arguments.path("names")) {
+            if (value.isTextual() && !value.asText().isBlank()) result.add(value.asText().trim());
+            if (result.size() >= limit) break;
+        }
+        return result;
+    }
+
+    private static void addRelated(
+            Catalog catalog,
+            String sourceName,
+            String candidateName,
+            Set<String> relatedNames,
+            List<AiGroundingReference> evidence
+    ) {
+        if (candidateName == null || candidateName.equalsIgnoreCase(sourceName)) return;
+        CatalogEntry candidate = resolveEntry(catalog, candidateName);
+        if (candidate == null || !relatedNames.add(candidate.name())) return;
+        evidence.add(new AiGroundingReference("TABLE", candidate.name(),
+                candidate.remarks() == null ? candidate.type() : clamp(candidate.remarks(), 200)));
+    }
+
+    private static List<AiGroundingReference> distinctEvidence(List<AiGroundingReference> input) {
+        Map<String, AiGroundingReference> result = new LinkedHashMap<>();
+        for (AiGroundingReference item : input) result.putIfAbsent(item.kind() + '\0' + item.label(), item);
+        return List.copyOf(result.values());
+    }
+
     private static CatalogEntry resolveEntry(Catalog catalog, String rawName) {
         String requested = rawName == null ? "" : rawName.trim();
         CatalogEntry exact = uniqueEntry(catalog, requested, false);
@@ -429,6 +571,11 @@ public class AiSchemaTools {
         return result;
     }
 
+    private static String relationLabel(ObjectRelation relation) {
+        return qualified(relation.fkSchemaName(), relation.fkTableName()) + "." + relation.fkColumnName()
+                + " → " + qualified(relation.pkSchemaName(), relation.pkTableName()) + "." + relation.pkColumnName();
+    }
+
     private static String qualified(String schema, String name) {
         return schema == null || schema.isBlank() ? name : schema + "." + name;
     }
@@ -442,12 +589,23 @@ public class AiSchemaTools {
         return switch (name) {
             case "search_schema" -> "正在搜索表和字段注释";
             case "describe_objects" -> "正在读取字段与外键";
+            case "find_related_objects" -> "正在沿外键查找关联表";
             case "get_object_ddl" -> "正在读取对象定义";
+            case "validate_sql" -> "正在用目标数据库校验 SQL";
             default -> "正在检查数据库结构";
         };
     }
 
-    public record ToolExecution(String content, String summary, boolean error, int objectCount) {
+    public record ToolExecution(
+            String content,
+            String summary,
+            boolean error,
+            int objectCount,
+            List<AiGroundingReference> evidence
+    ) {
+        public ToolExecution {
+            evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        }
     }
 
     private record CatalogKey(long connectionId, String schemaName, long version) {

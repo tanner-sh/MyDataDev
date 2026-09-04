@@ -3,7 +3,9 @@ package com.example.dbadmin.api;
 import com.example.dbadmin.access.ConnectionAccessService;
 import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
+import com.example.dbadmin.dto.AiDtos.AiCancelResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
+import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
 import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
 import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
 import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
@@ -12,11 +14,16 @@ import com.example.dbadmin.dto.AiDtos.AiReviewScriptRequest;
 import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
 import com.example.dbadmin.service.ai.AiSqlAgentService;
+import com.example.dbadmin.auth.WebIdentityContext;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -136,10 +143,40 @@ public class AiAssistantController {
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
         requireQuery(request.connectionId());
-        return agent.chatStream(request, actor);
+        return agent.chatStream(request, actor, ownerKey());
+    }
+
+    @GetMapping("/conversations/{id}")
+    public AiConversationResponse conversation(
+            @PathVariable String id,
+            @RequestParam long connectionId,
+            @RequestParam(required = false) String schemaName
+    ) {
+        requireQuery(connectionId);
+        return agent.conversation(id, ownerKey(), connectionId, schemaName);
+    }
+
+    @DeleteMapping("/conversations/{id}")
+    public AiCancelResponse removeConversation(
+            @PathVariable String id,
+            @RequestParam long connectionId
+    ) {
+        requireQuery(connectionId);
+        return new AiCancelResponse(agent.removeConversation(id, ownerKey(), connectionId));
+    }
+
+    @PostMapping("/chat/{requestId}/cancel")
+    public AiCancelResponse cancel(@PathVariable String requestId) {
+        return agent.cancel(requestId, ownerKey());
     }
 
     private void requireQuery(long connectionId) {
         access.require(connectionId, ConnectionPermission.QUERY);
+    }
+
+    private static String ownerKey() {
+        return WebIdentityContext.current()
+                .map(identity -> "user:" + identity.userId())
+                .orElse("local-desktop");
     }
 }

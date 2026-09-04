@@ -78,7 +78,7 @@ class ConnectionAccessIntegrationTest {
                         .contentType("application/json")
                         .content(mapper.writeValueAsString(Map.of(
                                 "connectionId", connectionId,
-                                "messages", new Object[]{Map.of("role", "USER", "text", "查询用户")}
+                                "message", "查询用户"
                         ))))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("CONNECTION_ACCESS_DENIED"));

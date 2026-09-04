@@ -2,8 +2,6 @@ package com.example.dbadmin.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public final class AiDtos {
@@ -85,21 +83,69 @@ public final class AiDtos {
     ) {
     }
 
-    /** 多轮 SQL 对话的一条历史消息。工具结果不由浏览器回传，避免客户端伪造数据库上下文。 */
-    public record AiChatMessageRequest(
-            @NotBlank @Pattern(regexp = "USER|ASSISTANT") String role,
-            @NotBlank @Size(max = 20000) String text
-    ) {
-    }
-
     /**
-     * 多轮 SQL 对话。历史只在当前浏览器会话中保存，每次随请求带回；后端不把自然语言落库。
+     * 多轮 SQL 对话。浏览器只提交当前这句话；历史和工具结果绑定在服务端短期会话里，
+     * 避免客户端伪造模型已经检查过的结构。
      */
     public record AiChatRequest(
             long connectionId,
             @Size(max = 200) String schemaName,
-            @NotNull @Size(min = 1, max = 20) java.util.List<@Valid AiChatMessageRequest> messages,
+            @Size(max = 36) String conversationId,
+            @NotBlank @Size(max = 20000) String message,
             @Size(max = 20000) String currentSql
+    ) {
+    }
+
+    /** 最终 SQL 所依据的真实结构项。 */
+    public record AiGroundingReference(String kind, String label, String detail) {
+    }
+
+    /** 编译校验结果和本轮用到的结构证据。 */
+    public record AiGroundingReport(
+            boolean validated,
+            String validationMessage,
+            java.util.List<AiGroundingReference> references
+    ) {
+        public AiGroundingReport {
+            references = references == null ? java.util.List.of() : java.util.List.copyOf(references);
+        }
+    }
+
+    /** 服务端保存并可在页面刷新后恢复的一条可见消息。 */
+    public record AiChatMessageResponse(String role, String text, AiGroundingReport grounding) {
+    }
+
+    public record AiConversationResponse(
+            String id,
+            long connectionId,
+            String schemaName,
+            java.util.List<AiChatMessageResponse> messages
+    ) {
+    }
+
+    public record AiCancelResponse(boolean cancelled) {
+    }
+
+    /** 管理员维护的业务词典：自然语言、别名与真实数据库对象之间的映射。 */
+    public record AiGlossaryEntryRequest(
+            @NotBlank @Size(max = 120) String term,
+            @Size(max = 10) java.util.List<@NotBlank @Size(max = 120) String> aliases,
+            @Size(max = 10) java.util.List<@NotBlank @Size(max = 200) String> objectNames,
+            @Size(max = 1000) String description
+    ) {
+    }
+
+    public record AiGlossaryUpdateRequest(
+            @NotNull @Size(max = 100) java.util.List<@jakarta.validation.Valid AiGlossaryEntryRequest> entries
+    ) {
+    }
+
+    public record AiGlossaryEntryResponse(
+            long id,
+            String term,
+            java.util.List<String> aliases,
+            java.util.List<String> objectNames,
+            String description
     ) {
     }
 

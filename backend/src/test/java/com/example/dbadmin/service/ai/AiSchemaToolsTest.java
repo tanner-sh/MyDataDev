@@ -1,6 +1,7 @@
 package com.example.dbadmin.service.ai;
 
 import com.example.dbadmin.core.DialectRegistry;
+import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.ConnectionService;
@@ -58,6 +59,17 @@ class AiSchemaToolsTest {
         assertThat(object.path("error").asText()).withFailMessage(describe.content()).isBlank();
         assertThat(findByName(object.path("columns"), "DISPLAY_NAME").path("type").asText()).isNotBlank();
         assertThat(object.path("importedKeys").toString()).containsIgnoringCase("APP_ROLE");
+
+        var related = tools.execute(CONNECTION_ID, "PUBLIC", call("related-1", "find_related_objects", """
+                {"names":["APP_USER"]}
+                """));
+        assertThat(related.error()).isFalse();
+        assertThat(json.readTree(related.content()).path("relatedObjects").toString()).containsIgnoringCase("APP_ROLE");
+
+        var validation = tools.execute(CONNECTION_ID, "PUBLIC", call("validate-1", "validate_sql", """
+                {"sql":"SELECT DISPLAY_NAME FROM APP_USER"}
+                """));
+        assertThat(json.readTree(validation.content()).path("valid").asBoolean()).isTrue();
     }
 
     @Test
@@ -83,7 +95,31 @@ class AiSchemaToolsTest {
         assertThat(ddl.content()).contains("不在当前命名空间").doesNotContain("CREATE TABLE");
     }
 
+    @Test
+    void usesBusinessGlossaryToFindObjectsWithUnrelatedPhysicalNames() throws Exception {
+        String url = "jdbc:h2:mem:ai-schema-tools-glossary;MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE FACT_2026_X9 (ID BIGINT PRIMARY KEY, TOTAL_AMOUNT DECIMAL(18,2))");
+        }
+        AiBusinessTerm businessTerm = new AiBusinessTerm(1, CONNECTION_ID, "订单", List.of("交易单"),
+                List.of("FACT_2026_X9"), "订单事实表");
+
+        AiSchemaTools tools = tools(url, List.of(businessTerm));
+        var search = tools.execute(CONNECTION_ID, "PUBLIC", call("search-glossary", "search_schema", """
+                {"query":"统计订单金额","limit":10}
+                """));
+
+        JsonNode result = json.readTree(search.content());
+        assertThat(findByName(result.path("results"), "FACT_2026_X9")).isNotNull();
+        assertThat(result.path("glossaryMatches").path(0).path("term").asText()).isEqualTo("订单");
+    }
+
     private AiSchemaTools tools(String url) throws Exception {
+        return tools(url, List.of());
+    }
+
+    private AiSchemaTools tools(String url, List<AiBusinessTerm> terms) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.require(CONNECTION_ID)).thenReturn(new DbConnection(
                 CONNECTION_ID, "test", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
@@ -93,7 +129,12 @@ class AiSchemaToolsTest {
         MetadataCacheService cache = new MetadataCacheService();
         MetadataService metadata = new MetadataService(
                 connections, new DialectRegistry(), mock(AuditRepository.class), cache, new ExecutionGuard());
-        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, json);
+        AiGlossaryService glossary = mock(AiGlossaryService.class);
+        when(glossary.terms(CONNECTION_ID)).thenReturn(terms);
+        AiSqlValidationService validator = new AiSqlValidationService(
+                connections, new com.example.dbadmin.service.SqlScriptSplitter(),
+                new com.example.dbadmin.service.SqlStatementClassifier(), new AppProperties());
+        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, validator, json);
     }
 
     private LlmToolCall call(String id, String name, String arguments) throws Exception {

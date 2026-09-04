@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Drawer, Input, Space, Tag, Typography } from 'antd';
-import { CheckOutlined, CopyOutlined, ImportOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Button, Collapse, Drawer, Input, Space, Spin, Tag, Typography } from 'antd';
+import { CheckCircleOutlined, CheckOutlined, CopyOutlined, ImportOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
 import { API } from '../constants';
+import { api, apiErrorCode } from '../api';
 import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
 import { checkSqlSuggestion } from '../sqlSuggestion';
+import type { AiChatMessage, AiConversation, AiGroundingReport } from '../types';
 
 const { Paragraph, Text } = Typography;
 
-type ChatMessage = { role: 'USER' | 'ASSISTANT'; text: string };
 type ToolActivity = { name: string; summary: string; error: boolean };
+type PendingRequest = {
+  controller: AbortController;
+  messages: AiChatMessage[];
+  question: string;
+  requestId?: string;
+};
 
 export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onClose, onInsertSql }: {
   open: boolean;
@@ -19,36 +26,56 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
   onClose: () => void;
   onInsertSql: (sql: string, title: string) => void;
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<AiChatMessage[]>([]);
+  const [conversationId, setConversationId] = useState<string>();
   const [input, setInput] = useState('');
   const [answer, setAnswer] = useState('');
+  const [grounding, setGrounding] = useState<AiGroundingReport>();
   const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [phase, setPhase] = useState('');
   const [activities, setActivities] = useState<ToolActivity[]>([]);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
-  const abortRef = useRef<AbortController | undefined>(undefined);
-  const pendingRef = useRef<{ controller: AbortController; messages: ChatMessage[]; question: string } | undefined>(undefined);
+  const pendingRef = useRef<PendingRequest | undefined>(undefined);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const storageKey = conversationStorageKey(connectionId, schemaName);
 
   useEffect(() => {
-    pendingRef.current = undefined;
-    abortRef.current?.abort();
-    abortRef.current = undefined;
+    stopCurrent(false);
     setMessages([]);
+    setConversationId(undefined);
     setInput('');
     setAnswer('');
+    setGrounding(undefined);
     setBusy(false);
     setPhase('');
     setActivities([]);
     setError('');
-  }, [connectionId, schemaName]);
+    const saved = window.sessionStorage.getItem(storageKey);
+    if (!saved) return;
+    let active = true;
+    setRestoring(true);
+    const query = new URLSearchParams({ connectionId: String(connectionId) });
+    if (schemaName) query.set('schemaName', schemaName);
+    void api<AiConversation>(`/ai/sql/conversations/${saved}?${query}`).then((conversation) => {
+      if (!active) return;
+      setConversationId(conversation.id);
+      setMessages(conversation.messages);
+    }).catch((cause) => {
+      window.sessionStorage.removeItem(storageKey);
+      if (active && apiErrorCode(cause) !== 'AI_CONVERSATION_EXPIRED') {
+        setError(cause instanceof Error ? cause.message : 'AI 对话恢复失败');
+      }
+    }).finally(() => { if (active) setRestoring(false); });
+    return () => { active = false; };
+  }, [connectionId, schemaName, storageKey]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => stopCurrent(false), []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, answer, phase, activities]);
+  }, [messages, answer, phase, activities, grounding]);
 
   useEffect(() => {
     if (!copied) return;
@@ -62,13 +89,33 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
   const check = useMemo(() => (sqlReady && sql ? checkSqlSuggestion(sql) : undefined), [sql, sqlReady]);
   const firstQuestion = messages.find((message) => message.role === 'USER')?.text || input;
 
-  function reset() {
+  function stopCurrent(restoreQuestion: boolean) {
+    const pending = pendingRef.current;
     pendingRef.current = undefined;
-    abortRef.current?.abort();
-    abortRef.current = undefined;
+    if (!pending) return;
+    if (pending.requestId) void api(`/ai/sql/chat/${pending.requestId}/cancel`, { method: 'POST' }).catch(() => undefined);
+    pending.controller.abort();
+    if (restoreQuestion) {
+      setMessages(pending.messages);
+      setInput(pending.question);
+      setAnswer('');
+      setGrounding(undefined);
+      setBusy(false);
+      setPhase('');
+    }
+  }
+
+  function reset() {
+    stopCurrent(false);
+    if (conversationId) {
+      void api(`/ai/sql/conversations/${conversationId}?connectionId=${connectionId}`, { method: 'DELETE' }).catch(() => undefined);
+    }
+    window.sessionStorage.removeItem(storageKey);
+    setConversationId(undefined);
     setMessages([]);
     setInput('');
     setAnswer('');
+    setGrounding(undefined);
     setBusy(false);
     setPhase('');
     setActivities([]);
@@ -77,19 +124,21 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
 
   async function send() {
     const question = input.trim();
-    if (!question || busy) return;
-    const nextMessages: ChatMessage[] = [...messages, { role: 'USER', text: question }];
-    setMessages(nextMessages);
+    if (!question || busy || restoring) return;
+    const previousMessages = messages;
+    setMessages([...messages, { role: 'USER', text: question }]);
     setInput('');
     setAnswer('');
+    setGrounding(undefined);
     setActivities([]);
     setError('');
     setPhase('正在理解需求并检查数据库结构…');
     setBusy(true);
     const controller = new AbortController();
-    abortRef.current = controller;
-    pendingRef.current = { controller, messages, question };
+    const pending: PendingRequest = { controller, messages: previousMessages, question };
+    pendingRef.current = pending;
     let nextAnswer = '';
+    let nextGrounding: AiGroundingReport | undefined;
     try {
       const response = await fetch(`${API}/ai/sql/chat/stream`, {
         method: 'POST',
@@ -99,21 +148,12 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
         body: JSON.stringify({
           connectionId,
           schemaName,
-          messages: nextMessages,
-          currentSql: messages.length === 0 ? currentSql.trim() || undefined : undefined
+          conversationId,
+          message: question,
+          currentSql: !conversationId && previousMessages.length === 0 ? currentSql.trim() || undefined : undefined
         })
       });
-      if (!response.ok || !response.body) {
-        const payload = await response.text();
-        let message = response.statusText;
-        try {
-          const parsed = JSON.parse(payload) as { message?: string };
-          if (parsed.message) message = parsed.message;
-        } catch {
-          if (payload.trim()) message = payload.trim();
-        }
-        throw new Error(message);
-      }
+      if (!response.ok || !response.body) throw new Error(await responseMessage(response));
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -124,7 +164,13 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
         const parsed = consumeSseBuffer(buffer);
         buffer = parsed.rest;
         for (const event of parsed.events) {
-          if (event.event === 'delta' && typeof event.data.text === 'string') {
+          if (event.event === 'session') {
+            if (typeof event.data.requestId === 'string') pending.requestId = event.data.requestId;
+            if (typeof event.data.conversationId === 'string') {
+              setConversationId(event.data.conversationId);
+              window.sessionStorage.setItem(storageKey, event.data.conversationId);
+            }
+          } else if (event.event === 'delta' && typeof event.data.text === 'string') {
             nextAnswer += event.data.text;
             setAnswer(nextAnswer);
           } else if (event.event === 'phase' && typeof event.data.text === 'string') {
@@ -135,26 +181,32 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
               summary: typeof event.data.summary === 'string' ? event.data.summary : '已检查数据库结构',
               error: event.data.error === true
             }]);
+          } else if (event.event === 'grounding') {
+            nextGrounding = parseGrounding(event.data);
+            setGrounding(nextGrounding);
           } else if (event.event === 'failed') {
             throw new Error(typeof event.data.message === 'string' ? event.data.message : 'AI 调用失败');
+          } else if (event.event === 'cancelled') {
+            throw new DOMException('AI 请求已取消', 'AbortError');
           }
         }
       }
       if (!nextAnswer.trim()) throw new Error('模型没有返回 SQL 或说明。');
-      setMessages((current) => [...current, { role: 'ASSISTANT', text: nextAnswer }]);
+      setMessages((current) => [...current, { role: 'ASSISTANT', text: nextAnswer, grounding: nextGrounding }]);
       setAnswer('');
+      setGrounding(undefined);
       setPhase('');
     } catch (cause) {
-      if (!controller.signal.aborted) {
-        setMessages(messages);
+      if (!controller.signal.aborted && !(cause instanceof DOMException && cause.name === 'AbortError')) {
+        setMessages(previousMessages);
         setInput(question);
         setAnswer('');
+        setGrounding(undefined);
         setPhase('');
         setError(cause instanceof Error ? cause.message : 'AI 调用失败');
       }
     } finally {
-      if (abortRef.current === controller) {
-        abortRef.current = undefined;
+      if (pendingRef.current === pending) {
         pendingRef.current = undefined;
         setBusy(false);
       }
@@ -165,47 +217,34 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
     <Drawer
       open={open}
       title="AI SQL 助手"
-      width={600}
-      onClose={() => { pendingRef.current = undefined; abortRef.current?.abort(); onClose(); }}
+      width={640}
+      onClose={() => { stopCurrent(false); onClose(); }}
       extra={(
         <Space size={4}>
           <Button size="small" icon={<PlusOutlined />} disabled={busy || messages.length === 0} onClick={reset}>新对话</Button>
-          {busy && (
-            <Button size="small" danger icon={<StopOutlined />} onClick={() => {
-              const pending = pendingRef.current;
-              pendingRef.current = undefined;
-              abortRef.current = undefined;
-              pending?.controller.abort();
-              if (pending) {
-                setMessages(pending.messages);
-                setInput(pending.question);
-              }
-              setAnswer('');
-              setBusy(false);
-              setPhase('');
-            }}>
-              停止
-            </Button>
-          )}
+          {busy && <Button size="small" danger icon={<StopOutlined />} onClick={() => stopCurrent(true)}>停止</Button>}
         </Space>
       )}
       styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } }}
     >
       <div className="ai-chat-context">
-        <Tag color="blue">只读元数据工具</Tag>
-        <Text type="secondary">{schemaName || '连接默认命名空间'} · AI 可查表、字段、注释和外键，但不会执行 SQL</Text>
+        <Tag color="blue">只读 Agent</Tag>
+        <Tag color="green">SQL 编译校验</Tag>
+        <Text type="secondary">{schemaName || '连接默认命名空间'} · 可查结构、业务词典和外键，不执行查询</Text>
       </div>
       <div ref={scrollRef} className="ai-chat-messages">
-        {messages.length === 0 && !answer && (
+        {restoring && <Spin tip="正在恢复短期对话…" />}
+        {!restoring && messages.length === 0 && !answer && (
           <div className="ai-chat-empty">
             <Text strong>用业务语言描述你要查询的内容</Text>
-            <Text type="secondary">AI 会自己搜索表和字段注释、读取关联关系，再生成一条 SQL。之后可以继续发送消息修正。</Text>
+            <Text type="secondary">AI 会搜索表、字段与业务词典，沿外键检查关联，并在目标数据库编译校验后给出 SQL。</Text>
           </div>
         )}
         {messages.map((message, index) => (
           <div key={`${message.role}-${index}`} className={`ai-chat-message is-${message.role.toLowerCase()}`}>
             <Text type="secondary">{message.role === 'USER' ? '你' : 'AI'}</Text>
             <Paragraph>{message.text}</Paragraph>
+            {message.role === 'ASSISTANT' && message.grounding && <Grounding report={message.grounding} />}
           </div>
         ))}
         {activities.length > 0 && (
@@ -222,6 +261,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
           <div className="ai-chat-message is-assistant">
             <Text type="secondary">AI</Text>
             <Paragraph>{answer}</Paragraph>
+            {grounding && <Grounding report={grounding} />}
           </div>
         )}
         {error && <Alert type="error" showIcon message="AI 调用失败" description={error} />}
@@ -230,46 +270,87 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
         {check?.warning && <Alert type="warning" showIcon message={check.warning} />}
         {sqlReady && sql && (
           <Space wrap>
-            <Button
-              size="small"
-              type="primary"
-              icon={<ImportOutlined />}
-              onClick={() => onInsertSql(sql, firstQuestion.trim().slice(0, 40) || 'AI 生成的 SQL')}
-            >
+            <Button size="small" type="primary" icon={<ImportOutlined />}
+              onClick={() => onInsertSql(sql, firstQuestion.trim().slice(0, 40) || 'AI 生成的 SQL')}>
               写入新标签页
             </Button>
-            <Button
-              size="small"
-              icon={copied ? <CheckOutlined /> : <CopyOutlined />}
-              onClick={() => { void navigator.clipboard?.writeText(sql).then(() => setCopied(true)).catch(() => undefined); }}
-            >
+            <Button size="small" icon={copied ? <CheckOutlined /> : <CopyOutlined />}
+              onClick={() => { void navigator.clipboard?.writeText(sql).then(() => setCopied(true)).catch(() => undefined); }}>
               {copied ? '已复制' : '复制 SQL'}
             </Button>
           </Space>
         )}
         <Input.TextArea
-          autoFocus
-          rows={3}
-          value={input}
-          disabled={busy}
+          autoFocus rows={3} value={input} disabled={busy || restoring}
           placeholder={messages.length === 0
             ? '例如：查询最近一周登录过的用户名称和所属角色'
             : '继续修正，例如：只要启用用户，再加上最后登录时间'}
           onChange={(event) => setInput(event.target.value)}
-          onPressEnter={(event) => {
-            if (!event.shiftKey) {
-              event.preventDefault();
-              void send();
-            }
-          }}
+          onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }}
         />
         <div className="ai-chat-send-row">
-          <Text type="secondary">Enter 发送，Shift+Enter 换行</Text>
-          <Button type="primary" icon={<SendOutlined />} loading={busy} disabled={!input.trim()} onClick={() => void send()}>
+          <Text type="secondary">短期会话会在本页刷新后恢复 · Enter 发送</Text>
+          <Button type="primary" icon={<SendOutlined />} loading={busy} disabled={!input.trim() || restoring} onClick={() => void send()}>
             {messages.length === 0 ? '生成 SQL' : '继续修正'}
           </Button>
         </div>
       </div>
     </Drawer>
   );
+}
+
+function Grounding({ report }: { report: AiGroundingReport }) {
+  const labels = { TABLE: '表', COLUMN: '字段', FOREIGN_KEY: '外键' } as const;
+  return (
+    <Collapse
+      size="small"
+      className="ai-chat-grounding"
+      items={[{
+        key: 'grounding',
+        label: <Space size={6}><CheckCircleOutlined />结构依据 · {report.references.length} 项</Space>,
+        children: (
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Text type={report.validated ? 'success' : 'secondary'}>{report.validationMessage}</Text>
+            {report.references.map((reference) => (
+              <div key={`${reference.kind}-${reference.label}`} className="ai-chat-grounding-item">
+                <Tag>{labels[reference.kind]}</Tag>
+                <Text code>{reference.label}</Text>
+                {reference.detail && <Text type="secondary">{reference.detail}</Text>}
+              </div>
+            ))}
+          </Space>
+        )
+      }]}
+    />
+  );
+}
+
+function parseGrounding(data: Record<string, unknown>): AiGroundingReport | undefined {
+  if (typeof data.validated !== 'boolean' || typeof data.validationMessage !== 'string') return undefined;
+  const references = Array.isArray(data.references) ? data.references.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const value = item as Record<string, unknown>;
+    if (!['TABLE', 'COLUMN', 'FOREIGN_KEY'].includes(String(value.kind)) || typeof value.label !== 'string') return [];
+    return [{
+      kind: value.kind as 'TABLE' | 'COLUMN' | 'FOREIGN_KEY',
+      label: value.label,
+      detail: typeof value.detail === 'string' ? value.detail : undefined
+    }];
+  }) : [];
+  return { validated: data.validated, validationMessage: data.validationMessage, references };
+}
+
+function conversationStorageKey(connectionId: number, schemaName?: string): string {
+  return `mydatadev.ai.sql.${connectionId}.${schemaName || ''}`;
+}
+
+async function responseMessage(response: Response): Promise<string> {
+  const payload = await response.text();
+  try {
+    const parsed = JSON.parse(payload) as { message?: string };
+    if (parsed.message) return parsed.message;
+  } catch {
+    if (payload.trim()) return payload.trim();
+  }
+  return response.statusText || 'AI 调用失败';
 }

@@ -164,6 +164,13 @@ app:
     max-table-page-size: 100
     session-ttl-minutes: 120
     agents: []
+  ai-agent:
+    worker-threads: 4
+    queue-capacity: 20
+    max-concurrent-per-user: 2
+    conversation-ttl-minutes: 60
+    max-conversations: 1000
+    validation-timeout-seconds: 10
   native-tools:
     probe-timeout-seconds: 3
     extra-search-paths: []

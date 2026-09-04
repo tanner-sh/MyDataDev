@@ -26,6 +26,7 @@ public class AppProperties {
     private final Ssh ssh = new Ssh();
     private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
+    private final AiAgent aiAgent = new AiAgent();
     private final Auth auth = new Auth();
     private final AuditAlert auditAlert = new AuditAlert();
 
@@ -87,6 +88,10 @@ public class AppProperties {
 
     public Mcp getMcp() {
         return mcp;
+    }
+
+    public AiAgent getAiAgent() {
+        return aiAgent;
     }
 
     public Auth getAuth() {
@@ -498,6 +503,29 @@ public class AppProperties {
         public void setConnectionIds(List<Long> connectionIds) { this.connectionIds = connectionIds == null ? new ArrayList<>() : new ArrayList<>(connectionIds); }
         public boolean isAllowProduction() { return allowProduction; }
         public void setAllowProduction(boolean allowProduction) { this.allowProduction = allowProduction; }
+    }
+
+    /** 自然语言 SQL Agent 的资源上限与短期会话配置。 */
+    public static class AiAgent {
+        private int workerThreads = 4;
+        private int queueCapacity = 20;
+        private int maxConcurrentPerUser = 2;
+        private int conversationTtlMinutes = 60;
+        private int maxConversations = 1_000;
+        private int validationTimeoutSeconds = 10;
+
+        public int getWorkerThreads() { return workerThreads; }
+        public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }
+        public int getQueueCapacity() { return queueCapacity; }
+        public void setQueueCapacity(int queueCapacity) { this.queueCapacity = queueCapacity; }
+        public int getMaxConcurrentPerUser() { return maxConcurrentPerUser; }
+        public void setMaxConcurrentPerUser(int maxConcurrentPerUser) { this.maxConcurrentPerUser = maxConcurrentPerUser; }
+        public int getConversationTtlMinutes() { return conversationTtlMinutes; }
+        public void setConversationTtlMinutes(int conversationTtlMinutes) { this.conversationTtlMinutes = conversationTtlMinutes; }
+        public int getMaxConversations() { return maxConversations; }
+        public void setMaxConversations(int maxConversations) { this.maxConversations = maxConversations; }
+        public int getValidationTimeoutSeconds() { return validationTimeoutSeconds; }
+        public void setValidationTimeoutSeconds(int validationTimeoutSeconds) { this.validationTimeoutSeconds = validationTimeoutSeconds; }
     }
 
     public static class NativeTools {

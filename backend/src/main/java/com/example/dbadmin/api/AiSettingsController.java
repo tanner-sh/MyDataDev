@@ -6,6 +6,9 @@ import com.example.dbadmin.dto.AiDtos.AiProbeResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
 import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
+import com.example.dbadmin.dto.AiDtos.AiGlossaryEntryResponse;
+import com.example.dbadmin.dto.AiDtos.AiGlossaryUpdateRequest;
+import com.example.dbadmin.service.ai.AiGlossaryService;
 import com.example.dbadmin.service.ai.AiSettingsService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,9 +26,11 @@ import java.util.List;
 @RequestMapping("/api/ai")
 public class AiSettingsController {
     private final AiSettingsService settings;
+    private final AiGlossaryService glossary;
 
-    public AiSettingsController(AiSettingsService settings) {
+    public AiSettingsController(AiSettingsService settings, AiGlossaryService glossary) {
         this.settings = settings;
+        this.glossary = glossary;
     }
 
     /** 所有登录用户都能读：界面据此决定要不要显示 AI 入口。 */
@@ -64,5 +69,19 @@ public class AiSettingsController {
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
         return settings.updatePolicy(id, request, actor);
+    }
+
+    @GetMapping("/connections/{id}/glossary")
+    public List<AiGlossaryEntryResponse> glossary(@PathVariable long id) {
+        return glossary.list(id);
+    }
+
+    @PutMapping("/connections/{id}/glossary")
+    public List<AiGlossaryEntryResponse> updateGlossary(
+            @PathVariable long id,
+            @Valid @RequestBody AiGlossaryUpdateRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return glossary.replace(id, request, actor);
     }
 }

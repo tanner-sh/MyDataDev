@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
-import { ApiOutlined, DeleteOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { ApiOutlined, BookOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { PanelLoading } from './PanelState';
-import type { AiConnectionPolicy, AiProbeResult, AiProvider, AiSchemaSharing, AiSettings } from '../types';
+import type { AiConnectionPolicy, AiGlossaryEntry, AiProbeResult, AiProvider, AiSchemaSharing, AiSettings } from '../types';
 import {
   AI_EFFORTS,
   AI_MAX_SAMPLE_ROWS,
@@ -31,6 +31,10 @@ export function AiSettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [probe, setProbe] = useState<AiProbeResult>();
+  const [glossaryPolicy, setGlossaryPolicy] = useState<AiConnectionPolicy>();
+  const [glossary, setGlossary] = useState<AiGlossaryEntry[]>([]);
+  const [glossaryLoading, setGlossaryLoading] = useState(false);
+  const [glossarySaving, setGlossarySaving] = useState(false);
   const [error, setError] = useState('');
   const [messageApi, messageContext] = message.useMessage();
 
@@ -103,6 +107,46 @@ export function AiSettingsPanel() {
     } catch (cause) {
       messageApi.error(cause instanceof Error ? cause.message : '共享策略保存失败');
     }
+  }
+
+  async function openGlossary(policy: AiConnectionPolicy) {
+    setGlossaryPolicy(policy);
+    setGlossaryLoading(true);
+    try {
+      setGlossary(await api<AiGlossaryEntry[]>(`/ai/connections/${policy.connectionId}/glossary`));
+    } catch (cause) {
+      messageApi.error(cause instanceof Error ? cause.message : '业务词典加载失败');
+      setGlossaryPolicy(undefined);
+    } finally {
+      setGlossaryLoading(false);
+    }
+  }
+
+  async function saveGlossary() {
+    if (!glossaryPolicy) return;
+    if (glossary.some((entry) => !entry.term.trim())) {
+      messageApi.warning('业务词不能为空');
+      return;
+    }
+    setGlossarySaving(true);
+    try {
+      const entries = glossary.map(({ term, aliases, objectNames, description }) => ({
+        term: term.trim(), aliases, objectNames, description: description?.trim() || null
+      }));
+      setGlossary(await api<AiGlossaryEntry[]>(`/ai/connections/${glossaryPolicy.connectionId}/glossary`, {
+        method: 'PUT', body: JSON.stringify({ entries })
+      }));
+      messageApi.success('业务词典已保存');
+      setGlossaryPolicy(undefined);
+    } catch (cause) {
+      messageApi.error(cause instanceof Error ? cause.message : '业务词典保存失败');
+    } finally {
+      setGlossarySaving(false);
+    }
+  }
+
+  function updateGlossary(id: number, patch: Partial<AiGlossaryEntry>) {
+    setGlossary((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
   }
 
   if (loading) return <PanelLoading text="正在加载 AI 设置…" />;
@@ -252,10 +296,76 @@ export function AiSettingsPanel() {
               dataIndex: 'sharing',
               key: 'hint',
               render: (sharing: AiSchemaSharing) => <Text type="secondary">{AI_SHARING_HINTS[sharing]}</Text>
+            },
+            {
+              title: '业务词典',
+              key: 'glossary',
+              width: 110,
+              render: (_, policy) => (
+                <Button size="small" icon={<BookOutlined />} onClick={() => void openGlossary(policy)}>维护</Button>
+              )
             }
           ]}
         />
       </Card>
+
+      <Modal
+        open={Boolean(glossaryPolicy)}
+        width={920}
+        title={`${glossaryPolicy?.connectionName || ''} · 业务词典`}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={glossarySaving}
+        onOk={() => void saveGlossary()}
+        onCancel={() => setGlossaryPolicy(undefined)}
+      >
+        <Paragraph type="secondary">
+          把“客户、活跃用户”等业务说法映射到真实表或视图。AI 搜索结构时会优先使用这些映射；多个别名或对象用逗号分隔。
+        </Paragraph>
+        <Table<AiGlossaryEntry>
+          size="small"
+          rowKey="id"
+          loading={glossaryLoading}
+          dataSource={glossary}
+          pagination={false}
+          scroll={{ y: 360 }}
+          columns={[
+            {
+              title: '业务词', dataIndex: 'term', width: 150,
+              render: (value: string, entry) => <Input value={value} maxLength={120} onChange={(event) => updateGlossary(entry.id, { term: event.target.value })} />
+            },
+            {
+              title: '别名', dataIndex: 'aliases', width: 190,
+              render: (value: string[], entry) => <Input value={value.join(', ')} placeholder="会员, 客户" onChange={(event) => updateGlossary(entry.id, { aliases: splitList(event.target.value) })} />
+            },
+            {
+              title: '数据库对象', dataIndex: 'objectNames', width: 220,
+              render: (value: string[], entry) => <Input value={value.join(', ')} placeholder="users, user_profile" onChange={(event) => updateGlossary(entry.id, { objectNames: splitList(event.target.value) })} />
+            },
+            {
+              title: '说明', dataIndex: 'description',
+              render: (value: string | null, entry) => <Input value={value || ''} maxLength={1000} placeholder="可选业务口径" onChange={(event) => updateGlossary(entry.id, { description: event.target.value })} />
+            },
+            {
+              title: '', key: 'action', width: 42,
+              render: (_, entry) => <Button type="text" danger icon={<DeleteOutlined />} onClick={() => setGlossary((current) => current.filter((item) => item.id !== entry.id))} />
+            }
+          ]}
+        />
+        <Button
+          style={{ marginTop: 12 }}
+          icon={<PlusOutlined />}
+          onClick={() => setGlossary((current) => [...current, {
+            id: -Date.now(), term: '', aliases: [], objectNames: [], description: ''
+          }])}
+        >
+          添加业务词
+        </Button>
+      </Modal>
     </Space>
   );
+}
+
+function splitList(value: string): string[] {
+  return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 10);
 }
