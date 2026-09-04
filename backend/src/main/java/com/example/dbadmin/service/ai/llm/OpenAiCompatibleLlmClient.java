@@ -66,7 +66,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                     message.isTextual() ? message.asText() : "",
                     usage.path("prompt_tokens").asLong(0),
                     usage.path("completion_tokens").asLong(0),
-                    0
+                    cachedTokens(usage)
             );
         } catch (IOException e) {
             throw new LlmException("模型服务返回了无法解析的响应。", response.statusCode(), e);
@@ -113,13 +113,29 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             }
             JsonNode usage = root.path("usage");
             return new LlmAgentTurn(text, calls,
-                    usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0), 0);
+                    usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0),
+                    cachedTokens(usage));
         } catch (IOException e) {
             throw new LlmException("模型服务返回了无法解析的工具调用响应。", response.statusCode(), e);
         }
     }
 
     /** SSE 行解析：只认 {@code data:} 行，{@code [DONE]} 与心跳行忽略。 */
+    /**
+     * 命中缓存的输入 token 数。
+     *
+     * <p>兼容协议这边没有统一字段：OpenAI 自己放在 {@code prompt_tokens_details.cached_tokens}，
+     * DeepSeek 用 {@code prompt_cache_hit_tokens}，两个都认。取不到就是 0 —— 那可能是真没命中，
+     * 也可能只是这家网关不报，所以这个数只适合看趋势，不适合拿来对账。</p>
+     *
+     * <p>另外语义和 Claude 不同：Claude 的 {@code input_tokens} 不含缓存读，而这里的
+     * {@code prompt_tokens} 是含的（等于 hit + miss）。跨 provider 比较时要记得这一点。</p>
+     */
+    private static long cachedTokens(JsonNode usage) {
+        long details = usage.path("prompt_tokens_details").path("cached_tokens").asLong(0);
+        return details > 0 ? details : usage.path("prompt_cache_hit_tokens").asLong(0);
+    }
+
     private String parseDelta(String line) {
         if (line == null || !line.startsWith("data:")) return null;
         String payload = line.substring("data:".length()).trim();

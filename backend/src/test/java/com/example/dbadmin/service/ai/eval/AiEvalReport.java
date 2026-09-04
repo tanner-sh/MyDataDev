@@ -29,7 +29,7 @@ public final class AiEvalReport {
         out.append("- 平均输入 token：").append(average(rows, row -> row.run().number("inputTokens"))).append('\n');
         out.append("- 平均输出 token：").append(average(rows, row -> row.run().number("outputTokens"))).append('\n');
         out.append("- 平均缓存读 token：").append(average(rows, row -> row.run().number("cacheReadTokens")))
-                .append("（长期为 0 说明 prompt cache 的前缀被写脏了）\n");
+                .append("（0 有两种可能：前缀被写脏了，或者这家网关根本不报缓存用量）\n");
         out.append("- 平均耗时：").append(String.format(Locale.ROOT, "%.1f 秒",
                         rows.stream().mapToLong(row -> row.run().elapsed().toMillis()).average().orElse(0) / 1000))
                 .append("\n\n");

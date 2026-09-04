@@ -20,6 +20,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OpenAiCompatibleLlmClientAgentTest {
     private final ObjectMapper json = new ObjectMapper();
 
+    /**
+     * 兼容协议这边没有统一的缓存字段：OpenAI 放在 {@code prompt_tokens_details.cached_tokens}，
+     * DeepSeek 用 {@code prompt_cache_hit_tokens}。两个都不认的话，指标里的缓存读会永远是 0，
+     * 而那个 0 会被误读成「前缀写脏了」——真实原因却是根本没去读。
+     */
+    @Test
+    void readsCachedInputTokensFromEitherVendorsUsageField() throws Exception {
+        assertThat(turnAgainstUsage("""
+                {"prompt_tokens":1200,"completion_tokens":30,"prompt_tokens_details":{"cached_tokens":900}}
+                """).cacheReadTokens()).isEqualTo(900);
+        assertThat(turnAgainstUsage("""
+                {"prompt_tokens":1200,"completion_tokens":30,"prompt_cache_hit_tokens":768,"prompt_cache_miss_tokens":432}
+                """).cacheReadTokens()).isEqualTo(768);
+        assertThat(turnAgainstUsage("""
+                {"prompt_tokens":1200,"completion_tokens":30}
+                """).cacheReadTokens()).isZero();
+    }
+
+    private LlmAgentTurn turnAgainstUsage(String usage) throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/chat/completions", exchange -> {
+            byte[] response = ("{\"choices\":[{\"message\":{\"content\":\"好的\"}}],\"usage\":" + usage.trim() + "}")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            OpenAiCompatibleLlmClient client = new OpenAiCompatibleLlmClient(HttpClient.newHttpClient(),
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1", "local-model", "");
+            return client.turn(new LlmAgentRequest("系统提示", List.of(LlmAgentMessage.user("问题")), List.of(), 1000));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     @Test
     void sendsFunctionToolsAndParsesTheRequestedToolCall() throws Exception {
         AtomicReference<String> requestBody = new AtomicReference<>();

@@ -312,7 +312,7 @@ AI_EVAL_API_KEY=... AI_EVAL_MODEL=... AI_EVAL_BASE_URL=https://自建网关/v1 m
 
 用独立的 `AI_EVAL_API_KEY` 而不是复用 `ANTHROPIC_API_KEY`：后者很可能只是开发机上给别的工具配的，不该有人跑一次 `mvn test` 就意外花掉几十次模型调用。
 
-报告里除了通过率，更值得盯两个数：**平均工具调用次数**说明模型要摸索多久才敢下笔，**平均缓存读 token** 说明 prompt cache 有没有真的命中（长期为 0 就是前缀被写脏了）。
+报告里除了通过率，更值得盯两个数：**平均工具调用次数**说明模型要摸索多久才敢下笔，**平均缓存读 token** 说明 prompt cache 有没有真的命中。这个数是 0 有两种可能，要分清：一是稳定前缀里混进了每次都变的内容，二是这家网关根本不报缓存用量 —— 兼容协议下 OpenAI 放在 `prompt_tokens_details.cached_tokens`、DeepSeek 放在 `prompt_cache_hit_tokens`，两个字段都没有就只能是 0。
 
 用例集是基线，**改一条已有用例就意味着历史分数不再可比**。要扩覆盖面就加新用例，或者往固定库里加表。
 
