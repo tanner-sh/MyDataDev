@@ -6,7 +6,6 @@ import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
 import com.example.dbadmin.dto.AiDtos.AiCancelResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
-import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
 import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
 import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
 import com.example.dbadmin.dto.AiDtos.AiInterpretRequest;
@@ -30,8 +29,12 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 /**
  * AI 问答接口。
  *
- * <p>流式入口用 POST 而不是方案里写的 GET：诊断要带上整条 SQL 与报错原文，塞进查询串既有
+ * <p>流式入口用 POST 而不是方案里写的 GET：请求要带上整条 SQL 与报错原文，塞进查询串既有
  * 长度上限也会被日志和反代原样记下来。代价是前端不能用 EventSource，改用 fetch 读流。</p>
+
+ * <p>执行报错的诊断没有独立端点，走 {@code /chat/stream} 的 Agent：诊断最需要的恰恰是搜索真实
+ * 结构的能力 —— 「字段不存在」这类报错里的名字本来就是错的，只看那条 SQL 提到的表是查不出正确
+ * 名称的。</p>
  *
  * <p>这里没有任何执行入口。AI 的产出只会回到编辑器，由用户自己确认后执行 —— 那条路径上的
  * 只读拦截、生产确认、未限定范围写确认与审计一个都不少。</p>
@@ -47,16 +50,6 @@ public class AiAssistantController {
         this.assistant = assistant;
         this.agent = agent;
         this.access = access;
-    }
-
-    @PostMapping("/diagnose")
-    public AiAnswerResponse diagnose(
-            @Valid @RequestBody AiDiagnoseRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return new AiAnswerResponse(assistant.diagnose(
-                request.connectionId(), request.schemaName(), request.sql(), request.errorMessage(), actor));
     }
 
     @PostMapping("/generate")
@@ -125,16 +118,6 @@ public class AiAssistantController {
     ) {
         requireQuery(request.connectionId());
         return assistant.reviewScriptStream(request.connectionId(), request.script(), actor);
-    }
-
-    @PostMapping("/diagnose/stream")
-    public SseEmitter diagnoseStream(
-            @Valid @RequestBody AiDiagnoseRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return assistant.diagnoseStream(
-                request.connectionId(), request.schemaName(), request.sql(), request.errorMessage(), actor);
     }
 
     @PostMapping("/chat/stream")

@@ -92,7 +92,20 @@ public final class AiDtos {
             @Size(max = 200) String schemaName,
             @Size(max = 36) String conversationId,
             @NotBlank @Size(max = 20000) String message,
-            @Size(max = 20000) String currentSql
+            @Size(max = 20000) String currentSql,
+            @jakarta.validation.Valid AiExecutionFailure failure
+    ) {
+    }
+
+    /**
+     * 一次执行失败的现场：跑挂的那条 SQL 与驱动返回的错误原文。
+     *
+     * <p>独立成字段而不是让前端拼进 {@code message}，是因为这两段都是不可信数据 —— 错误原文来自
+     * 目标数据库，里面可能带着任何内容。拼进用户消息，它们看起来就和用户的指令没有区别了。</p>
+     */
+    public record AiExecutionFailure(
+            @NotBlank @Size(max = 20000) String sql,
+            @NotBlank @Size(max = 8000) String errorMessage
     ) {
     }
 

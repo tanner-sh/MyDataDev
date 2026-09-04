@@ -54,6 +54,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SESSION_KILL: { label: '终止数据库会话', category: 'connection', dangerous: true },
   RESTORE_SUCCESS: { label: '恢复任务完成', category: 'restore' },
   MCP_TOOL_CALL: { label: 'MCP 工具调用', category: 'mcp' },
+  // 诊断已并入 AI SQL 助手对话，不再写这个动作码；保留中文名是因为历史记录里还有。
   AI_DIAGNOSE_ERROR: { label: 'AI 诊断执行报错', category: 'ai' },
   AI_GENERATE_SQL: { label: 'AI 生成 SQL', category: 'ai' },
   AI_AGENT_CHAT: { label: 'AI SQL 助手对话', category: 'ai' },

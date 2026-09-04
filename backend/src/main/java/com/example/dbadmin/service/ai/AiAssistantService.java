@@ -47,7 +47,6 @@ public class AiAssistantService {
      * {@code AuditActionLabelCoverageTest} 那条正则只认字面量，扫不到它们。
      * {@link com.example.dbadmin.service.ai.AiAuditActionsTest} 盯着这个数组。</p>
      */
-    public static final String ACTION_DIAGNOSE = "AI_DIAGNOSE_ERROR";
     public static final String ACTION_GENERATE = "AI_GENERATE_SQL";
     public static final String ACTION_EXPLAIN = "AI_EXPLAIN_INSIGHT";
     public static final String ACTION_INTERPRET = "AI_INTERPRET_RESULT";
@@ -55,7 +54,8 @@ public class AiAssistantService {
     public static final String ACTION_REVIEW_SCRIPT = "AI_REVIEW_SCRIPT";
 
     public static final List<String> AUDIT_ACTIONS = List.of(
-            ACTION_DIAGNOSE, ACTION_GENERATE, ACTION_EXPLAIN, ACTION_INTERPRET, ACTION_DOCUMENT, ACTION_REVIEW_SCRIPT);
+            ACTION_GENERATE, ACTION_EXPLAIN, ACTION_INTERPRET, ACTION_DOCUMENT, ACTION_REVIEW_SCRIPT,
+            AiSqlAgentService.ACTION_CHAT);
 
     /** 一次文档任务最多覆盖多少张表：再多就该分几次写，而不是攒一个跑十分钟的长回答。 */
     public static final int MAX_DOCUMENT_TABLES = 20;
@@ -96,20 +96,6 @@ public class AiAssistantService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-    }
-
-    /** 诊断一条执行失败的 SQL。 */
-    public String diagnose(long connectionId, String schemaName, String sql, String errorMessage, String actor) {
-        Prepared prepared = prepareDiagnose(connectionId, schemaName, sql, errorMessage);
-        LlmResponse response = prepared.client().complete(prepared.request());
-        writeAudit(ACTION_DIAGNOSE, connectionId, prepared, response, actor);
-        return response.text();
-    }
-
-    /** 诊断的流式变体：增量直接推给浏览器，用户不用对着转圈等一整段。 */
-    public SseEmitter diagnoseStream(long connectionId, String schemaName, String sql, String errorMessage, String actor) {
-        Prepared prepared = prepareDiagnose(connectionId, schemaName, sql, errorMessage);
-        return stream(prepared, ACTION_DIAGNOSE, connectionId, actor);
     }
 
     /** 自然语言转 SQL。产出只回到编辑器，这里没有任何执行入口。 */
@@ -249,17 +235,6 @@ public class AiAssistantService {
         LlmRequest request = LlmRequest.of(
                 AiPromptBuilder.system(context, dialectHint(connection)),
                 AiPromptBuilder.explain(sql, plan, findings));
-        return new Prepared(clients.create(current), request, current, policy, context);
-    }
-
-    private Prepared prepareDiagnose(long connectionId, String schemaName, String sql, String errorMessage) {
-        AiSettings current = settings.requireEnabled();
-        AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
-        DbConnection connection = connections.require(connectionId);
-        SchemaContext context = contexts.forSql(connectionId, schemaName, sql, policy);
-        LlmRequest request = LlmRequest.of(
-                AiPromptBuilder.system(context, dialectHint(connection)),
-                AiPromptBuilder.diagnose(sql, errorMessage));
         return new Prepared(clients.create(current), request, current, policy, context);
     }
 

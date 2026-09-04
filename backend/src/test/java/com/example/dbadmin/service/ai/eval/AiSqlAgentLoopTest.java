@@ -102,6 +102,69 @@ class AiSqlAgentLoopTest {
         }
     }
 
+    /**
+     * 报错诊断走 Agent 这条路，是因为最常见的那类报错恰恰需要搜结构：「字段不存在」时，
+     * 报错里提到的名字本来就是错的，只看那条 SQL 提到的表根本查不出正确名称。
+     */
+    @Test
+    void diagnosesAFailedStatementByLookingUpTheRealSchemaFirst() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"客户\",\"手机号\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                answer("""
+                        ```sql
+                        SELECT CUST_NM, MOBILE FROM T_CRM_0021
+                        ```
+                        报错里的 PHONE 字段不存在，这张表上的手机号列叫 MOBILE。""")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.ask("这条为什么跑不起来",
+                    new com.example.dbadmin.dto.AiDtos.AiExecutionFailure(
+                            "SELECT CUST_NM, PHONE FROM T_CRM_0021",
+                            "ERROR: column \"PHONE\" not found"));
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.answer()).contains("MOBILE");
+            assertThat(run.stats()).containsEntry("mode", "diagnose");
+
+            // 失败现场必须带着「不可信数据」的标注进入模型，报错原文可以是任何内容。
+            String firstUserMessage = model.seen().get(0).messages().get(0).text();
+            assertThat(firstUserMessage)
+                    .contains("不可信数据")
+                    .contains("SELECT CUST_NM, PHONE FROM T_CRM_0021")
+                    .contains("column \"PHONE\" not found");
+        }
+    }
+
+    /**
+     * 执行失败说明此前对结构的理解就是错的，所以哪怕是在一段已经查过结构的会话里继续诊断，
+     * 也要重新核对一遍，不能沿用旧结论。
+     */
+    @Test
+    void reChecksTheSchemaOnAFailureEvenInsideAConversationThatAlreadyInspectedIt() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"客户\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                answer("```sql\nSELECT CUST_NM FROM T_CRM_0021\n```"),
+                // 第二轮直接给答案而不查结构，应该被打回。
+                answer("```sql\nSELECT CUST_NM, PHONE FROM T_CRM_0021\n```"),
+                toolCall("t3", "search_schema", "{\"queries\":[\"手机号\"]}"),
+                toolCall("t4", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                answer("```sql\nSELECT CUST_NM, MOBILE FROM T_CRM_0021\n```")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            harness.ask("查询客户名称");
+            AiAgentHarness.Run diagnosed = harness.ask("加上手机号之后跑挂了",
+                    new com.example.dbadmin.dto.AiDtos.AiExecutionFailure(
+                            "SELECT CUST_NM, PHONE FROM T_CRM_0021", "ERROR: column \"PHONE\" not found"));
+
+            assertThat(diagnosed.outcome()).isEqualTo("success");
+            assertThat(diagnosed.answer()).contains("MOBILE");
+            List<LlmAgentMessage> retryRound = model.seen().get(4).messages();
+            assertThat(retryRound.get(retryRound.size() - 1).text()).contains("search_schema");
+        }
+    }
+
     @Test
     void rejectsAWriteStatementAndAsksForASelectInstead() throws Exception {
         ScriptedLlmClient model = new ScriptedLlmClient(List.of(

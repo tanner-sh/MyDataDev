@@ -7,7 +7,7 @@ import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
 import { applyAgentEvent, conversationStorageKey, initialAgentStreamState, streamErrorMessage } from '../aiChat';
 import { checkSqlSuggestion } from '../sqlSuggestion';
-import type { AiChatMessage, AiConversation, AiGroundingReport } from '../types';
+import type { AiChatMessage, AiConversation, AiExecutionFailure, AiGroundingReport } from '../types';
 
 const { Paragraph, Text } = Typography;
 
@@ -19,11 +19,14 @@ type PendingRequest = {
   requestId?: string;
 };
 
-export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onClose, onInsertSql }: {
+export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, failure, onFailureConsumed, onClose, onInsertSql }: {
   open: boolean;
   connectionId: number;
   schemaName?: string;
   currentSql: string;
+  /** 从结果区「AI 分析」进来时带上的执行失败现场；面板会自动把它作为一轮发出去。 */
+  failure?: AiExecutionFailure;
+  onFailureConsumed?: () => void;
   onClose: () => void;
   onInsertSql: (sql: string, title: string) => void;
 }) {
@@ -34,6 +37,14 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
   const [grounding, setGrounding] = useState<AiGroundingReport>();
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  /**
+   * 恢复短期会话这一步有没有走完。
+   *
+   * 单看 restoring 不够：恢复的 effect 与自动发送的 effect 在同一次提交里跑，前者调用
+   * setRestoring(true) 时后者捕获到的仍是旧值 —— 结果就是抢在恢复之前先建了一段新会话，
+   * 恢复完成后又把它覆盖掉。
+   */
+  const [restored, setRestored] = useState(false);
   const [phase, setPhase] = useState('');
   const [activities, setActivities] = useState<ToolActivity[]>([]);
   const [error, setError] = useState('');
@@ -54,8 +65,12 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
     setActivities([]);
     setError('');
     const saved = window.sessionStorage.getItem(storageKey);
-    if (!saved) return;
+    if (!saved) {
+      setRestored(true);
+      return;
+    }
     let active = true;
+    setRestored(false);
     setRestoring(true);
     const query = new URLSearchParams({ connectionId: String(connectionId) });
     if (schemaName) query.set('schemaName', schemaName);
@@ -68,11 +83,23 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
       if (active && apiErrorCode(cause) !== 'AI_CONVERSATION_EXPIRED') {
         setError(cause instanceof Error ? cause.message : 'AI 对话恢复失败');
       }
-    }).finally(() => { if (active) setRestoring(false); });
+    }).finally(() => {
+      if (!active) return;
+      setRestoring(false);
+      setRestored(true);
+    });
     return () => { active = false; };
   }, [connectionId, schemaName, storageKey]);
 
   useEffect(() => () => stopCurrent(false), []);
+
+  // 从结果区点进来时不用再让用户敲一遍「这条为什么跑不起来」：等会话恢复完就自动发一轮。
+  useEffect(() => {
+    if (!open || !failure || busy || !restored) return;
+    onFailureConsumed?.();
+    void send({ question: '这条 SQL 执行失败了，请找出原因并给出修正后的 SQL。', failure });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, failure, restored]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -123,12 +150,13 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
     setError('');
   }
 
-  async function send() {
-    const question = input.trim();
+  async function send(preset?: { question: string; failure: AiExecutionFailure }) {
+    const question = preset ? preset.question : input.trim();
+    const failedExecution = preset?.failure;
     if (!question || busy || restoring) return;
     const previousMessages = messages;
     setMessages([...messages, { role: 'USER', text: question }]);
-    setInput('');
+    if (!preset) setInput('');
     setAnswer('');
     setGrounding(undefined);
     setActivities([]);
@@ -151,7 +179,11 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
           schemaName,
           conversationId,
           message: question,
-          currentSql: !conversationId && previousMessages.length === 0 ? currentSql.trim() || undefined : undefined
+          // 带着失败现场时不再附带编辑器草稿：要诊断的是跑挂的那一条。
+          currentSql: !failedExecution && !conversationId && previousMessages.length === 0
+            ? currentSql.trim() || undefined
+            : undefined,
+          failure: failedExecution
         })
       });
       if (!response.ok || !response.body) {
@@ -193,7 +225,8 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
     } catch (cause) {
       if (!controller.signal.aborted && !(cause instanceof DOMException && cause.name === 'AbortError')) {
         setMessages(previousMessages);
-        setInput(question);
+        // 自动发起的那一轮失败时不要把生成的问句塞进输入框，用户没打过这句话。
+        if (!preset) setInput(question);
         setAnswer('');
         setGrounding(undefined);
         setPhase('');
@@ -230,7 +263,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
         {restoring && <Spin tip="正在恢复短期对话…" />}
         {!restoring && messages.length === 0 && !answer && (
           <div className="ai-chat-empty">
-            <Text strong>用业务语言描述你要查询的内容</Text>
+            <Text strong>用业务语言描述你要查询的内容，或把执行报错交给它分析</Text>
             <Text type="secondary">AI 会搜索表、字段与业务词典，沿外键检查关联，并在目标数据库编译校验后给出 SQL。</Text>
           </div>
         )}

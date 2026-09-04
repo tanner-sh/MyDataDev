@@ -41,8 +41,9 @@ class AiAssistantGuardIntegrationTest {
     void refusesEverythingWhileTheFeatureIsDisabled() throws Exception {
         long connectionId = createConnection("ai-guard-disabled");
 
-        mvc.perform(post("/api/ai/sql/diagnose").contentType("application/json").content(body(
-                        "connectionId", connectionId, "sql", "SELECT 1", "errorMessage", "boom")))
+        // 打的是 Agent 那条路：诊断并入它之后，这是最主要的入口，闸门必须在建 SSE 之前就拦住。
+        mvc.perform(post("/api/ai/sql/chat/stream").contentType("application/json").content(body(
+                        "connectionId", connectionId, "message", "查询用户")))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("AI_DISABLED"));
     }
@@ -52,8 +53,8 @@ class AiAssistantGuardIntegrationTest {
         long connectionId = createConnection("ai-guard-unshared");
         enableAi();
 
-        mvc.perform(post("/api/ai/sql/diagnose").contentType("application/json").content(body(
-                        "connectionId", connectionId, "sql", "SELECT 1", "errorMessage", "boom")))
+        mvc.perform(post("/api/ai/sql/chat/stream").contentType("application/json").content(body(
+                        "connectionId", connectionId, "message", "查询用户")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("AI_CONNECTION_NOT_SHARED"));
     }

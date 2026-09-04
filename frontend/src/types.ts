@@ -680,6 +680,12 @@ export type AiGroundingReport = {
   references: AiGroundingReference[];
 };
 
+/** 一次执行失败的现场；SQL 与错误原文在后端按不可信数据框定后才进入模型。 */
+export type AiExecutionFailure = {
+  sql: string;
+  errorMessage: string;
+};
+
 export type AiChatMessage = {
   role: 'USER' | 'ASSISTANT';
   text: string;

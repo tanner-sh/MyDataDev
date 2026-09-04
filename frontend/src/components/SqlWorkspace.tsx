@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import { Alert, Button, Dropdown, Empty, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import type { AiExecutionFailure, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
 import { ResultGrid } from './ResultGrid';
 import { PaneResizer } from './PaneResizer';
@@ -95,6 +95,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
   const [aiChatOpen, setAiChatOpen] = useState(false);
+  const [aiChatFailure, setAiChatFailure] = useState<AiExecutionFailure>();
   const [aiDocumentOpen, setAiDocumentOpen] = useState(false);
   const [aiDocumentTables, setAiDocumentTables] = useState<string[]>([]);
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
@@ -177,23 +178,21 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   const editorExecuteEvent = useStableEvent(() => { commitDraft(); onExecute(draftRef.current); });
 
   /**
-   * 把失败的这一次交给 AI 诊断。
+   * 把失败的这一次交给 AI SQL 助手。
+   *
+   * 走的是 Agent 那条路而不是单次问答：最常见的报错就是「字段/表不存在」，而报错里提到的名字
+   * 本来就是错的 —— 只看这条 SQL 提到的表根本查不出正确名称，得能搜结构、查词典、看历史写法。
    *
    * 用的是编辑器里此刻的 SQL 与结果区显示的报错原文 —— 用户看到的那一屏才是要诊断的东西，
-   * 不去 SQL 历史里翻。
+   * 不去 SQL 历史里翻。落进的是当前连接上那段会话，所以「刚才让它生成的这条」有上下文可接。
    */
   function askAiToDiagnose() {
     if (!selected || !activeTab.errorDetail) return;
-    setAiRequest({
-      action: 'diagnose',
-      title: 'AI 诊断执行失败',
-      body: {
-        connectionId: selected.id,
-        schemaName: activeSchema,
-        sql: draftRef.current || activeTab.sql,
-        errorMessage: activeTab.errorDetail
-      }
+    setAiChatFailure({
+      sql: draftRef.current || activeTab.sql,
+      errorMessage: activeTab.errorDetail
     });
+    setAiChatOpen(true);
   }
 
   /**
@@ -636,7 +635,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
             connectionId={selected.id}
             schemaName={activeSchema}
             currentSql={draftSql}
-            onClose={() => setAiChatOpen(false)}
+            failure={aiChatFailure}
+            onFailureConsumed={() => setAiChatFailure(undefined)}
+            onClose={() => { setAiChatOpen(false); setAiChatFailure(undefined); }}
             onInsertSql={onOpenSqlInNewTab}
           />
         </Suspense>

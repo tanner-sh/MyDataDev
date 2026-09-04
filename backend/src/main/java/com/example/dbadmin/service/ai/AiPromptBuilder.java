@@ -42,25 +42,6 @@ public final class AiPromptBuilder {
         return text.toString();
     }
 
-    /** 报错诊断：先说原因，再说怎么改。 */
-    public static String diagnose(String sql, String errorMessage) {
-        return """
-                下面这条 SQL 执行失败了。请依次回答三件事，每件事不超过三句：
-                1. 数据库为什么报这个错；
-                2. 具体改哪里；
-                3. 改好之后的完整 SQL（放在 ```sql 代码块里）。
-                如果失败原因与表结构无关（比如权限、连接、锁），直接说明，不要硬凑一条 SQL。
-
-                SQL：
-                ```sql
-                %s
-                ```
-
-                数据库返回的错误：
-                %s
-                """.formatted(clamp(sql, MAX_SQL_CHARS), clamp(errorMessage, MAX_ERROR_CHARS));
-    }
-
     /** 自然语言转 SQL：只要一条语句，不解释一堆。 */
     public static String generate(String question, boolean readonlyConnection) {
         String constraint = readonlyConnection

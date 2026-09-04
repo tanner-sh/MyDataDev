@@ -67,7 +67,7 @@ DTO 进 `dto/ApiDtos.java`，模型用 `record`。
 
 ### 3.2 前端
 
-- `components/AiSqlChatPanel.tsx` 提供自然语言生成与多轮修正；原有 `AiAssistantPanel.tsx` 继续承载诊断、解读和文档，两个面板都按需懒加载。
+- `components/AiSqlChatPanel.tsx` 提供自然语言生成、多轮修正与执行报错诊断；`AiAssistantPanel.tsx` 承载计划解读、结果解读和文档这几个单次问答，两个面板都按需懒加载。
 - 设置面板 `components/AiSettingsPanel.tsx`，走管理抽屉的新分区 `ai`（`requiresAdmin: true`）。
 - 纯逻辑抽 `src/aiSuggestion.ts`（流式片段拼接、SQL 代码块提取、插入编辑器的位置判断）+ 同名 `.test.ts`。
 - 模型调用全在后端，前端只发 REST，首屏体积预算不受影响。
@@ -121,14 +121,13 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具 → 编译校验 → SQL；只提交当前这句话，历史在服务端会话里 |
 | `GET`/`DELETE` | `/api/ai/sql/conversations/{id}` | 刷新后恢复可见消息；删除等于新建对话 |
 | `POST` | `/api/ai/sql/chat/{requestId}/cancel` | 取消正在跑的 Agent 请求 |
-| `POST` | `/api/ai/sql/diagnose` | 执行报错诊断 |
 | `POST` | `/api/ai/sql/explain-insight` | 执行计划解读 |
 | `POST` | `/api/ai/sql/{action}/stream` | 上述三项的 SSE 流式变体 |
 | `GET` | `/api/ai/status` | 可用性快照（所有登录用户可读，不含配置细节） |
 
 两处与最初草图的偏差：
 
-- **流式入口是 POST，不是 GET。** 诊断要带上整条 SQL 与报错原文，塞进查询串既有长度上限，也会被访问日志和反向代理原样记下来。代价是前端不能用 `EventSource`，改用 `fetch` 读 `ReadableStream`。
+- **流式入口是 POST，不是 GET。** 请求要带上整条 SQL 与报错原文，塞进查询串既有长度上限，也会被访问日志和反向代理原样记下来。代价是前端不能用 `EventSource`，改用 `fetch` 读 `ReadableStream`。
 - **多了 `GET /api/ai/status`。** 设置面板是管理员的，但「这条连接上要不要显示 AI 按钮」是每个用户都要知道的事，所以单开一个只说「功能开没开、哪些连接被授权」的只读接口，不含任何配置细节。
 
 错误一律用 `ApiProblemException(status, code, message, details)` 抛出。新增错误码需要在 `frontend/src/api.ts` 的 `ApiError` 侧同步识别：
@@ -143,7 +142,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 ### 6.1 选型
 
 - 默认模型 **`claude-opus-5`**（1M 上下文，$5 / $25 每 MTok）。
-- thinking 用 `{type: "adaptive"}`；`output_config.effort` 分场景：生成 SQL 与报错诊断用 `high`，注释生成之类的批量轻任务用 `low`。
+- thinking 用 `{type: "adaptive"}`；`output_config.effort` 分场景：SQL Agent（生成与报错诊断）用 `high`，注释生成之类的批量轻任务用 `low`。
 - 长输出（文档生成、结果解读）一律流式，避免 HTTP 超时。
 - 换更便宜的模型是产品取舍，不作为默认。
 
@@ -176,7 +175,7 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 | 动作码 | 中文名 |
 | --- | --- |
 | `AI_GENERATE_SQL` | AI 生成 SQL |
-| `AI_DIAGNOSE_ERROR` | AI 诊断执行报错 |
+| `AI_DIAGNOSE_ERROR` | AI 诊断执行报错（M9 起不再写入，历史记录仍在） |
 | `AI_EXPLAIN_INSIGHT` | AI 解读执行计划 |
 | `AI_SETTINGS_UPDATE` | 修改 AI 设置 |
 | `AI_POLICY_UPDATE` | 修改连接 AI 共享策略 |
@@ -289,6 +288,22 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 给模型的措辞刻意说清楚：历史只作写法参考，**表名和字段名一律以 `describe_objects` 的结果为准** —— 历史里的表可能已经改过或删掉了。参考到的历史写法会作为 `QUERY_HISTORY` 出现在结构依据面板上，用户能看见 AI 借鉴了哪条既有查询。
 
 评测集同步加了一维 `expectedTokens`：表选对了口径仍然可能错，所以对几条用例额外要求某个决定口径的字段必须出现（`category-revenue` 要 `AMT` 而不是 `LIST_PRICE`，`rep-monthly` 要 `ORDER_STATUS`）。这一维就是用来量历史检索有没有真的把口径带过去的。
+
+### M9 — 执行报错回流，诊断并入 Agent · 已完成
+
+**原来的诊断路看不见结构。** `AiAssistantService.prepareDiagnose` 走的是 `SchemaContextBuilder.forSql`：从出错的那条 SQL 里抽表名，再去查这几张表。可最常见的报错恰恰是 `column "x" does not exist` 和 `table "y" not found` —— **报错里提到的名字本来就是错的**，抽出来查不到，模型拿到一份空上下文，只能凭印象猜。
+
+而隔壁 Agent 有 `search_schema`、业务词典、历史写法，正好能回答「那这个东西到底叫什么」。所以诊断并进 Agent，旧的 `/api/ai/sql/diagnose` 与 `/diagnose/stream` 一并删掉 —— 留着两条诊断路、其中一条还更差，是比多一个端点更糟的事。
+
+实测（`deepseek-v4-flash`，H2 演示库）：`SELECT name, phone FROM customer WHERE status = 1` 全错，Agent 靠业务词典找到真实表 `T_CRM_0021`，把 `name`→`CUST_NM`、`phone`→`MOBILE`、`status = 1`→`ENABLED = TRUE` 全部映射正确并通过编译校验。
+
+几处设计取舍：
+
+- **失败现场是独立字段（`AiChatRequest.failure`），不是让前端拼进 `message`。** 跑挂的 SQL 和驱动返回的错误原文都是不可信数据 —— 错误原文来自目标库，里面可以是任何内容，包括一句像指令的话。拼进用户消息，模型看到的就和用户说的没有区别。组装逻辑在 `AiChatPrompt`，加了来源标注和用途限定，并且有测试盯着「材料必须出现在标注之后」。
+- **带着失败现场进来时强制重新检查结构**（`requireInspection = true`），哪怕这段会话刚查过。执行失败本身就意味着之前对结构的理解是错的，沿用旧结论等于用错误的前提去修错误。
+- **落进当前连接上的那段会话**，所以「刚才让它生成的这条」有上下文可接。会话按连接加命名空间存在 sessionStorage 里，不需要给每个 SQL 标签页单独记会话 id。
+- **审计里用 `mode=generate|diagnose` 区分**，动作码仍是 `AI_AGENT_CHAT`。`AI_DIAGNOSE_ERROR` 不再写入，但 `auditLog.ts` 里的中文名要留着 —— 历史记录里还有这个码。
+- 界面上入口没变，还是结果区那个「AI 诊断」按钮；点下去自动发一轮，用户不用再敲一遍「这条为什么跑不起来」。
 
 ### 评测集 — 改这套 Agent 之前先跑一遍
 

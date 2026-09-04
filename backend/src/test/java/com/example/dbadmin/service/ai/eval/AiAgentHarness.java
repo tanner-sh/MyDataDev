@@ -133,6 +133,11 @@ public final class AiAgentHarness implements AutoCloseable {
 
     /** 问一句话，等它跑完，把回答、结构依据和这次的运行数据一起带回来。 */
     public Run ask(String question) throws Exception {
+        return ask(question, null);
+    }
+
+    /** 带着一次执行失败的现场来问，也就是界面上「AI 分析」那条路。 */
+    public Run ask(String question, com.example.dbadmin.dto.AiDtos.AiExecutionFailure failure) throws Exception {
         CountDownLatch finished = new CountDownLatch(1);
         List<String> details = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
         doAnswer(invocation -> {
@@ -144,7 +149,7 @@ public final class AiAgentHarness implements AutoCloseable {
         }).when(audit).onConnection(nullable(String.class), anyString(), anyLong(), anyString());
 
         long started = System.nanoTime();
-        agent.chatStream(new AiChatRequest(CONNECTION_ID, SCHEMA, null, question, null), "eval", OWNER);
+        agent.chatStream(new AiChatRequest(CONNECTION_ID, SCHEMA, null, question, null, failure), "eval", OWNER);
         if (!finished.await(5, TimeUnit.MINUTES)) throw new IllegalStateException("Agent 请求超时，且没有写审计");
         Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
 

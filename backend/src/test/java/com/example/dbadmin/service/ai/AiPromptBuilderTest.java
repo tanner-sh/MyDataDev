@@ -41,22 +41,6 @@ class AiPromptBuilderTest {
     }
 
     @Test
-    void diagnosePromptCarriesTheStatementAndTheDriverError() {
-        String prompt = AiPromptBuilder.diagnose("SELECT * FROM orders", "ERROR: relation \"order\" does not exist");
-
-        assertThat(prompt).contains("SELECT * FROM orders");
-        assertThat(prompt).contains("relation \"order\" does not exist");
-    }
-
-    @Test
-    void diagnosePromptClampsAnOversizedStatement() {
-        String prompt = AiPromptBuilder.diagnose("x".repeat(AiPromptBuilder.MAX_SQL_CHARS + 500), "boom");
-
-        assertThat(prompt).contains("（已截断）");
-        assertThat(prompt.length()).isLessThan(AiPromptBuilder.MAX_SQL_CHARS + 1_000);
-    }
-
-    @Test
     void generatePromptPinsReadonlyConnectionsToSelect() {
         assertThat(AiPromptBuilder.generate("统计上周订单数", true)).contains("只能给 SELECT 语句");
         assertThat(AiPromptBuilder.generate("把过期订单标记为关闭", false)).contains("会修改数据");
