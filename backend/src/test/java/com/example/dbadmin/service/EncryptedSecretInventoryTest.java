@@ -17,7 +17,8 @@ class EncryptedSecretInventoryTest {
         var dataSource = new DriverManagerDataSource(url, "sa", "");
         new ResourceDatabasePopulator(
                 new ClassPathResource("schema.sql"),
-                new ClassPathResource("connection-ssh-schema.sql")
+                new ClassPathResource("connection-ssh-schema.sql"),
+                new ClassPathResource("ai-schema.sql")
         ).execute(dataSource);
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         jdbc.update("""
@@ -30,12 +31,17 @@ class EncryptedSecretInventoryTest {
                   encrypted_private_key, encrypted_private_key_passphrase)
                 VALUES ('storage', 'SFTP', 'localhost', 22, 'storage-password', 'storage-key', 'storage-passphrase')
                 """);
+        jdbc.update("""
+                INSERT INTO ai_settings(id, enabled, provider, model, api_key_cipher, effort)
+                VALUES (1, TRUE, 'ANTHROPIC', 'claude-opus-5', 'ai-api-key', 'HIGH')
+                """);
 
         assertThat(new EncryptedSecretInventory(jdbc).all())
                 .extracting(EncryptedSecretInventory.EncryptedSecret::ciphertext)
                 .containsExactlyInAnyOrder(
                         "db-password", "ssh-password", "ssh-key", "ssh-passphrase",
-                        "storage-password", "storage-key", "storage-passphrase"
+                        "storage-password", "storage-key", "storage-passphrase",
+                        "ai-api-key"
                 );
     }
 }

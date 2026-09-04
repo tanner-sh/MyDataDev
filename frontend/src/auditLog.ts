@@ -9,7 +9,7 @@
 export const AUDIT_PAGE_SIZE = 50;
 export const AUDIT_SEARCH_DEBOUNCE_MS = 300;
 
-export type AuditCategory = 'sql' | 'data' | 'schema' | 'connection' | 'backup' | 'restore' | 'mcp' | 'storage' | 'file' | 'security';
+export type AuditCategory = 'sql' | 'data' | 'schema' | 'connection' | 'backup' | 'restore' | 'mcp' | 'ai' | 'storage' | 'file' | 'security';
 
 export type AuditQuery = {
   actor?: string;
@@ -54,6 +54,9 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SESSION_KILL: { label: '终止数据库会话', category: 'connection', dangerous: true },
   RESTORE_SUCCESS: { label: '恢复任务完成', category: 'restore' },
   MCP_TOOL_CALL: { label: 'MCP 工具调用', category: 'mcp' },
+  AI_SETTINGS_UPDATE: { label: '修改 AI 设置', category: 'ai' },
+  AI_SETTINGS_TEST: { label: '测试 AI 连通性', category: 'ai' },
+  AI_POLICY_UPDATE: { label: '修改连接 AI 共享策略', category: 'ai' },
   DATA_COMMIT: { label: '提交表数据变更', category: 'data', dangerous: true },
   TABLE_DESIGN_EXECUTE: { label: '执行表结构变更', category: 'schema', dangerous: true },
   TABLE_CREATE: { label: '新建表', category: 'schema' },
@@ -135,6 +138,7 @@ const CATEGORY_COLORS: Readonly<Record<AuditCategory, string>> = {
   backup: 'cyan',
   restore: 'gold',
   mcp: 'magenta',
+  ai: 'lime',
   storage: 'green',
   file: 'orange',
   security: 'red'

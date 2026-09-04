@@ -109,6 +109,7 @@ const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
+const AiSettingsPanel = lazy(() => import('./components/AiSettingsPanel').then((module) => ({ default: module.AiSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
 const AccessManagementPanel = lazy(() => import('./components/AccessManagementPanel').then((module) => ({ default: module.AccessManagementPanel })));
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
@@ -3186,6 +3187,15 @@ export default function App() {
                 <header className="management-section-header"><Text strong>MCP Server 设置</Text></header>
                 <Suspense fallback={<PanelLoading text="正在加载 MCP 设置…" />}>
                   <McpSettingsPanel />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'ai' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>AI 助手设置</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载 AI 设置…" />}>
+                  <AiSettingsPanel />
                 </Suspense>
               </div>
             )}

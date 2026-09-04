@@ -634,3 +634,36 @@ export type SchemaDiffResponse = {
   migration: string[];
   warnings: string[];
 };
+
+export type AiProvider = 'ANTHROPIC' | 'OPENAI_COMPATIBLE';
+export type AiEffort = 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH' | 'MAX';
+/** 一条连接允许发给模型的内容范围；默认 NONE，没授权就连表名都取不到。 */
+export type AiSchemaSharing = 'NONE' | 'STRUCTURE' | 'STRUCTURE_AND_SAMPLE';
+
+export type AiSettings = {
+  enabled: boolean;
+  provider: AiProvider;
+  baseUrl?: string | null;
+  model: string;
+  effort: AiEffort;
+  /** 后端只说 Key 配没配，永远不回传密文。 */
+  apiKeyConfigured: boolean;
+};
+
+export type AiConnectionPolicy = {
+  connectionId: number;
+  connectionName: string;
+  dbType: string;
+  environment: string;
+  production: boolean;
+  sharing: AiSchemaSharing;
+  sampleRowLimit: number;
+};
+
+export type AiProbeResult = {
+  ok: boolean;
+  provider: string;
+  model: string;
+  latencyMs: number;
+  message: string;
+};

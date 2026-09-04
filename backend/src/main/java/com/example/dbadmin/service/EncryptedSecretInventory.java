@@ -45,6 +45,10 @@ public class EncryptedSecretInventory {
             add(values, "storage_profile[" + id + "].encrypted_private_key", rs.getString("encrypted_private_key"));
             add(values, "storage_profile[" + id + "].encrypted_private_key_passphrase", rs.getString("encrypted_private_key_passphrase"));
         });
+        jdbc.query("SELECT id, api_key_cipher FROM ai_settings", rs -> {
+            long id = rs.getLong("id");
+            add(values, "ai_settings[" + id + "].api_key_cipher", rs.getString("api_key_cipher"));
+        });
         return values;
     }
 
