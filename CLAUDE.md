@@ -73,7 +73,7 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `listConnections`、`listNamespaces`、`searchObjects`、`describeObject`、`getObjectDdl`、`browseTable`、`query`、`explain`；写工具只有 `db_execute` 一个，它复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少。
 
-应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。
+应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面只有 `AiSettingsPanel`（管理抽屉）与 `AiAssistantPanel`（回答抽屉，SQL 工作台与结构对比共用）。
 
 ### 数据库迁移
 
