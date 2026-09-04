@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
-import { BookOutlined, BranchesOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
+import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
@@ -17,6 +17,10 @@ import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
+import type { AiAskRequest } from './AiAssistantPanel';
+
+// AI 抽屉只在真的问了一次之后才需要，懒加载它才不会把这条链拉进 SQL 工作台的首屏预算。
+const AiAssistantPanel = lazy(() => import('./AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel })));
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -24,7 +28,9 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+  /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
+  aiAvailable: boolean;
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -75,6 +81,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   const canExport = canQuery && Boolean(selected && hasConnectionPermission(selected, 'EXPORT'));
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
+  const [aiRequest, setAiRequest] = useState<AiAskRequest>();
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
   const draftRef = useRef(activeTab.sql);
   const draftCommitTimerRef = useRef<number | null>(null);
@@ -153,6 +160,33 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
   const editorChangeEvent = useStableEvent(updateDraft);
   const editorFormatEvent = useStableEvent(() => { commitDraft(); onFormat(draftRef.current); });
   const editorExecuteEvent = useStableEvent(() => { commitDraft(); onExecute(draftRef.current); });
+
+  /**
+   * 把失败的这一次交给 AI 诊断。
+   *
+   * 用的是编辑器里此刻的 SQL 与结果区显示的报错原文 —— 用户看到的那一屏才是要诊断的东西，
+   * 不去 SQL 历史里翻。
+   */
+  function askAiToDiagnose() {
+    if (!selected || !activeTab.errorDetail) return;
+    setAiRequest({
+      action: 'diagnose',
+      title: 'AI 诊断执行失败',
+      body: {
+        connectionId: selected.id,
+        schemaName: activeSchema,
+        sql: draftRef.current || activeTab.sql,
+        errorMessage: activeTab.errorDetail
+      }
+    });
+  }
+
+  /** AI 给的 SQL 只落到编辑器里，执行与否由用户决定。 */
+  function insertAiSql(sql: string) {
+    updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
+    commitDraft();
+    setAiRequest(undefined);
+  }
 
   function appendSelectTemplate() {
     const template = selectSqlTemplate(selected?.dbType);
@@ -427,6 +461,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
               detail={activeTab.errorDetail}
               retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
+              onDiagnose={aiAvailable ? askAiToDiagnose : undefined}
             />
           )}
           {resultPaneMode === 'collapsed' && activeResult ? (
@@ -442,6 +477,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
               detail={activeTab.errorDetail}
               retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
+              onDiagnose={aiAvailable ? askAiToDiagnose : undefined}
             />
           ) : (
             <div className="sql-result-empty-state">
@@ -460,6 +496,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
         </div>
       </div>
       <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{loading ? `${cancelling ? '正在取消' : '执行中'} · ${formatElapsed(executionElapsedMs)} · ` : ''}{tabs.length} 个查询标签</Text>} />
+      {aiRequest && (
+        <Suspense fallback={null}>
+          <AiAssistantPanel request={aiRequest} onClose={() => setAiRequest(undefined)} onInsertSql={insertAiSql} />
+        </Suspense>
+      )}
     </div>
   );
 });
@@ -471,10 +512,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ selected, activeSchema,
  * LIMIT/OFFSET），在状态栏里会被截断，也没法选中复制，而结果区还停在「尚无执行结果」，
  * 看起来像什么都没发生。
  */
-const SqlExecutionErrorPanel = memo(function SqlExecutionErrorPanel({ detail, retryDisabled, onRetry }: {
+const SqlExecutionErrorPanel = memo(function SqlExecutionErrorPanel({ detail, retryDisabled, onRetry, onDiagnose }: {
   detail: string;
   retryDisabled: boolean;
   onRetry: () => void;
+  /** AI 不可用（功能关着或这条连接未授权）时不传，按钮就不出现。 */
+  onDiagnose?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -499,6 +542,7 @@ const SqlExecutionErrorPanel = memo(function SqlExecutionErrorPanel({ detail, re
           >
             {copied ? '已复制' : '复制错误'}
           </Button>
+          {onDiagnose && <Button size="small" icon={<BulbOutlined />} onClick={onDiagnose}>AI 诊断</Button>}
           <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={retryDisabled} onClick={onRetry}>重试</Button>
         </Space>
       </div>
@@ -508,10 +552,11 @@ const SqlExecutionErrorPanel = memo(function SqlExecutionErrorPanel({ detail, re
 });
 
 /** 失败发生时上一次的结果仍在屏幕上，用横幅明确「下面是上一次的结果」。 */
-const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, retryDisabled, onRetry }: {
+const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, retryDisabled, onRetry, onDiagnose }: {
   detail: string;
   retryDisabled: boolean;
   onRetry: () => void;
+  onDiagnose?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   useEffect(() => setExpanded(false), [detail]);
@@ -526,6 +571,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
           <Button size="small" type="text" onClick={() => setExpanded((current) => !current)}>
             {expanded ? '收起' : '展开'}
           </Button>
+          {onDiagnose && <Button size="small" icon={<BulbOutlined />} onClick={onDiagnose}>AI 诊断</Button>}
           <Button size="small" icon={<PlayCircleOutlined />} disabled={retryDisabled} onClick={onRetry}>重试</Button>
         </Space>
       </div>

@@ -98,8 +98,9 @@ server {
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SQL 执行、备份与恢复都是长请求；MCP 和后台任务进度（/api/restores/operations/stream）
-        # 是流式响应，proxy_buffering off 对它们是必需的，否则界面收不到实时进度。
+        # SQL 执行、备份与恢复都是长请求；MCP、后台任务进度（/api/restores/operations/stream）
+        # 与 AI 回答（/api/ai/sql/*/stream）是流式响应，proxy_buffering off 对它们是必需的，
+        # 否则界面收不到实时进度，AI 回答会一直空着直到整段生成完。
         proxy_read_timeout 7200s;
         proxy_send_timeout 7200s;
         proxy_buffering off;

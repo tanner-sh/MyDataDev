@@ -55,4 +55,31 @@ public final class AiDtos {
     /** 连通性测试结果。失败时 {@code ok=false}，把上游原因原样带回界面。 */
     public record AiProbeResponse(boolean ok, String provider, String model, long latencyMs, String message) {
     }
+
+    /**
+     * 报错诊断请求。
+     *
+     * <p>SQL 与报错原文都由前端原样回传：后端不留会话，也不从 SQL 历史里翻 —— 用户看到的
+     * 那一屏才是要诊断的东西。</p>
+     */
+    public record AiDiagnoseRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 20000) String sql,
+            @NotBlank @Size(max = 10000) String errorMessage
+    ) {
+    }
+
+    /** 一次问答的回答。文本是 Markdown，前端只做代码块提取，不整段渲染 HTML。 */
+    public record AiAnswerResponse(String text) {
+    }
+
+    /**
+     * 给所有登录用户的可用性快照。
+     *
+     * <p>设置面板是管理员的，但「这条连接上要不要显示 AI 按钮」是每个用户都要知道的事，
+     * 所以单独开一个不含任何配置细节的只读接口：只说功能开没开、哪些连接被授权了。</p>
+     */
+    public record AiStatusResponse(boolean enabled, java.util.List<Long> sharedConnectionIds) {
+    }
 }

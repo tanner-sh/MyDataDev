@@ -80,6 +80,8 @@ import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
 import { TypedConfirmationFields } from './components/TypedConfirmationFields';
 import type { TableLifecycleAction } from './components/TableLifecyclePanel';
+import { isAiAvailableForConnection } from './aiSuggestion';
+import { useAiStatus } from './hooks/useAiStatus';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 import { useStableEvent } from './hooks/useStableEvent';
 import {
@@ -226,6 +228,8 @@ export default function App() {
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
+  // 管理员在抽屉里改完 AI 设置后要立刻反映到工作台，所以抽屉一关就重取一次。
+  const { status: aiStatus, reload: reloadAiStatus } = useAiStatus();
   const updateObjectDesignDirty = useCallback((dirty: boolean) => {
     objectDesignDirtyRef.current = dirty;
     setObjectDesignDirty(dirty);
@@ -832,6 +836,8 @@ export default function App() {
   }
 
   function closeManagementDrawer() {
+    // AI 设置就在这个抽屉里改，关掉时重取一次可用性，工作台上的入口才会立刻跟着变。
+    if (activeDrawer === 'ai') reloadAiStatus();
     setActiveDrawer(null);
   }
 
@@ -2943,6 +2949,7 @@ export default function App() {
             ) : mode === 'sql' ? (
               <SqlWorkspace
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
+                aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
                 selected={selected}
                 activeSchema={activeSqlSchema}
                 namespaceKind={metadata?.namespaceKind}

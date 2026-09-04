@@ -6,8 +6,11 @@ import java.sql.SQLException;
 /**
  * Adds a rollback-only JDBC transaction and read-only hint around machine
  * queries. This supplements (rather than replaces) database-side permissions.
+ *
+ * <p>公开的原因是 AI 侧取样本行也要走同一套只读保护：与其在 {@code service.ai} 里再写一份
+ * 「设只读、回滚、恢复」的样板，不如让两条路径共用这一个已经被验证过的实现。</p>
  */
-final class ReadOnlyQueryScope implements AutoCloseable {
+public final class ReadOnlyQueryScope implements AutoCloseable {
     private final Connection connection;
     private final boolean active;
     private final boolean previousAutoCommit;
@@ -22,7 +25,7 @@ final class ReadOnlyQueryScope implements AutoCloseable {
         this.restoreReadOnly = restoreReadOnly;
     }
 
-    static ReadOnlyQueryScope begin(Connection connection, boolean enforce) throws Exception {
+    public static ReadOnlyQueryScope begin(Connection connection, boolean enforce) throws Exception {
         if (!enforce) return new ReadOnlyQueryScope(connection, false, true, false, false);
         boolean autoCommit = connection.getAutoCommit();
         boolean readOnly = false;

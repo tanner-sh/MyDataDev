@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.AiDtos.AiConnectionPolicyResponse;
 import com.example.dbadmin.dto.AiDtos.AiProbeResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
+import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.repo.AiSettingsRepository;
 import com.example.dbadmin.repo.AuditRepository;
@@ -152,6 +153,20 @@ public class AiSettingsService {
                 policy.sharing().name(),
                 policy.sampleRowLimit()
         );
+    }
+
+    /**
+     * 可用性快照，给所有登录用户。
+     *
+     * <p>不含任何配置细节：功能关着的时候连授权列表都不给，界面据此把 AI 入口整个藏掉。</p>
+     */
+    public AiStatusResponse status() {
+        if (!snapshot().enabled()) return new AiStatusResponse(false, List.of());
+        List<Long> shared = policies().stream()
+                .filter(policy -> !"NONE".equals(policy.sharing()))
+                .map(AiConnectionPolicyResponse::connectionId)
+                .toList();
+        return new AiStatusResponse(true, shared);
     }
 
     /**

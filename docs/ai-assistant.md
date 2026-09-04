@@ -110,7 +110,13 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `POST` | `/api/ai/sql/generate` | 自然语言 → SQL |
 | `POST` | `/api/ai/sql/diagnose` | 执行报错诊断 |
 | `POST` | `/api/ai/sql/explain-insight` | 执行计划解读 |
-| `GET` | `/api/ai/completions/stream` | 上述三项的 SSE 流式变体 |
+| `POST` | `/api/ai/sql/{action}/stream` | 上述三项的 SSE 流式变体 |
+| `GET` | `/api/ai/status` | 可用性快照（所有登录用户可读，不含配置细节） |
+
+两处与最初草图的偏差：
+
+- **流式入口是 POST，不是 GET。** 诊断要带上整条 SQL 与报错原文，塞进查询串既有长度上限，也会被访问日志和反向代理原样记下来。代价是前端不能用 `EventSource`，改用 `fetch` 读 `ReadableStream`。
+- **多了 `GET /api/ai/status`。** 设置面板是管理员的，但「这条连接上要不要显示 AI 按钮」是每个用户都要知道的事，所以单开一个只说「功能开没开、哪些连接被授权」的只读接口，不含任何配置细节。
 
 错误一律用 `ApiProblemException(status, code, message, details)` 抛出。新增错误码需要在 `frontend/src/api.ts` 的 `ApiError` 侧同步识别：
 
@@ -185,13 +191,21 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 1. 多了一个审计码 `AI_SETTINGS_TEST`。连通性测试会真的向外发一次请求，属于「有数据出网」的动作，不记等于留了个没痕迹的出网口。
 2. `AiSharingRules.effective` 是新增的读时降级：一条连接可能先按测试库开了样本档、之后被改成生产环境，库里那行还留着旧档位。读的时候降级，而不是等发请求时才发现。
 
-### M2 — 执行报错诊断（最小闭环）
+### M2 — 执行报错诊断（最小闭环） · 已完成
 
 选它先落地，因为上下文最小、价值最直观、没有「生成的 SQL 可能被执行」的风险。
 
-- `SchemaContextBuilder` 首版（按报错语句里出现的表取结构）
-- SQL 工作台报错区新增「AI 诊断」按钮
-- SSE 流式打通，反代文档同步
+- `SqlTableReferences`（从 SQL 里认出引用到的表）、`SchemaContext` / `SchemaContextFormat`（结构上下文与渲染）、`SchemaContextBuilder`（取数与取样本）
+- `AiPromptBuilder`：系统提示只由结构与方言决定，本次 SQL 与报错放在用户提示里 —— 前缀稳定，缓存才打得中
+- `AiAssistantService` + `AiAssistantController`：两道闸门 → 取结构 → 组提示 → 调模型 → 写审计
+- 前端 `aiSuggestion.ts`（SSE 分片解析、事件折叠、SQL 代码块提取）、`AiAssistantPanel` 抽屉、SQL 工作台两处报错区的「AI 诊断」按钮
+- `useAiStatus` + `/api/ai/status`：功能关着或连接未授权时，按钮整个不出现
+- 反代缓冲说明已写进 `docs/web-deploy.md`
+
+两处顺带的改动：
+
+1. `ReadOnlyQueryScope` 从包内可见改为 public。取样本行要走同一套只读保护（只读事务 + 回滚 + 恢复），与其在 `service/ai` 里再抄一份，不如共用这个已经验证过的实现。
+2. 新增 `AiAuditActionsTest`。AI 这一侧几个入口共用一条写审计的路径，动作码是变量，`AuditActionLabelCoverageTest` 的正则扫不到；动作码集中在 `AiAssistantService.AUDIT_ACTIONS`，由新测试盯着中文名。
 
 ### M3 — 自然语言 → SQL
 

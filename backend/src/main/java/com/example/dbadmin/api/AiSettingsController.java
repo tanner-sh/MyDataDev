@@ -5,6 +5,7 @@ import com.example.dbadmin.dto.AiDtos.AiConnectionPolicyResponse;
 import com.example.dbadmin.dto.AiDtos.AiProbeResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
+import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
 import com.example.dbadmin.service.ai.AiSettingsService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -25,6 +26,12 @@ public class AiSettingsController {
 
     public AiSettingsController(AiSettingsService settings) {
         this.settings = settings;
+    }
+
+    /** 所有登录用户都能读：界面据此决定要不要显示 AI 入口。 */
+    @GetMapping("/status")
+    public AiStatusResponse status() {
+        return settings.status();
     }
 
     @GetMapping("/settings")
