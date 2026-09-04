@@ -100,6 +100,72 @@ public final class AiPromptBuilder {
         return text.toString();
     }
 
+    /**
+     * 结果集解读与图表推荐。
+     *
+     * <p>候选图表由前端的 {@code resultChart.ts} 算出来一并发过来：能画什么是确定的事（哪些列是
+     * 数值、有多少个分类），让模型在真实候选里挑，而不是凭空推荐一个画不出来的图。</p>
+     */
+    public static String interpret(String sql, String resultPreview, String chartCandidates) {
+        StringBuilder text = new StringBuilder("""
+                下面是一条查询和它的部分结果。请回答两件事，各不超过三句：
+                1. 这批数据说明了什么（只说数据本身支持的结论，不要外推）；
+                2. 有没有值得注意的异常值或缺失。
+                注意：你看到的只是前几行，不是全量数据，涉及总量的结论要说明这一点。
+
+                SQL：
+                ```sql
+                """);
+        text.append(clamp(sql, MAX_SQL_CHARS)).append("\n```\n\n结果预览：\n").append(clamp(resultPreview, MAX_SQL_CHARS)).append('\n');
+        if (chartCandidates != null && !chartCandidates.isBlank()) {
+            text.append("""
+
+                    工作台能画出来的图表候选如下。如果其中某个更适合表达这批数据，用一句话推荐它并说明
+                    理由；都不合适就直说不必画图。不要推荐候选之外的图表类型。
+                    """).append(clamp(chartCandidates, 1_000)).append('\n');
+        }
+        return text.toString();
+    }
+
+    /**
+     * Schema 文档：给一批表写数据字典。
+     *
+     * <p>要求逐表输出固定结构，方便把分批调用的结果拼成一份文档。</p>
+     */
+    public static String document(String namespace, String tableNames) {
+        return """
+                为下面这些表写一份数据字典，供不熟悉这个库的同事阅读。每张表按这个结构输出：
+
+                ## 表名
+                一句话说明这张表存什么、什么时候写入。
+                | 字段 | 类型 | 说明 |
+                （只列出需要解释的字段：主键、外键、状态码、含义不明显的字段。id、created_at 这类
+                自解释的字段不必逐个写。）
+
+                只依据给出的表结构与注释推断；推断不出来的字段写「用途不明」，不要编造业务含义。
+                命名空间：%s
+                本次要写的表：%s
+                """.formatted(namespace == null || namespace.isBlank() ? "（默认）" : namespace, tableNames);
+    }
+
+    /**
+     * 结构同步脚本的风险说明。
+     *
+     * <p>脚本本身由结构对比按目标端方言生成，这里只做解读 —— 模型不改脚本，改了用户也不该信。</p>
+     */
+    public static String reviewScript(String script) {
+        return """
+                下面是结构对比生成的同步脚本，将在目标库上执行。请按风险从高到低列出需要注意的地方，
+                每条一行，说明是哪条语句、风险是什么（数据丢失、锁表、不可回滚、依赖顺序等）。
+                没有风险的语句不必逐条复述。最后用一句话给出总体判断。
+                不要改写脚本 —— 脚本由工作台按目标库方言生成，你只负责解读。
+
+                ```sql
+                %s
+                ```
+                """.formatted(clamp(script, MAX_SQL_CHARS * 2));
+    }
+
     private static String clamp(String value, int max) {
         String text = value == null ? "" : value.trim();
         return text.length() <= max ? text : text.substring(0, max) + "\n…（已截断）";

@@ -669,4 +669,4 @@ export type AiProbeResult = {
 };
 
 /** AI 可用性快照：功能开没开、哪些连接被授权了。不含任何配置细节。 */
-export type AiStatus = { enabled: boolean; sharedConnectionIds: number[] };
+export type AiStatus = { enabled: boolean; sharedConnectionIds: number[]; sampledConnectionIds: number[] };

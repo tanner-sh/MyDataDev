@@ -161,12 +161,17 @@ public class AiSettingsService {
      * <p>不含任何配置细节：功能关着的时候连授权列表都不给，界面据此把 AI 入口整个藏掉。</p>
      */
     public AiStatusResponse status() {
-        if (!snapshot().enabled()) return new AiStatusResponse(false, List.of());
-        List<Long> shared = policies().stream()
-                .filter(policy -> !"NONE".equals(policy.sharing()))
+        if (!snapshot().enabled()) return new AiStatusResponse(false, List.of(), List.of());
+        List<AiConnectionPolicyResponse> policies = policies();
+        List<Long> shared = policies.stream()
+                .filter(policy -> !AiSchemaSharing.NONE.name().equals(policy.sharing()))
                 .map(AiConnectionPolicyResponse::connectionId)
                 .toList();
-        return new AiStatusResponse(true, shared);
+        List<Long> sampled = policies.stream()
+                .filter(policy -> AiSchemaSharing.STRUCTURE_AND_SAMPLE.name().equals(policy.sharing()))
+                .map(AiConnectionPolicyResponse::connectionId)
+                .toList();
+        return new AiStatusResponse(true, shared, sampled);
     }
 
     /**

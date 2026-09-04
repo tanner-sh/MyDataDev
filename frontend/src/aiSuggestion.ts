@@ -97,3 +97,14 @@ export function isAiAvailableForConnection(status: AiStatus | undefined, connect
   if (!status?.enabled || connectionId == null) return false;
   return status.sharedConnectionIds.includes(connectionId);
 }
+
+/**
+ * 这条连接能不能把查询结果发给模型。
+ *
+ * 只有样本档才可以。生产连接不支持样本档，所以生产连接上永远拿不到结果解读 —— 这是策略的
+ * 直接后果，不是这里额外加的限制。
+ */
+export function isAiSampleAllowedForConnection(status: AiStatus | undefined, connectionId?: number | null): boolean {
+  if (!status?.enabled || connectionId == null) return false;
+  return status.sampledConnectionIds.includes(connectionId);
+}

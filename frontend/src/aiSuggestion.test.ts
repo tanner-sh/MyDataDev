@@ -5,7 +5,8 @@ import {
   extractSqlBlocks,
   firstSqlBlock,
   hasUnclosedSqlFence,
-  isAiAvailableForConnection
+  isAiAvailableForConnection,
+  isAiSampleAllowedForConnection
 } from './aiSuggestion';
 
 describe('SSE 分片', () => {
@@ -95,15 +96,24 @@ describe('回答里的 SQL', () => {
 
 describe('可用性判断', () => {
   it('功能关着时任何连接都不显示入口', () => {
-    expect(isAiAvailableForConnection({ enabled: false, sharedConnectionIds: [1] }, 1)).toBe(false);
+    expect(isAiAvailableForConnection({ enabled: false, sharedConnectionIds: [1], sampledConnectionIds: [1] }, 1)).toBe(false);
+    expect(isAiSampleAllowedForConnection({ enabled: false, sharedConnectionIds: [1], sampledConnectionIds: [1] }, 1)).toBe(false);
   });
 
   it('只有被授权的连接才显示入口', () => {
-    const status = { enabled: true, sharedConnectionIds: [1, 3] };
+    const status = { enabled: true, sharedConnectionIds: [1, 3], sampledConnectionIds: [3] };
 
     expect(isAiAvailableForConnection(status, 1)).toBe(true);
     expect(isAiAvailableForConnection(status, 2)).toBe(false);
     expect(isAiAvailableForConnection(status, null)).toBe(false);
     expect(isAiAvailableForConnection(undefined, 1)).toBe(false);
+  });
+
+  /** 只授权了结构的连接不能把查询结果发出去 —— 结果解读的按钮在那里根本不该出现。 */
+  it('只有开了样本档的连接才允许解读查询结果', () => {
+    const status = { enabled: true, sharedConnectionIds: [1, 3], sampledConnectionIds: [3] };
+
+    expect(isAiSampleAllowedForConnection(status, 3)).toBe(true);
+    expect(isAiSampleAllowedForConnection(status, 1)).toBe(false);
   });
 });

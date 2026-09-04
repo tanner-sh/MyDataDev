@@ -1,6 +1,7 @@
 package com.example.dbadmin.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 public final class AiDtos {
@@ -97,6 +98,36 @@ public final class AiDtos {
     ) {
     }
 
+    /**
+     * 结果解读请求。
+     *
+     * <p>{@code preview} 是前端截好的前几行文本 —— 这是唯一会把真实数据发出去的入口，
+     * 因此后端要求连接开了样本档，只授权结构的连接会被拒。</p>
+     */
+    public record AiInterpretRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 20000) String sql,
+            @NotBlank @Size(max = 20000) String preview,
+            @Size(max = 2000) String chartCandidates
+    ) {
+    }
+
+    /** Schema 文档生成请求：一次最多 20 张表，超出的会被截断。 */
+    public record AiDocumentRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotNull @Size(min = 1, max = 50) java.util.List<@NotBlank @Size(max = 200) String> tables
+    ) {
+    }
+
+    /** 结构同步脚本的风险解读请求。脚本只读不改。 */
+    public record AiReviewScriptRequest(
+            long connectionId,
+            @NotBlank @Size(max = 40000) String script
+    ) {
+    }
+
     /** 一次问答的回答。文本是 Markdown，前端只做代码块提取，不整段渲染 HTML。 */
     public record AiAnswerResponse(String text) {
     }
@@ -107,6 +138,11 @@ public final class AiDtos {
      * <p>设置面板是管理员的，但「这条连接上要不要显示 AI 按钮」是每个用户都要知道的事，
      * 所以单独开一个不含任何配置细节的只读接口：只说功能开没开、哪些连接被授权了。</p>
      */
-    public record AiStatusResponse(boolean enabled, java.util.List<Long> sharedConnectionIds) {
+    public record AiStatusResponse(
+            boolean enabled,
+            java.util.List<Long> sharedConnectionIds,
+            /** 其中还开了样本档的连接：只有这些连接允许把查询结果发给模型解读。 */
+            java.util.List<Long> sampledConnectionIds
+    ) {
     }
 }

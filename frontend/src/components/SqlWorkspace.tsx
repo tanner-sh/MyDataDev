@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
@@ -10,6 +10,7 @@ import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { ExplainInsightsPanel } from './ExplainInsightsPanel';
 import { explainFindingsText, explainPlanText, type ExplainFinding } from '../explainInsights';
+import { chartCandidateText, resultPreviewText } from '../aiResultPreview';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import { resolveEditorSplitRatio } from '../editorSplit';
 import type { ResultEditCommit } from '../resultEditing';
@@ -28,10 +29,16 @@ const { Text } = Typography;
 const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
+/** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
+const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
+  /** 这条连接是否开了样本档：只有开了才允许把查询结果发给模型解读。 */
+  aiSampleAllowed: boolean;
+  /** 当前命名空间已加载的表名，供「AI 数据字典」挑选。 */
+  schemaTables: string[];
   /** AI 生成的 SQL 开在新标签页，不覆盖用户手里正在写的那一条。 */
   onOpenSqlInNewTab: (sql: string, title: string) => void;
   selected: Connection | null;
@@ -87,6 +94,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
   const [aiQuestionOpen, setAiQuestionOpen] = useState(false);
   const [aiQuestion, setAiQuestion] = useState('');
+  const [aiDocumentOpen, setAiDocumentOpen] = useState(false);
+  const [aiDocumentTables, setAiDocumentTables] = useState<string[]>([]);
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
   const draftRef = useRef(activeTab.sql);
   const draftCommitTimerRef = useRef<number | null>(null);
@@ -208,6 +217,37 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
     });
   });
 
+  /**
+   * 把这批结果交给 AI 解读。
+   *
+   * 这是唯一会把真实数据发出去的入口，所以按钮只在连接开了样本档时出现，
+   * 后端还会再拦一次。发出去的是截好的前几行，不是整个结果集。
+   */
+  const askAiToInterpret = useStableEvent((result: SqlStatementResult) => {
+    if (!selected) return;
+    setAiRequest({
+      action: 'interpret',
+      title: 'AI 解读查询结果',
+      body: {
+        connectionId: selected.id,
+        schemaName: activeSchema,
+        sql: result.sql,
+        preview: resultPreviewText(result.result.columns, result.result.rows),
+        chartCandidates: chartCandidateText(result.result.columns, result.result.rows)
+      }
+    });
+  });
+
+  function askAiToDocument() {
+    if (!selected || aiDocumentTables.length === 0) return;
+    setAiDocumentOpen(false);
+    setAiRequest({
+      action: 'document',
+      title: 'AI 生成数据字典',
+      body: { connectionId: selected.id, schemaName: activeSchema, tables: aiDocumentTables }
+    });
+  }
+
   function askAiToGenerate() {
     if (!selected || !aiQuestion.trim()) return;
     setAiQuestionOpen(false);
@@ -260,10 +300,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
           connectionId={selected?.id}
           onCommitEdits={canWrite ? onCommitResultEdits : undefined}
           onAskAiExplain={aiAvailable ? askAiToExplain : undefined}
+          onAskAiInterpret={aiSampleAllowed ? askAiToInterpret : undefined}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, aiAvailable, askAiToExplain, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, aiAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -301,6 +342,15 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
         label: '查看执行计划',
         disabled: !canQuery || loading || !selected?.capabilities?.explain
       },
+      ...(aiAvailable ? [
+        { type: 'divider' as const },
+        {
+          key: 'ai-document',
+          icon: <BulbOutlined />,
+          label: 'AI 生成数据字典',
+          disabled: schemaTables.length === 0
+        }
+      ] : []),
       { type: 'divider' },
       { key: 'rename-tab', label: '重命名当前标签' },
       { key: 'duplicate-tab', label: '复制当前标签' }
@@ -326,6 +376,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
       if (key === 'explain') {
         commitDraft();
         onExplain(draftRef.current);
+        return;
+      }
+      if (key === 'ai-document') {
+        setAiDocumentTables(schemaTables.slice(0, MAX_DOCUMENT_TABLES));
+        setAiDocumentOpen(true);
         return;
       }
       if (key === 'rename-tab') {
@@ -528,7 +583,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiAvailable ? askAiToExplain : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed ? askAiToInterpret : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -574,6 +629,28 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
         />
         <Text type="secondary">
           只会发送与问题相关的表结构；生成的 SQL 写进新标签页，执行与否由你决定。
+        </Text>
+      </Modal>
+      <Modal
+        open={aiDocumentOpen}
+        title="AI 生成数据字典"
+        okText="生成"
+        cancelText="取消"
+        okButtonProps={{ disabled: aiDocumentTables.length === 0 }}
+        onOk={askAiToDocument}
+        onCancel={() => setAiDocumentOpen(false)}
+      >
+        <Select
+          mode="multiple"
+          className="full-width"
+          value={aiDocumentTables}
+          maxTagCount={8}
+          placeholder="选择要写进文档的表"
+          options={schemaTables.map((name) => ({ value: name, label: name }))}
+          onChange={(value) => setAiDocumentTables(value.slice(0, MAX_DOCUMENT_TABLES))}
+        />
+        <Text type="secondary">
+          一次最多 {MAX_DOCUMENT_TABLES} 张表。只发送表结构与注释，不发送任何行数据；同一条连接上同时只允许一个文档任务。
         </Text>
       </Modal>
       {aiRequest && (
@@ -661,7 +738,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain, onAskAiInterpret }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -675,6 +752,8 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
   /** 把这条执行计划交给 AI 解读；AI 不可用时不传。 */
   onAskAiExplain?: (result: SqlStatementResult, findings: ExplainFinding[]) => void;
+  /** 把这批结果交给 AI 解读；连接没开样本档时不传。 */
+  onAskAiInterpret?: (result: SqlStatementResult) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
   const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
@@ -695,6 +774,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
           {result.result.page && (
             <Tooltip title="翻页会重新执行原 SQL；未使用 ORDER BY 时结果顺序可能变化。">
               <Button type="text" size="small" icon={<InfoCircleOutlined />} aria-label="查看结果翻页说明" />
+            </Tooltip>
+          )}
+          {onAskAiInterpret && result.result.resultSet && result.result.rows.length > 0 && (
+            <Tooltip title="把前几行结果发给模型解读，并推荐合适的图表">
+              <Button type="text" size="small" icon={<BulbOutlined />} aria-label="AI 解读查询结果" onClick={() => onAskAiInterpret(result)} />
             </Tooltip>
           )}
           <StatementSqlButton result={result} />

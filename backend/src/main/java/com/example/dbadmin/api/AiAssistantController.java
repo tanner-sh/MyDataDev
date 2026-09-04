@@ -2,7 +2,10 @@ package com.example.dbadmin.api;
 
 import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
 import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
+import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
 import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
+import com.example.dbadmin.dto.AiDtos.AiInterpretRequest;
+import com.example.dbadmin.dto.AiDtos.AiReviewScriptRequest;
 import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
 import jakarta.validation.Valid;
@@ -74,6 +77,31 @@ public class AiAssistantController {
     ) {
         return assistant.explainStream(
                 request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor);
+    }
+
+    @PostMapping("/interpret/stream")
+    public SseEmitter interpretStream(
+            @Valid @RequestBody AiInterpretRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return assistant.interpretStream(request.connectionId(), request.schemaName(), request.sql(),
+                request.preview(), request.chartCandidates(), actor);
+    }
+
+    @PostMapping("/document/stream")
+    public SseEmitter documentStream(
+            @Valid @RequestBody AiDocumentRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return assistant.documentStream(request.connectionId(), request.schemaName(), request.tables(), actor);
+    }
+
+    @PostMapping("/review-script/stream")
+    public SseEmitter reviewScriptStream(
+            @Valid @RequestBody AiReviewScriptRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return assistant.reviewScriptStream(request.connectionId(), request.script(), actor);
     }
 
     @PostMapping("/diagnose/stream")

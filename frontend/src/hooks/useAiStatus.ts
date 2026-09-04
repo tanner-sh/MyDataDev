@@ -15,7 +15,7 @@ export function useAiStatus(reloadKey?: unknown): { status?: AiStatus; reload: (
   const reload = useCallback(() => {
     void api<AiStatus>('/ai/status')
       .then(setStatus)
-      .catch(() => setStatus({ enabled: false, sharedConnectionIds: [] }));
+      .catch(() => setStatus({ enabled: false, sharedConnectionIds: [], sampledConnectionIds: [] }));
   }, []);
 
   useEffect(() => { reload(); }, [reload, reloadKey]);

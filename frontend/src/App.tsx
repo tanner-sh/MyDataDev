@@ -80,7 +80,7 @@ import { PaneResizer } from './components/PaneResizer';
 import { ResourceExplorer } from './components/ResourceExplorer';
 import { TypedConfirmationFields } from './components/TypedConfirmationFields';
 import type { TableLifecycleAction } from './components/TableLifecyclePanel';
-import { isAiAvailableForConnection } from './aiSuggestion';
+import { isAiAvailableForConnection, isAiSampleAllowedForConnection } from './aiSuggestion';
 import { useAiStatus } from './hooks/useAiStatus';
 import { useLayoutPreferences } from './hooks/useLayoutPreferences';
 import { useStableEvent } from './hooks/useStableEvent';
@@ -242,6 +242,11 @@ export default function App() {
       objectStructureCacheRef.current.peek(objectCacheKey(selected.id, object))
     ));
   }, [metadata, selected, structureCacheRevision]);
+  // 数据字典只写表：视图与存储过程没有「字段说明」可写，列进去只会让选择框更难用。
+  const aiDocumentTableNames = useMemo(
+    () => objects.filter((object) => (object.type || '').toUpperCase().includes('TABLE')).map((object) => object.name),
+    [objects]
+  );
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
   const activeSqlSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
@@ -2951,6 +2956,8 @@ export default function App() {
               <SqlWorkspace
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
+                aiSampleAllowed={isAiSampleAllowedForConnection(aiStatus, selected?.id)}
+                schemaTables={aiDocumentTableNames}
                 onOpenSqlInNewTab={openAiSqlEvent}
                 selected={selected}
                 activeSchema={activeSqlSchema}
@@ -3185,6 +3192,7 @@ export default function App() {
                   <SchemaDiffPanel
                     connections={connections}
                     defaultConnectionId={selected?.id}
+                    aiStatus={aiStatus}
                     onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>

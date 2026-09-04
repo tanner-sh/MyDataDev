@@ -1,7 +1,7 @@
-import { memo, useMemo, useState } from 'react';
+import { lazy, memo, Suspense, useMemo, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { Alert, Button, Checkbox, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
-import { CopyOutlined, DiffOutlined, ExportOutlined } from '@ant-design/icons';
+import { BulbOutlined, CopyOutlined, DiffOutlined, ExportOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { localizeError } from '../utils';
 import {
@@ -16,7 +16,11 @@ import {
   summarizeSchemaDiff,
   type SchemaDiffForm
 } from '../schemaDiff';
-import type { Connection, SchemaDiffItem, SchemaDiffResponse, SchemaDiffStatus, SchemaDiffTable } from '../types';
+import type { AiStatus, Connection, SchemaDiffItem, SchemaDiffResponse, SchemaDiffStatus, SchemaDiffTable } from '../types';
+import { isAiAvailableForConnection } from '../aiSuggestion';
+import type { AiAskRequest } from './AiAssistantPanel';
+
+const AiAssistantPanel = lazy(() => import('./AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel })));
 
 const { Text, Paragraph } = Typography;
 
@@ -33,9 +37,11 @@ const STATUS_COLORS: Record<SchemaDiffStatus, string> = {
  * 面板只做「看差异」和「拿脚本」两件事：生成的迁移语句不在这里执行，而是送进 SQL 工作台，
  * 让它照常经过生产确认、无 WHERE 写操作确认和审计。
  */
-export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defaultConnectionId, onOpenInSqlTab }: {
+export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defaultConnectionId, aiStatus, onOpenInSqlTab }: {
   connections: Connection[];
   defaultConnectionId?: number;
+  /** AI 可用性快照；目标连接未授权时不显示风险解读入口。 */
+  aiStatus?: AiStatus;
   onOpenInSqlTab: (sql: string, title: string) => void;
 }) {
   const [form, setForm] = useState<SchemaDiffForm>({ ...EMPTY_SCHEMA_DIFF_FORM, sourceConnectionId: defaultConnectionId });
@@ -43,6 +49,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showIdentical, setShowIdentical] = useState(false);
+  const [aiRequest, setAiRequest] = useState<AiAskRequest>();
 
   const connectionOptions = useMemo(
     () => connections.map((connection) => ({ value: connection.id, label: `${connection.name}（${connection.dbType}）` })),
@@ -69,6 +76,21 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
     } finally {
       setLoading(false);
     }
+  }
+
+  /**
+   * 把脚本交给 AI 说风险。
+   *
+   * 脚本由目标端方言生成，模型只读不改 —— 一份被模型改过的迁移脚本，用户也不该照着执行。
+   * 因此按目标连接判断授权，也只发脚本本身。
+   */
+  function askAiToReviewScript() {
+    if (!script || !form.targetConnectionId) return;
+    setAiRequest({
+      action: 'review-script',
+      title: 'AI 解读同步脚本风险',
+      body: { connectionId: form.targetConnectionId, script }
+    });
   }
 
   async function copyScript() {
@@ -171,6 +193,9 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
               在 SQL 工作台打开
             </Button>
             <Button icon={<CopyOutlined />} disabled={!script} onClick={copyScript}>复制脚本</Button>
+            {isAiAvailableForConnection(aiStatus, form.targetConnectionId) && (
+              <Button icon={<BulbOutlined />} disabled={!script} onClick={askAiToReviewScript}>AI 风险说明</Button>
+            )}
           </Space>
           {visibleTables.length === 0 ? (
             <PanelEmpty title={showIdentical ? '没有可对比的表' : '两侧结构没有差异'} />
@@ -211,6 +236,12 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
             />
           )}
         </>
+      )}
+      {aiRequest && (
+        <Suspense fallback={null}>
+          {/* 风险说明不给「插入编辑器」：脚本已经在工作台里了，模型的解读不该再变成一段可执行文本。 */}
+          <AiAssistantPanel request={aiRequest} onClose={() => setAiRequest(undefined)} />
+        </Suspense>
       )}
     </section>
   );
