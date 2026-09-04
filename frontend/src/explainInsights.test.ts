@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   explainFindings,
   explainFindingsSummary,
+  explainFindingsText,
+  explainPlanText,
   explainRowLevels,
   isExplainResult,
   LARGE_ROW_ESTIMATE
@@ -152,5 +154,41 @@ describe('explainFindingsSummary', () => {
       { level: 'warning', code: 'a', title: '', detail: '', rows: [0] },
       { level: 'notice', code: 'b', title: '', detail: '', rows: [1] }
     ])).toBe('执行计划解读：1 项需要关注，1 项提示');
+  });
+});
+
+describe('发给模型的计划文本', () => {
+  it('用制表符表格而不是 JSON', () => {
+    const text = explainPlanText(['id', 'type', 'rows'], [[1, 'ALL', 1200000]]);
+
+    expect(text).toBe('id\ttype\trows\n1\tALL\t1200000');
+  });
+
+  it('空值写成 NULL，多余空白压平', () => {
+    expect(explainPlanText(['detail'], [[null], ['  a\n  b  ']])).toBe('detail\nNULL\na b');
+  });
+
+  it('没有列时返回空串', () => {
+    expect(explainPlanText([], [])).toBe('');
+  });
+
+  it('过长的计划会被截断并说明', () => {
+    const rows = Array.from({ length: 2000 }, (_, index) => [`row-${index}`.repeat(20)]);
+
+    expect(explainPlanText(['detail'], rows)).toContain('计划过长已截断');
+  });
+});
+
+describe('发给模型的规则结论', () => {
+  it('把结论连同命中行渲染成一行一条', () => {
+    const text = explainFindingsText([
+      { level: 'warning', code: 'full-scan', title: '全表扫描', detail: 'orders 没走索引', rows: [0, 2] }
+    ]);
+
+    expect(text).toBe('[需要关注] 全表扫描（第 1、3 行）：orders 没走索引');
+  });
+
+  it('没有结论时返回空串，提示词里那一段会整段省掉', () => {
+    expect(explainFindingsText([])).toBe('');
   });
 });

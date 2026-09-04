@@ -265,3 +265,42 @@ export function explainFindingsSummary(findings: ExplainFinding[]): string {
   if (notices > 0) parts.push(`${notices} 项提示`);
   return `执行计划解读：${parts.join('，')}`;
 }
+
+/** 计划文本化时单个单元格的字符上限：计划里偶尔会有很长的过滤条件。 */
+const MAX_PLAN_CELL_CHARS = 300;
+/** 计划文本化的总字符上限。 */
+const MAX_PLAN_CHARS = 12_000;
+
+/**
+ * 把执行计划渲染成发给模型的文本。
+ *
+ * 用制表符分隔的表格而不是 JSON：计划本来就是表格，JSON 会把列名在每一行重复一遍，
+ * 同样的信息多花一倍 token。
+ */
+export function explainPlanText(columns: string[], rows: unknown[][]): string {
+  if (columns.length === 0) return '';
+  const cell = (value: unknown) => {
+    const text = value == null ? 'NULL' : String(value).replace(/\s+/g, ' ').trim();
+    return text.length > MAX_PLAN_CELL_CHARS ? `${text.slice(0, MAX_PLAN_CELL_CHARS)}…` : text;
+  };
+  const lines = [columns.join('\t'), ...rows.map((row) => row.map(cell).join('\t'))];
+  const text = lines.join('\n');
+  return text.length > MAX_PLAN_CHARS ? `${text.slice(0, MAX_PLAN_CHARS)}\n…（计划过长已截断）` : text;
+}
+
+/**
+ * 把确定性规则的结论渲染成文本，一并发给模型。
+ *
+ * 模型不该重新判断一遍「这是不是全表扫描」—— 那是规则已经确定的事实。发过去是为了让它
+ * 在这些结论之上解释与给建议。
+ */
+export function explainFindingsText(findings: ExplainFinding[]): string {
+  if (findings.length === 0) return '';
+  return findings
+    .map((finding) => {
+      const rows = finding.rows.map((index) => index + 1).join('、');
+      const level = finding.level === 'warning' ? '需要关注' : '提示';
+      return `[${level}] ${finding.title}（第 ${rows} 行）：${finding.detail}`;
+    })
+    .join('\n');
+}

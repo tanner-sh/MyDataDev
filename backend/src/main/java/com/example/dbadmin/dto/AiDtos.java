@@ -82,6 +82,21 @@ public final class AiDtos {
     ) {
     }
 
+    /**
+     * 执行计划解读请求。
+     *
+     * <p>{@code findings} 是前端确定性规则（explainInsights.ts）已经得出的结论，一并发过去
+     * 让模型在其上解释，而不是重新判断一遍 —— 那部分不该由模型来做。</p>
+     */
+    public record AiExplainRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 20000) String sql,
+            @NotBlank @Size(max = 20000) String plan,
+            @Size(max = 4000) String findings
+    ) {
+    }
+
     /** 一次问答的回答。文本是 Markdown，前端只做代码块提取，不整段渲染 HTML。 */
     public record AiAnswerResponse(String text) {
     }

@@ -45,8 +45,9 @@ public class AiAssistantService {
      */
     public static final String ACTION_DIAGNOSE = "AI_DIAGNOSE_ERROR";
     public static final String ACTION_GENERATE = "AI_GENERATE_SQL";
+    public static final String ACTION_EXPLAIN = "AI_EXPLAIN_INSIGHT";
 
-    public static final List<String> AUDIT_ACTIONS = List.of(ACTION_DIAGNOSE, ACTION_GENERATE);
+    public static final List<String> AUDIT_ACTIONS = List.of(ACTION_DIAGNOSE, ACTION_GENERATE, ACTION_EXPLAIN);
 
     private final AiSettingsService settings;
     private final SchemaContextBuilder contexts;
@@ -118,6 +119,35 @@ public class AiAssistantService {
         LlmRequest request = LlmRequest.of(
                 AiPromptBuilder.system(context, dialectHint(connection)),
                 AiPromptBuilder.generate(question, connection.readonly()));
+        return new Prepared(clients.create(current), request, current, policy, context);
+    }
+
+    /**
+     * 解读执行计划。
+     *
+     * <p>计划文本与确定性规则已经得出的结论都由前端回传：那些结论是 {@code explainInsights.ts}
+     * 算出来的，模型只在它们之上解释「为什么慢、建什么索引」，不重新判断一遍。</p>
+     */
+    public String explain(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
+        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings);
+        LlmResponse response = prepared.client().complete(prepared.request());
+        writeAudit(ACTION_EXPLAIN, connectionId, prepared, response, actor);
+        return response.text();
+    }
+
+    public SseEmitter explainStream(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
+        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings);
+        return stream(prepared, ACTION_EXPLAIN, connectionId, actor);
+    }
+
+    private Prepared prepareExplain(long connectionId, String schemaName, String sql, String plan, String findings) {
+        AiSettings current = settings.requireEnabled();
+        AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
+        DbConnection connection = connections.require(connectionId);
+        SchemaContext context = contexts.forSql(connectionId, schemaName, sql, policy);
+        LlmRequest request = LlmRequest.of(
+                AiPromptBuilder.system(context, dialectHint(connection)),
+                AiPromptBuilder.explain(sql, plan, findings));
         return new Prepared(clients.create(current), request, current, policy, context);
     }
 

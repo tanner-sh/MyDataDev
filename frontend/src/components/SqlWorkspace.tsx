@@ -9,6 +9,7 @@ import { PaneResizer } from './PaneResizer';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { SqlEditorSurface } from './SqlEditorSurface';
 import { ExplainInsightsPanel } from './ExplainInsightsPanel';
+import { explainFindingsText, explainPlanText, type ExplainFinding } from '../explainInsights';
 import { nextResultPaneMode, sqlStatementResultLabel, type ResultPaneMode } from '../sqlResultWorkspace';
 import { resolveEditorSplitRatio } from '../editorSplit';
 import type { ResultEditCommit } from '../resultEditing';
@@ -185,6 +186,28 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
     });
   }
 
+  /**
+   * 把这条执行计划交给 AI 解读。
+   *
+   * 一并发过去的是确定性规则已经算出的结论：模型不该重新判断「这是不是全表扫描」，
+   * 它要做的是在这些事实之上解释原因、给出改法。
+   */
+  const askAiToExplain = useStableEvent((result: SqlStatementResult, findings: ExplainFinding[]) => {
+    if (!selected) return;
+    const columns = result.result.columns.map((column) => column.label);
+    setAiRequest({
+      action: 'explain-insight',
+      title: 'AI 解读执行计划',
+      body: {
+        connectionId: selected.id,
+        schemaName: activeSchema,
+        sql: result.sql,
+        plan: explainPlanText(columns, result.result.rows),
+        findings: explainFindingsText(findings)
+      }
+    });
+  });
+
   function askAiToGenerate() {
     if (!selected || !aiQuestion.trim()) return;
     setAiQuestionOpen(false);
@@ -236,10 +259,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
           onPageChange={handleResultPageChange}
           connectionId={selected?.id}
           onCommitEdits={canWrite ? onCommitResultEdits : undefined}
+          onAskAiExplain={aiAvailable ? askAiToExplain : undefined}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, aiAvailable, askAiToExplain, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -504,7 +528,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlI
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiAvailable ? askAiToExplain : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -637,7 +661,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -649,6 +673,8 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
   connectionId?: number;
   onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
+  /** 把这条执行计划交给 AI 解读；AI 不可用时不传。 */
+  onAskAiExplain?: (result: SqlStatementResult, findings: ExplainFinding[]) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
   const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
@@ -682,7 +708,11 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
           <div className="statement-result-notices">
             {result.result.page && !pagingEnabled && <Alert type="warning" showIcon title="该结果来自其他连接，请切回原连接后再翻页。" />}
             {result.result.resultSet && (
-              <ExplainInsightsPanel columns={result.result.columns.map((column) => column.label)} rows={result.result.rows} />
+              <ExplainInsightsPanel
+                columns={result.result.columns.map((column) => column.label)}
+                rows={result.result.rows}
+                onAskAi={onAskAiExplain ? (findings) => onAskAiExplain(result, findings) : undefined}
+              />
             )}
           </div>
           <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onCommitEdits={onCommitEdits} />

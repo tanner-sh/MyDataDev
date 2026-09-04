@@ -56,6 +56,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   MCP_TOOL_CALL: { label: 'MCP 工具调用', category: 'mcp' },
   AI_DIAGNOSE_ERROR: { label: 'AI 诊断执行报错', category: 'ai' },
   AI_GENERATE_SQL: { label: 'AI 生成 SQL', category: 'ai' },
+  AI_EXPLAIN_INSIGHT: { label: 'AI 解读执行计划', category: 'ai' },
   AI_SETTINGS_UPDATE: { label: '修改 AI 设置', category: 'ai' },
   AI_SETTINGS_TEST: { label: '测试 AI 连通性', category: 'ai' },
   AI_POLICY_UPDATE: { label: '修改连接 AI 共享策略', category: 'ai' },

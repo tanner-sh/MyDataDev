@@ -219,10 +219,12 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 1. **选表策略只做了关键词与词块匹配**，没做「按最近使用」和「按外键邻接扩展」。前者要读 SQL 历史再做一次归因，后者要对每张候选表查一次外键 —— 两者都会把一次生成变成十几次元数据查询，而收益是「可能多认出一张相关表」。留到有真实反馈说选表不准时再补。
 2. **`SqlSuggestionValidator` 落在前端而不是后端**，名字也改成了 `sqlSuggestion.ts`。判定该发生在 SQL 要进编辑器的地方：流式回答是一段段到的，后端见到的是自己吐出去的片段，用户点「插入」时面对的是拼完的那一整段。放后端等于把同一条规则写两份。
 
-### M4 — 执行计划解读
+### M4 — 执行计划解读 · 已完成
 
-- 复用 `explainInsights.ts` 的确定性结论作为输入，LLM 只写「为什么慢 / 建什么索引」
-- 与现有 `ExplainInsightsPanel` 合并展示，规则结论在前、AI 解读在后
+- `explainInsights.ts` 新增 `explainPlanText` 与 `explainFindingsText`：把计划渲染成制表符表格（JSON 会把列名在每行重复一遍，同样的信息多花一倍 token），把规则结论渲染成一行一条。
+- `AiPromptBuilder.explain` 把规则结论单列一段，并明说「不必重复判断」—— 模型要做的是在这些事实之上解释原因、给出改法。
+- `ExplainInsightsPanel` 增加可选的「AI 解读」按钮：规则结论在前、AI 解读在后，两者不混在一起显示。
+- 计划没有明显问题时，提示词要求模型直接说「没有明显问题」，不为了凑建议而建议。
 
 ### M5 — 候选增强（视反馈取舍）
 

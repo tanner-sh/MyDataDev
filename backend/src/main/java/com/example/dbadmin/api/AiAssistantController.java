@@ -2,6 +2,7 @@ package com.example.dbadmin.api;
 
 import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
 import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
+import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
 import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
 import jakarta.validation.Valid;
@@ -55,6 +56,24 @@ public class AiAssistantController {
     ) {
         return assistant.generateStream(
                 request.connectionId(), request.schemaName(), request.question(), actor);
+    }
+
+    @PostMapping("/explain-insight")
+    public AiAnswerResponse explain(
+            @Valid @RequestBody AiExplainRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return new AiAnswerResponse(assistant.explain(
+                request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor));
+    }
+
+    @PostMapping("/explain-insight/stream")
+    public SseEmitter explainStream(
+            @Valid @RequestBody AiExplainRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return assistant.explainStream(
+                request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor);
     }
 
     @PostMapping("/diagnose/stream")
