@@ -416,6 +416,22 @@ public class AiSchemaTools {
                 List.of(new AiGroundingReference("TABLE", entry.name(), entry.type())));
     }
 
+    /**
+     * 当前命名空间里 AI 能看到的对象，给词典建议用。
+     *
+     * <p>复用 search_schema 那份缓存目录，而不是另走一遍元数据查询：两边看到的对象必须完全
+     * 一致，否则界面上建议的词条会指向一个 AI 其实搜不到的表。</p>
+     */
+    public List<CatalogObject> objects(long connectionId, String schemaName) throws Exception {
+        return catalog(connectionId, schemaName).entries().stream()
+                .map(entry -> new CatalogObject(entry.name(), entry.type(), entry.remarks()))
+                .toList();
+    }
+
+    /** 对外的对象视图；内部的 CatalogEntry 还带着列摘要，词典建议用不到。 */
+    public record CatalogObject(String name, String type, String comment) {
+    }
+
     private Catalog catalog(long connectionId, String requestedSchema) throws Exception {
         long version = metadataCache.directoryVersion(connectionId);
         CatalogKey key = new CatalogKey(connectionId, requestedSchema == null ? "" : requestedSchema, version);

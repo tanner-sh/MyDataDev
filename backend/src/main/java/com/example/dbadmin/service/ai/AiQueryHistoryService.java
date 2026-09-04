@@ -44,6 +44,23 @@ public class AiQueryHistoryService {
     }
 
     /**
+     * 每张表在最近的执行历史里被查到过多少次。
+     *
+     * <p>给词典建议排序用：没人查过的表，先给它写词条没有意义。这里按执行次数计，不做形状去重 ——
+     * 同一条查询被跑一百次，正说明这几张表是这个库的日常。</p>
+     */
+    public Map<String, Integer> tableUsage(long connectionId) {
+        Map<String, Integer> usage = new LinkedHashMap<>();
+        for (SqlHistoryResponse row : history.findRecent(connectionId, SCAN_LIMIT)) {
+            if (!"SUCCESS".equalsIgnoreCase(row.status())) continue;
+            String sql = row.sql();
+            if (sql == null || sql.isBlank() || !classifier.isSelectQuery(sql)) continue;
+            for (String table : queryTables(AiSqlShape.mask(sql))) usage.merge(table, 1, Integer::sum);
+        }
+        return usage;
+    }
+
+    /**
      * 打分并去重。纯逻辑，和数据库无关。
      *
      * <p>命中表的权重远高于关键词：找相似写法时，「用到了同样这几张表」几乎总比「文本里出现过

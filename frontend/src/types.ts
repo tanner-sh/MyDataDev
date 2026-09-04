@@ -660,6 +660,21 @@ export type AiConnectionPolicy = {
   sampleRowLimit: number;
 };
 
+/** 从表注释推出的候选词条；管理员挑选后并入词典，不会自动落库。 */
+export type AiGlossarySuggestion = {
+  term: string;
+  aliases: string[];
+  objectNames: string[];
+  description?: string | null;
+  usageCount: number;
+};
+
+export type AiGlossarySuggestions = {
+  suggestions: AiGlossarySuggestion[];
+  /** 连注释都没有的对象：给不出候选词，但正是 AI 最找不到的那批。 */
+  uncommentedObjects: string[];
+};
+
 export type AiGlossaryEntry = {
   id: number;
   term: string;

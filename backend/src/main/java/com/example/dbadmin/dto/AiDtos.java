@@ -167,6 +167,23 @@ public final class AiDtos {
     ) {
     }
 
+    /** @param usageCount 这条词条涉及的表在执行历史里被查过多少次；排序依据，也给管理员一个取舍参考 */
+    public record AiGlossarySuggestionResponse(
+            String term,
+            java.util.List<String> aliases,
+            java.util.List<String> objectNames,
+            String description,
+            int usageCount
+    ) {
+    }
+
+    /** @param uncommentedObjects 连注释都没有的对象：给不出候选词，但正是 AI 最找不到的那批 */
+    public record AiGlossarySuggestionsResponse(
+            java.util.List<AiGlossarySuggestionResponse> suggestions,
+            java.util.List<String> uncommentedObjects
+    ) {
+    }
+
     public record AiGlossaryEntryResponse(
             long id,
             String term,

@@ -3,7 +3,17 @@ import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Selec
 import { ApiOutlined, BookOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { PanelLoading } from './PanelState';
-import type { AiConnectionPolicy, AiGlossaryEntry, AiProbeResult, AiProvider, AiSchemaSharing, AiSettings } from '../types';
+import type {
+  AiConnectionPolicy,
+  AiGlossaryEntry,
+  AiGlossarySuggestion,
+  AiGlossarySuggestions,
+  AiProbeResult,
+  AiProvider,
+  AiSchemaSharing,
+  AiSettings
+} from '../types';
+import { alreadyInGlossary, mergeSuggestions } from '../aiGlossary';
 import {
   AI_EFFORTS,
   AI_MAX_SAMPLE_ROWS,
@@ -35,6 +45,9 @@ export function AiSettingsPanel() {
   const [glossary, setGlossary] = useState<AiGlossaryEntry[]>([]);
   const [glossaryLoading, setGlossaryLoading] = useState(false);
   const [glossarySaving, setGlossarySaving] = useState(false);
+  const [suggestions, setSuggestions] = useState<AiGlossarySuggestions>();
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [pickedTerms, setPickedTerms] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [messageApi, messageContext] = message.useMessage();
 
@@ -109,7 +122,37 @@ export function AiSettingsPanel() {
     }
   }
 
+  /**
+   * 拉候选词条。
+   *
+   * 不自动落库：候选是从表注释推出来的，业务词该叫什么、有哪些别名，最终得由人定。自动写进去
+   * 会让词典里混进一批没人认领的词条，比空着更难维护。
+   */
+  async function loadSuggestions(connectionId: number) {
+    setSuggestionsLoading(true);
+    try {
+      setSuggestions(await api<AiGlossarySuggestions>(`/ai/connections/${connectionId}/glossary/suggestions`));
+      setPickedTerms([]);
+    } catch (cause) {
+      messageApi.error(cause instanceof Error ? cause.message : '候选词条生成失败');
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  }
+
+  function applySuggestions() {
+    if (!suggestions) return;
+    const picked = suggestions.suggestions.filter((item) => pickedTerms.includes(item.term));
+    const merged = mergeSuggestions(glossary, picked);
+    const added = merged.length - glossary.length;
+    setGlossary(merged);
+    setPickedTerms([]);
+    messageApi.success(added > 0 ? `已加入 ${added} 条，记得补上用户嘴里的别名再保存` : '选中的业务词都已存在');
+  }
+
   async function openGlossary(policy: AiConnectionPolicy) {
+    setSuggestions(undefined);
+    setPickedTerms([]);
     setGlossaryPolicy(policy);
     setGlossaryLoading(true);
     try {
@@ -322,6 +365,15 @@ export function AiSettingsPanel() {
         <Paragraph type="secondary">
           把“客户、活跃用户”等业务说法映射到真实表或视图。AI 搜索结构时会优先使用这些映射；多个别名或对象用逗号分隔。
         </Paragraph>
+        <GlossarySuggestions
+          loading={suggestionsLoading}
+          data={suggestions}
+          glossary={glossary}
+          picked={pickedTerms}
+          onPick={setPickedTerms}
+          onLoad={() => glossaryPolicy && void loadSuggestions(glossaryPolicy.connectionId)}
+          onApply={applySuggestions}
+        />
         <Table<AiGlossaryEntry>
           size="small"
           rowKey="id"
@@ -368,4 +420,84 @@ export function AiSettingsPanel() {
 
 function splitList(value: string): string[] {
   return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 10);
+}
+
+/**
+ * 候选词条的挑选区。
+ *
+ * <p>刻意做成「挑选」而不是「一键导入」：注释里的词本来就能被 search_schema 搜到，自动生成的
+ * 词条本身不算新信息 —— 词典真正不可替代的是用户嘴里的「会员」「买家」，那些不会出现在任何
+ * 注释里。所以这里的目标是把「对着空表格填一百条」变成「勾几条再补别名」，而不是替人做决定。</p>
+ */
+function GlossarySuggestions({ loading, data, glossary, picked, onPick, onLoad, onApply }: {
+  loading: boolean;
+  data?: AiGlossarySuggestions;
+  glossary: AiGlossaryEntry[];
+  picked: string[];
+  onPick: (terms: string[]) => void;
+  onLoad: () => void;
+  onApply: () => void;
+}) {
+  const existing = data ? alreadyInGlossary(glossary, data.suggestions) : new Set<string>();
+  const selectable = (data?.suggestions || []).filter((item) => !existing.has(item.term));
+
+  if (!data) {
+    return (
+      <Button size="small" loading={loading} onClick={onLoad} style={{ marginBottom: 12 }}>
+        从表注释生成候选
+      </Button>
+    );
+  }
+
+  return (
+    <Card
+      size="small"
+      style={{ marginBottom: 12 }}
+      title={`候选词条 · ${selectable.length} 条可加入`}
+      extra={(
+        <Space size={4}>
+          <Button size="small" onClick={onLoad} loading={loading}>重新生成</Button>
+          <Button size="small" type="primary" disabled={picked.length === 0} onClick={onApply}>
+            加入 {picked.length || ''}
+          </Button>
+        </Space>
+      )}
+    >
+      {selectable.length === 0 ? (
+        <Text type="secondary">没有可加入的候选：有注释的表都已经在词典里了。</Text>
+      ) : (
+        <Table<AiGlossarySuggestion>
+          size="small"
+          rowKey="term"
+          loading={loading}
+          dataSource={selectable}
+          pagination={false}
+          scroll={{ y: 180 }}
+          rowSelection={{ selectedRowKeys: picked, onChange: (keys) => onPick(keys as string[]) }}
+          columns={[
+            { title: '业务词', dataIndex: 'term', width: 140 },
+            {
+              title: '数据库对象', dataIndex: 'objectNames', width: 240,
+              render: (value: string[]) => <Text code>{value.join(', ')}</Text>
+            },
+            {
+              title: '历史查询次数', dataIndex: 'usageCount', width: 110,
+              render: (value: number) => (value > 0
+                ? <Text>{value}</Text>
+                : <Text type="secondary">没人查过</Text>)
+            },
+            { title: '来自注释', dataIndex: 'description', ellipsis: true }
+          ]}
+        />
+      )}
+      {data.uncommentedObjects.length > 0 && (
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          另有 {data.uncommentedObjects.length} 个对象连注释都没有，推不出候选词，而它们恰恰是 AI 最找不到的：
+          {' '}<Text code>{data.uncommentedObjects.slice(0, 8).join(', ')}</Text>
+          {data.uncommentedObjects.length > 8 ? ' …' : ''}
+          。给它们补表注释，或者在下面手工加词条。
+        </Paragraph>
+      )}
+    </Card>
+  );
 }

@@ -80,6 +80,7 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 - **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
 - **执行报错的诊断走 Agent，不要再开单次问答的路。** 最常见的报错是「字段/表不存在」，而报错里提到的名字本来就是错的 —— 只看那条 SQL 提到的表根本查不出正确名称，必须能搜结构、查词典。失败现场经 `AiChatRequest.failure` 传入，由 `AiChatPrompt` 加上不可信标注后才进模型：错误原文来自目标库，拼进用户消息就和用户的指令没区别了。
+- **业务词典的候选从表注释推**（`AiGlossarySuggestions`），但不自动落库：注释里的词本来就能被 `search_schema` 搜到，自动生成的词条不算新信息 —— 词典不可替代的是用户嘴里的「会员」「买家」，那只能人补。目标是把「从零填写」变成「审阅和补别名」。
 - **结果回流只发形状不发数据**（`frontend/src/aiResultShape.ts`）：行数、耗时、每列的空值数与不同取值数，全是计数。这样它才落在「只发结构」档；要发真实数据行是另一个入口（结果解读），那边要求连接开到样本档。
 - **执行历史进入模型上下文前必须先过 `AiSqlShape.mask`**（`AiQueryHistoryService`）。历史里带着真实业务值 —— 手机号、金额、注释里的人名和工单号；抹掉字面量之后剩下的是查询骨架，这条工具才落得进「只发结构」这一档。绕开它就等于把这一档的承诺作废了。
 - **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
