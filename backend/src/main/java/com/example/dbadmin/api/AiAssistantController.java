@@ -2,6 +2,7 @@ package com.example.dbadmin.api;
 
 import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
 import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
+import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -36,6 +37,24 @@ public class AiAssistantController {
     ) {
         return new AiAnswerResponse(assistant.diagnose(
                 request.connectionId(), request.schemaName(), request.sql(), request.errorMessage(), actor));
+    }
+
+    @PostMapping("/generate")
+    public AiAnswerResponse generate(
+            @Valid @RequestBody AiGenerateRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return new AiAnswerResponse(assistant.generate(
+                request.connectionId(), request.schemaName(), request.question(), actor));
+    }
+
+    @PostMapping("/generate/stream")
+    public SseEmitter generateStream(
+            @Valid @RequestBody AiGenerateRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return assistant.generateStream(
+                request.connectionId(), request.schemaName(), request.question(), actor);
     }
 
     @PostMapping("/diagnose/stream")

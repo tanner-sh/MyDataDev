@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Layout, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Space, Tabs, Tooltip, Typography } from 'antd';
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
@@ -28,9 +28,11 @@ const MIN_EDITOR_HEIGHT = 120;
 const MIN_RESULTS_HEIGHT = 240;
 const RESIZER_HEIGHT = 5;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
+  /** AI 生成的 SQL 开在新标签页，不覆盖用户手里正在写的那一条。 */
+  onOpenSqlInNewTab: (sql: string, title: string) => void;
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
@@ -82,6 +84,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, 
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
+  const [aiQuestionOpen, setAiQuestionOpen] = useState(false);
+  const [aiQuestion, setAiQuestion] = useState('');
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
   const draftRef = useRef(activeTab.sql);
   const draftCommitTimerRef = useRef<number | null>(null);
@@ -181,10 +185,29 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, 
     });
   }
 
-  /** AI 给的 SQL 只落到编辑器里，执行与否由用户决定。 */
+  function askAiToGenerate() {
+    if (!selected || !aiQuestion.trim()) return;
+    setAiQuestionOpen(false);
+    setAiRequest({
+      action: 'generate',
+      title: 'AI 生成 SQL',
+      body: { connectionId: selected.id, schemaName: activeSchema, question: aiQuestion.trim() }
+    });
+  }
+
+  /**
+   * AI 给的 SQL 只落到编辑器里，执行与否由用户决定。
+   *
+   * 诊断的结果追加到当前标签页（用户正对着这条 SQL 改），生成的结果开新标签页
+   * （手里那条还没写完，不该被覆盖）。
+   */
   function insertAiSql(sql: string) {
-    updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
-    commitDraft();
+    if (aiRequest?.action === 'generate') {
+      onOpenSqlInNewTab(sql, aiQuestion.trim().slice(0, 40) || 'AI 生成的 SQL');
+    } else {
+      updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
+      commitDraft();
+    }
     setAiRequest(undefined);
   }
 
@@ -317,6 +340,19 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, 
                 <span className="sql-toolbar-label">格式化</span>
               </Button>
             </Tooltip>
+            {aiAvailable && (
+              <Tooltip title="用自然语言描述需求，AI 生成 SQL（只写进新标签页，不会执行）">
+                <Button
+                  className="sql-toolbar-button"
+                  size="small"
+                  icon={<BulbOutlined />}
+                  aria-label="用自然语言生成 SQL"
+                  onClick={() => { setAiQuestion(''); setAiQuestionOpen(true); }}
+                >
+                  <span className="sql-toolbar-label">AI 生成</span>
+                </Button>
+              </Tooltip>
+            )}
             <Tooltip title="SQL 历史">
               <Button className="sql-toolbar-button" size="small" icon={<HistoryOutlined />} aria-label="查看 SQL 历史" disabled={!canQuery || historyLoading} loading={historyLoading} onClick={onOpenHistory}>
                 <span className="sql-toolbar-label">历史</span>
@@ -496,6 +532,26 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, selected, 
         </div>
       </div>
       <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{loading ? `${cancelling ? '正在取消' : '执行中'} · ${formatElapsed(executionElapsedMs)} · ` : ''}{tabs.length} 个查询标签</Text>} />
+      <Modal
+        open={aiQuestionOpen}
+        title="用自然语言生成 SQL"
+        okText="生成"
+        cancelText="取消"
+        okButtonProps={{ disabled: !aiQuestion.trim() }}
+        onOk={askAiToGenerate}
+        onCancel={() => setAiQuestionOpen(false)}
+      >
+        <Input.TextArea
+          autoFocus
+          rows={4}
+          value={aiQuestion}
+          placeholder="例如：统计上周每天的订单数与总金额，按日期排序"
+          onChange={(event) => setAiQuestion(event.target.value)}
+        />
+        <Text type="secondary">
+          只会发送与问题相关的表结构；生成的 SQL 写进新标签页，执行与否由你决定。
+        </Text>
+      </Modal>
       {aiRequest && (
         <Suspense fallback={null}>
           <AiAssistantPanel request={aiRequest} onClose={() => setAiRequest(undefined)} onInsertSql={insertAiSql} />

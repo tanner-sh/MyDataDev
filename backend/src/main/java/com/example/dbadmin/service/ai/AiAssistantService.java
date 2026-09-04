@@ -44,8 +44,9 @@ public class AiAssistantService {
      * {@link com.example.dbadmin.service.ai.AiAuditActionsTest} 盯着这个数组。</p>
      */
     public static final String ACTION_DIAGNOSE = "AI_DIAGNOSE_ERROR";
+    public static final String ACTION_GENERATE = "AI_GENERATE_SQL";
 
-    public static final List<String> AUDIT_ACTIONS = List.of(ACTION_DIAGNOSE);
+    public static final List<String> AUDIT_ACTIONS = List.of(ACTION_DIAGNOSE, ACTION_GENERATE);
 
     private final AiSettingsService settings;
     private final SchemaContextBuilder contexts;
@@ -94,6 +95,30 @@ public class AiAssistantService {
     public SseEmitter diagnoseStream(long connectionId, String schemaName, String sql, String errorMessage, String actor) {
         Prepared prepared = prepareDiagnose(connectionId, schemaName, sql, errorMessage);
         return stream(prepared, ACTION_DIAGNOSE, connectionId, actor);
+    }
+
+    /** 自然语言转 SQL。产出只回到编辑器，这里没有任何执行入口。 */
+    public String generate(long connectionId, String schemaName, String question, String actor) {
+        Prepared prepared = prepareGenerate(connectionId, schemaName, question);
+        LlmResponse response = prepared.client().complete(prepared.request());
+        writeAudit(ACTION_GENERATE, connectionId, prepared, response, actor);
+        return response.text();
+    }
+
+    public SseEmitter generateStream(long connectionId, String schemaName, String question, String actor) {
+        Prepared prepared = prepareGenerate(connectionId, schemaName, question);
+        return stream(prepared, ACTION_GENERATE, connectionId, actor);
+    }
+
+    private Prepared prepareGenerate(long connectionId, String schemaName, String question) {
+        AiSettings current = settings.requireEnabled();
+        AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
+        DbConnection connection = connections.require(connectionId);
+        SchemaContext context = contexts.forQuestion(connectionId, schemaName, question, policy);
+        LlmRequest request = LlmRequest.of(
+                AiPromptBuilder.system(context, dialectHint(connection)),
+                AiPromptBuilder.generate(question, connection.readonly()));
+        return new Prepared(clients.create(current), request, current, policy, context);
     }
 
     private Prepared prepareDiagnose(long connectionId, String schemaName, String sql, String errorMessage) {

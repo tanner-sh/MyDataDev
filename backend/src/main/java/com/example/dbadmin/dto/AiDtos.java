@@ -70,6 +70,18 @@ public final class AiDtos {
     ) {
     }
 
+    /**
+     * 自然语言转 SQL 的请求。
+     *
+     * <p>问题原文不落任何一张表：既不进 sql_history，也不进审计，只活在这一次请求里。</p>
+     */
+    public record AiGenerateRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 2000) String question
+    ) {
+    }
+
     /** 一次问答的回答。文本是 Markdown，前端只做代码块提取，不整段渲染 HTML。 */
     public record AiAnswerResponse(String text) {
     }

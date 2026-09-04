@@ -4,6 +4,7 @@ import { CheckOutlined, CopyOutlined, ImportOutlined, StopOutlined } from '@ant-
 import { API } from '../constants';
 import { authHeaders } from '../auth';
 import { applyStreamEvent, consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
+import { checkSqlSuggestion } from '../sqlSuggestion';
 import { PanelLoading } from './PanelState';
 
 const { Paragraph, Text } = Typography;
@@ -86,6 +87,8 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
 
   const sql = firstSqlBlock(state.text);
   const sqlReady = Boolean(sql) && !hasUnclosedSqlFence(state.text);
+  // 回答还在流的时候不检查：半条 SQL 判出来的类型没有意义，只会让提示闪来闪去。
+  const check = sqlReady && sql ? checkSqlSuggestion(sql) : undefined;
 
   return (
     <Drawer
@@ -120,6 +123,9 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
       {!state.text && !state.done && !state.error && <PanelLoading text="模型正在回答…" />}
       {state.text && (
         <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{state.text}</Paragraph>
+      )}
+      {check?.warning && (
+        <Alert type="warning" showIcon message={check.warning} style={{ marginBottom: 8 }} />
       )}
       {state.done && !state.error && (
         <Text type="secondary">

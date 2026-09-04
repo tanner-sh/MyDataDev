@@ -2641,6 +2641,7 @@ export default function App() {
     setActiveDrawer(null);
     openSqlInNewTab(sql, title);
   });
+  const openAiSqlEvent = useStableEvent((sql: string, title: string) => openSqlInNewTab(sql, title));
   const requestProductionConfirmationEvent = useStableEvent((action: string) => requestProductionConfirmation(action));
   const loadBackupNamespacesEvent = useStableEvent((query: BackupTargetQuery) => loadBackupNamespaces(query));
   const loadBackupTablesEvent = useStableEvent((query: BackupTableTargetQuery) => loadBackupTables(query));
@@ -2950,6 +2951,7 @@ export default function App() {
               <SqlWorkspace
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
+                onOpenSqlInNewTab={openAiSqlEvent}
                 selected={selected}
                 activeSchema={activeSqlSchema}
                 namespaceKind={metadata?.namespaceKind}
