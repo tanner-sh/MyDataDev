@@ -38,7 +38,8 @@ public class AiAgentMetrics {
 
     private static String safeTool(String name) {
         return switch (name) {
-            case "search_schema", "describe_objects", "find_related_objects", "get_object_ddl", "validate_sql" -> name;
+            case "search_schema", "describe_objects", "find_related_objects", "search_query_history",
+                 "get_object_ddl", "validate_sql" -> name;
             default -> "unknown";
         };
     }

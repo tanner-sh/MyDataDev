@@ -47,6 +47,42 @@ class AiSqlAgentLoopTest {
         }
     }
 
+    /**
+     * 历史检索的价值在于把「这个库的人怎么算成交」这类口径带给模型 —— 外键说明可以怎么关联，
+     * 历史说明实际怎么关联。用户要能在证据面板上看见它参考了哪条既有写法。
+     */
+    @Test
+    void carriesPastQueryShapesIntoTheModelAndOntoTheEvidencePanel() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"query\":\"销售员 订单\",\"limit\":10}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"SALES_ORDER\",\"APP_USER\"]}"),
+                toolCall("t3", "search_query_history", "{\"tables\":[\"SALES_ORDER\",\"APP_USER\"]}"),
+                answer("""
+                        ```sql
+                        SELECT u.DISPLAY_NAME, COUNT(*) AS ORDER_COUNT FROM SALES_ORDER o
+                        JOIN APP_USER u ON u.ID = o.SALES_REP_ID
+                        WHERE o.ORDER_STATUS = 'PAID' GROUP BY u.DISPLAY_NAME
+                        ```
+                        沿用了这个库统计成交只算 PAID 的口径。""")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of(),
+                AiEvalCases.queryHistory(AiAgentHarness.CONNECTION_ID), "scripted")) {
+            AiAgentHarness.Run run = harness.ask("统计每个销售员成交的订单数");
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.groundingKinds()).contains("QUERY_HISTORY");
+
+            // 历史必须以抹掉字面量的形状进入模型上下文，原始业务值一个都不能带过去。
+            String historyResult = model.seen().get(3).messages().stream()
+                    .flatMap(message -> message.toolResults().stream())
+                    .map(result -> result.content())
+                    .filter(content -> content.contains("queries"))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(historyResult).contains("ORDER_STATUS = ?").doesNotContain("'PAID'");
+        }
+    }
+
     @Test
     void refusesToAnswerFromMemoryBeforeAnyStructureHasBeenRead() throws Exception {
         ScriptedLlmClient model = new ScriptedLlmClient(List.of(

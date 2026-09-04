@@ -669,7 +669,7 @@ export type AiGlossaryEntry = {
 };
 
 export type AiGroundingReference = {
-  kind: 'TABLE' | 'COLUMN' | 'FOREIGN_KEY';
+  kind: 'TABLE' | 'COLUMN' | 'FOREIGN_KEY' | 'QUERY_HISTORY';
   label: string;
   detail?: string | null;
 };

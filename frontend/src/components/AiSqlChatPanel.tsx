@@ -294,7 +294,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
 }
 
 function Grounding({ report }: { report: AiGroundingReport }) {
-  const labels = { TABLE: '表', COLUMN: '字段', FOREIGN_KEY: '外键' } as const;
+  const labels = { TABLE: '表', COLUMN: '字段', FOREIGN_KEY: '外键', QUERY_HISTORY: '历史写法' } as const;
   return (
     <Collapse
       size="small"

@@ -348,6 +348,7 @@ public class AiSqlAgentService {
                 case "TABLE" -> usedTables.contains(objectName(item.label()).toLowerCase(Locale.ROOT));
                 case "COLUMN" -> columnUsed(sql, item.label(), usedTables);
                 case "FOREIGN_KEY" -> relationUsed(item.label(), usedTables);
+                case "QUERY_HISTORY" -> historyUsed(item.label(), usedTables);
                 default -> false;
             };
             if (include) selected.putIfAbsent(item.kind() + '\0' + item.label(), item);
@@ -372,6 +373,17 @@ public class AiSqlAgentService {
         return matches >= 2;
     }
 
+    /**
+     * 历史写法只要提到了最终 SQL 用到的表，就值得摆到证据面板上。
+     *
+     * <p>比表和字段那两条宽松是有意的：历史是「参考了谁的写法」，不是「依据了什么结构」。用户
+     * 要能看见 AI 借鉴了哪条既有查询，才判断得了它有没有沿用这个库的口径。</p>
+     */
+    private static boolean historyUsed(String label, Set<String> usedTables) {
+        String normalized = label.toLowerCase(Locale.ROOT);
+        return usedTables.stream().anyMatch(table -> identifierAppears(normalized, table));
+    }
+
     private static boolean identifierAppears(String sql, String identifier) {
         return Pattern.compile("(?i)(?<![\\p{L}\\p{N}_$])" + Pattern.quote(identifier)
                 + "(?![\\p{L}\\p{N}_$])").matcher(sql).find();
@@ -390,6 +402,9 @@ public class AiSqlAgentService {
                 - 首次生成 SQL 前必须先调用 search_schema，再调用 describe_objects 读取相关表的真实字段和关系。
                 - search_schema 同时使用表/字段注释和管理员维护的业务词典。第一次结果不够时，换同义词、英文词或业务关键词继续搜索。
                 - 需要跨表查询时，调用 find_related_objects 沿真实外键发现邻接表和关联列，再按需 describe_objects。
+                - 确定要用哪几张表之后、动手写 SQL 之前，调用一次 search_query_history 看这个库里的人实际怎么查。
+                  外键说明的是可以怎么关联，历史说明的是实际怎么关联 —— 主表选哪张、状态用哪个值过滤、金额取明细还是订单头，
+                  这些口径只有跑过的语句里有。历史只作写法参考，表名和字段名一律以 describe_objects 的结果为准。
                 - 后续修正若引入了新的业务实体或字段，继续调用结构工具；仅修改已有条件时可沿用本会话已验证的工具结果。
                 - 写出候选 SQL 后调用 validate_sql。校验失败时根据错误自行修正，必要时继续查结构。
                 - 只能依据工具返回的结构使用表名和字段名。找不到时明确询问用户，绝不臆造。

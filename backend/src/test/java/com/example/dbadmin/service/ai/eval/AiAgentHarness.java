@@ -5,7 +5,9 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.AiDtos.AiChatMessageResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.repo.SqlHistoryRepository;
 import com.example.dbadmin.service.ConnectionService;
 import com.example.dbadmin.service.ExecutionGuard;
 import com.example.dbadmin.service.MetadataCacheService;
@@ -17,6 +19,7 @@ import com.example.dbadmin.service.ai.AiAgentMetrics;
 import com.example.dbadmin.service.ai.AiConnectionPolicy;
 import com.example.dbadmin.service.ai.AiConversationStore;
 import com.example.dbadmin.service.ai.AiGlossaryService;
+import com.example.dbadmin.service.ai.AiQueryHistoryService;
 import com.example.dbadmin.service.ai.AiSchemaSharing;
 import com.example.dbadmin.service.ai.AiSchemaTools;
 import com.example.dbadmin.service.ai.AiSettings;
@@ -74,12 +77,13 @@ public final class AiAgentHarness implements AutoCloseable {
     private final MeterRegistry registry = new SimpleMeterRegistry();
 
     public AiAgentHarness(LlmClient client, List<com.example.dbadmin.service.ai.AiBusinessTerm> glossaryTerms) throws Exception {
-        this(client, glossaryTerms, "eval-model");
+        this(client, glossaryTerms, List.of(), "eval-model");
     }
 
     public AiAgentHarness(
             LlmClient client,
             List<com.example.dbadmin.service.ai.AiBusinessTerm> glossaryTerms,
+            List<SqlHistoryResponse> queryHistory,
             String modelLabel
     ) throws Exception {
         jdbcUrl = "jdbc:h2:mem:ai-eval-" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
@@ -104,8 +108,11 @@ public final class AiAgentHarness implements AutoCloseable {
         AppProperties properties = new AppProperties();
         AiSqlValidationService validator = new AiSqlValidationService(connections, new DialectRegistry(),
                 new SqlScriptSplitter(), new SqlStatementClassifier(), properties);
+        SqlHistoryRepository historyRepository = mock(SqlHistoryRepository.class);
+        when(historyRepository.findRecent(anyLong(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(queryHistory);
+        AiQueryHistoryService history = new AiQueryHistoryService(historyRepository, new SqlStatementClassifier());
         AiSchemaTools tools = new AiSchemaTools(connections, new DialectRegistry(), metadata, metadataCache,
-                glossary, validator, new ObjectMapper());
+                glossary, history, validator, new ObjectMapper());
 
         AiSettingsService settings = mock(AiSettingsService.class);
         when(settings.requireEnabled()).thenReturn(new AiSettings(true,
@@ -143,9 +150,13 @@ public final class AiAgentHarness implements AutoCloseable {
 
         Map<String, String> stats = parseAuditDetail(details.get(details.size() - 1));
         AiChatMessageResponse answer = lastAnswer(stats.get("conversation"));
+        List<String> kinds = answer == null || answer.grounding() == null ? List.of()
+                : answer.grounding().references().stream()
+                        .map(com.example.dbadmin.dto.AiDtos.AiGroundingReference::kind).distinct().toList();
         return new Run(
                 answer == null ? "" : answer.text(),
                 answer != null && answer.grounding() != null && answer.grounding().validated(),
+                kinds,
                 stats,
                 elapsed);
     }
@@ -206,7 +217,13 @@ public final class AiAgentHarness implements AutoCloseable {
     /**
      * @param stats 审计 detail 解析出的运行数据：outcome、rounds、tools、objects、各类 token
      */
-    public record Run(String answer, boolean validated, Map<String, String> stats, Duration elapsed) {
+    public record Run(
+            String answer,
+            boolean validated,
+            List<String> groundingKinds,
+            Map<String, String> stats,
+            Duration elapsed
+    ) {
         public int number(String key) {
             String value = stats.get(key);
             try {

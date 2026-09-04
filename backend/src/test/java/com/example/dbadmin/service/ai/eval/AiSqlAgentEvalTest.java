@@ -47,7 +47,8 @@ class AiSqlAgentEvalTest {
 
         List<AiEvalReport.Row> rows = new ArrayList<>();
         try (AiAgentHarness harness = new AiAgentHarness(
-                client, AiEvalCases.glossary(AiAgentHarness.CONNECTION_ID), model)) {
+                client, AiEvalCases.glossary(AiAgentHarness.CONNECTION_ID),
+                AiEvalCases.queryHistory(AiAgentHarness.CONNECTION_ID), model)) {
             for (AiEvalCase evalCase : AiEvalCases.all()) {
                 AiAgentHarness.Run run = harness.ask(evalCase.question());
                 rows.add(new AiEvalReport.Row(evalCase, run,

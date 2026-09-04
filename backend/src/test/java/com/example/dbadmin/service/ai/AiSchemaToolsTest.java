@@ -115,6 +115,44 @@ class AiSchemaToolsTest {
         assertThat(result.path("glossaryMatches").path(0).path("term").asText()).isEqualTo("订单");
     }
 
+    /**
+     * 历史里带着真实业务值。抹不干净，这条工具就等于把「只发结构」这一档的承诺作废了。
+     */
+    @Test
+    void returnsQueryShapesFromHistoryWithoutLiteralsAndSkipsWrites() throws Exception {
+        String url = "jdbc:h2:mem:ai-history-tool;MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE APP_ROLE (ID BIGINT PRIMARY KEY, ROLE_NAME VARCHAR(80))");
+            statement.execute("CREATE TABLE APP_USER (ID BIGINT PRIMARY KEY, DISPLAY_NAME VARCHAR(120), ROLE_ID BIGINT)");
+        }
+
+        var result = tools(url).execute(CONNECTION_ID, "PUBLIC", call("h-1", "search_query_history", """
+                {"tables":["APP_USER"],"keywords":"角色"}
+                """));
+
+        assertThat(result.error()).isFalse();
+        JsonNode queries = json.readTree(result.content()).path("queries");
+        assertThat(queries).hasSize(1);
+        assertThat(queries.path(0).path("sql").asText())
+                .contains("JOIN APP_ROLE")
+                .contains("ROLE_NAME = ?")
+                .doesNotContain("管理员");
+        assertThat(queries.path(0).path("tables")).hasSize(2);
+        // 写语句不是「怎么查」的参考，历史里有也不给模型看。
+        assertThat(result.content()).doesNotContain("DELETE");
+        assertThat(result.evidence()).allMatch(item -> "QUERY_HISTORY".equals(item.kind()));
+    }
+
+    @Test
+    void refusesHistorySearchWithNeitherTablesNorKeywords() throws Exception {
+        var result = tools("jdbc:h2:mem:ai-history-empty;DB_CLOSE_DELAY=-1")
+                .execute(CONNECTION_ID, "PUBLIC", call("h-2", "search_query_history", "{\"tables\":[]}"));
+
+        assertThat(result.error()).isTrue();
+        assertThat(result.content()).contains("表名或关键词");
+    }
+
     private AiSchemaTools tools(String url) throws Exception {
         return tools(url, List.of());
     }
@@ -134,7 +172,21 @@ class AiSchemaToolsTest {
         AiSqlValidationService validator = new AiSqlValidationService(
                 connections, new DialectRegistry(), new com.example.dbadmin.service.SqlScriptSplitter(),
                 new com.example.dbadmin.service.SqlStatementClassifier(), new AppProperties());
-        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, validator, json);
+        AiQueryHistoryService history = new AiQueryHistoryService(
+                historyRepository(), new com.example.dbadmin.service.SqlStatementClassifier());
+        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, history, validator, json);
+    }
+
+    private com.example.dbadmin.repo.SqlHistoryRepository historyRepository() {
+        var repository = mock(com.example.dbadmin.repo.SqlHistoryRepository.class);
+        when(repository.findRecent(anyLong(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(List.of(
+                new com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse(1, CONNECTION_ID,
+                        "SELECT u.DISPLAY_NAME FROM APP_USER u JOIN APP_ROLE r ON r.ID = u.ROLE_ID"
+                                + " WHERE r.ROLE_NAME = '管理员'",
+                        "EXECUTE", "SUCCESS", 12, null, "tanner", "2026-09-01"),
+                new com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse(2, CONNECTION_ID,
+                        "DELETE FROM APP_USER WHERE ID = 9", "EXECUTE", "SUCCESS", 3, null, "tanner", "2026-09-02")));
+        return repository;
     }
 
     private LlmToolCall call(String id, String name, String arguments) throws Exception {

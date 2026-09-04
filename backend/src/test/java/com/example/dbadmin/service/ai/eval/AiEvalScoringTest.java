@@ -11,6 +11,7 @@ class AiEvalScoringTest {
             "统计每个销售员本月成交的订单数",
             List.of("SALES_ORDER", "APP_USER"),
             List.of("APP_USER_ARCHIVE"),
+            List.of(),
             "干扰项");
 
     @Test
@@ -79,6 +80,38 @@ class AiEvalScoringTest {
                 """, true);
 
         assertThat(score.passed()).isTrue();
+    }
+
+    /** 表选对了，口径仍然可能错：销售额取商品标价还是取明细金额，是两个不同的答案。 */
+    @Test
+    void failsWhenTheRequiredColumnIsMissingEvenThoughEveryTableIsRight() {
+        AiEvalCase revenue = AiEvalCase.of("category-revenue", "每个类目的销售额",
+                List.of("PRODUCT", "SALES_ORDER_ITEM"), List.of("AMT"), "金额取明细");
+
+        var wrong = AiEvalScoring.score(revenue, """
+                ```sql
+                SELECT p.CATEGORY_ID, SUM(p.LIST_PRICE) FROM SALES_ORDER_ITEM i
+                JOIN PRODUCT p ON p.ID = i.PRODUCT_ID GROUP BY p.CATEGORY_ID
+                ```
+                """, true);
+        var right = AiEvalScoring.score(revenue, """
+                ```sql
+                SELECT p.CATEGORY_ID, SUM(i.AMT) FROM SALES_ORDER_ITEM i
+                JOIN PRODUCT p ON p.ID = i.PRODUCT_ID GROUP BY p.CATEGORY_ID
+                ```
+                """, true);
+
+        assertThat(wrong.passed()).isFalse();
+        assertThat(wrong.missingTokens()).containsExactly("AMT");
+        assertThat(wrong.reason()).isEqualTo("口径不对，没有用到 AMT");
+        assertThat(right.passed()).isTrue();
+    }
+
+    /** 子串匹配会让 AMT 被 TOTAL_AMOUNT 蒙混过关，所以必须按整词比。 */
+    @Test
+    void requiresTheIdentifierAsAWholeWordNotASubstring() {
+        assertThat(AiEvalScoring.identifierAppears("SELECT TOTAL_AMOUNT FROM T", "AMT")).isFalse();
+        assertThat(AiEvalScoring.identifierAppears("SELECT i.AMT FROM T i", "amt")).isTrue();
     }
 
     @Test

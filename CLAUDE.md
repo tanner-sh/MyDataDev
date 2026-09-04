@@ -79,6 +79,7 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 
 - **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
+- **执行历史进入模型上下文前必须先过 `AiSqlShape.mask`**（`AiQueryHistoryService`）。历史里带着真实业务值 —— 手机号、金额、注释里的人名和工单号；抹掉字面量之后剩下的是查询骨架，这条工具才落得进「只发结构」这一档。绕开它就等于把这一档的承诺作废了。
 - **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
 - `AiAgentCoordinator` 管有界线程池、按用户并发上限与取消；`AiAgentMetrics` 出 Micrometer 指标，其中 `cache_read` 长期为 0 说明 prompt cache 的前缀被写脏了。
 - **改 Agent 的 prompt、工具或循环之前先看评测集**（`service/ai/eval/`）：`AiSqlAgentLoopTest` 用剧本化的假模型在 CI 里守住整条循环，`AiSqlAgentEvalTest` 用真模型跑固定用例集出报告（要 `AI_EVAL_API_KEY`，默认跳过）。用例只校验「命中了哪些表」，改已有用例等于让历史分数不可比。

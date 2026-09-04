@@ -32,7 +32,8 @@ class AiEvalReportTest {
 
         List<AiEvalReport.Row> rows = new ArrayList<>();
         try (AiAgentHarness harness = new AiAgentHarness(
-                model, AiEvalCases.glossary(AiAgentHarness.CONNECTION_ID), "scripted")) {
+                model, AiEvalCases.glossary(AiAgentHarness.CONNECTION_ID),
+                AiEvalCases.queryHistory(AiAgentHarness.CONNECTION_ID), "scripted")) {
             for (AiEvalCase evalCase : List.of(passing, failing)) {
                 AiAgentHarness.Run run = harness.ask(evalCase.question());
                 rows.add(new AiEvalReport.Row(evalCase, run,

@@ -26,7 +26,7 @@ export function initialAgentStreamState(phase = ''): AgentStreamState {
   return { answer: '', phase, activities: [], done: false, cancelled: false };
 }
 
-const KINDS = ['TABLE', 'COLUMN', 'FOREIGN_KEY'] as const;
+const KINDS = ['TABLE', 'COLUMN', 'FOREIGN_KEY', 'QUERY_HISTORY'] as const;
 
 export function applyAgentEvent(state: AgentStreamState, event: AiStreamEvent): AgentStreamState {
   const data = event.data;

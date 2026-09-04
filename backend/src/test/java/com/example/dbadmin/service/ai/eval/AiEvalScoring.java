@@ -36,9 +36,14 @@ public final class AiEvalScoring {
         Set<String> extra = new TreeSet<>(actual);
         extra.removeAll(expected);
         extra.removeAll(forbidden);
+        Set<String> missingTokens = new TreeSet<>();
+        for (String token : evalCase.expectedTokens()) {
+            if (!identifierAppears(sql, token)) missingTokens.add(token.toUpperCase(Locale.ROOT));
+        }
 
-        boolean passed = sql != null && validated && missing.isEmpty() && forbiddenHit.isEmpty();
-        return new Score(evalCase.id(), sql, validated, matched, missing, forbiddenHit, extra, passed);
+        boolean passed = sql != null && validated && missing.isEmpty()
+                && forbiddenHit.isEmpty() && missingTokens.isEmpty();
+        return new Score(evalCase.id(), sql, validated, matched, missing, forbiddenHit, extra, missingTokens, passed);
     }
 
     /**
@@ -54,6 +59,13 @@ public final class AiEvalScoring {
         String sql = matcher.group(1).trim();
         if (matcher.find()) return null;
         return sql.isEmpty() ? null : sql;
+    }
+
+    /** 标识符是否作为完整的词出现；子串匹配会让 AMT 被 TOTAL_AMOUNT 蒙混过关。 */
+    static boolean identifierAppears(String sql, String identifier) {
+        if (sql == null || identifier == null || identifier.isBlank()) return false;
+        return Pattern.compile("(?i)(?<![\\p{L}\\p{N}_$])" + Pattern.quote(identifier)
+                + "(?![\\p{L}\\p{N}_$])").matcher(sql).find();
     }
 
     /** SQL 里引用到的表名，去掉库名/模式名前缀和引号后统一成大写。 */
@@ -81,6 +93,7 @@ public final class AiEvalScoring {
             Set<String> missingTables,
             Set<String> forbiddenTables,
             Set<String> extraTables,
+            Set<String> missingTokens,
             boolean passed
     ) {
         public String reason() {
@@ -88,7 +101,8 @@ public final class AiEvalScoring {
             if (sql == null) return "没有产出唯一的一条 SQL";
             if (!validated) return "未通过目标库编译校验";
             if (!forbiddenTables.isEmpty()) return "命中干扰表 " + String.join("、", forbiddenTables);
-            return "漏掉 " + String.join("、", missingTables);
+            if (!missingTables.isEmpty()) return "漏掉 " + String.join("、", missingTables);
+            return "口径不对，没有用到 " + String.join("、", missingTokens);
         }
     }
 }

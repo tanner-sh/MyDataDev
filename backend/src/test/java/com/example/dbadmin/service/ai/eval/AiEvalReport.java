@@ -58,6 +58,9 @@ public final class AiEvalReport {
             out.append("问题：").append(row.evalCase().question()).append("\n\n");
             out.append("考察点：").append(row.evalCase().note()).append("\n\n");
             out.append("期望的表：").append(String.join("、", row.evalCase().expectedTables())).append("\n\n");
+            if (!row.evalCase().expectedTokens().isEmpty()) {
+                out.append("期望用到的字段：").append(String.join("、", row.evalCase().expectedTokens())).append("\n\n");
+            }
             out.append("```sql\n")
                     .append(row.score().sql() == null ? "（没有产出 SQL）" : row.score().sql())
                     .append("\n```\n\n");
