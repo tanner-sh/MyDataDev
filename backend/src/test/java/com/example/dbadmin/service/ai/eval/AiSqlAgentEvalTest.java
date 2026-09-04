@@ -41,9 +41,9 @@ class AiSqlAgentEvalTest {
                 ? AiProvider.ANTHROPIC : AiProvider.OPENAI_COMPATIBLE;
         String model = System.getenv().getOrDefault("AI_EVAL_MODEL", provider.defaultModel());
         AiSettings settings = new AiSettings(true, provider, baseUrl, model, null, AiEffort.HIGH);
-        LlmClient client = provider == AiProvider.ANTHROPIC
+        RecordingLlmClient client = new RecordingLlmClient(provider == AiProvider.ANTHROPIC
                 ? new AnthropicLlmClient(settings, apiKey)
-                : new OpenAiCompatibleLlmClient(settings, apiKey);
+                : new OpenAiCompatibleLlmClient(settings, apiKey));
 
         List<AiEvalReport.Row> rows = new ArrayList<>();
         try (AiAgentHarness harness = new AiAgentHarness(
@@ -52,7 +52,7 @@ class AiSqlAgentEvalTest {
             for (AiEvalCase evalCase : AiEvalCases.all()) {
                 AiAgentHarness.Run run = harness.ask(evalCase.question());
                 rows.add(new AiEvalReport.Row(evalCase, run,
-                        AiEvalScoring.score(evalCase, run.answer(), run.validated())));
+                        AiEvalScoring.score(evalCase, run.answer(), run.validated()), client.drain()));
             }
         }
 

@@ -14,7 +14,42 @@ public final class AiEvalReport {
     private AiEvalReport() {
     }
 
-    public record Row(AiEvalCase evalCase, AiAgentHarness.Run run, AiEvalScoring.Score score) {
+    /** @param toolTrace 这条用例实际的工具调用序列，按发生顺序 */
+    public record Row(
+            AiEvalCase evalCase,
+            AiAgentHarness.Run run,
+            AiEvalScoring.Score score,
+            List<String> toolTrace
+    ) {
+        public Row(AiEvalCase evalCase, AiAgentHarness.Run run, AiEvalScoring.Score score) {
+            this(evalCase, run, score, List.of());
+        }
+
+        /** 连续重复的调用折叠成 {@code describe_objects ×2}，一眼看得出是搜了两次还是读了两次表。 */
+        public String trace() {
+            if (toolTrace.isEmpty()) return "-";
+            StringBuilder out = new StringBuilder();
+            String previous = null;
+            int repeats = 0;
+            for (String call : toolTrace) {
+                if (call.equals(previous)) {
+                    repeats++;
+                    continue;
+                }
+                appendCall(out, previous, repeats);
+                previous = call;
+                repeats = 1;
+            }
+            appendCall(out, previous, repeats);
+            return out.toString();
+        }
+
+        private static void appendCall(StringBuilder out, String call, int repeats) {
+            if (call == null) return;
+            if (!out.isEmpty()) out.append(" → ");
+            out.append(call);
+            if (repeats > 1) out.append(" ×").append(repeats);
+        }
     }
 
     public static String render(String model, List<Row> rows) {
@@ -25,7 +60,8 @@ public final class AiEvalReport {
         out.append("- 用例：").append(rows.size()).append(" 条，通过 ").append(passed)
                 .append("（").append(percent(passed, rows.size())).append("）\n");
         out.append("- 平均轮次：").append(average(rows, row -> row.run().number("rounds"))).append('\n');
-        out.append("- 平均工具调用：").append(average(rows, row -> row.run().number("tools"))).append('\n');
+        out.append("- 平均工具调用：").append(average(rows, row -> row.run().number("tools")))
+                .append(toolBreakdown(rows)).append('\n');
         out.append("- 平均输入 token：").append(average(rows, row -> row.run().number("inputTokens"))).append('\n');
         out.append("- 平均输出 token：").append(average(rows, row -> row.run().number("outputTokens"))).append('\n');
         out.append("- 平均缓存读 token：").append(average(rows, row -> row.run().number("cacheReadTokens")))
@@ -34,14 +70,15 @@ public final class AiEvalReport {
                         rows.stream().mapToLong(row -> row.run().elapsed().toMillis()).average().orElse(0) / 1000))
                 .append("\n\n");
 
-        out.append("| 用例 | 结果 | 说明 | 轮次 | 工具 | 输入 token | 输出 token | 缓存读 | 秒 |\n");
-        out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+        out.append("| 用例 | 结果 | 说明 | 轮次 | 工具 | 工具序列 | 输入 token | 输出 token | 缓存读 | 秒 |\n");
+        out.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
         for (Row row : rows) {
             out.append("| ").append(row.evalCase().id())
                     .append(" | ").append(row.score().passed() ? "通过" : "**未通过**")
                     .append(" | ").append(row.score().reason())
                     .append(" | ").append(row.run().number("rounds"))
                     .append(" | ").append(row.run().number("tools"))
+                    .append(" | ").append(row.trace())
                     .append(" | ").append(row.run().number("inputTokens"))
                     .append(" | ").append(row.run().number("outputTokens"))
                     .append(" | ").append(row.run().number("cacheReadTokens"))
@@ -67,6 +104,23 @@ public final class AiEvalReport {
         }
         if (!anyFailure) out.append("全部通过。\n");
         return out.toString();
+    }
+
+    /** 每个工具平均被调了几次 —— 要减掉哪一次，得先知道是哪一次。 */
+    private static String toolBreakdown(List<Row> rows) {
+        java.util.Map<String, Integer> counts = new java.util.TreeMap<>();
+        for (Row row : rows) {
+            for (String call : row.toolTrace()) counts.merge(call, 1, Integer::sum);
+        }
+        if (counts.isEmpty()) return "";
+        StringBuilder out = new StringBuilder("（");
+        counts.entrySet().stream()
+                .sorted(java.util.Map.Entry.<String, Integer>comparingByValue().reversed())
+                .forEach(entry -> out.append(entry.getKey()).append(' ')
+                        .append(String.format(Locale.ROOT, "%.1f", (double) entry.getValue() / rows.size()))
+                        .append("，"));
+        out.setLength(out.length() - 1);
+        return out.append("）").toString();
     }
 
     private static String percent(long part, long total) {

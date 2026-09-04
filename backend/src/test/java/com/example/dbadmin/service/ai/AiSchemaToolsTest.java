@@ -66,10 +66,10 @@ class AiSchemaToolsTest {
         assertThat(related.error()).isFalse();
         assertThat(json.readTree(related.content()).path("relatedObjects").toString()).containsIgnoringCase("APP_ROLE");
 
-        var validation = tools.execute(CONNECTION_ID, "PUBLIC", call("validate-1", "validate_sql", """
-                {"sql":"SELECT DISPLAY_NAME FROM APP_USER"}
-                """));
-        assertThat(json.readTree(validation.content()).path("valid").asBoolean()).isTrue();
+        // 编译校验不是工具：服务端对每个候选答案都会校验并把失败原文发回模型，
+        // 再给模型一个自己调的入口，等于每次都多花一个模型往返。
+        assertThat(tools.definitions()).extracting(com.example.dbadmin.service.ai.llm.LlmToolDefinition::name)
+                .doesNotContain("validate_sql");
     }
 
     @Test
@@ -113,6 +113,54 @@ class AiSchemaToolsTest {
         JsonNode result = json.readTree(search.content());
         assertThat(findByName(result.path("results"), "FACT_2026_X9")).isNotNull();
         assertThat(result.path("glossaryMatches").path(0).path("term").asText()).isEqualTo("订单");
+    }
+
+    /**
+     * 一次搜多个业务词。评测里模型平均要搜 2.6 次才凑齐候选表，而每次搜索都是一个完整的
+     * 模型往返；检索本身只是本地目录扫描，合并成一次几乎不花额外代价。
+     */
+    @Test
+    void searchesEveryBusinessTermInOneCallAndSaysWhichTermFoundWhat() throws Exception {
+        String url = "jdbc:h2:mem:ai-multi-search;MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE APP_ROLE (ID BIGINT PRIMARY KEY, ROLE_NAME VARCHAR(80))");
+            statement.execute("CREATE TABLE APP_USER (ID BIGINT PRIMARY KEY, DISPLAY_NAME VARCHAR(120))");
+            statement.execute("COMMENT ON TABLE APP_USER IS '系统用户资料'");
+            statement.execute("COMMENT ON TABLE APP_ROLE IS '角色定义'");
+        }
+
+        var search = tools(url).execute(CONNECTION_ID, "PUBLIC", call("s-1", "search_schema", """
+                {"queries":["用户","角色","这个词查不到东西"],"limit":10}
+                """));
+
+        assertThat(search.error()).isFalse();
+        JsonNode result = json.readTree(search.content());
+        assertThat(findByName(result.path("results"), "APP_USER")).isNotNull();
+        assertThat(findByName(result.path("results"), "APP_ROLE")).isNotNull();
+        // 逐词命中数让模型知道该换哪个同义词，而不是把所有词重搜一遍。
+        assertThat(result.path("matchesPerQuery").path("用户").asInt()).isPositive();
+        assertThat(result.path("matchesPerQuery").path("这个词查不到东西").asInt()).isZero();
+        assertThat(findByName(result.path("results"), "APP_USER").path("matchedQueries").path(0).asText())
+                .isEqualTo("用户");
+    }
+
+    /** 模型仍然写单数 query 时也要认，否则换个模型就整条链路失效。 */
+    @Test
+    void stillAcceptsTheSingularQueryField() throws Exception {
+        String url = "jdbc:h2:mem:ai-single-search;MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE APP_USER (ID BIGINT PRIMARY KEY, DISPLAY_NAME VARCHAR(120))");
+            statement.execute("COMMENT ON TABLE APP_USER IS '系统用户资料'");
+        }
+
+        var search = tools(url).execute(CONNECTION_ID, "PUBLIC", call("s-2", "search_schema", """
+                {"query":"用户","limit":10}
+                """));
+
+        assertThat(search.error()).isFalse();
+        assertThat(findByName(json.readTree(search.content()).path("results"), "APP_USER")).isNotNull();
     }
 
     /**
@@ -174,7 +222,7 @@ class AiSchemaToolsTest {
                 new com.example.dbadmin.service.SqlStatementClassifier(), new AppProperties());
         AiQueryHistoryService history = new AiQueryHistoryService(
                 historyRepository(), new com.example.dbadmin.service.SqlStatementClassifier());
-        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, history, validator, json);
+        return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, history, json);
     }
 
     private com.example.dbadmin.repo.SqlHistoryRepository historyRepository() {

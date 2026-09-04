@@ -112,7 +112,7 @@ public final class AiAgentHarness implements AutoCloseable {
         when(historyRepository.findRecent(anyLong(), org.mockito.ArgumentMatchers.anyInt())).thenReturn(queryHistory);
         AiQueryHistoryService history = new AiQueryHistoryService(historyRepository, new SqlStatementClassifier());
         AiSchemaTools tools = new AiSchemaTools(connections, new DialectRegistry(), metadata, metadataCache,
-                glossary, history, validator, new ObjectMapper());
+                glossary, history, new ObjectMapper());
 
         AiSettingsService settings = mock(AiSettingsService.class);
         when(settings.requireEnabled()).thenReturn(new AiSettings(true,
