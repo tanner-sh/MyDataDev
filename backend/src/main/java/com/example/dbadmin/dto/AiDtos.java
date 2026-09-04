@@ -2,6 +2,8 @@ package com.example.dbadmin.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public final class AiDtos {
@@ -80,6 +82,24 @@ public final class AiDtos {
             long connectionId,
             @Size(max = 200) String schemaName,
             @NotBlank @Size(max = 2000) String question
+    ) {
+    }
+
+    /** 多轮 SQL 对话的一条历史消息。工具结果不由浏览器回传，避免客户端伪造数据库上下文。 */
+    public record AiChatMessageRequest(
+            @NotBlank @Pattern(regexp = "USER|ASSISTANT") String role,
+            @NotBlank @Size(max = 20000) String text
+    ) {
+    }
+
+    /**
+     * 多轮 SQL 对话。历史只在当前浏览器会话中保存，每次随请求带回；后端不把自然语言落库。
+     */
+    public record AiChatRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotNull @Size(min = 1, max = 20) java.util.List<@Valid AiChatMessageRequest> messages,
+            @Size(max = 20000) String currentSql
     ) {
     }
 

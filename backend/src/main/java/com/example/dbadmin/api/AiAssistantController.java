@@ -1,6 +1,9 @@
 package com.example.dbadmin.api;
 
+import com.example.dbadmin.access.ConnectionAccessService;
+import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
+import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.dto.AiDtos.AiDiagnoseRequest;
 import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
 import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
@@ -8,6 +11,7 @@ import com.example.dbadmin.dto.AiDtos.AiInterpretRequest;
 import com.example.dbadmin.dto.AiDtos.AiReviewScriptRequest;
 import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
+import com.example.dbadmin.service.ai.AiSqlAgentService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -29,9 +33,13 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/ai/sql")
 public class AiAssistantController {
     private final AiAssistantService assistant;
+    private final AiSqlAgentService agent;
+    private final ConnectionAccessService access;
 
-    public AiAssistantController(AiAssistantService assistant) {
+    public AiAssistantController(AiAssistantService assistant, AiSqlAgentService agent, ConnectionAccessService access) {
         this.assistant = assistant;
+        this.agent = agent;
+        this.access = access;
     }
 
     @PostMapping("/diagnose")
@@ -39,6 +47,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiDiagnoseRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return new AiAnswerResponse(assistant.diagnose(
                 request.connectionId(), request.schemaName(), request.sql(), request.errorMessage(), actor));
     }
@@ -48,6 +57,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiGenerateRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return new AiAnswerResponse(assistant.generate(
                 request.connectionId(), request.schemaName(), request.question(), actor));
     }
@@ -57,6 +67,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiGenerateRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.generateStream(
                 request.connectionId(), request.schemaName(), request.question(), actor);
     }
@@ -66,6 +77,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiExplainRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return new AiAnswerResponse(assistant.explain(
                 request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor));
     }
@@ -75,6 +87,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiExplainRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.explainStream(
                 request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor);
     }
@@ -84,6 +97,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiInterpretRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.interpretStream(request.connectionId(), request.schemaName(), request.sql(),
                 request.preview(), request.chartCandidates(), actor);
     }
@@ -93,6 +107,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiDocumentRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.documentStream(request.connectionId(), request.schemaName(), request.tables(), actor);
     }
 
@@ -101,6 +116,7 @@ public class AiAssistantController {
             @Valid @RequestBody AiReviewScriptRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.reviewScriptStream(request.connectionId(), request.script(), actor);
     }
 
@@ -109,7 +125,21 @@ public class AiAssistantController {
             @Valid @RequestBody AiDiagnoseRequest request,
             @RequestHeader(value = "X-User", required = false) String actor
     ) {
+        requireQuery(request.connectionId());
         return assistant.diagnoseStream(
                 request.connectionId(), request.schemaName(), request.sql(), request.errorMessage(), actor);
+    }
+
+    @PostMapping("/chat/stream")
+    public SseEmitter chatStream(
+            @Valid @RequestBody AiChatRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        requireQuery(request.connectionId());
+        return agent.chatStream(request, actor);
+    }
+
+    private void requireQuery(long connectionId) {
+        access.require(connectionId, ConnectionPermission.QUERY);
     }
 }

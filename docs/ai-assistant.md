@@ -6,7 +6,8 @@
 
 **目标**
 
-- 在 SQL 工作台内提供自然语言生成 SQL、执行报错诊断、执行计划解读三项核心能力。
+- 在 SQL 工作台内提供自然语言生成 SQL、连续对话修正、执行报错诊断、执行计划解读等能力。
+- 生成 SQL 时由模型按需搜索当前命名空间的表/字段注释，并继续读取候选对象的字段、索引和外键，避免依赖前端碰运气选表。
 - 结构元数据的出网范围由用户显式控制，默认不发送任何业务行数据。
 - AI 生成的一切 SQL 走与界面完全相同的执行路径，生产确认、未限定范围写确认、审计一个都不能少。
 - Provider 可插拔：默认 Claude，允许接入兼容协议的自建服务或本地模型，离线环境可以完全不启用。
@@ -14,8 +15,8 @@
 **非目标（本期不做）**
 
 - 不做自动执行：AI 永远只把 SQL 写进编辑器，由人按下执行。
-- 不做多轮 agent 循环与工具调用编排。第一期是「一次请求一次回答」的工作流，不是 agent。
 - 不做对话历史的长期存储与检索（会话保留在前端内存，刷新即丢）。
+- 不给内置 Agent 查询业务行或执行 SQL 的工具；Agent 只能读取受控元数据，最终 SQL 仍由用户确认。
 - 不替换 `sqlCompletion.ts` 的确定性补全。
 
 ## 2. 现状盘点
@@ -49,6 +50,8 @@ api/AiController            REST 入口，SSE 流式输出
         └── service/ai/provider/LlmClient     provider 接口
               ├── AnthropicLlmClient          默认实现
               └── OpenAiCompatibleLlmClient    自建 / 本地模型
+  └── service/ai/AiSqlAgentService       多轮编排：模型 → 元数据工具 → 模型 → SQL
+        └── service/ai/AiSchemaTools          搜索注释、读取对象详情/DDL；连接与 Schema 由服务端绑定
   └── repo/AiSettingsRepository        JdbcTemplate 持久化（Provider 配置、连接级开关）
 ```
 
@@ -58,7 +61,7 @@ DTO 进 `dto/ApiDtos.java`，模型用 `record`。
 
 ### 3.2 前端
 
-- 新面板 `components/AiAssistantPanel.tsx`，挂在 SQL 工作台右侧，`React.lazy` 懒加载。
+- `components/AiSqlChatPanel.tsx` 提供自然语言生成与多轮修正；原有 `AiAssistantPanel.tsx` 继续承载诊断、解读和文档，两个面板都按需懒加载。
 - 设置面板 `components/AiSettingsPanel.tsx`，走管理抽屉的新分区 `ai`（`requiresAdmin: true`）。
 - 纯逻辑抽 `src/aiSuggestion.ts`（流式片段拼接、SQL 代码块提取、插入编辑器的位置判断）+ 同名 `.test.ts`。
 - 模型调用全在后端，前端只发 REST，首屏体积预算不受影响。
@@ -108,6 +111,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `POST` | `/api/ai/settings/test` | 连通性测试，只发一条最小请求 |
 | `GET`/`PUT` | `/api/ai/connections/{id}/policy` | 连接级共享策略 |
 | `POST` | `/api/ai/sql/generate` | 自然语言 → SQL |
+| `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具调用 → SQL；请求携带本次前端会话历史，可连续修正 |
 | `POST` | `/api/ai/sql/diagnose` | 执行报错诊断 |
 | `POST` | `/api/ai/sql/explain-insight` | 执行计划解读 |
 | `POST` | `/api/ai/sql/{action}/stream` | 上述三项的 SSE 流式变体 |
@@ -123,6 +127,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 - `AI_DISABLED` — 未启用或未配置 Provider
 - `AI_CONNECTION_NOT_SHARED` — 该连接的共享策略为 `NONE`
 - `AI_PROVIDER_ERROR` — 上游返回错误（透传状态码与简要原因）
+- `AI_AGENT_LIMIT` — 本轮已达到元数据工具/模型轮次上限，仍无法确定 SQL
 
 ## 6. 模型与 Provider
 
@@ -143,7 +148,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 
 ### 6.3 成本
 
-结构摘要是稳定前缀，放进系统提示并打 `cache_control` 断点，用户问题放在断点之后 —— 同一连接的连续提问基本都是 cache read。摘要带一个版本号，`MetadataCacheService` 的 `evict*` 触发时推进版本，前缀随之失效重建。上线后用 `usage.cache_read_input_tokens` 验证命中，长期为零说明前缀里混进了变量。
+诊断、计划解读等固定上下文流程仍把结构摘要作为稳定前缀，并使用 prompt cache。SQL Agent 不再预先塞入整库结构，而是只把工具定义与按需命中的对象详情放入上下文；Schema 搜索目录按 `MetadataCacheService` 的目录版本缓存，元数据失效时同步换代。
 
 ## 7. 安全与隐私边界
 
@@ -238,6 +243,15 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 2. **写的是数据字典而不是 `COMMENT` DDL**。注释语句的写法各方言不同（MySQL 改列、PostgreSQL 用 `COMMENT ON`），要落地得给每个方言加一个 `commentSql`，波及所有方言实现；而文档本身已经能解决「不熟悉这个库的人看不懂表」这个真问题。要把注释写回库里，用 M3 的「AI 生成」按方言要一条语句即可。
 3. **`AI_INTERPRET_RESULT` 在审计里标了 `dangerous`**。它不破坏数据，但它是唯一一个把真实业务数据送出本机的动作 —— 审计的读者最该一眼看到的就是这个。
 
+### M6 — 元数据工具调用与多轮 SQL 对话 · 已完成
+
+- 新增 `AiSqlAgentService`，一轮请求最多进行 6 次模型推理、12 次元数据工具调用；达到上限后明确失败，不无限循环。
+- 新增三个只读工具：`search_schema` 搜索表名/表注释/字段名/字段注释，`describe_objects` 读取字段、主键、索引与外键，`get_object_ddl` 在必要时补充对象定义。
+- 工具的连接和 Schema 由服务端请求上下文绑定，模型参数里没有 `connectionId`；对象详情也必须先命中当前 Schema 的目录，不能用限定名跳到其他 Schema。
+- 工具不提供查行、写入或执行 SQL 的入口；Agent 只生成一条只读查询，并写入新标签页等待用户确认。
+- `AiSqlChatPanel` 在前端内存保存本轮用户/助手消息，后续问题会带上历史，因此可以用“只看启用用户”“再加最后登录时间”这类指令连续修正；刷新或切换连接/Schema 后清空。
+- Anthropic 与 OpenAI 兼容协议都实现原生 tool use/function calling，兼容自建网关和本地模型。
+
 ## 9. 验收清单
 
 每个里程碑合并前：
@@ -247,6 +261,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 - 新增审计动作码在 `auditLog.ts` 有中文名（`AuditActionLabelCoverageTest`）
 - 关闭 AI 功能时，所有相关入口在界面上不可见，且后端返回 `AI_DISABLED` 而不是 500
 - 连接策略为 `NONE` 时，任何 AI 接口都取不到该连接的结构
+- Agent 工具只能读取当前请求绑定的连接与 Schema，不能查询业务行或执行 SQL
 
 ## 10. 已定决策
 
@@ -256,7 +271,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | --- | --- | --- | --- |
 | 1 | 桌面模式的 Provider 配置怎么存 | **与 Web 模式一致处理**，各存各的元数据库 | 桌面版需单独配一次 Provider，与连接/Agent/备份现状一致，不做特例 |
 | 2 | 多用户模式下 API Key 的归属 | **全局一份 + 管理员维护** | `ai_settings` 不带 `user_id`；读接口一律掩码，普通用户看不到 Key |
-| 3 | 自然语言输入是否落 SQL 历史 | **不落**，只落最终生成的 SQL | AI 接口不写 `sql_history`；用户在编辑器里执行时，按现有路径正常落库 |
+| 3 | 自然语言与对话是否落 SQL 历史 | **不落**；对话仅保留在前端内存，最终 SQL 仅在用户执行后按原路径记录 | AI 接口不写 `sql_history`；刷新页面即丢失对话 |
 | 4 | 本地 / 兼容协议模型的实现时机 | **放 M1**，与 `AnthropicLlmClient` 同期 | provider 抽象要有第二个实现才谈得上验证，延后必然返工接口形状 |
 
 第 3 条还有一个连带约束：自然语言原文既不进 `sql_history`，也不进审计（见 7.7）。它在服务端只活在一次请求的生命周期里，不落任何一张表。

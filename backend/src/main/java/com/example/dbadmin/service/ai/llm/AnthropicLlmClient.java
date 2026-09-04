@@ -2,19 +2,27 @@ package com.example.dbadmin.service.ai.llm;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.core.JsonValue;
 import com.anthropic.core.http.StreamResponse;
 import com.anthropic.errors.AnthropicServiceException;
 import com.anthropic.models.messages.CacheControlEphemeral;
 import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.ContentBlockParam;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.OutputConfig;
 import com.anthropic.models.messages.RawMessageStreamEvent;
 import com.anthropic.models.messages.TextBlockParam;
+import com.anthropic.models.messages.Tool;
+import com.anthropic.models.messages.ToolResultBlockParam;
+import com.anthropic.models.messages.ToolUseBlockParam;
 import com.example.dbadmin.service.ai.AiEffort;
 import com.example.dbadmin.service.ai.AiProvider;
 import com.example.dbadmin.service.ai.AiSettings;
+import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -86,6 +94,28 @@ public class AnthropicLlmClient implements LlmClient {
         return LlmResponse.text(text.toString());
     }
 
+    @Override
+    public LlmAgentTurn turn(LlmAgentRequest request) {
+        try {
+            Message message = client.messages().create(agentParams(request));
+            StringBuilder text = new StringBuilder();
+            List<LlmToolCall> calls = new ArrayList<>();
+            for (ContentBlock block : message.content()) {
+                block.text().ifPresent(value -> text.append(value.text()));
+                block.toolUse().ifPresent(value -> calls.add(new LlmToolCall(
+                        value.id(), value.name(), value._input().convert(JsonNode.class))));
+            }
+            return new LlmAgentTurn(
+                    text.toString(), calls,
+                    message.usage().inputTokens(),
+                    message.usage().outputTokens(),
+                    message.usage().cacheReadInputTokens().orElse(0L)
+            );
+        } catch (AnthropicServiceException e) {
+            throw translate(e);
+        }
+    }
+
     private MessageCreateParams params(LlmRequest request) {
         MessageCreateParams.Builder builder = MessageCreateParams.builder()
                 .model(model)
@@ -99,6 +129,68 @@ public class AnthropicLlmClient implements LlmClient {
                     .build()));
         }
         return builder.build();
+    }
+
+    private MessageCreateParams agentParams(LlmAgentRequest request) {
+        MessageCreateParams.Builder builder = MessageCreateParams.builder()
+                .model(model)
+                .maxTokens(request.maxTokens())
+                .outputConfig(OutputConfig.builder().effort(effortValue()).build())
+                .systemOfTextBlockParams(List.of(TextBlockParam.builder()
+                        .text(request.systemPrompt())
+                        .cacheControl(CacheControlEphemeral.builder().build())
+                        .build()));
+        for (LlmAgentMessage message : request.messages()) {
+            switch (message.role()) {
+                case USER -> builder.addUserMessage(message.text());
+                case ASSISTANT -> builder.addMessage(assistantMessage(message));
+                case TOOL_RESULTS -> builder.addMessage(toolResultMessage(message.toolResults()));
+            }
+        }
+        for (LlmToolDefinition definition : request.tools()) builder.addTool(tool(definition));
+        return builder.build();
+    }
+
+    private MessageParam assistantMessage(LlmAgentMessage message) {
+        List<ContentBlockParam> blocks = new ArrayList<>();
+        if (!message.text().isBlank()) {
+            blocks.add(ContentBlockParam.ofText(TextBlockParam.builder().text(message.text()).build()));
+        }
+        for (LlmToolCall call : message.toolCalls()) {
+            ToolUseBlockParam.Input.Builder input = ToolUseBlockParam.Input.builder();
+            call.arguments().fields().forEachRemaining(entry ->
+                    input.putAdditionalProperty(entry.getKey(), JsonValue.fromJsonNode(entry.getValue())));
+            blocks.add(ContentBlockParam.ofToolUse(ToolUseBlockParam.builder()
+                    .id(call.id()).name(call.name()).input(input.build()).build()));
+        }
+        return MessageParam.builder().role(MessageParam.Role.ASSISTANT).contentOfBlockParams(blocks).build();
+    }
+
+    private MessageParam toolResultMessage(List<LlmToolResult> results) {
+        List<ContentBlockParam> blocks = results.stream()
+                .map(result -> ContentBlockParam.ofToolResult(ToolResultBlockParam.builder()
+                        .toolUseId(result.callId())
+                        .content(result.content())
+                        .isError(result.error())
+                        .build()))
+                .toList();
+        return MessageParam.builder().role(MessageParam.Role.USER).contentOfBlockParams(blocks).build();
+    }
+
+    private Tool tool(LlmToolDefinition definition) {
+        Tool.InputSchema.Properties.Builder properties = Tool.InputSchema.Properties.builder();
+        definition.inputSchema().path("properties").fields().forEachRemaining(entry ->
+                properties.putAdditionalProperty(entry.getKey(), JsonValue.fromJsonNode(entry.getValue())));
+        Tool.InputSchema.Builder schema = Tool.InputSchema.builder()
+                .type(JsonValue.from("object"))
+                .properties(properties.build());
+        JsonNode required = definition.inputSchema().path("required");
+        if (required.isArray()) required.forEach(item -> schema.addRequired(item.asText()));
+        return Tool.builder()
+                .name(definition.name())
+                .description(definition.description())
+                .inputSchema(schema.build())
+                .build();
     }
 
     private OutputConfig.Effort effortValue() {

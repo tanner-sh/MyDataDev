@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import type { Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
@@ -23,6 +23,7 @@ import type { AiAskRequest } from './AiAssistantPanel';
 
 // AI 抽屉只在真的问了一次之后才需要，懒加载它才不会把这条链拉进 SQL 工作台的首屏预算。
 const AiAssistantPanel = lazy(() => import('./AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel })));
+const AiSqlChatPanel = lazy(() => import('./AiSqlChatPanel').then((module) => ({ default: module.AiSqlChatPanel })));
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -86,14 +87,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   onFinishTransaction: (commit: boolean) => void;
 }) {
   const canQuery = Boolean(selected && hasConnectionPermission(selected, 'QUERY'));
+  const aiQueryAvailable = aiAvailable && canQuery;
   const canWrite = Boolean(selected && hasConnectionPermission(selected, 'DATA_WRITE'));
   const canExecute = Boolean(selected && hasAnyConnectionPermission(selected, ['QUERY', 'DATA_WRITE', 'DDL']));
   const canExport = canQuery && Boolean(selected && hasConnectionPermission(selected, 'EXPORT'));
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
-  const [aiQuestionOpen, setAiQuestionOpen] = useState(false);
-  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiChatOpen, setAiChatOpen] = useState(false);
   const [aiDocumentOpen, setAiDocumentOpen] = useState(false);
   const [aiDocumentTables, setAiDocumentTables] = useState<string[]>([]);
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
@@ -248,16 +249,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
     });
   }
 
-  function askAiToGenerate() {
-    if (!selected || !aiQuestion.trim()) return;
-    setAiQuestionOpen(false);
-    setAiRequest({
-      action: 'generate',
-      title: 'AI 生成 SQL',
-      body: { connectionId: selected.id, schemaName: activeSchema, question: aiQuestion.trim() }
-    });
-  }
-
   /**
    * AI 给的 SQL 只落到编辑器里，执行与否由用户决定。
    *
@@ -266,7 +257,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
    */
   function insertAiSql(sql: string) {
     if (aiRequest?.action === 'generate') {
-      onOpenSqlInNewTab(sql, aiQuestion.trim().slice(0, 40) || 'AI 生成的 SQL');
+      onOpenSqlInNewTab(sql, 'AI 生成的 SQL');
     } else {
       updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
       commitDraft();
@@ -299,12 +290,12 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
           onPageChange={handleResultPageChange}
           connectionId={selected?.id}
           onCommitEdits={canWrite ? onCommitResultEdits : undefined}
-          onAskAiExplain={aiAvailable ? askAiToExplain : undefined}
-          onAskAiInterpret={aiSampleAllowed ? askAiToInterpret : undefined}
+          onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined}
+          onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined}
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, aiAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -342,7 +333,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
         label: '查看执行计划',
         disabled: !canQuery || loading || !selected?.capabilities?.explain
       },
-      ...(aiAvailable ? [
+      ...(aiQueryAvailable ? [
         { type: 'divider' as const },
         {
           key: 'ai-document',
@@ -419,14 +410,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
                 <span className="sql-toolbar-label">格式化</span>
               </Button>
             </Tooltip>
-            {aiAvailable && (
-              <Tooltip title="用自然语言描述需求，AI 生成 SQL（只写进新标签页，不会执行）">
+            {aiQueryAvailable && (
+              <Tooltip title="用自然语言描述需求，AI 会查找表、字段、注释和外键，并支持继续对话修正">
                 <Button
                   className="sql-toolbar-button"
                   size="small"
                   icon={<BulbOutlined />}
                   aria-label="用自然语言生成 SQL"
-                  onClick={() => { setAiQuestion(''); setAiQuestionOpen(true); }}
+                  onClick={() => setAiChatOpen(true)}
                 >
                   <span className="sql-toolbar-label">AI 生成</span>
                 </Button>
@@ -576,14 +567,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
               detail={activeTab.errorDetail}
               retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
-              onDiagnose={aiAvailable ? askAiToDiagnose : undefined}
+              onDiagnose={aiQueryAvailable ? askAiToDiagnose : undefined}
             />
           )}
           {resultPaneMode === 'collapsed' && activeResult ? (
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed ? askAiToInterpret : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -592,7 +583,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
               detail={activeTab.errorDetail}
               retryDisabled={!canExecute || loading || !draftSql.trim()}
               onRetry={() => { commitDraft(); onExecute(draftRef.current); }}
-              onDiagnose={aiAvailable ? askAiToDiagnose : undefined}
+              onDiagnose={aiQueryAvailable ? askAiToDiagnose : undefined}
             />
           ) : (
             <div className="sql-result-empty-state">
@@ -611,26 +602,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
         </div>
       </div>
       <WorkspaceStatusBar status={status} trailing={<Text type="secondary">{loading ? `${cancelling ? '正在取消' : '执行中'} · ${formatElapsed(executionElapsedMs)} · ` : ''}{tabs.length} 个查询标签</Text>} />
-      <Modal
-        open={aiQuestionOpen}
-        title="用自然语言生成 SQL"
-        okText="生成"
-        cancelText="取消"
-        okButtonProps={{ disabled: !aiQuestion.trim() }}
-        onOk={askAiToGenerate}
-        onCancel={() => setAiQuestionOpen(false)}
-      >
-        <Input.TextArea
-          autoFocus
-          rows={4}
-          value={aiQuestion}
-          placeholder="例如：统计上周每天的订单数与总金额，按日期排序"
-          onChange={(event) => setAiQuestion(event.target.value)}
-        />
-        <Text type="secondary">
-          只会发送与问题相关的表结构；生成的 SQL 写进新标签页，执行与否由你决定。
-        </Text>
-      </Modal>
       <Modal
         open={aiDocumentOpen}
         title="AI 生成数据字典"
@@ -656,6 +627,18 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
       {aiRequest && (
         <Suspense fallback={null}>
           <AiAssistantPanel request={aiRequest} onClose={() => setAiRequest(undefined)} onInsertSql={insertAiSql} />
+        </Suspense>
+      )}
+      {aiChatOpen && selected && (
+        <Suspense fallback={null}>
+          <AiSqlChatPanel
+            open
+            connectionId={selected.id}
+            schemaName={activeSchema}
+            currentSql={draftSql}
+            onClose={() => setAiChatOpen(false)}
+            onInsertSql={onOpenSqlInNewTab}
+          />
         </Suspense>
       )}
     </div>

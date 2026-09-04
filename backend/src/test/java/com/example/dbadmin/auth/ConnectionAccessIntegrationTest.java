@@ -72,6 +72,17 @@ class ConnectionAccessIntegrationTest {
         assertThat(connectionIds(owner)).contains(connectionId);
         assertThat(connectionIds(reader)).doesNotContain(connectionId);
 
+        mvc.perform(post("/api/ai/sql/chat/stream")
+                        .session(reader.session()).cookie(reader.csrfCookie())
+                        .header("X-XSRF-TOKEN", reader.csrfToken())
+                        .contentType("application/json")
+                        .content(mapper.writeValueAsString(Map.of(
+                                "connectionId", connectionId,
+                                "messages", new Object[]{Map.of("role", "USER", "text", "查询用户")}
+                        ))))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("CONNECTION_ACCESS_DENIED"));
+
         MvcResult group = mvc.perform(post("/api/admin/access/groups")
                         .session(administrator.session()).cookie(administrator.csrfCookie())
                         .header("X-XSRF-TOKEN", administrator.csrfToken())

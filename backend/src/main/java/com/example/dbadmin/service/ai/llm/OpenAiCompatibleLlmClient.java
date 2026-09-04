@@ -14,6 +14,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -90,6 +92,33 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         return LlmResponse.text(text.toString());
     }
 
+    @Override
+    public LlmAgentTurn turn(LlmAgentRequest request) {
+        HttpResponse<String> response = send(agentBody(request), HttpResponse.BodyHandlers.ofString());
+        requireSuccess(response.statusCode(), response.body());
+        try {
+            JsonNode root = json.readTree(response.body());
+            JsonNode message = root.path("choices").path(0).path("message");
+            String text = message.path("content").isTextual() ? message.path("content").asText() : "";
+            List<LlmToolCall> calls = new ArrayList<>();
+            for (JsonNode call : message.path("tool_calls")) {
+                String arguments = call.path("function").path("arguments").asText("{}");
+                JsonNode parsed;
+                try {
+                    parsed = json.readTree(arguments);
+                } catch (IOException ignored) {
+                    parsed = json.createObjectNode();
+                }
+                calls.add(new LlmToolCall(call.path("id").asText(), call.path("function").path("name").asText(), parsed));
+            }
+            JsonNode usage = root.path("usage");
+            return new LlmAgentTurn(text, calls,
+                    usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0), 0);
+        } catch (IOException e) {
+            throw new LlmException("模型服务返回了无法解析的工具调用响应。", response.statusCode(), e);
+        }
+    }
+
     /** SSE 行解析：只认 {@code data:} 行，{@code [DONE]} 与心跳行忽略。 */
     private String parseDelta(String line) {
         if (line == null || !line.startsWith("data:")) return null;
@@ -136,6 +165,63 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         ObjectNode user = messages.addObject();
         user.put("role", "user");
         user.put("content", request.userPrompt());
+        return root.toString();
+    }
+
+    private String agentBody(LlmAgentRequest request) {
+        ObjectNode root = json.createObjectNode();
+        root.put("model", model);
+        root.put("max_tokens", request.maxTokens());
+        root.put("stream", false);
+        ArrayNode messages = root.putArray("messages");
+        if (!request.systemPrompt().isBlank()) {
+            ObjectNode system = messages.addObject();
+            system.put("role", "system");
+            system.put("content", request.systemPrompt());
+        }
+        for (LlmAgentMessage message : request.messages()) {
+            switch (message.role()) {
+                case USER -> {
+                    ObjectNode item = messages.addObject();
+                    item.put("role", "user");
+                    item.put("content", message.text());
+                }
+                case ASSISTANT -> {
+                    ObjectNode item = messages.addObject();
+                    item.put("role", "assistant");
+                    if (message.text().isBlank()) item.putNull("content");
+                    else item.put("content", message.text());
+                    if (!message.toolCalls().isEmpty()) {
+                        ArrayNode calls = item.putArray("tool_calls");
+                        for (LlmToolCall call : message.toolCalls()) {
+                            ObjectNode encoded = calls.addObject();
+                            encoded.put("id", call.id());
+                            encoded.put("type", "function");
+                            ObjectNode function = encoded.putObject("function");
+                            function.put("name", call.name());
+                            function.put("arguments", call.arguments().toString());
+                        }
+                    }
+                }
+                case TOOL_RESULTS -> {
+                    for (LlmToolResult result : message.toolResults()) {
+                        ObjectNode item = messages.addObject();
+                        item.put("role", "tool");
+                        item.put("tool_call_id", result.callId());
+                        item.put("content", result.content());
+                    }
+                }
+            }
+        }
+        ArrayNode tools = root.putArray("tools");
+        for (LlmToolDefinition definition : request.tools()) {
+            ObjectNode item = tools.addObject();
+            item.put("type", "function");
+            ObjectNode function = item.putObject("function");
+            function.put("name", definition.name());
+            function.put("description", definition.description());
+            function.set("parameters", definition.inputSchema());
+        }
         return root.toString();
     }
 

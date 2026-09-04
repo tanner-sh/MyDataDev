@@ -261,6 +261,13 @@ public class MetadataCacheService {
         return generation(directoryGenerations, connectionId).get();
     }
 
+    /**
+     * 供依赖元数据目录的派生缓存组成 key。调用方只能读取版本，失效仍统一走本服务的 evict 方法。
+     */
+    public long directoryVersion(long connectionId) {
+        return directoryGeneration(connectionId);
+    }
+
     private AtomicLong generation(ConcurrentHashMap<Long, AtomicLong> generations, long connectionId) {
         return generations.computeIfAbsent(connectionId, ignored -> new AtomicLong());
     }

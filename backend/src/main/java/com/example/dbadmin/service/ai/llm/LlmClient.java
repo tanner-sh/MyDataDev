@@ -23,4 +23,10 @@ public interface LlmClient {
      * {@code SseEmitter} 负责，这里只管把增量吐出来。</p>
      */
     LlmResponse stream(LlmRequest request, Consumer<String> onDelta);
+
+    /**
+     * 带函数工具的一轮对话。这里故意只做“一轮”：是否继续、调用哪些本地服务以及调用上限，
+     * 都由应用层 Agent 编排器控制，provider 不能越过权限和隐私闸门直接碰数据库。
+     */
+    LlmAgentTurn turn(LlmAgentRequest request);
 }
