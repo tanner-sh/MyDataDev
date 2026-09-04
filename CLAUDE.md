@@ -81,6 +81,7 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
 - **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
 - `AiAgentCoordinator` 管有界线程池、按用户并发上限与取消；`AiAgentMetrics` 出 Micrometer 指标，其中 `cache_read` 长期为 0 说明 prompt cache 的前缀被写脏了。
+- **改 Agent 的 prompt、工具或循环之前先看评测集**（`service/ai/eval/`）：`AiSqlAgentLoopTest` 用剧本化的假模型在 CI 里守住整条循环，`AiSqlAgentEvalTest` 用真模型跑固定用例集出报告（要 `AI_EVAL_API_KEY`，默认跳过）。用例只校验「命中了哪些表」，改已有用例等于让历史分数不可比。
 
 ### 数据库迁移
 

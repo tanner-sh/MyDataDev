@@ -273,6 +273,32 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 - **最终回答流式输出。** Agent 每轮开始时发 `answer-reset`，前端据此丢掉上一轮的开场白或没通过校验的候选 SQL，正文随 `delta` 增量显示。OpenAI 兼容协议下 `LlmClient.turn` 退化成非流式（写完一次性回调），行为与之前一致。
 - **连接级业务词典**（`ai_business_glossary`，V15 迁移）：管理员维护「业务词 → 别名 → 真实对象名」，`search_schema` 命中词典的对象直接加权。词典是 AI 唯一能看到的、库里没有的知识来源。
 
+### 评测集 — 改这套 Agent 之前先跑一遍
+
+用例、固定库结构和打分逻辑都在 `backend/src/test/java/com/example/dbadmin/service/ai/eval/`，固定库是 `src/test/resources/ai-eval-schema.sql`。
+
+**只校验「这条 SQL 命中了哪些表」，不校验 SQL 文本。** 同一个需求有无数种写法，比对文本量的是模型的风格；而找没找对表恰恰是这套 Agent 存在的理由 —— 表错了，后面写得再漂亮都是错的。判「通过」要同时满足三条：期望的表一张不少、禁用的干扰表一张没有、SQL 通过目标库编译校验。多带一张表只记录不扣分。
+
+固定库里埋了三处真实项目常见的麻烦：`T_CRM_0021` 的物理名毫无语义（只能靠表注释或业务词典找到）、`APP_USER_ARCHIVE` 是 `APP_USER` 的归档表（最容易选错的干扰项）、金额和时间的列名前后不统一（`AMT` / `TOTAL_AMOUNT`、`ORDER_DATE` / `CREATED_AT`，不读真实字段就会猜错）。
+
+两种跑法：
+
+| | 跑什么 | 什么时候跑 |
+| --- | --- | --- |
+| `AiSqlAgentLoopTest`、`AiEvalReportTest` | 剧本化的假模型 + 真的工具、校验、会话、审计 | 每次 `mvn test`，不需要 API Key |
+| `AiSqlAgentEvalTest` | 真模型跑完整用例集，出 `target/ai-eval-report.md` | 手动，改 prompt / 换模型 / 调工具之后 |
+
+```bash
+AI_EVAL_API_KEY=sk-... mvn test -Dtest=AiSqlAgentEvalTest
+AI_EVAL_API_KEY=... AI_EVAL_MODEL=... AI_EVAL_BASE_URL=https://自建网关/v1 mvn test -Dtest=AiSqlAgentEvalTest
+```
+
+用独立的 `AI_EVAL_API_KEY` 而不是复用 `ANTHROPIC_API_KEY`：后者很可能只是开发机上给别的工具配的，不该有人跑一次 `mvn test` 就意外花掉几十次模型调用。
+
+报告里除了通过率，更值得盯两个数：**平均工具调用次数**说明模型要摸索多久才敢下笔，**平均缓存读 token** 说明 prompt cache 有没有真的命中（长期为 0 就是前缀被写脏了）。
+
+用例集是基线，**改一条已有用例就意味着历史分数不再可比**。要扩覆盖面就加新用例，或者往固定库里加表。
+
 ## 9. 验收清单
 
 每个里程碑合并前：
@@ -285,6 +311,7 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 - Agent 工具只能读取当前请求绑定的连接与 Schema，不能查询业务行或执行 SQL
 - 编译校验不得在目标库上真正取数：新增方言时确认 `compileQuery` 的驱动行为，别默认继承
 - Agent 请求无论成功、失败还是取消，都要在审计里留下一条 `AI_AGENT_CHAT`
+- 改动 Agent 的 prompt、工具或循环后，跑一次 `AiSqlAgentEvalTest` 并对比上一次的通过率与 token
 
 ## 10. 已定决策
 
