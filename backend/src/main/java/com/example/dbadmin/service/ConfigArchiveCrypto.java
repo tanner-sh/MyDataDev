@@ -16,7 +16,7 @@ import java.util.Base64;
 /**
  * 配置归档的口令加密。
  *
- * <p>不能复用 {@link CryptoService}：它的密钥来自本机的 {@code app.crypto-key}，而导出的整个
+ * <p>不能复用 {@link CryptoService}：它的密钥来自本机托管的主密钥，而导出的整个
  * 意义就是把配置搬到另一台装机上，那边的密钥必然不同。所以归档用调用者自己给的口令派生密钥。</p>
  *
  * <p>口令是人记的，熵远低于随机密钥，因此必须过 KDF 而不是直接哈希：PBKDF2-HMAC-SHA256，

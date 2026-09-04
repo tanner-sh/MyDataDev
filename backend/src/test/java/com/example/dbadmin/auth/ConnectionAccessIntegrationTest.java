@@ -27,7 +27,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.url=jdbc:h2:mem:connection-access-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "app.crypto-key=connection-access-test-crypto-key",
+        "app.crypto-key-file=target/test-secrets/connection-access-test.key",
         "app.backup.directory=${java.io.tmpdir}/mydatadev-connection-access-test-backups",
         "app.auth.mode=LOCAL",
         "app.auth.username=access.admin",

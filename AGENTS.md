@@ -21,8 +21,7 @@
 
 ```bash
 cd backend
-export DB_ADMIN_CRYPTO_KEY='local-dev-key-please-change'   # 没有默认密钥，缺失时后端拒绝启动
-mvn spring-boot:run   # 启动后端 API，默认端口 8080
+mvn spring-boot:run   # 首次启动自动生成 secrets/mydatadev-master.key；默认端口 8080
 mvn test              # 运行全部后端测试
 ```
 
@@ -70,4 +69,4 @@ Pull Request 应说明用户可见变化、验证命令、配置或 schema 影�
 
 ## 安全与配置提示
 
-不要提交真实数据库凭据。后端本地元数据使用 H2，配置位于 `backend/src/main/resources/application.yml`。密码加密依赖 `DB_ADMIN_CRYPTO_KEY`，不同环境应通过环境变量提供强密钥，不要写入 Git。
+不要提交真实数据库凭据或 `secrets/` 下的主密钥。后端本地元数据使用 H2，配置位于 `backend/src/main/resources/application.yml`。密码加密依赖系统托管的主密钥文件；生产环境应限制文件权限、纳入独立安全备份，或把 `app.crypto-key-file` 指向部署平台挂载的只读 Secret。

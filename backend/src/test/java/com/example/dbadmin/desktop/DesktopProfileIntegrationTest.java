@@ -14,7 +14,8 @@ import static org.assertj.core.api.Assertions.assertThat;
         "MYDATADEV_DESKTOP_HOME=${java.io.tmpdir}/mydatadev-desktop-profile-test",
         "MYDATADEV_DESKTOP_CONTROL_TOKEN=desktop-profile-control-token",
         "MYDATADEV_DESKTOP_PARENT_PID=1",
-        "DB_ADMIN_CRYPTO_KEY=desktop-profile-crypto-key",
+        "app.crypto-key-source=FILE",
+        "app.crypto-key-file=target/test-secrets/desktop-profile-test.key",
         "spring.datasource.url=jdbc:h2:mem:desktop-profile-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "logging.file.name=${java.io.tmpdir}/mydatadev-desktop-profile-test/mydatadev.log"
 })

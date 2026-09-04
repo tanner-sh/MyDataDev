@@ -1,6 +1,11 @@
 server:
   port: 8080
 
+app:
+  # 开发脚本与后端共用 .dev-data；后端自行生成并复用密钥文件。
+  crypto-key-source: FILE
+  crypto-key-file: ${MYDATADEV_DESKTOP_HOME}/dev-crypto-key
+
 logging:
   file:
     name: ${MYDATADEV_DESKTOP_HOME}/logs/mydatadev-dev.log

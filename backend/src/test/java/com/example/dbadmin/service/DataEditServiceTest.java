@@ -293,10 +293,9 @@ class DataEditServiceTest {
         when(connections.require(anyLong())).thenReturn(dbConnection);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         AppProperties properties = new AppProperties();
-        properties.setCryptoKey("test-table-cursor-key");
         properties.getSql().setTimeoutSeconds(10);
-        TableCursorCodec cursorCodec = new TableCursorCodec(new ObjectMapper(), new CryptoService(properties));
-        RowLocatorCodec rowLocatorCodec = new RowLocatorCodec(new ObjectMapper(), new CryptoService(properties));
+        TableCursorCodec cursorCodec = new TableCursorCodec(new ObjectMapper(), new CryptoService("test-table-cursor-key"));
+        RowLocatorCodec rowLocatorCodec = new RowLocatorCodec(new ObjectMapper(), new CryptoService("test-table-cursor-key"));
         return new DataEditService(
                 metadata,
                 connections,

@@ -17,7 +17,6 @@ Web 模式的发行产物有两个，随桌面安装包一起发布在同一个 
 ## 单 JAR 部署
 
 ```bash
-export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
 export DB_ADMIN_WEB_PASSWORD='<至少 12 位的强密码>'
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 ```
@@ -29,11 +28,14 @@ JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动
 | 目录 | 内容 |
 | --- | --- |
 | `./data` | H2 元数据库：Web 用户、连接配置、加密后的密码、SQL 历史、审计、MCP Agent、任务记录。 |
+| `./secrets` | 系统自动生成的主密钥；必须限制为服务账号可读，并与元数据库一起安全备份。 |
 | `./backups` | 备份文件与远端上传失败的暂存文件。 |
 | `./sql-files` | 大 SQL 文件执行任务的上传文件。 |
 | `./logs` | 应用日志。 |
 
-`DB_ADMIN_CRYPTO_KEY` 是连接密码和文件服务凭据的加密密钥。**必须在首次启动前设置**，且此后不能更改 —— 换密钥会导致已保存的密文无法解密。`DB_ADMIN_WEB_PASSWORD` 只是首个 Web 管理员的初始化密码，用户表为空时必须至少 12 位；已有用户后再启动不依赖这个环境变量。首次登录并确认账号可用后，建议将它从运行环境移除。
+首次启动会用安全随机数生成 `./secrets/mydatadev-master.key`，以后启动自动读取同一个文件。应用会把目录和文件权限分别收紧为 `0700`、`0600`（文件系统支持 POSIX 权限时）。主密钥不是普通配置：丢失或替换它会使已保存的数据库密码、SSH 凭据和文件服务凭据无法解密。请把它与 `data` 一同备份，但分开控制访问权限。
+
+部署平台也可以预先生成 Secret，以只读文件挂载后通过 `--app.crypto-key-file=/run/secrets/mydatadev-master-key` 指定路径。密钥本身不应放在环境变量或命令行参数中；配置项传递的只是文件路径。`DB_ADMIN_WEB_PASSWORD` 只是首个 Web 管理员的初始化密码，用户表为空时必须至少 12 位；已有用户后再启动不依赖这个环境变量。首次登录并确认账号可用后，建议将它从运行环境移除。
 
 常用覆盖项（全部可以用 `--key=value` 或环境变量传入）：
 
@@ -57,7 +59,6 @@ After=network-online.target
 [Service]
 User=mydatadev
 WorkingDirectory=/opt/mydatadev
-Environment=DB_ADMIN_CRYPTO_KEY=<32 位以上的强随机字符串>
 # 仅第一次初始化管理员需要；确认可登录后从 unit 中删除。
 Environment=DB_ADMIN_WEB_PASSWORD=<至少 12 位的强密码>
 ExecStart=/usr/bin/java -jar /opt/mydatadev/MyDataDev-web.jar --spring.profiles.active=web
@@ -122,7 +123,7 @@ APP_CORS_ALLOWED_ORIGIN_PATTERNS=https://db.example.com
 
 桌面版与 Web 版使用完全独立的元数据库和加密密钥，连接不互通。需要搬迁时，在「管理 → 连接管理 → 导出 / 导入」里把连接打成一个归档文件：
 
-- 归档用**你设置的口令**加密（PBKDF2-HMAC-SHA256 派生密钥 + AES-256-GCM），不使用本机的 `app.crypto-key` —— 目标端的密钥必然不同，搬密文是解不开的。
+- 归档用**你设置的口令**加密（PBKDF2-HMAC-SHA256 派生密钥 + AES-256-GCM），不使用本机托管的主密钥 —— 目标端的密钥必然不同，搬密文是解不开的。
 - 因此归档内部是明文密码与 SSH 密钥材料，全靠口令保护：**口令必须与文件分开传递**，口令丢失后文件无法恢复。
 - 导入时密码会用目标端自己的密钥重新加密入库。
 - 仅管理员可用；导出与导入在两端都写审计，并按连接归属，可在审计日志里按连接筛出来。
@@ -184,10 +185,29 @@ Webhook 使用 `X-MyDataDev-Signature-256: sha256=<HMAC>` 验签。发送失败�
 ## 升级
 
 1. 停止旧进程。
-2. 备份数据目录（至少 `./data`）。
-3. 换上新版本 JAR，用同一个工作目录和同一个 `DB_ADMIN_CRYPTO_KEY` 启动。
+2. 备份数据目录；已采用文件密钥的版本还要备份 `./secrets`。
+3. 换上新版本 JAR，用同一个工作目录启动。
 
 元数据库 schema 由 Flyway 在启动时自动迁移，不需要手动执行 SQL。迁移不支持回退，降级到旧版本前请从备份恢复数据目录。
+
+### 从环境变量密钥升级
+
+旧版本曾要求每次启动都提供 `DB_ADMIN_CRYPTO_KEY`。新版本不再读取这个环境变量；如果元数据库里已有加密凭据，应用也不会擅自生成新密钥。首次启动新版本前，在可交互终端中执行一次：
+
+```bash
+java -jar MyDataDev-<version>-web.jar crypto-key adopt
+```
+
+命令会隐藏输入并要求重复确认原来的密钥，只把它写入 `./secrets/mydatadev-master.key.pending`。随后正常启动：
+
+```bash
+unset DB_ADMIN_CRYPTO_KEY
+java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
+```
+
+启动阶段会先用候选密钥逐条验证已有数据库密码、SSH 凭据和文件服务凭据。全部能解密后才原子提升为正式主密钥；任何一条验证失败都会拒绝启动，保留原数据和候选文件，修正原密钥后重新执行接管命令即可。这个过程沿用原密钥，不会重写历史密文。
+
+如果旧库从未保存过任何加密凭据，可以直接正常启动，由系统自动生成新主密钥。不要在应用启动后手工修改主密钥文件：正在运行的进程不会热加载，重启后又会因历史密文校验失败而拒绝启动。
 
 引入多用户的 V9 迁移只新建 `app_user` 表。V10 新建用户组、连接策略和授权表，并为所有升级前已存在的连接写入 `SHARED` 策略，同时给审计表增加请求上下文字段。两次迁移都不会修改或删除原有连接、加密密码、SQL 历史、审计内容、备份任务、备份文件或目标业务数据库数据；已有审计记录的新字段保持为空。升级后第一次启动会在用户表为空时插入一个初始管理员。
 

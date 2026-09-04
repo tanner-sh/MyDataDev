@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { backendArguments, backendEnvironment, type BackendStartOptions } from './backend.js';
+import {
+  backendArguments,
+  backendCryptoKeyInput,
+  backendEnvironment,
+  type BackendStartOptions
+} from './backend.js';
 
 function options(): BackendStartOptions {
   return {
@@ -18,7 +23,11 @@ function options(): BackendStartOptions {
     controlToken: 'control-token',
     parentPid: 123,
     platform: 'linux',
-    environment: { PATH: '/usr/bin' }
+    environment: {
+      PATH: '/usr/bin',
+      db_admin_crypto_key: 'inherited-legacy-key',
+      APP_CRYPTO_KEY: 'inherited-spring-key'
+    }
   };
 }
 
@@ -30,11 +39,19 @@ describe('desktop backend launch contract', () => {
     expect(args.join(' ')).not.toContain('control-token');
   });
 
-  it('passes isolated paths and secrets only through the child environment', () => {
+  it('keeps the master key out of the child environment', () => {
     const environment = backendEnvironment(options());
-    expect(environment.DB_ADMIN_CRYPTO_KEY).toBe('secret-key');
+    expect(environment.DB_ADMIN_CRYPTO_KEY).toBeUndefined();
+    expect(environment.db_admin_crypto_key).toBeUndefined();
+    expect(environment.APP_CRYPTO_KEY).toBeUndefined();
+    expect(Object.values(environment)).not.toContain('secret-key');
     expect(environment.MYDATADEV_DESKTOP_HOME).toBe('/data/MyDataDev');
     expect(environment.MYDATADEV_DESKTOP_CONTROL_TOKEN).toBe('control-token');
     expect(environment.MYDATADEV_DESKTOP_PARENT_PID).toBe('123');
+  });
+
+  it('delivers exactly one key line over standard input', () => {
+    expect(backendCryptoKeyInput('secret-key')).toBe('secret-key\n');
+    expect(() => backendCryptoKeyInput('secret\nkey')).toThrow('包含换行符');
   });
 });

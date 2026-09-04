@@ -16,7 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.url=jdbc:h2:mem:static-cache-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "app.crypto-key=static-cache-test-crypto-key",
+        "app.crypto-key-file=target/test-secrets/static-cache-test.key",
         "app.backup.directory=${java.io.tmpdir}/mydatadev-static-cache-test-backups"
 })
 @AutoConfigureMockMvc

@@ -25,13 +25,25 @@ export function backendArguments(jar: string) {
 }
 
 export function backendEnvironment(options: BackendStartOptions): NodeJS.ProcessEnv {
+  const inheritedEnvironment = Object.fromEntries(
+    Object.entries(options.environment).filter(([name]) => {
+      const normalized = name.toUpperCase();
+      return normalized !== 'DB_ADMIN_CRYPTO_KEY' && normalized !== 'APP_CRYPTO_KEY';
+    })
+  );
   return {
-    ...options.environment,
-    DB_ADMIN_CRYPTO_KEY: options.cryptoKey,
+    ...inheritedEnvironment,
     MYDATADEV_DESKTOP_HOME: options.desktopPaths.home,
     MYDATADEV_DESKTOP_CONTROL_TOKEN: options.controlToken,
     MYDATADEV_DESKTOP_PARENT_PID: String(options.parentPid)
   };
+}
+
+export function backendCryptoKeyInput(cryptoKey: string) {
+  if (!cryptoKey || /[\r\n]/.test(cryptoKey)) {
+    throw new Error('桌面主密钥为空或包含换行符。');
+  }
+  return `${cryptoKey}\n`;
 }
 
 export async function waitForHealthyBackend(port: number, timeoutMs = HEALTH_TIMEOUT_MS) {
@@ -88,7 +100,7 @@ export class BackendManager {
     this.output = createWriteStream(path.join(this.options.desktopPaths.logs, 'desktop-launcher.log'), { flags: 'a' });
     this.child = spawn(this.options.java, backendArguments(this.options.jar), {
       env: backendEnvironment(this.options),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     });
     this.child.stdout?.pipe(this.output, { end: false });
@@ -97,11 +109,26 @@ export class BackendManager {
       this.output?.write(`\n[desktop] backend exited code=${code ?? 'null'} signal=${signal ?? 'null'}\n`);
     });
     try {
+      await this.sendCryptoKey();
       await waitForHealthyBackend(this.options.port);
     } catch (error) {
       await this.forceStop();
       throw error;
     }
+  }
+
+  private async sendCryptoKey() {
+    const input = this.child?.stdin;
+    if (!input) throw new Error('无法向后端安全交付主密钥。');
+    const payload = backendCryptoKeyInput(this.options.cryptoKey);
+    await new Promise<void>((resolve, reject) => {
+      const failed = (error: Error) => reject(new Error('向后端交付主密钥失败。', { cause: error }));
+      input.once('error', failed);
+      input.end(payload, () => {
+        input.off('error', failed);
+        resolve();
+      });
+    });
   }
 
   async stop() {

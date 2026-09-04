@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
@@ -9,23 +8,10 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const desktopDirectory = path.resolve(directory, '..');
 const projectDirectory = path.resolve(desktopDirectory, '..');
 const devHome = path.join(desktopDirectory, '.dev-data');
-const keyFile = path.join(devHome, 'dev-crypto-key');
 const children = new Set();
 
 function command(name) {
   return process.platform === 'win32' ? `${name}.cmd` : name;
-}
-
-async function developmentKey() {
-  await mkdir(devHome, { recursive: true });
-  try {
-    return (await readFile(keyFile, 'utf8')).trim();
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    const key = randomBytes(32).toString('base64url');
-    await writeFile(keyFile, `${key}\n`, { mode: 0o600 });
-    return key;
-  }
 }
 
 function start(executable, args, cwd, environment) {
@@ -76,7 +62,6 @@ for (const port of [8080, 5173]) {
 
 const environment = {
   ...process.env,
-  DB_ADMIN_CRYPTO_KEY: await developmentKey(),
   MYDATADEV_DESKTOP_HOME: devHome,
   MYDATADEV_DESKTOP_CONTROL_TOKEN: randomBytes(32).toString('base64url'),
   MYDATADEV_DESKTOP_PARENT_PID: String(process.pid),

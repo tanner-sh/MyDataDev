@@ -1,6 +1,8 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
@@ -20,14 +22,40 @@ public class CryptoService {
     private final SecretKeySpec key;
     private final SecureRandom random = new SecureRandom();
 
-    public CryptoService(AppProperties properties) throws Exception {
-        String configuredKey = properties.getCryptoKey();
-        if (configuredKey == null || configuredKey.isBlank()) {
-            throw new IllegalStateException("必须通过 DB_ADMIN_CRYPTO_KEY 或 app.crypto-key 配置加密密钥。");
-        }
+    @Autowired
+    public CryptoService(
+            AppProperties properties,
+            Environment environment,
+            CryptoKeyStore keyStore,
+            EncryptedSecretInventory inventory
+    ) throws Exception {
+        var encryptedSecrets = inventory.all();
+        CryptoKeyStore.LoadedKey loaded = keyStore.load(properties, environment, !encryptedSecrets.isEmpty());
+        this.key = deriveKey(loaded.material());
+        validateExistingSecrets(encryptedSecrets);
+        keyStore.promote(loaded);
+    }
+
+    /** 聚焦单元测试使用固定材料；应用运行时只能通过 CryptoKeyStore 创建服务。 */
+    CryptoService(String configuredKey) throws Exception {
+        if (configuredKey == null || configuredKey.isBlank()) throw new IllegalArgumentException("测试主密钥不能为空");
+        this.key = deriveKey(configuredKey);
+    }
+
+    private static SecretKeySpec deriveKey(String configuredKey) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256")
                 .digest(configuredKey.getBytes(StandardCharsets.UTF_8));
-        this.key = new SecretKeySpec(Arrays.copyOf(digest, 32), "AES");
+        return new SecretKeySpec(Arrays.copyOf(digest, 32), "AES");
+    }
+
+    private void validateExistingSecrets(java.util.List<EncryptedSecretInventory.EncryptedSecret> secrets) {
+        for (var secret : secrets) {
+            try {
+                decrypt(secret.ciphertext());
+            } catch (RuntimeException error) {
+                throw new IllegalStateException("主密钥无法解密已有凭据（" + secret.location() + "）。请确认接管的是原始密钥；数据库未被修改。", error);
+            }
+        }
     }
 
     public String encrypt(String value) {

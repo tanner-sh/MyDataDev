@@ -50,8 +50,7 @@ class SqlServiceEditableResultTest {
         AuditRepository audit = mock(AuditRepository.class);
         MetadataService metadata = new MetadataService(connections, dialects, audit, cache, new ExecutionGuard());
         AppProperties properties = new AppProperties();
-        properties.setCryptoKey("test-key-test-key-test-key-32byt");
-        CryptoService crypto = new CryptoService(properties);
+        CryptoService crypto = new CryptoService("test-key-test-key-test-key-32byt");
         DataEditService dataEdit = new DataEditService(
                 metadata, connections, audit, dialects, properties,
                 new TableCursorCodec(new ObjectMapper(), crypto),

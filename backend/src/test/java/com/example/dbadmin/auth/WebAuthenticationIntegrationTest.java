@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.url=jdbc:h2:mem:web-auth-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "app.crypto-key=web-auth-test-crypto-key",
+        "app.crypto-key-file=target/test-secrets/web-auth-test.key",
         "app.backup.directory=${java.io.tmpdir}/mydatadev-web-auth-test-backups",
         "app.auth.mode=LOCAL",
         "app.auth.username=operator",

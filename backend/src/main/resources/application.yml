@@ -63,7 +63,8 @@ spring:
           keep-alive-interval: 15s
 
 app:
-  crypto-key: ${DB_ADMIN_CRYPTO_KEY:}
+  crypto-key-source: FILE
+  crypto-key-file: ./secrets/mydatadev-master.key
   auth:
     mode: DISABLED
     username: admin

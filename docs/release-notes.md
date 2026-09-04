@@ -19,14 +19,13 @@
 ## Web 服务端快速启动
 
 ```bash
-export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
 export DB_ADMIN_WEB_PASSWORD='<至少 12 位的强密码>'
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 ```
 
-打开 <http://localhost:8080>。数据写入启动目录下的 `data`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。
+打开 <http://localhost:8080>。数据写入启动目录下的 `data`、`secrets`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。
 
-`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改，否则已保存的数据库密码无法解密。Web 模式默认启用服务端 Session 认证；`DB_ADMIN_WEB_PASSWORD` 只用于空用户库的首个管理员，必须至少 12 位。仍建议只在可信网络中通过 HTTPS 反向代理部署。完整部署、Nginx 配置与升级步骤见[Web 发行包部署说明](https://github.com/tanner-sh/MyDataDev/blob/main/docs/web-deploy.md)。
+首次启动会自动生成 `./secrets/mydatadev-master.key`，以后自动复用；请限制权限并与 `data` 一同安全备份。旧版本使用环境变量密钥的安装必须先执行一次 `java -jar MyDataDev-<version>-web.jar crypto-key adopt`，录入原密钥后再正常启动。Web 模式默认启用服务端 Session 认证；`DB_ADMIN_WEB_PASSWORD` 只用于空用户库的首个管理员，必须至少 12 位。仍建议只在可信网络中通过 HTTPS 反向代理部署。完整部署、Nginx 配置与升级步骤见[Web 发行包部署说明](https://github.com/tanner-sh/MyDataDev/blob/main/docs/web-deploy.md)。
 
 ## macOS 首次启动说明
 

@@ -21,14 +21,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 连接配置的加密导出与导入。
  *
- * <p>关键契约：归档里的密码必须能在目标端还原，而目标端用的是另一把 app.crypto-key ——
+ * <p>关键契约：归档里的密码必须能在目标端还原，而目标端用的是另一份主密钥 ——
  * 这正是不能直接搬密文的原因。</p>
  */
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:archive-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "app.crypto-key=archive-test-crypto-key",
+        "app.crypto-key-file=target/test-secrets/archive-test.key",
         "app.backup.directory=${java.io.tmpdir}/mydatadev-archive-test-backups"
 })
 class ConnectionArchiveIntegrationTest {

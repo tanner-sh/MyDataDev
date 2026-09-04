@@ -19,7 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.datasource.url=jdbc:h2:mem:mcp-endpoint-test;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
-        "app.crypto-key=mcp-endpoint-test-crypto-key",
+        "app.crypto-key-file=target/test-secrets/mcp-endpoint-test.key",
         "app.backup.directory=${java.io.tmpdir}/mydatadev-mcp-endpoint-backups",
         "spring.ai.mcp.server.enabled=true",
         "app.mcp.enabled=true",

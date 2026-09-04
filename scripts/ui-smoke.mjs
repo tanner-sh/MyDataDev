@@ -5,7 +5,7 @@
  * Chrome DevTools Protocol 走 WebSocket，Node 自带，够用。
  *
  * 用法（需要先把前后端跑起来）：
- *   cd backend && DB_ADMIN_CRYPTO_KEY=... mvn spring-boot:run
+ *   cd backend && mvn spring-boot:run
  *   cd frontend && npm run dev
  *   node scripts/ui-smoke.mjs [--url http://localhost:5173] [--shots ./ui-shots]
  *

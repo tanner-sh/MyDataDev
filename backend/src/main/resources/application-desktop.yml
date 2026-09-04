@@ -19,7 +19,8 @@ spring:
           cache-public: false
 
 app:
-  crypto-key: ${DB_ADMIN_CRYPTO_KEY}
+  # Electron 从系统安全存储取出密钥，只通过子进程标准输入交付一次。
+  crypto-key-source: STDIN
   backup:
     directory: ${MYDATADEV_DESKTOP_HOME}/backups
   sql-file:

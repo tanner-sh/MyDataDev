@@ -121,14 +121,13 @@ MyDataDev 内置以下数据库类型及对应 JDBC 驱动：
 从 [GitHub Releases](https://github.com/tanner-sh/MyDataDev/releases/latest) 下载 `MyDataDev-<version>-web.jar`，它内置前端，只需要 Java 17+：
 
 ```bash
-export DB_ADMIN_CRYPTO_KEY='<32 位以上的强随机字符串>'
 export DB_ADMIN_WEB_PASSWORD='<至少 12 位的强密码>'
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 ```
 
-打开 <http://localhost:8080>，同一个端口同时提供界面、`/api` 和 `/mcp`。数据写入启动目录下的 `data`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。前后端分离部署可使用同一 Release 中的 `MyDataDev-<version>-frontend-dist.tar.gz`，配置见[Web 发行包部署说明](docs/web-deploy.md)。
+打开 <http://localhost:8080>，同一个端口同时提供界面、`/api` 和 `/mcp`。数据写入启动目录下的 `data`、`secrets`、`backups`、`sql-files` 和 `logs`，请固定工作目录启动。前后端分离部署可使用同一 Release 中的 `MyDataDev-<version>-frontend-dist.tar.gz`，配置见[Web 发行包部署说明](docs/web-deploy.md)。
 
-`DB_ADMIN_CRYPTO_KEY` 必须在首次启动前设置且此后不再更改。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，用户组和连接授权在“管理 → 访问控制”中维护，初始化完成后可从运行环境移除初始密码。
+首次启动会自动生成 `./secrets/mydatadev-master.key`，以后启动自动复用；请限制文件权限并把它与 `data` 一同安全备份。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，用户组和连接授权在“管理 → 访问控制”中维护，初始化完成后可从运行环境移除初始密码。旧版本升级需要先按[主密钥接管步骤](docs/web-deploy.md#从环境变量密钥升级)录入原密钥。
 
 ### Web 开发模式
 
@@ -138,9 +137,7 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 
 ```bash
 cd backend
-# 没有默认密钥：未设置 DB_ADMIN_CRYPTO_KEY 时后端会拒绝启动。
-# 开发环境可以随便取一个值，但一旦保存过连接就不要再改 —— 换密钥会导致已有密文无法解密。
-export DB_ADMIN_CRYPTO_KEY='local-dev-key-please-change'
+# 首次启动自动生成 backend/secrets/mydatadev-master.key。
 mvn spring-boot:run
 ```
 
@@ -247,7 +244,7 @@ node scripts/build-web-bundle.mjs
 | --- | --- |
 | `server.port` | 后端监听端口，默认 `8080`。 |
 | `spring.datasource.*` | MyDataDev 自身的 H2 元数据库连接。 |
-| `app.crypto-key` | 连接密码加密密钥，生产部署应通过 `DB_ADMIN_CRYPTO_KEY` 注入强密钥。 |
+| `app.crypto-key-file` | 系统托管主密钥文件，默认 `./secrets/mydatadev-master.key`；可指向部署平台提供的只读 Secret 文件。 |
 | `app.auth.*` | Web Session 认证。Web 包默认 `LOCAL`，`DB_ADMIN_WEB_USERNAME` / `DB_ADMIN_WEB_PASSWORD` 仅用于初始化第一个管理员；桌面和本地开发默认关闭。 |
 | `app.auth.oidc.*` | 标准 OIDC SSO 的 issuer、客户端凭据、声明名、管理员组和本地用户组映射。 |
 | `app.audit-alert.*` | 高风险审计事件的 Webhook、HMAC 签名、冷却时间与动作白名单；默认关闭。 |
@@ -257,11 +254,11 @@ node scripts/build-web-bundle.mjs
 | `app.restore.*` / `app.sql-file.*` | 恢复上传、远端恢复缓存与大 SQL 文件任务限制。 |
 | `app.mcp.*` | MCP 初次初始化的开关、资源限制和兼容配置。 |
 
-请勿将真实数据库密码、Agent API Key 或生产加密密钥提交到 Git。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
+请勿将真实数据库密码、Agent API Key 或主密钥文件提交到 Git。`secrets` 必须限制为服务账号可读，并与元数据库分开保存一份安全备份。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
 
 ### 备份文件服务
 
-在“备份与恢复 → 文件服务”中可以维护可复用的 SMB、NFS、FTP/FTPS 和 SFTP 配置，备份任务可逐个选择本地目录或文件服务。凭据和私钥使用 `app.crypto-key` 加密后保存在 MyDataDev 元数据库中；修改该密钥会导致已有密文无法解密。
+在“备份与恢复 → 文件服务”中可以维护可复用的 SMB、NFS、FTP/FTPS 和 SFTP 配置，备份任务可逐个选择本地目录或文件服务。凭据和私钥使用系统托管主密钥加密后保存在 MyDataDev 元数据库中；丢失或替换该密钥会导致已有密文无法解密。
 
 - SMB 使用 SMB 2/3，不启用 SMB 1。
 - NFS 当前支持 NFSv3 `AUTH_SYS`，需要配置 UID/GID，并要求后端可访问服务端 RPC portmapper、mountd 与 NFS 端口；不支持 NFSv4 和 Kerberos。
