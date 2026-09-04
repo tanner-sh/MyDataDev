@@ -118,9 +118,9 @@ public class AiSchemaTools {
                 ),
                 new LlmToolDefinition(
                         "validate_sql",
-                        "在目标数据库上对一条只读候选 SQL 做编译校验，不执行查询也不读取行。生成最终回答前应调用。",
+                        "在目标数据库上对一条候选 SQL 做编译校验，只解析计划、不取数据。生成最终回答前应调用。",
                         schema(Map.of(
-                                "sql", property("string", "一条完整的 SELECT、WITH 或只读 EXPLAIN 查询")
+                                "sql", property("string", "一条完整的 SELECT 查询，可带 WITH 前缀")
                         ), List.of("sql"))
                 )
         );

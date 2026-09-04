@@ -15,7 +15,7 @@
 **非目标（本期不做）**
 
 - 不做自动执行：AI 永远只把 SQL 写进编辑器，由人按下执行。
-- 不做对话历史的长期存储与检索（会话保留在前端内存，刷新即丢）。
+- 不做对话历史的长期存储与检索：多轮会话存在服务端进程内的短期缓存里，按用户隔离、按 TTL 过期，不落库。
 - 不给内置 Agent 查询业务行或执行 SQL 的工具；Agent 只能读取受控元数据，最终 SQL 仍由用户确认。
 - 不替换 `sqlCompletion.ts` 的确定性补全。
 
@@ -50,8 +50,13 @@ api/AiController            REST 入口，SSE 流式输出
         └── service/ai/provider/LlmClient     provider 接口
               ├── AnthropicLlmClient          默认实现
               └── OpenAiCompatibleLlmClient    自建 / 本地模型
-  └── service/ai/AiSqlAgentService       多轮编排：模型 → 元数据工具 → 模型 → SQL
-        └── service/ai/AiSchemaTools          搜索注释、读取对象详情/DDL；连接与 Schema 由服务端绑定
+  └── service/ai/AiSqlAgentService       多轮编排：模型 → 元数据工具 → 模型 → 编译校验 → SQL
+        ├── service/ai/AiSchemaTools          搜索注释、读取对象详情/DDL/外键邻接；连接与 Schema 由服务端绑定
+        ├── service/ai/AiSqlValidationService 候选 SQL 的目标库编译校验（怎么校验交给方言）
+        ├── service/ai/AiConversationStore    服务端短期可信会话；工具结果不经浏览器
+        ├── service/ai/AiAgentCoordinator     有界线程池、按用户并发上限、可中断的请求句柄
+        ├── service/ai/AiAgentMetrics         轮次、工具、校验与 token 的 Micrometer 指标
+        └── service/ai/AiGlossaryService      连接级业务词典（管理员维护，喂给 search_schema）
   └── repo/AiSettingsRepository        JdbcTemplate 持久化（Provider 配置、连接级开关）
 ```
 
@@ -111,7 +116,10 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `POST` | `/api/ai/settings/test` | 连通性测试，只发一条最小请求 |
 | `GET`/`PUT` | `/api/ai/connections/{id}/policy` | 连接级共享策略 |
 | `POST` | `/api/ai/sql/generate` | 自然语言 → SQL |
-| `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具调用 → SQL；请求携带本次前端会话历史，可连续修正 |
+| `GET`/`PUT` | `/api/ai/connections/{id}/glossary` | 连接级业务词典（管理员） |
+| `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具 → 编译校验 → SQL；只提交当前这句话，历史在服务端会话里 |
+| `GET`/`DELETE` | `/api/ai/sql/conversations/{id}` | 刷新后恢复可见消息；删除等于新建对话 |
+| `POST` | `/api/ai/sql/chat/{requestId}/cancel` | 取消正在跑的 Agent 请求 |
 | `POST` | `/api/ai/sql/diagnose` | 执行报错诊断 |
 | `POST` | `/api/ai/sql/explain-insight` | 执行计划解读 |
 | `POST` | `/api/ai/sql/{action}/stream` | 上述三项的 SSE 流式变体 |
@@ -149,6 +157,8 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 ### 6.3 成本
 
 诊断、计划解读等固定上下文流程仍把结构摘要作为稳定前缀，并使用 prompt cache。SQL Agent 不再预先塞入整库结构，而是只把工具定义与按需命中的对象详情放入上下文；Schema 搜索目录按 `MetadataCacheService` 的目录版本缓存，元数据失效时同步换代。
+
+Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓存前缀的顺序是 tools → system → messages，所以它覆盖工具定义），另一个是每轮打在最后一条消息上的滚动断点。后者才是关键 —— 每一轮都要把此前所有工具结果原样重发，不缓存的话输入 token 随轮次平方增长。命不命中看 `dbadmin.ai.agent.tokens{type="cache_read"}`：这个数长期为 0 就说明前缀里混进了每次都变的内容。
 
 ## 7. 安全与隐私边界
 
@@ -245,12 +255,23 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 
 ### M6 — 元数据工具调用与多轮 SQL 对话 · 已完成
 
-- 新增 `AiSqlAgentService`，一轮请求最多进行 6 次模型推理、12 次元数据工具调用；达到上限后明确失败，不无限循环。
-- 新增三个只读工具：`search_schema` 搜索表名/表注释/字段名/字段注释，`describe_objects` 读取字段、主键、索引与外键，`get_object_ddl` 在必要时补充对象定义。
+- 新增 `AiSqlAgentService`，一轮请求最多进行 8 次模型推理、16 次元数据工具调用；达到上限后明确失败，不无限循环。
+- 新增五个只读工具：`search_schema` 搜索表名/表注释/字段名/字段注释与业务词典，`describe_objects` 读取字段、主键、索引与外键，`find_related_objects` 沿真实外键发现邻接表，`get_object_ddl` 在必要时补充对象定义，`validate_sql` 在目标库上编译校验候选 SQL。
 - 工具的连接和 Schema 由服务端请求上下文绑定，模型参数里没有 `connectionId`；对象详情也必须先命中当前 Schema 的目录，不能用限定名跳到其他 Schema。
 - 工具不提供查行、写入或执行 SQL 的入口；Agent 只生成一条只读查询，并写入新标签页等待用户确认。
-- `AiSqlChatPanel` 在前端内存保存本轮用户/助手消息，后续问题会带上历史，因此可以用“只看启用用户”“再加最后登录时间”这类指令连续修正；刷新或切换连接/Schema 后清空。
+- 会话搬到了服务端（`AiConversationStore`）：浏览器只提交当前这句话和一个会话 ID，工具结果和 `requireInspection` 标记都留在后端，客户端无法伪造“模型已经检查过结构”的历史。会话按登录用户隔离、按 TTL 过期，刷新可恢复可见消息。
+- 会话缓存按字符数而不是条数淘汰：里面存的是工具结果原文（结构 JSON、DDL），一条会话到几百 KB 很正常，按条数限制等于让堆占用不受控。
 - Anthropic 与 OpenAI 兼容协议都实现原生 tool use/function calling，兼容自建网关和本地模型。
+
+### M7 — 校验、会话与运行治理 · 已完成
+
+- **候选 SQL 在目标库上编译校验，并把「怎么校验」交给方言。** `DatabaseDialect.compileQuery` 的默认实现只 prepare 再读结果列元数据 —— PostgreSQL、Oracle、SQL Server 的驱动会把它翻译成一次服务端 Describe，确实不执行。但 Connector/J 在默认的客户端预编译下，`getMetaData()` 会另建一个语句把查询真跑一遍，而且不继承外层的 `queryTimeout`：一条笛卡尔积会在目标库上不受限地跑完。所以 MySQL 系覆盖成 `EXPLAIN`（不带 ANALYZE，只解析和生成计划）。新增方言时要先确认驱动行为，别默认继承。
+- **校验入口只收 SELECT（可带 WITH 前缀）。** SHOW、DESCRIBE、EXPLAIN 也是只读的，但它们能不能被「只解析不取数」地校验各方言差别很大，`EXPLAIN ANALYZE SELECT` 在 PostgreSQL 上更是真跑一遍。`SqlStatementClassifier.isSelectQuery` 把这道判断收在一处，模型的系统提示和重试提示同步收窄。
+- **校验失败自动回到模型修正**，失败原文作为下一轮的用户消息；修正次数受同一个轮次上限约束。
+- **`AiAgentCoordinator`**：有界线程池 + 队列 + 按用户并发上限，取消靠 `Thread.interrupt()`。局限要知道：轮次之间的 `checkCancelled()` 是有效的，但如果 provider 的 HTTP 客户端不响应中断（OkHttp 就不响应），正在进行的那次模型调用仍会跑完才停。
+- **审计对取消也写一条。** 取消发生时，工具往往已经把库结构发给外部模型了 —— 只记成功和失败，等于这次外发在审计里查不到。审计动作码是独立的 `AI_AGENT_CHAT`，和单轮 `AI_GENERATE_SQL` 分开筛。
+- **最终回答流式输出。** Agent 每轮开始时发 `answer-reset`，前端据此丢掉上一轮的开场白或没通过校验的候选 SQL，正文随 `delta` 增量显示。OpenAI 兼容协议下 `LlmClient.turn` 退化成非流式（写完一次性回调），行为与之前一致。
+- **连接级业务词典**（`ai_business_glossary`，V15 迁移）：管理员维护「业务词 → 别名 → 真实对象名」，`search_schema` 命中词典的对象直接加权。词典是 AI 唯一能看到的、库里没有的知识来源。
 
 ## 9. 验收清单
 
@@ -262,6 +283,8 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 - 关闭 AI 功能时，所有相关入口在界面上不可见，且后端返回 `AI_DISABLED` 而不是 500
 - 连接策略为 `NONE` 时，任何 AI 接口都取不到该连接的结构
 - Agent 工具只能读取当前请求绑定的连接与 Schema，不能查询业务行或执行 SQL
+- 编译校验不得在目标库上真正取数：新增方言时确认 `compileQuery` 的驱动行为，别默认继承
+- Agent 请求无论成功、失败还是取消，都要在审计里留下一条 `AI_AGENT_CHAT`
 
 ## 10. 已定决策
 

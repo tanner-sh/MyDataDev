@@ -5,6 +5,7 @@ import { API } from '../constants';
 import { api, apiErrorCode } from '../api';
 import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
+import { applyAgentEvent, conversationStorageKey, initialAgentStreamState, streamErrorMessage } from '../aiChat';
 import { checkSqlSuggestion } from '../sqlSuggestion';
 import type { AiChatMessage, AiConversation, AiGroundingReport } from '../types';
 
@@ -153,10 +154,13 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
           currentSql: !conversationId && previousMessages.length === 0 ? currentSql.trim() || undefined : undefined
         })
       });
-      if (!response.ok || !response.body) throw new Error(await responseMessage(response));
+      if (!response.ok || !response.body) {
+        throw new Error(streamErrorMessage(await response.text(), response.statusText));
+      }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let stream = initialAgentStreamState('正在理解需求并检查数据库结构…');
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -164,33 +168,23 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, onC
         const parsed = consumeSseBuffer(buffer);
         buffer = parsed.rest;
         for (const event of parsed.events) {
-          if (event.event === 'session') {
-            if (typeof event.data.requestId === 'string') pending.requestId = event.data.requestId;
-            if (typeof event.data.conversationId === 'string') {
-              setConversationId(event.data.conversationId);
-              window.sessionStorage.setItem(storageKey, event.data.conversationId);
-            }
-          } else if (event.event === 'delta' && typeof event.data.text === 'string') {
-            nextAnswer += event.data.text;
-            setAnswer(nextAnswer);
-          } else if (event.event === 'phase' && typeof event.data.text === 'string') {
-            setPhase(event.data.text);
-          } else if (event.event === 'tool') {
-            setActivities((current) => [...current, {
-              name: typeof event.data.name === 'string' ? event.data.name : 'metadata',
-              summary: typeof event.data.summary === 'string' ? event.data.summary : '已检查数据库结构',
-              error: event.data.error === true
-            }]);
-          } else if (event.event === 'grounding') {
-            nextGrounding = parseGrounding(event.data);
-            setGrounding(nextGrounding);
-          } else if (event.event === 'failed') {
-            throw new Error(typeof event.data.message === 'string' ? event.data.message : 'AI 调用失败');
-          } else if (event.event === 'cancelled') {
-            throw new DOMException('AI 请求已取消', 'AbortError');
+          const previous = stream;
+          stream = applyAgentEvent(stream, event);
+          if (stream.failure) throw new Error(stream.failure);
+          if (stream.cancelled) throw new DOMException('AI 请求已取消', 'AbortError');
+          if (stream.conversationId && stream.conversationId !== previous.conversationId) {
+            setConversationId(stream.conversationId);
+            window.sessionStorage.setItem(storageKey, stream.conversationId);
           }
+          pending.requestId = stream.requestId;
         }
+        setAnswer(stream.answer);
+        setPhase(stream.phase);
+        setActivities(stream.activities);
+        setGrounding(stream.grounding);
       }
+      nextAnswer = stream.answer;
+      nextGrounding = stream.grounding;
       if (!nextAnswer.trim()) throw new Error('模型没有返回 SQL 或说明。');
       setMessages((current) => [...current, { role: 'ASSISTANT', text: nextAnswer, grounding: nextGrounding }]);
       setAnswer('');
@@ -325,32 +319,3 @@ function Grounding({ report }: { report: AiGroundingReport }) {
   );
 }
 
-function parseGrounding(data: Record<string, unknown>): AiGroundingReport | undefined {
-  if (typeof data.validated !== 'boolean' || typeof data.validationMessage !== 'string') return undefined;
-  const references = Array.isArray(data.references) ? data.references.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const value = item as Record<string, unknown>;
-    if (!['TABLE', 'COLUMN', 'FOREIGN_KEY'].includes(String(value.kind)) || typeof value.label !== 'string') return [];
-    return [{
-      kind: value.kind as 'TABLE' | 'COLUMN' | 'FOREIGN_KEY',
-      label: value.label,
-      detail: typeof value.detail === 'string' ? value.detail : undefined
-    }];
-  }) : [];
-  return { validated: data.validated, validationMessage: data.validationMessage, references };
-}
-
-function conversationStorageKey(connectionId: number, schemaName?: string): string {
-  return `mydatadev.ai.sql.${connectionId}.${schemaName || ''}`;
-}
-
-async function responseMessage(response: Response): Promise<string> {
-  const payload = await response.text();
-  try {
-    const parsed = JSON.parse(payload) as { message?: string };
-    if (parsed.message) return parsed.message;
-  } catch {
-    if (payload.trim()) return payload.trim();
-  }
-  return response.statusText || 'AI 调用失败';
-}

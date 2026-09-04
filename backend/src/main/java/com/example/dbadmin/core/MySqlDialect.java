@@ -29,6 +29,26 @@ public class MySqlDialect extends DefaultDialect {
         statement.setFetchSize(Integer.MIN_VALUE);
     }
 
+    /**
+     * 用 {@code EXPLAIN} 代替默认的 prepare + getMetaData。
+     *
+     * <p>Connector/J 默认走客户端预编译（{@code useServerPrepStmts=false}），此时
+     * {@code getMetaData()} 会另建一个内部语句、绑上空参数把查询真执行一遍。它虽然带
+     * {@code setMaxRows(1)}，却不继承外层设置的 {@code queryTimeout} —— 也就是说全表扫描和
+     * 笛卡尔积会在目标库上不受限地跑完。{@code EXPLAIN}（不带 ANALYZE）只解析和生成计划，
+     * 语法或对象名错了照样报错，正是校验要的语义。</p>
+     */
+    @Override
+    public void compileQuery(Connection connection, String sql, int timeoutSeconds) throws Exception {
+        try (Statement statement = connection.createStatement()) {
+            configureReadStatement(connection, statement, 0, timeoutSeconds);
+            statement.setMaxRows(1);
+            try (ResultSet ignored = statement.executeQuery("EXPLAIN " + sql)) {
+                // 计划本身不需要读，能产出就说明这条 SQL 在目标库上是可编译的。
+            }
+        }
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);

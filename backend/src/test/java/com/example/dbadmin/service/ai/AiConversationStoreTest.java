@@ -4,6 +4,7 @@ import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.AiDtos.AiGroundingReport;
 import com.example.dbadmin.service.ai.llm.LlmAgentMessage;
+import com.example.dbadmin.service.ai.llm.LlmToolResult;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -47,6 +48,40 @@ class AiConversationStoreTest {
         assertThatThrownBy(() -> store.begin(turn.id(), "user:7", 3, "PUBLIC", 1, "并发问题", null))
                 .isInstanceOf(ApiProblemException.class).hasMessageContaining("正在处理");
         store.fail(turn);
+    }
+
+    /**
+     * 会话里存的是工具结果原文（结构 JSON、DDL），一条就可能有几百 KB。历史必须按字符数裁，
+     * 只按消息条数裁等于让缓存占用不受控。
+     */
+    @Test
+    void dropsOldestHistoryOnceTheCharacterBudgetIsExceeded() {
+        AppProperties properties = new AppProperties();
+        properties.getAiAgent().setMaxConversationChars(10_000);
+        AiConversationStore store = new AiConversationStore(properties);
+        AiConversationStore.Turn turn = store.begin(null, "local", 3, "PUBLIC", 1, "问题", null);
+
+        List<LlmAgentMessage> history = new ArrayList<>(turn.messages());
+        for (int round = 0; round < 6; round++) {
+            history.add(LlmAgentMessage.user("第 " + round + " 轮"));
+            history.add(LlmAgentMessage.assistant("", List.of()));
+            history.add(LlmAgentMessage.toolResults(List.of(
+                    new LlmToolResult("call-" + round, "x".repeat(4_000), false))));
+        }
+        store.complete(turn, history, "回答", new AiGroundingReport(false, "无 SQL", List.of()), List.of());
+
+        AiConversationStore.Turn next = store.begin(turn.id(), "local", 3, "PUBLIC", 1, "再问", null);
+
+        // 最后一条是新提的问题，其余是被裁剩下的历史；窗口必须从 USER 开始，否则工具结果会
+        // 变成找不到 tool_use 的孤儿，模型侧直接报错。
+        assertThat(next.messages()).hasSizeLessThan(history.size());
+        assertThat(next.messages().get(0).role()).isEqualTo(LlmAgentMessage.Role.USER);
+        long chars = next.messages().stream()
+                .flatMap(message -> message.toolResults().stream())
+                .mapToLong(result -> result.content().length())
+                .sum();
+        assertThat(chars).isLessThanOrEqualTo(10_000);
+        store.fail(next);
     }
 
     @Test

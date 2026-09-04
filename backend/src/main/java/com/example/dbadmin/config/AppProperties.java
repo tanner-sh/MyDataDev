@@ -511,8 +511,12 @@ public class AppProperties {
         private int queueCapacity = 20;
         private int maxConcurrentPerUser = 2;
         private int conversationTtlMinutes = 60;
-        private int maxConversations = 1_000;
+        // 会话真正占的是堆，不是条数：一条会话里存的是工具结果原文（结构 JSON、DDL），
+        // 单条几百 KB 很正常。所以上限按字符数给，而不是按会话数。
+        private int maxConversationChars = 400_000;
+        private long maxCachedChars = 40_000_000L;
         private int validationTimeoutSeconds = 10;
+        private int streamTimeoutMinutes = 10;
 
         public int getWorkerThreads() { return workerThreads; }
         public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }
@@ -522,10 +526,14 @@ public class AppProperties {
         public void setMaxConcurrentPerUser(int maxConcurrentPerUser) { this.maxConcurrentPerUser = maxConcurrentPerUser; }
         public int getConversationTtlMinutes() { return conversationTtlMinutes; }
         public void setConversationTtlMinutes(int conversationTtlMinutes) { this.conversationTtlMinutes = conversationTtlMinutes; }
-        public int getMaxConversations() { return maxConversations; }
-        public void setMaxConversations(int maxConversations) { this.maxConversations = maxConversations; }
+        public int getMaxConversationChars() { return maxConversationChars; }
+        public void setMaxConversationChars(int maxConversationChars) { this.maxConversationChars = maxConversationChars; }
+        public long getMaxCachedChars() { return maxCachedChars; }
+        public void setMaxCachedChars(long maxCachedChars) { this.maxCachedChars = maxCachedChars; }
         public int getValidationTimeoutSeconds() { return validationTimeoutSeconds; }
         public void setValidationTimeoutSeconds(int validationTimeoutSeconds) { this.validationTimeoutSeconds = validationTimeoutSeconds; }
+        public int getStreamTimeoutMinutes() { return streamTimeoutMinutes; }
+        public void setStreamTimeoutMinutes(int streamTimeoutMinutes) { this.streamTimeoutMinutes = streamTimeoutMinutes; }
     }
 
     public static class NativeTools {

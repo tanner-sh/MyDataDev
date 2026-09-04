@@ -29,4 +29,16 @@ public interface LlmClient {
      * 都由应用层 Agent 编排器控制，provider 不能越过权限和隐私闸门直接碰数据库。
      */
     LlmAgentTurn turn(LlmAgentRequest request);
+
+    /**
+     * 与 {@link #turn} 相同，但把最终文本的增量同步回调出去，让界面在模型还在写的时候就有东西看。
+     *
+     * <p>默认实现退化成非流式，写完一次性回调 —— 协议不支持流式工具调用的 provider 保持原有
+     * 行为，而不是让上层去区分谁能流式。</p>
+     */
+    default LlmAgentTurn turn(LlmAgentRequest request, Consumer<String> onDelta) {
+        LlmAgentTurn result = turn(request);
+        if (!result.text().isEmpty()) onDelta.accept(result.text());
+        return result;
+    }
 }

@@ -57,6 +57,20 @@ public class SqlStatementClassifier {
         return classify(sql) == Kind.QUERY;
     }
 
+    /**
+     * 是否是一条以 SELECT 为主语句的只读查询（允许 WITH 前缀）。
+     *
+     * <p>比 {@link #isQuery} 窄一档。SHOW、DESCRIBE、TABLE、VALUES、EXPLAIN 也都是只读的，但
+     * 它们能不能被「只解析不取数」地校验，各方言差别很大 —— {@code EXPLAIN ANALYZE SELECT}
+     * 在 PostgreSQL 上更是会把查询真跑一遍。AI 的编译校验入口只收这一类，把方言差异挡在
+     * 门外，而不是逐个数据库去判断哪种只读语句能安全校验。</p>
+     */
+    public boolean isSelectQuery(String sql) {
+        List<Token> tokens = tokens(sql);
+        Operation operation = tokens.isEmpty() ? null : operation(tokens);
+        return operation != null && "SELECT".equals(operation.word()) && classify(sql) == Kind.QUERY;
+    }
+
     public boolean isAutomaticallyPageable(String sql) {
         List<Token> tokens = tokens(sql);
         Operation operation = tokens.isEmpty() ? null : operation(tokens);

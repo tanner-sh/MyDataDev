@@ -4,15 +4,38 @@ import com.example.dbadmin.model.DbConnection;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
+import java.sql.Statement;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MySqlDialectTest {
     private final MySqlDialect dialect = new MySqlDialect();
+
+    /**
+     * Connector/J 默认走客户端预编译，此时 {@code getMetaData()} 会另建一个语句把查询真执行
+     * 一遍，而且不继承外层的 queryTimeout。AI 会拿没人看过的 SQL 反复调用编译校验，所以这条
+     * 路径必须是 EXPLAIN，绝不能落回默认的 prepare。
+     */
+    @Test
+    void compilesQueriesWithExplainRatherThanPreparingThem() throws Exception {
+        Connection connection = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenReturn(mock(ResultSet.class));
+
+        dialect.compileQuery(connection, "SELECT id FROM app_user", 9);
+
+        verify(statement).executeQuery("EXPLAIN SELECT id FROM app_user");
+        verify(statement).setQueryTimeout(9);
+        verify(connection, never()).prepareStatement(anyString());
+    }
 
     @Test
     void usesCatalogAndBackticksForMySqlObjects() throws Exception {

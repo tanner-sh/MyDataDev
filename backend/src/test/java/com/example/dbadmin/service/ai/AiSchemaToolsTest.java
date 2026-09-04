@@ -132,7 +132,7 @@ class AiSchemaToolsTest {
         AiGlossaryService glossary = mock(AiGlossaryService.class);
         when(glossary.terms(CONNECTION_ID)).thenReturn(terms);
         AiSqlValidationService validator = new AiSqlValidationService(
-                connections, new com.example.dbadmin.service.SqlScriptSplitter(),
+                connections, new DialectRegistry(), new com.example.dbadmin.service.SqlScriptSplitter(),
                 new com.example.dbadmin.service.SqlStatementClassifier(), new AppProperties());
         return new AiSchemaTools(connections, new DialectRegistry(), metadata, cache, glossary, validator, json);
     }

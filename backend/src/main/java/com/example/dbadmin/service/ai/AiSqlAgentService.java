@@ -1,6 +1,7 @@
 package com.example.dbadmin.service.ai;
 
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.AiDtos.AiCancelResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
@@ -43,10 +44,11 @@ import java.util.regex.Pattern;
 @Service
 public class AiSqlAgentService {
     private static final Logger log = LoggerFactory.getLogger(AiSqlAgentService.class);
+    /** Agent 对话单独一个动作码：审计里要能和单轮「AI 生成 SQL」分开筛。 */
+    public static final String ACTION_CHAT = "AI_AGENT_CHAT";
     private static final int MAX_AGENT_ROUNDS = 8;
     private static final int MAX_TOOL_CALLS = 16;
     private static final long MAX_OUTPUT_TOKENS = 4_000;
-    private static final long STREAM_TIMEOUT_MS = TimeUnit.MINUTES.toMillis(3);
     private static final Pattern SQL_FENCE = Pattern.compile("(?is)```sql\\s*(.*?)```");
 
     private final AiSettingsService settings;
@@ -61,6 +63,7 @@ public class AiSqlAgentService {
     private final MetadataCacheService metadataCache;
     private final AiAgentCoordinator coordinator;
     private final AiAgentMetrics metrics;
+    private final long streamTimeoutMs;
 
     public AiSqlAgentService(
             AiSettingsService settings,
@@ -74,7 +77,8 @@ public class AiSqlAgentService {
             AiConversationStore conversations,
             MetadataCacheService metadataCache,
             AiAgentCoordinator coordinator,
-            AiAgentMetrics metrics
+            AiAgentMetrics metrics,
+            AppProperties properties
     ) {
         this.settings = settings;
         this.connections = connections;
@@ -88,6 +92,8 @@ public class AiSqlAgentService {
         this.metadataCache = metadataCache;
         this.coordinator = coordinator;
         this.metrics = metrics;
+        this.streamTimeoutMs = TimeUnit.MINUTES.toMillis(
+                Math.max(1, properties.getAiAgent().getStreamTimeoutMinutes()));
     }
 
     public SseEmitter chatStream(AiChatRequest request, String actor, String ownerKey) {
@@ -97,7 +103,7 @@ public class AiSqlAgentService {
         AiConversationStore.Turn turn = conversations.begin(
                 request.conversationId(), ownerKey, request.connectionId(), request.schemaName(),
                 metadataCache.directoryVersion(request.connectionId()), request.message(), request.currentSql());
-        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+        SseEmitter emitter = new SseEmitter(streamTimeoutMs);
         CountDownLatch responseReady = new CountDownLatch(1);
         String requestId;
         try {
@@ -115,6 +121,9 @@ public class AiSqlAgentService {
             } catch (RuntimeException error) {
                 coordinator.cancel(requestId, ownerKey);
                 throw error;
+            }
+            if (coordinator.saturated()) {
+                send(emitter, "phase", Map.of("text", "前面还有 AI 请求在跑，正在排队…"));
             }
             responseReady.countDown();
         } catch (RuntimeException error) {
@@ -152,6 +161,7 @@ public class AiSqlAgentService {
     ) {
         int toolCalls = 0;
         int objectsRead = 0;
+        int rounds = 0;
         long inputTokens = 0;
         long outputTokens = 0;
         long cacheReadTokens = 0;
@@ -160,15 +170,22 @@ public class AiSqlAgentService {
         boolean searchFoundObjects = false;
         boolean described = false;
         boolean completed = false;
+        String outcome = "error";
+        String failure = null;
         List<LlmAgentMessage> messages = conversationTurn.messages();
         List<AiGroundingReference> evidence = new ArrayList<>(conversationTurn.evidence());
         try {
             LlmClient client = clients.create(current);
             send(emitter, "phase", Map.of("text", "正在理解需求并检查数据库结构…"));
             for (int round = 1; round <= MAX_AGENT_ROUNDS; round++) {
+                rounds = round;
                 AiAgentCoordinator.checkCancelled();
-                LlmAgentTurn modelTurn = client.turn(new LlmAgentRequest(
-                        systemPrompt(connection, request.schemaName()), messages, tools.definitions(), MAX_OUTPUT_TOKENS));
+                // 每一轮的正文都从头写起：上一轮的开场白或没通过校验的候选 SQL 不该留在屏幕上。
+                send(emitter, "answer-reset", Map.of("round", round));
+                LlmAgentTurn modelTurn = client.turn(
+                        new LlmAgentRequest(systemPrompt(connection, request.schemaName()), messages,
+                                tools.definitions(), MAX_OUTPUT_TOKENS),
+                        delta -> send(emitter, "delta", Map.of("text", delta)));
                 inputTokens += modelTurn.inputTokens();
                 outputTokens += modelTurn.outputTokens();
                 cacheReadTokens += modelTurn.cacheReadTokens();
@@ -200,21 +217,11 @@ public class AiSqlAgentService {
                     messages.add(LlmAgentMessage.assistant(modelTurn.text(), List.of()));
                     conversations.complete(conversationTurn, messages, modelTurn.text(), grounding, evidence);
                     completed = true;
-                    send(emitter, "delta", Map.of("text", modelTurn.text()));
+                    outcome = "success";
+                    // 正文已经随 delta 流式发过了，这里只补最终态：证据和收尾。
                     sendObject(emitter, "grounding", grounding);
                     send(emitter, "done", Map.of("ok", true, "toolCalls", toolCalls));
                     emitter.complete();
-                    metrics.request("success", started, inputTokens, outputTokens, cacheReadTokens);
-                    audit.onConnection(actor, AiAssistantService.ACTION_GENERATE, request.connectionId(),
-                            "sharing=" + policy.sharing()
-                                    + " agent=true conversation=" + conversationTurn.id()
-                                    + " rounds=" + round
-                                    + " tools=" + toolCalls
-                                    + " objects=" + objectsRead
-                                    + " inputTokens=" + inputTokens
-                                    + " outputTokens=" + outputTokens
-                                    + " cacheReadTokens=" + cacheReadTokens
-                                    + " model=" + current.model());
                     return;
                 }
 
@@ -253,31 +260,41 @@ public class AiSqlAgentService {
                     "AI 已达到本次结构检查与自动修正上限。请补充业务条件或明确相关表。",
                     Map.of("toolCalls", toolCalls));
         } catch (AiAgentCoordinator.AgentCancelledException e) {
-            metrics.request("cancelled", started, inputTokens, outputTokens, cacheReadTokens);
+            outcome = "cancelled";
             cancelled(emitter);
         } catch (LlmException e) {
             if (Thread.currentThread().isInterrupted()) {
-                metrics.request("cancelled", started, inputTokens, outputTokens, cacheReadTokens);
+                outcome = "cancelled";
                 cancelled(emitter);
             } else {
-                metrics.request("error", started, inputTokens, outputTokens, cacheReadTokens);
-                audit.onConnection(actor, AiAssistantService.ACTION_GENERATE, request.connectionId(),
-                        "agent=true failed status=" + e.upstreamStatus() + " tools=" + toolCalls);
+                failure = "status=" + e.upstreamStatus();
                 failed(emitter, e.getMessage());
             }
         } catch (RuntimeException e) {
             if (Thread.currentThread().isInterrupted()) {
-                metrics.request("cancelled", started, inputTokens, outputTokens, cacheReadTokens);
+                outcome = "cancelled";
                 cancelled(emitter);
             } else {
-                metrics.request("error", started, inputTokens, outputTokens, cacheReadTokens);
                 log.warn("AI SQL Agent 失败", e);
-                audit.onConnection(actor, AiAssistantService.ACTION_GENERATE, request.connectionId(),
-                        "agent=true failed tools=" + toolCalls);
+                failure = e.getClass().getSimpleName();
                 failed(emitter, e.getMessage() == null ? "AI 调用失败" : e.getMessage());
             }
         } finally {
             if (!completed) conversations.fail(conversationTurn);
+            metrics.request(outcome, started, inputTokens, outputTokens, cacheReadTokens);
+            // 取消同样要落审计：工具在被打断之前，往往已经把库结构发给外部模型了。
+            audit.onConnection(actor, ACTION_CHAT, request.connectionId(),
+                    "outcome=" + outcome
+                            + (failure == null ? "" : " failure=" + failure)
+                            + " sharing=" + policy.sharing()
+                            + " conversation=" + conversationTurn.id()
+                            + " rounds=" + rounds
+                            + " tools=" + toolCalls
+                            + " objects=" + objectsRead
+                            + " inputTokens=" + inputTokens
+                            + " outputTokens=" + outputTokens
+                            + " cacheReadTokens=" + cacheReadTokens
+                            + " model=" + current.model());
             Thread.interrupted();
         }
     }
@@ -301,8 +318,9 @@ public class AiSqlAgentService {
         if (matcher.find() || scriptSplitter.split(sql).size() != 1) {
             return "候选回答包含多条 SQL。请只保留一条完整的只读查询，并放在一个 sql 代码块中。";
         }
-        if (!classifier.isQuery(sql)) {
-            return "候选 SQL 不是只读查询。请改成一条 SELECT、WITH 或只读 EXPLAIN，不得生成写入或 DDL。";
+        if (!classifier.isSelectQuery(sql)) {
+            return "候选 SQL 不是一条 SELECT 查询。请改成 SELECT（可带 WITH 前缀），不要用 SHOW、EXPLAIN"
+                    + " 或任何写入、DDL 语句。";
         }
         return null;
     }
@@ -380,7 +398,7 @@ public class AiSqlAgentService {
                 输出要求：
                 - 用简体中文，先给一条完整 SQL，必须放在 ```sql 代码块里，再用不超过三句话说明关联和前提。
                 - 每次修正都输出修正后的完整 SQL，不要只给差异。
-                - 只给一条只读查询语句（SELECT、WITH 或只读 EXPLAIN），不得生成 INSERT、UPDATE、DELETE、DDL 或管理命令。
+                - 只给一条 SELECT 查询（可带 WITH 前缀），不得生成 SHOW、EXPLAIN、INSERT、UPDATE、DELETE、DDL 或管理命令。
                 - 可以说明通过了编译校验，但不得声称已经执行查询、读取结果或修改数据。
 
                 当前数据库类型：%s

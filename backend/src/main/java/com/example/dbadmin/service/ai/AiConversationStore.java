@@ -30,11 +30,15 @@ public class AiConversationStore {
     private static final int MAX_VISIBLE_MESSAGES = 40;
     private static final int MAX_INTERNAL_MESSAGES = 48;
     private final Cache<String, Conversation> conversations;
+    private final int maxConversationChars;
 
     public AiConversationStore(AppProperties properties) {
         AppProperties.AiAgent config = properties.getAiAgent();
+        maxConversationChars = Math.max(10_000, config.getMaxConversationChars());
         conversations = Caffeine.newBuilder()
-                .maximumSize(Math.max(10, config.getMaxConversations()))
+                // 按字符数而不是按条数淘汰：会话里存的是工具结果原文，条数完全说明不了占用。
+                .maximumWeight(Math.max(maxConversationChars, config.getMaxCachedChars()))
+                .weigher((String ignored, Conversation conversation) -> conversation.weight)
                 .expireAfterAccess(Duration.ofMinutes(Math.max(1, config.getConversationTtlMinutes())))
                 .build();
     }
@@ -88,14 +92,17 @@ public class AiConversationStore {
             List<AiGroundingReference> evidence
     ) {
         synchronized (turn.conversation) {
-            turn.conversation.internalMessages = trimHistory(internalMessages);
+            turn.conversation.internalMessages = trimHistory(internalMessages, maxConversationChars);
             turn.conversation.evidence = distinctEvidence(evidence);
             turn.conversation.visibleMessages.add(new AiChatMessageResponse("USER", turn.question, null));
             turn.conversation.visibleMessages.add(new AiChatMessageResponse("ASSISTANT", answer, grounding));
             while (turn.conversation.visibleMessages.size() > MAX_VISIBLE_MESSAGES) {
                 turn.conversation.visibleMessages.remove(0);
             }
+            turn.conversation.weight = weight(turn.conversation);
         }
+        // Caffeine 只在写入时称重，而会话是原地长大的；不重新 put，权重会一直停在创建那一刻。
+        conversations.put(turn.conversation.id, turn.conversation);
         turn.conversation.busy.set(false);
     }
 
@@ -169,10 +176,43 @@ public class AiConversationStore {
         return result;
     }
 
-    private static List<LlmAgentMessage> trimHistory(List<LlmAgentMessage> input) {
+    /**
+     * 保留最近的历史，同时受条数与字符数两道约束。
+     *
+     * <p>窗口一律从一条 USER 消息开始：协议要求 tool_use 和 tool_result 成对出现，从中间切会留下
+     * 找不到调用的工具结果，模型侧直接报错。</p>
+     */
+    private static List<LlmAgentMessage> trimHistory(List<LlmAgentMessage> input, int maxChars) {
         int from = Math.max(0, input.size() - MAX_INTERNAL_MESSAGES);
+        long chars = 0;
+        for (int index = input.size() - 1; index >= from; index--) {
+            chars += chars(input.get(index));
+            if (chars > maxChars) {
+                from = index + 1;
+                break;
+            }
+        }
         while (from < input.size() && input.get(from).role() != LlmAgentMessage.Role.USER) from++;
         return List.copyOf(input.subList(from, input.size()));
+    }
+
+    private static int weight(Conversation conversation) {
+        long chars = 0;
+        for (LlmAgentMessage message : conversation.internalMessages) chars += chars(message);
+        for (AiChatMessageResponse message : conversation.visibleMessages) {
+            chars += message.text() == null ? 0 : message.text().length();
+        }
+        for (AiGroundingReference reference : conversation.evidence) {
+            chars += reference.label().length() + (reference.detail() == null ? 0 : reference.detail().length());
+        }
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(1, chars));
+    }
+
+    private static int chars(LlmAgentMessage message) {
+        int total = message.text().length();
+        for (var call : message.toolCalls()) total += call.arguments().toString().length();
+        for (var result : message.toolResults()) total += result.content().length();
+        return total;
     }
 
     private static List<AiGroundingReference> distinctEvidence(List<AiGroundingReference> input) {
@@ -212,6 +252,8 @@ public class AiConversationStore {
         private final String schemaName;
         private final AtomicBoolean busy = new AtomicBoolean();
         private long metadataVersion;
+        /** 缓存权重（字符数）。由 {@link AiConversationStore#weight} 在每轮结束后重算。 */
+        private volatile int weight = 1;
         private List<LlmAgentMessage> internalMessages = List.of();
         private List<AiGroundingReference> evidence = List.of();
         private final List<AiChatMessageResponse> visibleMessages = new ArrayList<>();

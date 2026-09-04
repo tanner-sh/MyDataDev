@@ -169,8 +169,12 @@ app:
     queue-capacity: 20
     max-concurrent-per-user: 2
     conversation-ttl-minutes: 60
-    max-conversations: 1000
+    # 会话缓存按字符数计量而不是按条数：一条会话保存的是工具结果原文，单条可以到几百 KB。
+    max-conversation-chars: 400000
+    max-cached-chars: 40000000
     validation-timeout-seconds: 10
+    # 一轮 Agent 最多 8 次推理、16 次工具调用，还要算上排队时间；SSE 超时必须比这个总和宽。
+    stream-timeout-minutes: 10
   native-tools:
     probe-timeout-seconds: 3
     extra-search-paths: []

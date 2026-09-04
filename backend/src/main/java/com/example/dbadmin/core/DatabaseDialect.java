@@ -33,6 +33,24 @@ public interface DatabaseDialect {
 
     SqlResult explain(Connection connection, String sql, int maxRows, int timeoutSeconds) throws Exception;
 
+    /**
+     * 对一条候选查询做「只解析、不取数」的校验：能编译就正常返回，不能编译就抛出驱动的原始异常。
+     *
+     * <p>实现必须保证不会真正取业务行 —— AI 会拿模型刚生成、没人看过的 SQL 反复调用它，一条
+     * 笛卡尔积在生产库上跑到底的代价，比校验本身大得多。</p>
+     *
+     * <p>默认实现只 prepare 再读结果列元数据。PostgreSQL、Oracle、SQL Server 的驱动会把它翻译
+     * 成一次服务端 Describe，确实不执行；但 Connector/J 在默认的客户端预编译下，
+     * {@code getMetaData()} 会另建一个语句把查询真跑一遍，所以 MySQL 系必须覆盖这个方法。新增
+     * 方言时先确认驱动的行为，别默认继承。</p>
+     */
+    default void compileQuery(Connection connection, String sql, int timeoutSeconds) throws Exception {
+        try (java.sql.PreparedStatement statement = connection.prepareStatement(sql)) {
+            configureReadStatement(connection, statement, 0, timeoutSeconds);
+            statement.getMetaData();
+        }
+    }
+
     default NamespaceKind namespaceKind() {
         return NamespaceKind.SCHEMA;
     }

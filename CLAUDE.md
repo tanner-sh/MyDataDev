@@ -73,7 +73,14 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `listConnections`、`listNamespaces`、`searchObjects`、`describeObject`、`getObjectDdl`、`browseTable`、`query`、`explain`；写工具只有 `db_execute` 一个，它复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少。
 
-应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面只有 `AiSettingsPanel`（管理抽屉）与 `AiAssistantPanel`（回答抽屉，SQL 工作台与结构对比共用）。
+应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/aiChat.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面是 `AiSettingsPanel`（管理抽屉，含连接共享策略与业务词典）、`AiAssistantPanel`（单轮回答抽屉，SQL 工作台与结构对比共用）与 `AiSqlChatPanel`（多轮 Agent 抽屉）。
+
+自然语言 SQL 那条路是个服务端闭环的 Agent（`AiSqlAgentService`），有几处约定不要绕开：
+
+- **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
+- **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
+- **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
+- `AiAgentCoordinator` 管有界线程池、按用户并发上限与取消；`AiAgentMetrics` 出 Micrometer 指标，其中 `cache_read` 长期为 0 说明 prompt cache 的前缀被写脏了。
 
 ### 数据库迁移
 

@@ -73,6 +73,16 @@ public class AiAgentCoordinator {
         }
     }
 
+    /**
+     * 提交时工作线程是否已经用满，也就是新任务大概率要排队。
+     *
+     * <p>只用来给界面一句「正在排队」的说法：请求已经返回 200 并建好了 SSE，如果不说，用户
+     * 看到的就是一条什么都不发生的流。</p>
+     */
+    public boolean saturated() {
+        return executor.getActiveCount() >= executor.getCorePoolSize();
+    }
+
     public boolean cancel(String requestId, String ownerKey) {
         Handle handle = handles.get(requestId);
         return handle != null && handle.ownerKey.equals(ownerKey) && handle.cancel();

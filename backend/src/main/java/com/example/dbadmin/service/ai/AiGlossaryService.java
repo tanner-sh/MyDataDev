@@ -6,8 +6,11 @@ import com.example.dbadmin.dto.AiDtos.AiGlossaryUpdateRequest;
 import com.example.dbadmin.repo.AiGlossaryRepository;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.ConnectionService;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -19,6 +22,11 @@ public class AiGlossaryService {
     private final AiGlossaryRepository repository;
     private final ConnectionService connections;
     private final AuditRepository audit;
+    /** Agent 一轮里 search_schema 会被调好几次，词典每次都回源等于白打 H2。 */
+    private final Cache<Long, List<AiBusinessTerm>> cached = Caffeine.newBuilder()
+            .maximumSize(200)
+            .expireAfterWrite(Duration.ofMinutes(10))
+            .build();
 
     public AiGlossaryService(AiGlossaryRepository repository, ConnectionService connections, AuditRepository audit) {
         this.repository = repository;
@@ -35,12 +43,13 @@ public class AiGlossaryService {
         connections.require(connectionId);
         List<AiBusinessTerm> entries = normalize(connectionId, request.entries());
         repository.replace(connectionId, entries);
+        cached.invalidate(connectionId);
         audit.onConnection(actor, "AI_GLOSSARY_UPDATE", connectionId, "entries=" + entries.size());
         return list(connectionId);
     }
 
     public List<AiBusinessTerm> terms(long connectionId) {
-        return repository.findByConnectionId(connectionId);
+        return cached.get(connectionId, repository::findByConnectionId);
     }
 
     private static List<AiBusinessTerm> normalize(long connectionId, List<AiGlossaryEntryRequest> input) {
