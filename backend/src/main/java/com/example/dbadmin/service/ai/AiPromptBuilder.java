@@ -58,30 +58,6 @@ public final class AiPromptBuilder {
     }
 
     /**
-     * 执行计划解读。
-     *
-     * <p>确定性规则已经判断出来的结论（{@code ruleFindings}）一并发过去，让模型在它们之上
-     * 解释「为什么慢、建什么索引」，而不是重新判断一遍 —— 规则那部分不该由模型来做。</p>
-     */
-    public static String explain(String sql, String planText, String ruleFindings) {
-        StringBuilder text = new StringBuilder("""
-                下面是一条 SQL 和它的执行计划。请回答两件事：
-                1. 这个计划为什么可能慢（指出具体是哪一步）；
-                2. 可以怎么改 —— 建索引就给出完整的建索引语句，改写 SQL 就给出改写后的语句。
-                如果计划本身没有明显问题，直接说「这个计划没有明显问题」，不要为了凑建议而建议。
-
-                SQL：
-                ```sql
-                """);
-        text.append(clamp(sql, MAX_SQL_CHARS)).append("\n```\n\n执行计划：\n").append(clamp(planText, MAX_SQL_CHARS)).append('\n');
-        if (ruleFindings != null && !ruleFindings.isBlank()) {
-            text.append("\n工作台已经用固定规则识别出的信号（不必重复判断，请在此之上解释与给建议）：\n")
-                    .append(clamp(ruleFindings, 2_000)).append('\n');
-        }
-        return text.toString();
-    }
-
-    /**
      * 结果集解读与图表推荐。
      *
      * <p>候选图表由前端的 {@code resultChart.ts} 算出来一并发过来：能画什么是确定的事（哪些列是

@@ -209,35 +209,6 @@ public class AiAssistantService {
         return stream(prepared, ACTION_REVIEW_SCRIPT, connectionId, actor);
     }
 
-    /**
-     * 解读执行计划。
-     *
-     * <p>计划文本与确定性规则已经得出的结论都由前端回传：那些结论是 {@code explainInsights.ts}
-     * 算出来的，模型只在它们之上解释「为什么慢、建什么索引」，不重新判断一遍。</p>
-     */
-    public String explain(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
-        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings, actor);
-        LlmResponse response = prepared.client().complete(prepared.request());
-        writeAudit(ACTION_EXPLAIN, connectionId, prepared, response, actor);
-        return response.text();
-    }
-
-    public SseEmitter explainStream(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
-        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings, actor);
-        return stream(prepared, ACTION_EXPLAIN, connectionId, actor);
-    }
-
-    private Prepared prepareExplain(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
-        AiSettings current = settings.requireEnabled(actor);
-        AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
-        DbConnection connection = connections.require(connectionId);
-        SchemaContext context = contexts.forSql(connectionId, schemaName, sql, policy);
-        LlmRequest request = LlmRequest.of(
-                AiPromptBuilder.system(context, dialectHint(connection)),
-                AiPromptBuilder.explain(sql, plan, findings));
-        return new Prepared(clients.create(current), request, current, policy, context);
-    }
-
     private SseEmitter stream(Prepared prepared, String action, long connectionId, String actor) {
         return stream(prepared, action, connectionId, actor, () -> { });
     }

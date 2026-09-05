@@ -10,7 +10,10 @@ import { PanelLoading } from './PanelState';
 const { Paragraph, Text } = Typography;
 
 export type AiAskRequest = {
-  /** 后端路径（相对 /api/ai/sql），例如 explain-insight。执行报错的诊断不走这里，见 AiSqlChatPanel。 */
+  /**
+   * 后端路径（相对 /api/ai/sql），例如 interpret。需要读结构才答得准的那几件事都不走这里
+   * ——生成 SQL、报错诊断、结果复盘、执行计划解读都在 AiSqlChatPanel 那条 Agent 路上。
+   */
   action: string;
   title: string;
   body: Record<string, unknown>;

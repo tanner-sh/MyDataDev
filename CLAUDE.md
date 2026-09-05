@@ -73,12 +73,13 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `listConnections`、`listNamespaces`、`searchObjects`、`describeObject`、`getObjectDdl`、`browseTable`、`query`、`explain`；写工具只有 `db_execute` 一个，它复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少。
 
-应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/aiChat.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面是 `AiSettingsPanel`（管理抽屉，含连接共享策略与业务词典）、`AiAssistantPanel`（单轮回答抽屉，SQL 工作台与结构对比共用）与 `AiSqlChatPanel`（多轮 Agent 抽屉）。
+应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/aiChat.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面是 `AiSettingsPanel`（管理抽屉，含连接共享策略、业务词典与 token 用量）、`AiAssistantPanel`（单轮回答抽屉：结果解读、数据字典、同步脚本审阅）与 `AiSqlChatPanel`（多轮 Agent 抽屉：生成、报错诊断、结果复盘、执行计划解读）。
 
 自然语言 SQL 那条路是个服务端闭环的 Agent（`AiSqlAgentService`），有几处约定不要绕开：
 
 - **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
+- **执行计划的解读也走 Agent**（`AiChatRequest.plan`）。只发计划文本的话，模型看不到这张表上真实存在哪些索引，只能泛泛地说「加个索引」。这一轮是唯一允许模型产出非 SELECT 的：一条 `CREATE INDEX`（`AiPlanAdvice.isIndexScript` 之外的 DDL 与写操作一律打回），且不做编译校验 —— `compileQuery` 只接 SELECT，prepare 一条 DDL 在某些驱动上等于执行它。脚本仍然只写进编辑器。
 - **执行报错的诊断走 Agent，不要再开单次问答的路。** 最常见的报错是「字段/表不存在」，而报错里提到的名字本来就是错的 —— 只看那条 SQL 提到的表根本查不出正确名称，必须能搜结构、查词典。失败现场经 `AiChatRequest.failure` 传入，由 `AiChatPrompt` 加上不可信标注后才进模型：错误原文来自目标库，拼进用户消息就和用户的指令没区别了。
 - **词典的另一半从「搜空的检索词」来**（`AiGlossaryGaps` + `ai_glossary_gap`）：`search_schema` 一个对象都没搜到的词，就是用户的说法和这个库的命名对不上的现场。`AiSqlAgentService` 在 `finally` 里汇总落库（失败和取消也记），整段吞异常 —— 这是旁路信息，不该让一次已经跑完的回答失败。筛选规则与下面那条同源：超过十二个汉字的是描述不是名字。这是唯一一处会落库的用户提问派生物，边界写在 `docs/ai-assistant.md` 的 7.8。
 - **业务词典的候选从表注释推**（`AiGlossarySuggestions`），但不自动落库：注释里的词本来就能被 `search_schema` 搜到，自动生成的词条不算新信息 —— 词典不可替代的是用户嘴里的「会员」「买家」，那只能人补。目标是把「从零填写」变成「审阅和补别名」。

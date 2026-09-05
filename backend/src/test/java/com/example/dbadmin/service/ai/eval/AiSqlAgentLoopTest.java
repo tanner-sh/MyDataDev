@@ -259,6 +259,62 @@ class AiSqlAgentLoopTest {
     }
 
     /**
+     * 计划解读走 Agent 而不是单次问答：只把计划文本发过去，模型看不到这张表上真实存在哪些
+     * 索引，只能泛泛地说「加个索引」，甚至建议一个已经有了的。
+     */
+    @Test
+    void readsTheRealIndexesBeforeSuggestingOneAndHandsTheScriptToTheUser() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"订单\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"SALES_ORDER\"]}"),
+                answer("""
+                        ```sql
+                        CREATE INDEX IDX_SALES_ORDER_STATUS ON SALES_ORDER(ORDER_STATUS)
+                        ```
+                        计划在 SALES_ORDER 上做了全表扫描，而 ORDER_STATUS 上没有索引。""")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.askAboutPlan("这条为什么慢",
+                    new com.example.dbadmin.dto.AiDtos.AiExecutionPlan(
+                            "SELECT * FROM SALES_ORDER WHERE ORDER_STATUS = 'PAID'",
+                            "Seq Scan on SALES_ORDER  (cost=0.00..18334.00 rows=1200000)",
+                            "SALES_ORDER 全表扫描，预估 120 万行"));
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.stats()).containsEntry("mode", "explain");
+            assertThat(run.answer()).contains("CREATE INDEX");
+            // 建索引语句没法编译校验（compileQuery 只接 SELECT），所以要明说它没校验过、不会自动执行。
+            assertThat(run.validated()).isFalse();
+            assertThat(run.stats()).containsEntry("seq", "search_schema,describe_objects");
+        }
+    }
+
+    /** 「优化」的名义下给出删索引、改表结构或写数据，都要被打回。 */
+    @Test
+    void refusesToTurnPlanAdviceIntoADropOrAnAlter() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"订单\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"SALES_ORDER\"]}"),
+                answer("```sql\nDROP INDEX IDX_SALES_ORDER_CREATED\n```"),
+                answer("""
+                        ```sql
+                        CREATE INDEX IDX_SALES_ORDER_STATUS ON SALES_ORDER(ORDER_STATUS)
+                        ```
+                        另外 IDX_SALES_ORDER_CREATED 看起来没被用到，是否删除请你自己判断。""")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.askAboutPlan("这条为什么慢",
+                    new com.example.dbadmin.dto.AiDtos.AiExecutionPlan(
+                            "SELECT * FROM SALES_ORDER", "Seq Scan on SALES_ORDER", null));
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.answer()).doesNotContain("DROP INDEX\n```");
+            List<LlmAgentMessage> retryRound = model.seen().get(3).messages();
+            assertThat(retryRound.get(retryRound.size() - 1).text()).contains("CREATE INDEX");
+        }
+    }
+
+    /**
      * 预算闸门只有在记账可靠时才有意义，而「跑挂了就不记」会让最容易失控的那类请求
      * （反复重试、每次都烧 token）刚好绕开额度。
      */

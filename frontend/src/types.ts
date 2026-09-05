@@ -715,6 +715,14 @@ export type AiGlossaryEntry = {
   description?: string | null;
 };
 
+/**
+ * 一次执行计划的现场：跑的是哪条 SQL、计划长什么样、确定性规则已经看出了什么。
+ *
+ * findings 来自 explainInsights.ts，一并发过去是为了让模型在它们之上解释与给建议，
+ * 而不是重新判断一遍「这是不是全表扫描」。
+ */
+export type AiExecutionPlan = { sql: string; plan: string; findings?: string | null };
+
 export type AiGroundingReference = {
   kind: 'TABLE' | 'COLUMN' | 'FOREIGN_KEY' | 'QUERY_HISTORY';
   label: string;

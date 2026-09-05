@@ -156,7 +156,12 @@ public final class AiAgentHarness implements AutoCloseable {
 
     /** 在已有会话里接着问 —— 多轮之间的上下文是否稳定增长，只有同一段会话里才看得出来。 */
     public Run askIn(String conversationId, String question) throws Exception {
-        return ask(conversationId, question, null, null);
+        return ask(conversationId, question, null, null, null);
+    }
+
+    /** 带着一份执行计划来问，也就是执行计划面板里的「AI 解读」。 */
+    public Run askAboutPlan(String question, com.example.dbadmin.dto.AiDtos.AiExecutionPlan plan) throws Exception {
+        return ask(null, question, null, null, plan);
     }
 
     /** 带着执行现场来问：失败原文，或成功但结果不对的形状。 */
@@ -165,14 +170,15 @@ public final class AiAgentHarness implements AutoCloseable {
             com.example.dbadmin.dto.AiDtos.AiExecutionFailure failure,
             com.example.dbadmin.dto.AiDtos.AiExecutionOutcome outcome
     ) throws Exception {
-        return ask(null, question, failure, outcome);
+        return ask(null, question, failure, outcome, null);
     }
 
     private Run ask(
             String conversationId,
             String question,
             com.example.dbadmin.dto.AiDtos.AiExecutionFailure failure,
-            com.example.dbadmin.dto.AiDtos.AiExecutionOutcome outcome
+            com.example.dbadmin.dto.AiDtos.AiExecutionOutcome outcome,
+            com.example.dbadmin.dto.AiDtos.AiExecutionPlan plan
     ) throws Exception {
         CountDownLatch finished = new CountDownLatch(1);
         List<String> details = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
@@ -185,7 +191,8 @@ public final class AiAgentHarness implements AutoCloseable {
         }).when(audit).onConnection(nullable(String.class), anyString(), anyLong(), anyString());
 
         long started = System.nanoTime();
-        agent.chatStream(new AiChatRequest(CONNECTION_ID, SCHEMA, conversationId, question, null, failure, outcome),
+        agent.chatStream(
+                new AiChatRequest(CONNECTION_ID, SCHEMA, conversationId, question, null, failure, outcome, plan),
                 "eval", OWNER);
         if (!finished.await(5, TimeUnit.MINUTES)) throw new IllegalStateException("Agent 请求超时，且没有写审计");
         Duration elapsed = Duration.ofNanos(System.nanoTime() - started);

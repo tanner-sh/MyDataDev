@@ -48,20 +48,6 @@ class AiPromptBuilderTest {
 
     /** 确定性规则已经得出的结论要一并发过去，模型只在其上解释，而不是重新判断一遍。 */
     @Test
-    void explainPromptForwardsTheDeterministicFindings() {
-        String prompt = AiPromptBuilder.explain("SELECT 1", "Seq Scan on orders", "orders 全表扫描，预估 120 万行");
-
-        assertThat(prompt).contains("Seq Scan on orders");
-        assertThat(prompt).contains("不必重复判断");
-        assertThat(prompt).contains("预估 120 万行");
-    }
-
-    @Test
-    void explainPromptOmitsTheFindingsSectionWhenThereAreNone() {
-        assertThat(AiPromptBuilder.explain("SELECT 1", "Seq Scan", "  ")).doesNotContain("不必重复判断");
-    }
-
-    @Test
     void interpretPromptWarnsThatOnlyAPreviewWasSeen() {
         String prompt = AiPromptBuilder.interpret("SELECT * FROM orders", "id\tstatus\n1\tPAID", null);
 

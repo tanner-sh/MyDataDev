@@ -133,7 +133,8 @@ public final class AiDtos {
             @NotBlank @Size(max = 20000) String message,
             @Size(max = 20000) String currentSql,
             @jakarta.validation.Valid AiExecutionFailure failure,
-            @jakarta.validation.Valid AiExecutionOutcome outcome
+            @jakarta.validation.Valid AiExecutionOutcome outcome,
+            @jakarta.validation.Valid AiExecutionPlan plan
     ) {
     }
 
@@ -159,6 +160,20 @@ public final class AiDtos {
     public record AiExecutionOutcome(
             @NotBlank @Size(max = 20000) String sql,
             @Size(max = 4000) String shape
+    ) {
+    }
+
+    /**
+     * 一次执行计划的现场：跑的是哪条 SQL、计划长什么样、确定性规则已经看出了什么。
+     *
+     * <p>{@code findings} 是 {@code explainInsights.ts} 用固定规则算出来的结论（全表扫描、
+     * 未命中索引一类），一并发过去是为了让模型在它们之上解释与给建议，而不是重新判断一遍
+     * —— 那部分本来就不该由模型来做。</p>
+     */
+    public record AiExecutionPlan(
+            @NotBlank @Size(max = 20000) String sql,
+            @NotBlank @Size(max = 20000) String plan,
+            @Size(max = 4000) String findings
     ) {
     }
 
@@ -246,21 +261,6 @@ public final class AiDtos {
             java.util.List<String> aliases,
             java.util.List<String> objectNames,
             String description
-    ) {
-    }
-
-    /**
-     * 执行计划解读请求。
-     *
-     * <p>{@code findings} 是前端确定性规则（explainInsights.ts）已经得出的结论，一并发过去
-     * 让模型在其上解释，而不是重新判断一遍 —— 那部分不该由模型来做。</p>
-     */
-    public record AiExplainRequest(
-            long connectionId,
-            @Size(max = 200) String schemaName,
-            @NotBlank @Size(max = 20000) String sql,
-            @NotBlank @Size(max = 20000) String plan,
-            @Size(max = 4000) String findings
     ) {
     }
 

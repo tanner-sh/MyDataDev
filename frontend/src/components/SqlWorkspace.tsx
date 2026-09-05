@@ -3,7 +3,7 @@ import { Alert, Button, Dropdown, Empty, Layout, Modal, Popover, Select, Space, 
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import type { AiExecutionFailure, AiExecutionOutcome, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import type { AiExecutionFailure, AiExecutionOutcome, AiExecutionPlan, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
 import { resultShape, resultShapeText } from '../aiResultShape';
 import { ResultGrid } from './ResultGrid';
@@ -99,6 +99,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   const [aiChatOpen, setAiChatOpen] = useState(false);
   const [aiChatFailure, setAiChatFailure] = useState<AiExecutionFailure>();
   const [aiChatOutcome, setAiChatOutcome] = useState<AiExecutionOutcome>();
+  const [aiChatPlan, setAiChatPlan] = useState<AiExecutionPlan>();
   const [aiDocumentOpen, setAiDocumentOpen] = useState(false);
   const [aiDocumentTables, setAiDocumentTables] = useState<string[]>([]);
   const [executionElapsedMs, setExecutionElapsedMs] = useState(0);
@@ -191,6 +192,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
     const shape = resultShape(result.result);
     if (!shape) return;
     setAiChatFailure(undefined);
+    setAiChatPlan(undefined);
     setAiChatOutcome({ sql: result.sql, shape: resultShapeText(shape) });
     setAiChatOpen(true);
   });
@@ -207,6 +209,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   function askAiToDiagnose() {
     if (!selected || !activeTab.errorDetail) return;
     setAiChatOutcome(undefined);
+    setAiChatPlan(undefined);
     setAiChatFailure({
       sql: draftRef.current || activeTab.sql,
       errorMessage: activeTab.errorDetail
@@ -217,23 +220,24 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   /**
    * 把这条执行计划交给 AI 解读。
    *
+   * 走 Agent 那条路而不是单次问答：只有计划文本的话，模型看不到这张表上真实存在哪些索引，
+   * 只能泛泛地说「加个索引」，甚至建议一个已经有了的。进了 Agent 它才能读字段和索引、
+   * 看这个库里同类查询怎么写。产出的建索引语句同样只写进编辑器，由人执行。
+   *
    * 一并发过去的是确定性规则已经算出的结论：模型不该重新判断「这是不是全表扫描」，
    * 它要做的是在这些事实之上解释原因、给出改法。
    */
   const askAiToExplain = useStableEvent((result: SqlStatementResult, findings: ExplainFinding[]) => {
     if (!selected) return;
     const columns = result.result.columns.map((column) => column.label);
-    setAiRequest({
-      action: 'explain-insight',
-      title: 'AI 解读执行计划',
-      body: {
-        connectionId: selected.id,
-        schemaName: activeSchema,
-        sql: result.sql,
-        plan: explainPlanText(columns, result.result.rows),
-        findings: explainFindingsText(findings)
-      }
+    setAiChatFailure(undefined);
+    setAiChatOutcome(undefined);
+    setAiChatPlan({
+      sql: result.sql,
+      plan: explainPlanText(columns, result.result.rows),
+      findings: explainFindingsText(findings)
     });
+    setAiChatOpen(true);
   });
 
   /**
@@ -657,8 +661,14 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
             currentSql={draftSql}
             failure={aiChatFailure}
             outcome={aiChatOutcome}
-            onFailureConsumed={() => { setAiChatFailure(undefined); setAiChatOutcome(undefined); }}
-            onClose={() => { setAiChatOpen(false); setAiChatFailure(undefined); setAiChatOutcome(undefined); }}
+            plan={aiChatPlan}
+            onFailureConsumed={() => { setAiChatFailure(undefined); setAiChatOutcome(undefined); setAiChatPlan(undefined); }}
+            onClose={() => {
+              setAiChatOpen(false);
+              setAiChatFailure(undefined);
+              setAiChatOutcome(undefined);
+              setAiChatPlan(undefined);
+            }}
             onInsertSql={onOpenSqlInNewTab}
           />
         </Suspense>

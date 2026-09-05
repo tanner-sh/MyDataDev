@@ -108,7 +108,7 @@ public class AiSqlAgentService {
         AiConversationStore.Turn turn = conversations.begin(
                 request.conversationId(), ownerKey, request.connectionId(), request.schemaName(),
                 metadataCache.directoryVersion(request.connectionId()), request.message(), request.currentSql(),
-                request.failure(), request.outcome());
+                request.failure(), request.outcome(), request.plan());
         SseEmitter emitter = new SseEmitter(streamTimeoutMs);
         CountDownLatch responseReady = new CountDownLatch(1);
         String requestId;
@@ -203,11 +203,13 @@ public class AiSqlAgentService {
 
                 if (modelTurn.toolCalls().isEmpty()) {
                     if (modelTurn.text().isBlank()) throw new IllegalStateException("模型没有返回 SQL 或说明。");
+                    boolean planMode = request.plan() != null;
                     String retry = retryReason(modelTurn.text(), conversationTurn.requireInspection(),
-                            searched, searchFoundObjects, described);
+                            searched, searchFoundObjects, described, planMode);
                     String sql = extractSql(modelTurn.text());
                     AiSqlValidationService.ValidationResult validation = null;
-                    if (retry == null && sql != null) {
+                    boolean indexScript = planMode && AiPlanAdvice.isIndexScript(sql);
+                    if (retry == null && sql != null && !indexScript) {
                         send(emitter, "phase", Map.of("text", "正在用目标数据库编译校验 SQL…"));
                         validation = validator.validate(request.connectionId(), request.schemaName(), sql);
                         metrics.validation(validation.valid());
@@ -223,7 +225,7 @@ public class AiSqlAgentService {
                         continue;
                     }
 
-                    AiGroundingReport grounding = grounding(sql, validation, evidence);
+                    AiGroundingReport grounding = grounding(sql, validation, evidence, indexScript);
                     messages.add(LlmAgentMessage.assistant(modelTurn.text(), List.of()));
                     conversations.complete(conversationTurn, messages, modelTurn.text(), grounding, evidence);
                     completed = true;
@@ -339,6 +341,7 @@ public class AiSqlAgentService {
     private static String mode(AiChatRequest request) {
         if (request.failure() != null) return "diagnose";
         if (request.outcome() != null) return "review";
+        if (request.plan() != null) return "explain";
         return "generate";
     }
 
@@ -347,7 +350,8 @@ public class AiSqlAgentService {
             boolean requireInitialInspection,
             boolean searched,
             boolean searchFoundObjects,
-            boolean described
+            boolean described,
+            boolean planMode
     ) {
         if (requireInitialInspection && !searched) {
             return "你还没有搜索当前数据库结构。请先调用 search_schema，再依据结果继续，不要直接猜表名。";
@@ -361,9 +365,14 @@ public class AiSqlAgentService {
         if (matcher.find() || scriptSplitter.split(sql).size() != 1) {
             return "候选回答包含多条 SQL。请只保留一条完整的只读查询，并放在一个 sql 代码块中。";
         }
+        // 计划解读这一轮还收「建这个索引」—— 那正是它最有价值的产出。但也只收到建索引为止。
+        if (planMode && AiPlanAdvice.isIndexScript(sql)) return null;
         if (!classifier.isSelectQuery(sql)) {
-            return "候选 SQL 不是一条 SELECT 查询。请改成 SELECT（可带 WITH 前缀），不要用 SHOW、EXPLAIN"
-                    + " 或任何写入、DDL 语句。";
+            return planMode
+                    ? "候选 SQL 只能是改写后的 SELECT 查询或一条 CREATE INDEX 语句。"
+                            + "删除索引、改表结构或写数据都不在这一步的范围内，需要的话只用文字说明。"
+                    : "候选 SQL 不是一条 SELECT 查询。请改成 SELECT（可带 WITH 前缀），不要用 SHOW、EXPLAIN"
+                            + " 或任何写入、DDL 语句。";
         }
         return null;
     }
@@ -378,7 +387,8 @@ public class AiSqlAgentService {
     private static AiGroundingReport grounding(
             String sql,
             AiSqlValidationService.ValidationResult validation,
-            List<AiGroundingReference> evidence
+            List<AiGroundingReference> evidence,
+            boolean indexScript
     ) {
         if (sql == null) return new AiGroundingReport(false, "回答未包含可校验的 SQL。", List.of());
         Set<String> usedTables = new LinkedHashSet<>();
@@ -397,7 +407,9 @@ public class AiSqlAgentService {
             if (include) selected.putIfAbsent(item.kind() + '\0' + item.label(), item);
             if (selected.size() >= 30) break;
         }
-        String message = validation == null ? "SQL 未执行编译校验。" : validation.message();
+        String message = indexScript
+                ? "这是一条建索引语句，未做编译校验，也不会自动执行 —— 请在 SQL 工作台里确认后再执行。"
+                : validation == null ? "SQL 未执行编译校验。" : validation.message();
         return new AiGroundingReport(validation != null && validation.valid(), message, List.copyOf(selected.values()));
     }
 
@@ -453,6 +465,11 @@ public class AiSqlAgentService {
                 - 后续修正若引入了新的业务实体或字段，继续调用结构工具；仅修改已有条件时可沿用本会话已验证的工具结果。
                 - 用户带着「结果不对」的现场来时：结果形状里只有计数，没有数据。零行通常是过滤条件过严或关联方向反了，
                   某列全为空通常是外连接没匹配上，行数远超预期通常是缺了关联条件。先核对结构再给修正后的 SQL。
+                - 用户带着执行计划来时：先用 describe_objects 读出相关表真实存在哪些索引和字段，再解释这个计划为什么慢。
+                  给建议要落到具体一步上，别泛泛说「加索引」；确实需要就给一条完整的 CREATE INDEX 语句，
+                  它同样只写进编辑器、由人执行。已经存在的索引不要重复建议，计划本身没问题就直说。
+                  不要给 DROP INDEX、ALTER TABLE 或任何写数据的语句 —— 删一个索引是否安全取决于这个库上还有谁在用它，
+                  那是人的判断，需要提醒就用文字说。
                 - 用户带着执行失败的现场来时：先按错误原文判断是哪一类问题（对象名或字段名不存在、类型不匹配、语法、权限、
                   超时），再用结构工具核对真实名称，然后说明原因并给出修正后的完整 SQL。不要照着报错里的名字猜，
                   那个名字本来就是错的。如果失败的是写入或 DDL 语句，只解释原因和该怎么改，不要生成语句。
@@ -463,7 +480,8 @@ public class AiSqlAgentService {
                 输出要求：
                 - 用简体中文，先给一条完整 SQL，必须放在 ```sql 代码块里，再用不超过三句话说明关联和前提。
                 - 每次修正都输出修正后的完整 SQL，不要只给差异。
-                - 只给一条 SELECT 查询（可带 WITH 前缀），不得生成 SHOW、EXPLAIN、INSERT、UPDATE、DELETE、DDL 或管理命令。
+                - 只给一条 SELECT 查询（可带 WITH 前缀），不得生成 SHOW、EXPLAIN、INSERT、UPDATE、DELETE、DDL 或管理命令；
+                  唯一的例外是解读执行计划时可以给一条 CREATE INDEX。
                 - 可以说明通过了编译校验，但不得声称已经执行查询、读取结果或修改数据。
 
                 当前数据库类型：%s

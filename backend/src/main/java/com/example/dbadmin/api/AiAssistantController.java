@@ -7,7 +7,6 @@ import com.example.dbadmin.dto.AiDtos.AiCancelResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
 import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
-import com.example.dbadmin.dto.AiDtos.AiExplainRequest;
 import com.example.dbadmin.dto.AiDtos.AiInterpretRequest;
 import com.example.dbadmin.dto.AiDtos.AiReviewScriptRequest;
 import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
@@ -70,26 +69,6 @@ public class AiAssistantController {
         requireQuery(request.connectionId());
         return assistant.generateStream(
                 request.connectionId(), request.schemaName(), request.question(), actor);
-    }
-
-    @PostMapping("/explain-insight")
-    public AiAnswerResponse explain(
-            @Valid @RequestBody AiExplainRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return new AiAnswerResponse(assistant.explain(
-                request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor));
-    }
-
-    @PostMapping("/explain-insight/stream")
-    public SseEmitter explainStream(
-            @Valid @RequestBody AiExplainRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return assistant.explainStream(
-                request.connectionId(), request.schemaName(), request.sql(), request.plan(), request.findings(), actor);
     }
 
     @PostMapping("/interpret/stream")

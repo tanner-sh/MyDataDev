@@ -121,10 +121,9 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `GET` | `/api/ai/connections/{id}/glossary/suggestions` | 从表注释推候选词条；只读，不落库 |
 | `GET`/`DELETE` | `/api/ai/connections/{id}/glossary/gaps` | AI 搜过却一无所获的业务词；DELETE 是「忽略」 |
 | `GET` | `/api/ai/usage` | token 用量与预算（管理员）；`days` 默认 14，上限 90 |
-| `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具 → 编译校验 → SQL；只提交当前这句话，历史在服务端会话里 |
+| `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具 → 编译校验 → SQL；只提交当前这句话，历史在服务端会话里。报错诊断、结果复盘、执行计划解读都走这一条（`failure` / `outcome` / `plan`） |
 | `GET`/`DELETE` | `/api/ai/sql/conversations/{id}` | 刷新后恢复可见消息；删除等于新建对话 |
 | `POST` | `/api/ai/sql/chat/{requestId}/cancel` | 取消正在跑的 Agent 请求 |
-| `POST` | `/api/ai/sql/explain-insight` | 执行计划解读 |
 | `POST` | `/api/ai/sql/{action}/stream` | 上述三项的 SSE 流式变体 |
 | `GET` | `/api/ai/status` | 可用性快照（所有登录用户可读，不含配置细节） |
 
@@ -239,7 +238,7 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 1. **选表策略只做了关键词与词块匹配**，没做「按最近使用」和「按外键邻接扩展」。前者要读 SQL 历史再做一次归因，后者要对每张候选表查一次外键 —— 两者都会把一次生成变成十几次元数据查询，而收益是「可能多认出一张相关表」。留到有真实反馈说选表不准时再补。
 2. **`SqlSuggestionValidator` 落在前端而不是后端**，名字也改成了 `sqlSuggestion.ts`。判定该发生在 SQL 要进编辑器的地方：流式回答是一段段到的，后端见到的是自己吐出去的片段，用户点「插入」时面对的是拼完的那一整段。放后端等于把同一条规则写两份。
 
-### M4 — 执行计划解读 · 已完成
+### M4 — 执行计划解读 · 已完成（M14 起并入 Agent）
 
 - `explainInsights.ts` 新增 `explainPlanText` 与 `explainFindingsText`：把计划渲染成制表符表格（JSON 会把列名在每行重复一遍，同样的信息多花一倍 token），把规则结论渲染成一行一条。
 - `AiPromptBuilder.explain` 把规则结论单列一段，并明说「不必重复判断」—— 模型要做的是在这些事实之上解释原因、给出改法。
@@ -385,6 +384,31 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 - 界面在 AI 设置里加了一张用量卡片：今日用量与额度、最近十四天按天的输入/输出/缓存读、
   用得最多的十个人。**不画图表** —— 一张表在这个宽度里比折线好读，也不必为它把图表依赖
   拉进首屏。
+
+### M14 — 执行计划解读并入 Agent · 已完成
+
+**只把计划文本发给模型，它看不到这张表上真实存在哪些索引。** M4 那条单轮问答拿到的是 SQL、
+计划和规则结论，然后就要回答「该建什么索引」—— 缺的恰恰是最关键的一半：现有索引、字段类型、
+基数，以及这个库里同类查询实际怎么写。结果只能是泛泛的「给 ORDER_STATUS 加个索引」，
+而那个索引很可能已经有了。
+
+所以走 M9 的老路：并进 Agent，删掉 `/api/ai/sql/explain-insight` 与它的流式变体。留着两条解读路、
+其中一条还更差，是比多一个端点更糟的事。
+
+- 计划现场经 `AiChatRequest.plan` 传入（`AiExecutionPlan`：SQL、计划文本、`explainInsights.ts` 的
+  规则结论），由 `AiChatPrompt` 加上不可信标注后才进模型 —— 计划文本里的表名和注释都来自目标库。
+- **带着计划进来时强制重新检查结构**（与失败、结果复盘一致）：不读出真实索引，「该建什么索引」
+  就只能靠猜。
+- **这一轮允许模型给出一条 `CREATE INDEX`**，那正是计划解读最有价值的产出。但也只到建索引为止：
+  `AiPlanAdvice.isIndexScript` 之外的 DDL 与写操作一律打回，只能用文字说明。删一个索引是否安全，
+  取决于这个库上还有谁在用它 —— 那是人的判断，不该被顺手写进编辑器。
+- **索引脚本不做编译校验**：`compileQuery` 只接 SELECT，而 prepare 一条 DDL 在某些驱动上就等于
+  执行它。所以证据面板直说「未做编译校验，也不会自动执行」，脚本按原样交给用户，在 SQL 工作台
+  走正常执行路径 —— 生产确认与审计都在那条路上。
+- 系统提示里新增的那条是**静态**的，和其他模式的说明并列，不随模式切换 —— 模式相关的内容一律走
+  用户消息。系统提示一变，整段 prompt cache 前缀就作废，`AiPromptCachePrefixTest` 会直接拦下来。
+- 审计里 `mode=explain`，与 `generate|diagnose|review` 并列；`AI_EXPLAIN_INSIGHT` 不再写入，
+  但 `auditLog.ts` 里的中文名要留着 —— 历史记录里还有这个码。
 
 ### 评测集 — 改这套 Agent 之前先跑一遍
 

@@ -14,7 +14,14 @@ import {
   streamErrorMessage
 } from '../aiChat';
 import { checkSqlSuggestion } from '../sqlSuggestion';
-import type { AiChatMessage, AiConversation, AiExecutionFailure, AiExecutionOutcome, AiGroundingReport } from '../types';
+import type {
+  AiChatMessage,
+  AiConversation,
+  AiExecutionFailure,
+  AiExecutionOutcome,
+  AiExecutionPlan,
+  AiGroundingReport
+} from '../types';
 
 const { Paragraph, Text } = Typography;
 
@@ -26,14 +33,18 @@ type PendingRequest = {
   requestId?: string;
 };
 
-export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, failure, outcome, onFailureConsumed, onClose, onInsertSql }: {
+export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, failure, outcome, plan, onFailureConsumed, onClose, onInsertSql }: {
   open: boolean;
   connectionId: number;
   schemaName?: string;
   currentSql: string;
-  /** 从结果区进来时带上的执行现场：跑挂的报错，或跑通但结果不对的形状。面板会自动发出一轮。 */
+  /**
+   * 从结果区进来时带上的执行现场：跑挂的报错、跑通但结果不对的形状，或一份执行计划。
+   * 面板会自动发出一轮，用户不用再敲一遍「这条为什么不对」。
+   */
   failure?: AiExecutionFailure;
   outcome?: AiExecutionOutcome;
+  plan?: AiExecutionPlan;
   onFailureConsumed?: () => void;
   onClose: () => void;
   onInsertSql: (sql: string, title: string) => void;
@@ -112,9 +123,14 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     if (outcome) {
       onFailureConsumed?.();
       void send({ question: '这条 SQL 跑通了，但结果看起来不对。请判断写法哪里与需求不符，并给出修正后的 SQL。', outcome });
+      return;
+    }
+    if (plan) {
+      onFailureConsumed?.();
+      void send({ question: '这条查询的执行计划如下，请解释它为什么慢，并给出可行的改法。', plan });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, failure, outcome, restored]);
+  }, [open, failure, outcome, plan, restored]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -165,10 +181,16 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     setError('');
   }
 
-  async function send(preset?: { question: string; failure?: AiExecutionFailure; outcome?: AiExecutionOutcome }) {
+  async function send(preset?: {
+    question: string;
+    failure?: AiExecutionFailure;
+    outcome?: AiExecutionOutcome;
+    plan?: AiExecutionPlan;
+  }) {
     const question = preset ? preset.question : input.trim();
     const failedExecution = preset?.failure;
     const reviewedExecution = preset?.outcome;
+    const explainedPlan = preset?.plan;
     if (!question || busy || restoring) return;
     const previousMessages = messages;
     setMessages([...messages, { role: 'USER', text: question }]);
@@ -200,7 +222,8 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
             ? currentSql.trim() || undefined
             : undefined,
           failure: failedExecution,
-          outcome: reviewedExecution
+          outcome: reviewedExecution,
+          plan: explainedPlan
         })
       });
       if (!response.ok || !response.body) {
