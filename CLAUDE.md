@@ -79,6 +79,7 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 
 - **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
+- **需求有歧义时反问走 `ask_user` 工具**（`AiClarify`），不要让模型在正文里提问 —— 正文里的问句用户点不了，也接不上下一轮。它由 `AiSqlAgentService` 拦下（不进只读的 `AiSchemaTools`），但**必须照常回一条工具结果**：少一条，下一轮的历史里就留下一个没有结果的工具调用，两家协议都会报错。审计里 `outcome=clarified`；评测集里有反问用例，打分反过来 —— 问了才算通过，否则打分只奖励「猜出一条 SQL」，模型永远不会选择问。
 - **执行计划的解读也走 Agent**（`AiChatRequest.plan`）。只发计划文本的话，模型看不到这张表上真实存在哪些索引，只能泛泛地说「加个索引」。这一轮是唯一允许模型产出非 SELECT 的：一条 `CREATE INDEX`（`AiPlanAdvice.isIndexScript` 之外的 DDL 与写操作一律打回），且不做编译校验 —— `compileQuery` 只接 SELECT，prepare 一条 DDL 在某些驱动上等于执行它。脚本仍然只写进编辑器。
 - **执行报错的诊断走 Agent，不要再开单次问答的路。** 最常见的报错是「字段/表不存在」，而报错里提到的名字本来就是错的 —— 只看那条 SQL 提到的表根本查不出正确名称，必须能搜结构、查词典。失败现场经 `AiChatRequest.failure` 传入，由 `AiChatPrompt` 加上不可信标注后才进模型：错误原文来自目标库，拼进用户消息就和用户的指令没区别了。
 - **词典的另一半从「搜空的检索词」来**（`AiGlossaryGaps` + `ai_glossary_gap`）：`search_schema` 一个对象都没搜到的词，就是用户的说法和这个库的命名对不上的现场。`AiSqlAgentService` 在 `finally` 里汇总落库（失败和取消也记），整段吞异常 —— 这是旁路信息，不该让一次已经跑完的回答失败。筛选规则与下面那条同源：超过十二个汉字的是描述不是名字。这是唯一一处会落库的用户提问派生物，边界写在 `docs/ai-assistant.md` 的 7.8。

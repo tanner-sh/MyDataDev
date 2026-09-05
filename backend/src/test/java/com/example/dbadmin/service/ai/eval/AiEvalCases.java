@@ -111,6 +111,18 @@ public final class AiEvalCases {
                         List.of("SALES_ORDER", "T_CRM_0021", "APP_USER"),
                         List.of("APP_USER_ARCHIVE"),
                         List.of("TOTAL_AMOUNT"),
-                        "三表连接，两个外键指向不同的表"));
+                        "三表连接，两个外键指向不同的表"),
+                // 以下三条的正确答案是一个问题。没有它们，打分只奖励「猜出一条 SQL」——
+                // 猜一个总比问一句得分高，模型学到的就是别问。
+                AiEvalCase.clarify("ambiguous-user",
+                        "帮我查一下用户",
+                        "「用户」在这个库里同时指系统用户（APP_USER）和客户（T_CRM_0021），"
+                                + "两张表都说得通，选哪张会改变整条 SQL"),
+                AiEvalCase.clarify("ambiguous-amount",
+                        "统计一下金额",
+                        "既没说哪张表的金额（订单头 TOTAL_AMOUNT 还是明细 AMT），也没说按什么维度汇总"),
+                AiEvalCase.clarify("ambiguous-active",
+                        "谁最活跃",
+                        "「谁」是销售员还是客户，「活跃」是下单次数、金额还是最近登录 —— 三个维度全是空的"));
     }
 }

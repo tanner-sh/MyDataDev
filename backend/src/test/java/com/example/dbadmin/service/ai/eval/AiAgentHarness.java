@@ -206,6 +206,7 @@ public final class AiAgentHarness implements AutoCloseable {
                 answer == null ? "" : answer.text(),
                 answer != null && answer.grounding() != null && answer.grounding().validated(),
                 kinds,
+                answer == null ? null : answer.question(),
                 stats,
                 elapsed);
     }
@@ -266,10 +267,12 @@ public final class AiAgentHarness implements AutoCloseable {
     /**
      * @param stats 审计 detail 解析出的运行数据：outcome、rounds、tools、objects、各类 token
      */
+    /** @param question 这一轮以反问收尾时的问题与选项，否则为 null */
     public record Run(
             String answer,
             boolean validated,
             List<String> groundingKinds,
+            com.example.dbadmin.dto.AiDtos.AiClarifyResponse question,
             Map<String, String> stats,
             Duration elapsed
     ) {

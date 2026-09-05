@@ -52,7 +52,9 @@ class AiSqlAgentEvalTest {
             for (AiEvalCase evalCase : AiEvalCases.all()) {
                 AiAgentHarness.Run run = harness.ask(evalCase.question());
                 rows.add(new AiEvalReport.Row(evalCase, run,
-                        AiEvalScoring.score(evalCase, run.answer(), run.validated()), client.drain()));
+                        AiEvalScoring.score(evalCase, run.answer(), run.validated(),
+                                "clarified".equals(run.outcome())),
+                        client.drain()));
             }
         }
 

@@ -193,7 +193,28 @@ public final class AiDtos {
     }
 
     /** 服务端保存并可在页面刷新后恢复的一条可见消息。 */
-    public record AiChatMessageResponse(String role, String text, AiGroundingReport grounding) {
+    /**
+     * 会话里的一条可见消息。
+     *
+     * @param question 这一轮是反问时带上结构化的问题与选项；刷新页面后选项按钮还在，
+     *                 用户不必把问题重新读一遍再手打回答
+     */
+    public record AiChatMessageResponse(
+            String role,
+            String text,
+            AiGroundingReport grounding,
+            AiClarifyResponse question
+    ) {
+        public AiChatMessageResponse(String role, String text, AiGroundingReport grounding) {
+            this(role, text, grounding, null);
+        }
+    }
+
+    /** 模型的反问。 */
+    public record AiClarifyResponse(String question, java.util.List<AiClarifyOptionResponse> options) {
+    }
+
+    public record AiClarifyOptionResponse(String label, String detail) {
     }
 
     public record AiConversationResponse(

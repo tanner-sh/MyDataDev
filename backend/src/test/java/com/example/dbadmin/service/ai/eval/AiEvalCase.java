@@ -14,9 +14,13 @@ import java.util.Set;
  * 取明细金额、统计成交算不算未支付的单，这类规矩只写在这个库跑过的语句里。要求某个字段名
  * 出现，是在不绑死写法的前提下量这一维最省事的办法。</p>
  *
+ * <p>还有一类用例的正确答案不是 SQL 而是一个问题（{@code expectsClarification}）。没有它，
+ * 打分机制只奖励「猜出一条 SQL」—— 猜一个总比问一句得分高，模型学到的就是别问。</p>
+ *
  * @param expectedTables 必须出现的表；少一张就算没通过
  * @param forbiddenTables 出现即失败的表，用来钉住归档表这类近似干扰项
  * @param expectedTokens 必须出现的标识符，通常是决定口径的那个字段
+ * @param expectsClarification 正确答案是反问：需求本身有歧义，猜一个就算错
  */
 public record AiEvalCase(
         String id,
@@ -24,6 +28,7 @@ public record AiEvalCase(
         Set<String> expectedTables,
         Set<String> forbiddenTables,
         Set<String> expectedTokens,
+        boolean expectsClarification,
         String note
 ) {
     public AiEvalCase {
@@ -32,8 +37,18 @@ public record AiEvalCase(
         expectedTokens = expectedTokens == null ? Set.of() : Set.copyOf(expectedTokens);
     }
 
+    public AiEvalCase(String id, String question, Set<String> expectedTables, Set<String> forbiddenTables,
+                      Set<String> expectedTokens, String note) {
+        this(id, question, expectedTables, forbiddenTables, expectedTokens, false, note);
+    }
+
     static AiEvalCase of(String id, String question, List<String> expected, String note) {
         return new AiEvalCase(id, question, Set.copyOf(expected), Set.of(), Set.of(), note);
+    }
+
+    /** 正确答案是一个问题，不是一条 SQL。 */
+    static AiEvalCase clarify(String id, String question, String note) {
+        return new AiEvalCase(id, question, Set.of(), Set.of(), Set.of(), true, note);
     }
 
     static AiEvalCase of(String id, String question, List<String> expected, List<String> tokens, String note) {

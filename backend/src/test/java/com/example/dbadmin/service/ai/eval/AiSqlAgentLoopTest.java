@@ -259,6 +259,68 @@ class AiSqlAgentLoopTest {
     }
 
     /**
+     * 需求有歧义时问一句，而不是挑一个猜。
+     *
+     * <p>此前系统提示里就写着「找不到时明确询问用户」，但没有出口形状：反问和答案一样是一段
+     * 正文，用户得自己把问题读出来再手打回答。做成工具之后，问题和选项是结构化的，界面能画成
+     * 按钮，点一下就接上下一轮。</p>
+     */
+    @Test
+    void asksOneQuestionAndPicksTheAnswerUpInTheSameConversation() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"订单\",\"金额\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"SALES_ORDER\"]}"),
+                toolCall("t3", "ask_user", """
+                        {"question":"按下单时间还是支付时间统计？","options":[
+                          {"label":"下单时间","detail":"SALES_ORDER.ORDER_DATE"},
+                          {"label":"支付时间","detail":"PAYMENT.PAID_AT"}]}"""),
+                answer("```sql\nSELECT ORDER_DATE, SUM(TOTAL_AMOUNT) FROM SALES_ORDER GROUP BY ORDER_DATE\n```")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run asked = harness.ask("统计每天的销售额");
+
+            assertThat(asked.outcome()).isEqualTo("clarified");
+            assertThat(asked.question()).isNotNull();
+            assertThat(asked.question().question()).contains("下单时间");
+            assertThat(asked.question().options()).hasSize(2);
+            // 反问这一轮没有 SQL，证据面板不该声称校验通过。
+            assertThat(asked.validated()).isFalse();
+
+            AiAgentHarness.Run answered = harness.askIn(asked.stats().get("conversation"), "下单时间");
+            assertThat(answered.outcome()).isEqualTo("success");
+            assertThat(answered.answer()).contains("ORDER_DATE");
+
+            // 关键：ask_user 也得有工具结果。少一条，下一轮的历史里就留下一个没有结果的工具
+            // 调用，两家协议都会直接报错 —— 而那要到用户回答之后才炸。
+            List<LlmAgentMessage> lastRound = model.seen().get(3).messages();
+            assertThat(lastRound).anySatisfy(message -> {
+                assertThat(message.role()).isEqualTo(LlmAgentMessage.Role.TOOL_RESULTS);
+                assertThat(message.toolResults()).anyMatch(result -> result.content().contains("等待回答"));
+            });
+        }
+    }
+
+    /** 没有问题的反问会让对话停在一个空气泡上，所以打回去让模型重来。 */
+    @Test
+    void sendsAnEmptyClarificationBackToTheModel() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"客户\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                toolCall("t3", "ask_user", "{\"options\":[{\"label\":\"A\"}]}"),
+                answer("```sql\nSELECT CUST_NM FROM T_CRM_0021\n```")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.ask("查询客户名称");
+
+            assertThat(run.outcome()).isEqualTo("success");
+            assertThat(run.question()).isNull();
+            List<LlmAgentMessage> afterAsk = model.seen().get(3).messages();
+            assertThat(afterAsk).anySatisfy(message -> assertThat(message.toolResults())
+                    .anyMatch(result -> result.error() && result.content().contains("question")));
+        }
+    }
+
+    /**
      * 计划解读走 Agent 而不是单次问答：只把计划文本发过去，模型看不到这张表上真实存在哪些
      * 索引，只能泛泛地说「加个索引」，甚至建议一个已经有了的。
      */

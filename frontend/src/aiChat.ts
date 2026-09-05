@@ -1,4 +1,4 @@
-import type { AiGroundingReference, AiGroundingReport } from './types';
+import type { AiChatMessage, AiClarifyQuestion, AiGroundingReference, AiGroundingReport } from './types';
 import type { AiStreamEvent } from './aiSuggestion';
 
 /**
@@ -20,6 +20,8 @@ export type AgentStreamState = {
   failure?: string;
   /** 请求被取消（用户点停止，或服务端关掉了这次运行）。 */
   cancelled: boolean;
+  /** 这一轮以反问收尾：模型没给 SQL，而是问了一句。 */
+  question?: AiClarifyQuestion;
 };
 
 export function initialAgentStreamState(phase = ''): AgentStreamState {
@@ -55,6 +57,10 @@ export function applyAgentEvent(state: AgentStreamState, event: AiStreamEvent): 
       };
     case 'grounding':
       return { ...state, grounding: parseGrounding(data) };
+    case 'question': {
+      const question = parseQuestion(data);
+      return question ? { ...state, question, phase: '' } : state;
+    }
     case 'done':
       return { ...state, done: true, phase: '' };
     case 'failed':
@@ -81,6 +87,34 @@ export function parseGrounding(data: Record<string, unknown>): AiGroundingReport
     })
     : [];
   return { validated: data.validated, validationMessage: data.validationMessage, references };
+}
+
+/** 反问事件的解析。问题为空就当没问 —— 一个空气泡比没有更糟。 */
+export function parseQuestion(data: Record<string, unknown>): AiClarifyQuestion | undefined {
+  if (typeof data.question !== 'string' || !data.question.trim()) return undefined;
+  const options = Array.isArray(data.options)
+    ? data.options.flatMap((item) => {
+      if (!item || typeof item !== 'object') return [];
+      const value = item as Record<string, unknown>;
+      if (typeof value.label !== 'string' || !value.label.trim()) return [];
+      return [{ label: value.label, detail: typeof value.detail === 'string' ? value.detail : undefined }];
+    })
+    : [];
+  return { question: data.question, options };
+}
+
+/**
+ * 该把哪个反问画成按钮。
+ *
+ * <p>只认「对话里最后一条消息」上的那个：往上翻能看到几轮前问过什么，但那些问题早就被后面的
+ * 回答接上了，再摆一排按钮出来，点下去等于把已经答过的问题重答一遍。刷新页面后从会话恢复的
+ * 消息同样走这里 —— 用户不必把问题重读一遍再手打回答。</p>
+ */
+export function pendingQuestion(messages: AiChatMessage[], live?: AiClarifyQuestion): AiClarifyQuestion | undefined {
+  if (live) return live;
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'ASSISTANT') return undefined;
+  return last.question || undefined;
 }
 
 export function conversationStorageKey(connectionId: number, schemaName?: string): string {

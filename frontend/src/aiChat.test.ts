@@ -4,6 +4,8 @@ import {
   conversationStorageKey,
   initialAgentStreamState,
   parseGrounding,
+  parseQuestion,
+  pendingQuestion,
   splitAnswerBlocks,
   splitInlineSpans,
   streamErrorMessage
@@ -186,5 +188,59 @@ describe('splitInlineSpans', () => {
 
   it('空文本返回一段空的纯文本而不是空数组', () => {
     expect(splitInlineSpans('')).toEqual([{ kind: 'plain', text: '' }]);
+  });
+});
+
+describe('反问', () => {
+  it('从流里读出问题与选项', () => {
+    const state = replay([sse('question', {
+      question: '按下单时间还是支付时间统计？',
+      options: [{ label: '下单时间', detail: 'ORDER_DATE' }, { label: '支付时间' }]
+    })]);
+
+    expect(state.question?.question).toBe('按下单时间还是支付时间统计？');
+    expect(state.question?.options.map((option) => option.label)).toEqual(['下单时间', '支付时间']);
+    // 反问收尾，进度文案该消失 —— 它不是还在跑。
+    expect(state.phase).toBe('');
+  });
+
+  /** 一个没有问题的反问会让对话停在一个空气泡上。 */
+  it('没有问题正文时当作没问', () => {
+    expect(parseQuestion({ options: [{ label: 'A' }] })).toBeUndefined();
+    expect(parseQuestion({ question: '  ' })).toBeUndefined();
+    expect(replay([sse('question', { options: [] })]).question).toBeUndefined();
+  });
+
+  it('丢掉形状不对的选项，而不是整条问题作废', () => {
+    const parsed = parseQuestion({ question: '哪一张？', options: [{ label: '客户表' }, { detail: '没有 label' }, 'x'] });
+
+    expect(parsed?.options).toEqual([{ label: '客户表', detail: undefined }]);
+  });
+});
+
+describe('pendingQuestion', () => {
+  const question = { question: '哪一张？', options: [{ label: '客户表' }] };
+
+  it('本轮刚问出来的优先', () => {
+    expect(pendingQuestion([], question)).toBe(question);
+  });
+
+  /** 刷新页面后从会话恢复：按钮还在，用户不必把问题重读一遍再手打回答。 */
+  it('恢复出来的最后一条助手消息带着问题时也画按钮', () => {
+    expect(pendingQuestion([{ role: 'ASSISTANT', text: '哪一张？', question }])).toBe(question);
+  });
+
+  /** 往上翻能看到几轮前问过什么，但那些问题早就被后面的回答接上了。 */
+  it('已经被回答过的问题不再摆按钮', () => {
+    expect(pendingQuestion([
+      { role: 'ASSISTANT', text: '哪一张？', question },
+      { role: 'USER', text: '客户表' },
+      { role: 'ASSISTANT', text: '```sql\nSELECT 1\n```' }
+    ])).toBeUndefined();
+  });
+
+  it('没有反问时什么都不画', () => {
+    expect(pendingQuestion([{ role: 'ASSISTANT', text: '普通回答' }])).toBeUndefined();
+    expect(pendingQuestion([])).toBeUndefined();
   });
 });

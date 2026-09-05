@@ -126,4 +126,22 @@ class AiEvalScoringTest {
         assertThat(score.passed()).isTrue();
         assertThat(score.extraTables()).containsExactly("T_CRM_0021");
     }
+
+    /**
+     * 反问用例反过来打分：问了才算通过。少了这一类，打分只奖励「猜出一条 SQL」，
+     * 模型永远不会选择问。
+     */
+    @Test
+    void passesAClarificationCaseOnlyWhenTheModelActuallyAsked() {
+        var clarifyCase = AiEvalCase.clarify("ambiguous-user", "帮我查一下用户", "两张表都说得通");
+
+        var asked = AiEvalScoring.score(clarifyCase, "你指的是系统用户还是客户？", false, true);
+        var guessed = AiEvalScoring.score(clarifyCase,
+                "```sql\nSELECT * FROM APP_USER\n```", true, false);
+
+        assertThat(asked.passed()).isTrue();
+        assertThat(asked.reason()).isEqualTo("通过（问了）");
+        assertThat(guessed.passed()).isFalse();
+        assertThat(guessed.reason()).isEqualTo("该问却直接猜了");
+    }
 }

@@ -97,11 +97,30 @@ public class AiConversationStore {
             AiGroundingReport grounding,
             List<AiGroundingReference> evidence
     ) {
+        complete(turn, internalMessages, answer, grounding, evidence, null);
+    }
+
+    /**
+     * 收尾这一轮。
+     *
+     * <p>{@code question} 不为空说明这一轮是反问 —— 它和普通回答一样是一条可见的助手消息，
+     * 区别只在于界面能把选项画成按钮。反问同样要把内部消息存回去：模型发出的 {@code ask_user}
+     * 调用和它的工具结果都在里面，丢了它们，下一轮的历史里就会留下一个没有结果的工具调用，
+     * 两家协议都会直接报错。</p>
+     */
+    public void complete(
+            Turn turn,
+            List<LlmAgentMessage> internalMessages,
+            String answer,
+            AiGroundingReport grounding,
+            List<AiGroundingReference> evidence,
+            com.example.dbadmin.dto.AiDtos.AiClarifyResponse question
+    ) {
         synchronized (turn.conversation) {
             turn.conversation.internalMessages = trimHistory(internalMessages, maxConversationChars);
             turn.conversation.evidence = distinctEvidence(evidence);
             turn.conversation.visibleMessages.add(new AiChatMessageResponse("USER", turn.question, null));
-            turn.conversation.visibleMessages.add(new AiChatMessageResponse("ASSISTANT", answer, grounding));
+            turn.conversation.visibleMessages.add(new AiChatMessageResponse("ASSISTANT", answer, grounding, question));
             while (turn.conversation.visibleMessages.size() > MAX_VISIBLE_MESSAGES) {
                 turn.conversation.visibleMessages.remove(0);
             }

@@ -94,7 +94,11 @@ public final class AiEvalReport {
             out.append("### ").append(row.evalCase().id()).append(" — ").append(row.score().reason()).append("\n\n");
             out.append("问题：").append(row.evalCase().question()).append("\n\n");
             out.append("考察点：").append(row.evalCase().note()).append("\n\n");
-            out.append("期望的表：").append(String.join("、", row.evalCase().expectedTables())).append("\n\n");
+            if (row.evalCase().expectsClarification()) {
+                out.append("期望：反问一句，而不是猜一个口径\n\n");
+            } else {
+                out.append("期望的表：").append(String.join("、", row.evalCase().expectedTables())).append("\n\n");
+            }
             if (!row.evalCase().expectedTokens().isEmpty()) {
                 out.append("期望用到的字段：").append(String.join("、", row.evalCase().expectedTokens())).append("\n\n");
             }

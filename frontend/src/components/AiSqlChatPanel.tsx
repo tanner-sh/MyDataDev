@@ -9,6 +9,7 @@ import {
   applyAgentEvent,
   conversationStorageKey,
   initialAgentStreamState,
+  pendingQuestion,
   splitAnswerBlocks,
   splitInlineSpans,
   streamErrorMessage
@@ -16,6 +17,7 @@ import {
 import { checkSqlSuggestion } from '../sqlSuggestion';
 import type {
   AiChatMessage,
+  AiClarifyQuestion,
   AiConversation,
   AiExecutionFailure,
   AiExecutionOutcome,
@@ -54,6 +56,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
   const [input, setInput] = useState('');
   const [answer, setAnswer] = useState('');
   const [grounding, setGrounding] = useState<AiGroundingReport>();
+  const [liveQuestion, setLiveQuestion] = useState<AiClarifyQuestion>();
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(false);
   /**
@@ -79,6 +82,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     setInput('');
     setAnswer('');
     setGrounding(undefined);
+    setLiveQuestion(undefined);
     setBusy(false);
     setPhase('');
     setActivities([]);
@@ -142,6 +146,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     return () => window.clearTimeout(timer);
   }, [copied]);
 
+  const question = pendingQuestion(messages, liveQuestion);
   const visibleAnswer = answer || [...messages].reverse().find((message) => message.role === 'ASSISTANT')?.text || '';
   const sql = firstSqlBlock(visibleAnswer);
   const sqlReady = Boolean(sql) && !hasUnclosedSqlFence(visibleAnswer);
@@ -197,6 +202,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     if (!preset) setInput('');
     setAnswer('');
     setGrounding(undefined);
+    setLiveQuestion(undefined);
     setActivities([]);
     setError('');
     setPhase('正在理解需求并检查数据库结构…');
@@ -257,8 +263,16 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
       }
       nextAnswer = stream.answer;
       nextGrounding = stream.grounding;
-      if (!nextAnswer.trim()) throw new Error('模型没有返回 SQL 或说明。');
-      setMessages((current) => [...current, { role: 'ASSISTANT', text: nextAnswer, grounding: nextGrounding }]);
+      // 这一轮以反问收尾：没有 SQL 是对的，不该按「模型什么都没返回」处理。
+      if (stream.question) {
+        setLiveQuestion(stream.question);
+        setMessages((current) => [...current, {
+          role: 'ASSISTANT', text: stream.question!.question, question: stream.question
+        }]);
+      } else {
+        if (!nextAnswer.trim()) throw new Error('模型没有返回 SQL 或说明。');
+        setMessages((current) => [...current, { role: 'ASSISTANT', text: nextAnswer, grounding: nextGrounding }]);
+      }
       setAnswer('');
       setGrounding(undefined);
       setPhase('');
@@ -331,6 +345,9 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
             {grounding && <Grounding report={grounding} />}
           </div>
         )}
+        {question && !busy && (
+          <ClarifyPrompt question={question} onPick={(label) => void send({ question: label })} />
+        )}
         {error && <Alert type="error" showIcon message="AI 调用失败" description={error} />}
       </div>
       <div className="ai-chat-composer">
@@ -363,6 +380,34 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
         </div>
       </div>
     </Drawer>
+  );
+}
+
+/**
+ * 模型的反问。
+ *
+ * <p>选项画成按钮而不是让用户照着问句手打：问题本来就是模型提出来的，答案的措辞也该由它定 ——
+ * 用户重新组织一遍语言，反而可能给出一个它没预期的说法，又要多问一轮。没有选项时只显示问题，
+ * 用户在下面的输入框里回答。</p>
+ */
+function ClarifyPrompt({ question, onPick }: {
+  question: AiClarifyQuestion;
+  onPick: (label: string) => void;
+}) {
+  return (
+    <div className="ai-chat-clarify">
+      <Text strong>{question.question}</Text>
+      {question.options.length > 0 && (
+        <Space wrap size={6}>
+          {question.options.map((option) => (
+            <Button key={option.label} size="small" onClick={() => onPick(option.label)}
+              title={option.detail || undefined}>
+              {option.label}
+            </Button>
+          ))}
+        </Space>
+      )}
+    </div>
   );
 }
 

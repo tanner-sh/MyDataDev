@@ -751,6 +751,19 @@ export type AiChatMessage = {
   role: 'USER' | 'ASSISTANT';
   text: string;
   grounding?: AiGroundingReport | null;
+  /** 这一轮是反问时带上问题与可点选项。 */
+  question?: AiClarifyQuestion | null;
+};
+
+/**
+ * 模型的反问。
+ *
+ * 选项可以为空：「你指哪张客户表」给得出选项，「这个订单号是多少」给不出，
+ * 强行要求只会让模型编造几个。
+ */
+export type AiClarifyQuestion = {
+  question: string;
+  options: { label: string; detail?: string | null }[];
 };
 
 export type AiConversation = {

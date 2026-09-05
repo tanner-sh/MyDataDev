@@ -14,6 +14,9 @@ import java.util.regex.Pattern;
  *
  * <p>判「通过」的三个条件：期望的表一张不少、禁用的表一张没有、SQL 通过了目标库的编译校验。
  * 多出来的表只记录不扣分 —— 多带一张字典表往往仍是对的答案，而漏一张核心表一定是错的。</p>
+ *
+ * <p>反问用例反过来：正确答案是问一句，给出 SQL 就算错。少了这一类，打分只奖励「猜出一条
+ * SQL」，模型永远不会选择问。</p>
  */
 public final class AiEvalScoring {
     private static final Pattern SQL_FENCE = Pattern.compile("(?is)```sql\\s*(.*?)```");
@@ -22,7 +25,16 @@ public final class AiEvalScoring {
     }
 
     public static Score score(AiEvalCase evalCase, String answer, boolean validated) {
+        return score(evalCase, answer, validated, false);
+    }
+
+    /** @param clarified 这一轮以反问收尾（Agent 审计里的 {@code outcome=clarified}） */
+    public static Score score(AiEvalCase evalCase, String answer, boolean validated, boolean clarified) {
         String sql = extractSql(answer);
+        if (evalCase.expectsClarification()) {
+            return new Score(evalCase.id(), sql, validated, Set.of(), Set.of(), Set.of(), Set.of(), Set.of(),
+                    clarified, true);
+        }
         Set<String> actual = tables(sql);
         Set<String> expected = normalize(evalCase.expectedTables());
         Set<String> forbidden = normalize(evalCase.forbiddenTables());
@@ -43,7 +55,8 @@ public final class AiEvalScoring {
 
         boolean passed = sql != null && validated && missing.isEmpty()
                 && forbiddenHit.isEmpty() && missingTokens.isEmpty();
-        return new Score(evalCase.id(), sql, validated, matched, missing, forbiddenHit, extra, missingTokens, passed);
+        return new Score(evalCase.id(), sql, validated, matched, missing, forbiddenHit, extra, missingTokens,
+                passed, false);
     }
 
     /**
@@ -85,6 +98,7 @@ public final class AiEvalScoring {
         return result;
     }
 
+    /** @param clarificationCase 这是一条反问用例：通过的条件是它问了，而不是它写出了什么 */
     public record Score(
             String caseId,
             String sql,
@@ -94,9 +108,11 @@ public final class AiEvalScoring {
             Set<String> forbiddenTables,
             Set<String> extraTables,
             Set<String> missingTokens,
-            boolean passed
+            boolean passed,
+            boolean clarificationCase
     ) {
         public String reason() {
+            if (clarificationCase) return passed ? "通过（问了）" : "该问却直接猜了";
             if (passed) return "通过";
             if (sql == null) return "没有产出唯一的一条 SQL";
             if (!validated) return "未通过目标库编译校验";
