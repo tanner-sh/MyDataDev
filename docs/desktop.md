@@ -125,6 +125,19 @@ git push origin v0.5.0
 
 标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
 
+## 更新检查
+
+桌面端启动后会查一次 GitHub 的最新 Release（`desktop/src/update-check.ts`），有新版本就弹一个提示，点「打开下载页」跳到浏览器。
+
+**只查、只提示，不下载也不安装。** 自动更新要代码签名和一个更新服务器，而当前是未签名发行（见下一节）—— 静默替换一个未签名的应用既做不到也不该做。
+
+几处刻意的取舍：
+
+- 整段吞异常，也不 await：离线、GitHub 不通、被限流都是最正常不过的结果，为它弹错误框或拖慢启动都是本末倒置。超时 5 秒。
+- 草稿与预发布不提示。
+- 开发模式（`MYDATADEV_DESKTOP_DEV_SERVER_URL` 存在时）不提示：本地版本号本来就可能落后于已发布的 tag。
+- 版本比较按数字逐段比，不比字符串 —— `0.10.0` 比 `0.9.0` 新，这是这件事里唯一容易出错的地方，`update-check.test.ts` 盯着它。
+
 ## 无 Apple 开发者账号的发布策略
 
 当前流水线不使用付费的 Apple Developer ID。macOS 应用会在打包时完成全量 ad-hoc 签名，确保 Electron、内嵌 Java Runtime 和应用资源构成一个签名结构完整的 `.app`。这会消除 `code has no resources but signature indicates they must be present` 这类产物自身的签名结构错误，但 ad-hoc 签名不能证明开发者身份，也不包含 Apple 公证。Gatekeeper 仍可能根据 macOS 版本显示“无法验证开发者”或“应用已损坏”。

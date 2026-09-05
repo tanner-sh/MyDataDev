@@ -15,6 +15,12 @@ import {
 import { BackendManager, requestBackendShutdown, waitForHealthyBackend } from './backend.js';
 import { bundledBackendPaths, resolveDesktopPaths, type DesktopPaths } from './paths.js';
 import { loadOrCreateDesktopSecret } from './secret-store.js';
+import {
+  parseLatestRelease,
+  RELEASES_URL,
+  shouldNotify,
+  UPDATE_CHECK_TIMEOUT_MS
+} from './update-check.js';
 
 const PRODUCT_NAME = 'MyDataDev';
 const UI_PORT = 5173;
@@ -182,6 +188,39 @@ async function runSmokeTest() {
   await requestQuit(false);
 }
 
+/**
+ * 启动后看一眼有没有新版本。
+ *
+ * <p>只查、只提示，不下载也不安装：自动更新要签名和更新服务器，而 macOS 目前是未签名发行，
+ * 静默替换一个未签名的应用既做不到也不该做。</p>
+ *
+ * <p>整段吞掉异常，也不 await：查不到新版本是最正常不过的结果（离线、GitHub 不通、限流），
+ * 为它弹一个错误框，或者让它拖慢启动，都是本末倒置。</p>
+ */
+async function checkForUpdates() {
+  try {
+    const response = await fetch(RELEASES_URL, {
+      headers: { accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS)
+    });
+    if (!response.ok) return;
+    const latest = parseLatestRelease(await response.json());
+    if (!shouldNotify(app.getVersion(), latest, isDevelopment) || !latest) return;
+    const answer = await dialog.showMessageBox({
+      type: 'info',
+      title: `${PRODUCT_NAME} 有新版本`,
+      message: `发现新版本 ${latest.version}（当前 ${app.getVersion()}）。`,
+      detail: '下载页面会在浏览器中打开，安装包需要手动下载安装。',
+      buttons: ['稍后再说', '打开下载页'],
+      defaultId: 1,
+      cancelId: 0
+    });
+    if (answer.response === 1) await shell.openExternal(latest.url);
+  } catch {
+    // 查不到就算了：离线、限流、GitHub 不可达都属于正常情况，不值得打扰用户。
+  }
+}
+
 async function bootstrap() {
   desktopPaths = resolveDesktopPaths(process.platform, process.env, app.getPath('home'));
   const insecureLinuxFallback = await startBackend();
@@ -191,6 +230,8 @@ async function bootstrap() {
   }
   createWindow();
   createTray();
+  // 不 await：更新检查是旁路的，不该挡在窗口后面的任何一步前面。
+  void checkForUpdates();
   if (insecureLinuxFallback) {
     await dialog.showMessageBox({
       type: 'warning',
