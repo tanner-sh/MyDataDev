@@ -378,6 +378,55 @@ public final class ApiDtos {
     ) {
     }
 
+    /**
+     * 两张表的逐行数据对比。
+     *
+     * @param targetTable 留空表示与源表同名
+     * @param keyColumns 用于匹配行的字段；留空时用目标表（其次源表）的主键
+     * @param includeDeletes 是否为「只在目标端存在」的行生成 DELETE。默认不生成 —— 那些行往往是
+     *                       目标库自己的数据，默认删等于把一次对比变成危险操作
+     */
+    public record DataDiffRequest(
+            @NotNull Long sourceConnectionId,
+            @Size(max = 240) String sourceSchema,
+            @NotBlank @Size(max = 240) String sourceTable,
+            @NotNull Long targetConnectionId,
+            @Size(max = 240) String targetSchema,
+            @Size(max = 240) String targetTable,
+            @Size(max = 20) List<@Size(max = 240) String> keyColumns,
+            boolean includeDeletes
+    ) {
+    }
+
+    /** {@code change} 取 ONLY_IN_SOURCE / ONLY_IN_TARGET / DIFFERENT，方向都以 source 为准。 */
+    public record DataDiffRow(
+            List<String> key,
+            String change,
+            List<String> columns,
+            List<String> sourceValues,
+            List<String> targetValues
+    ) {
+    }
+
+    public record DataDiffSummary(int onlyInSource, int onlyInTarget, int different, int identical) {
+    }
+
+    /** @param truncated 差异条数触顶：脚本只覆盖了前一部分，界面必须说清楚 */
+    public record DataDiffResponse(
+            SchemaDiffEndpoint source,
+            SchemaDiffEndpoint target,
+            String sourceTable,
+            String targetTable,
+            List<String> keyColumns,
+            List<String> columns,
+            DataDiffSummary summary,
+            List<DataDiffRow> rows,
+            List<String> script,
+            boolean truncated,
+            List<String> warnings
+    ) {
+    }
+
     public record TableLifecycleRequest(
             @NotBlank @Size(max = 20) String operation,
             @Size(max = 240) String schemaName,

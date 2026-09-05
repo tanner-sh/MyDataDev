@@ -108,6 +108,7 @@ type ProductionConfirmationRequest = { action: string; expected: string };
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
+const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
@@ -3196,6 +3197,19 @@ export default function App() {
                     connections={connections}
                     defaultConnectionId={selected?.id}
                     aiStatus={aiStatus}
+                    onOpenInSqlTab={openSchemaDiffScript}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'data-diff' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>数据对比与同步</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载数据对比…" />}>
+                  <DataDiffPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
                     onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>

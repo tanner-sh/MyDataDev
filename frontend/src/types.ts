@@ -647,6 +647,45 @@ export type SchemaDiffResponse = {
   warnings: string[];
 };
 
+/** 数据对比：差异方向同样以源端为准。 */
+export type DataDiffChange = 'ONLY_IN_SOURCE' | 'ONLY_IN_TARGET' | 'DIFFERENT';
+export type DataDiffRequest = {
+  sourceConnectionId: number;
+  sourceSchema?: string;
+  sourceTable: string;
+  targetConnectionId: number;
+  targetSchema?: string;
+  /** 留空表示与源表同名。 */
+  targetTable?: string;
+  /** 用于匹配行的字段；留空时用主键。 */
+  keyColumns: string[];
+  /** 是否为「只在目标端存在」的行生成 DELETE。默认不生成。 */
+  includeDeletes: boolean;
+};
+export type DataDiffRow = {
+  key: string[];
+  change: DataDiffChange;
+  /** 值不同的列；仅 DIFFERENT 有内容。 */
+  columns: string[];
+  sourceValues: (string | null)[];
+  targetValues: (string | null)[];
+};
+export type DataDiffSummary = { onlyInSource: number; onlyInTarget: number; different: number; identical: number };
+export type DataDiffResponse = {
+  source: SchemaDiffEndpoint;
+  target: SchemaDiffEndpoint;
+  sourceTable: string;
+  targetTable: string;
+  keyColumns: string[];
+  columns: string[];
+  summary: DataDiffSummary;
+  rows: DataDiffRow[];
+  script: string[];
+  /** 差异条数触顶：脚本只覆盖了前一部分。 */
+  truncated: boolean;
+  warnings: string[];
+};
+
 export type AiProvider = 'ANTHROPIC' | 'OPENAI_COMPATIBLE';
 export type AiEffort = 'LOW' | 'MEDIUM' | 'HIGH' | 'XHIGH' | 'MAX';
 /** 一条连接允许发给模型的内容范围；默认 NONE，没授权就连表名都取不到。 */
