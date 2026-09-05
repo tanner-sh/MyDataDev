@@ -85,6 +85,17 @@ public interface DatabaseDialect {
     String dropTableSql(String schemaName, String tableName);
 
     /**
+     * 这个方言能不能改列注释。
+     *
+     * <p>注释是这个产品最依赖的元数据（资源树、结构对比、AI 的结构搜索都在读它），却长期
+     * 只读不可写。默认认为支持 —— 绝大多数关系库都有 {@code COMMENT ON} 或等价写法；
+     * SQLite 根本没有注释，SQL Server 要走扩展属性，这两家显式关掉。</p>
+     */
+    default boolean supportsColumnComments() {
+        return true;
+    }
+
+    /**
      * 把一个表达式转成文本，供大小写无关的模糊筛选使用。
      *
      * <p>结果网格的列筛选按文本语义工作（包含、等于、为空），而列本身可能是数字、时间或布尔。

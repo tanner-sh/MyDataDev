@@ -103,6 +103,10 @@ public final class ApiDtos {
         }
     }
 
+    /**
+     * @param columnComments 能不能改列注释。绝大多数关系库都能，所以七参构造按 true 处理；
+     *                       SQLite（根本没有注释）和 SQL Server（要走扩展属性）显式关掉
+     */
     public record DatabaseCapabilities(
             boolean tableBrowse,
             boolean tableEdit,
@@ -110,8 +114,15 @@ public final class ApiDtos {
             boolean explain,
             List<String> nativeBackupMethods,
             List<String> nativeRestoreMethods,
-            List<SchemaObjectCapability> schemaObjects
+            List<SchemaObjectCapability> schemaObjects,
+            boolean columnComments
     ) {
+        public DatabaseCapabilities(boolean tableBrowse, boolean tableEdit, boolean tableDesign, boolean explain,
+                                    List<String> nativeBackupMethods, List<String> nativeRestoreMethods,
+                                    List<SchemaObjectCapability> schemaObjects) {
+            this(tableBrowse, tableEdit, tableDesign, explain, nativeBackupMethods, nativeRestoreMethods, schemaObjects, true);
+        }
+
         public DatabaseCapabilities(boolean tableBrowse, boolean tableEdit, boolean tableDesign, boolean explain, List<String> nativeBackupMethods, List<String> nativeRestoreMethods) {
             this(tableBrowse, tableEdit, tableDesign, explain, nativeBackupMethods, nativeRestoreMethods, List.of());
         }
@@ -330,7 +341,14 @@ public final class ApiDtos {
         }
     }
 
-    public record ColumnDesign(@NotBlank String name, @NotBlank String type, Integer size, boolean nullable, String defaultValue, String originalName, boolean deleted) {
+    /** @param remarks 列注释；{@code null} 表示这次不改注释，空串表示清空 */
+    public record ColumnDesign(@NotBlank String name, @NotBlank String type, Integer size, boolean nullable,
+                               String defaultValue, String originalName, boolean deleted,
+                               @Size(max = 1000) String remarks) {
+        public ColumnDesign(String name, String type, Integer size, boolean nullable, String defaultValue,
+                            String originalName, boolean deleted) {
+            this(name, type, size, nullable, defaultValue, originalName, deleted, null);
+        }
     }
 
     public record IndexDesign(@NotBlank String name, List<String> columns, boolean unique, String originalName, boolean deleted) {

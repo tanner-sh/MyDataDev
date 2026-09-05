@@ -272,6 +272,7 @@ export function TableLifecyclePanel({
             columns={columns}
             indexes={indexes}
             primaryKeys={primaryKeys}
+            commentsSupported={connection?.capabilities?.columnComments ?? true}
             disabled={createSubmitting}
             dirty={createDirty}
             setColumns={setColumns}

@@ -10,6 +10,13 @@ import java.util.List;
 import java.util.Locale;
 
 public class SqliteDialect extends DefaultDialect {
+
+    /** SQLite 没有列注释这个概念。 */
+    @Override
+    public boolean supportsColumnComments() {
+        return false;
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
@@ -19,7 +26,7 @@ public class SqliteDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, false, true, List.of(), List.of(), SchemaObjectCapabilities.sqlite());
+        return new DatabaseCapabilities(true, true, false, true, List.of(), List.of(), SchemaObjectCapabilities.sqlite(), false);
     }
 
     @Override

@@ -17,6 +17,7 @@ export function TableDefinitionEditor({
   columns,
   indexes,
   primaryKeys,
+  commentsSupported = true,
   disabled,
   dirty,
   onReset,
@@ -28,6 +29,8 @@ export function TableDefinitionEditor({
   columns: DesignColumnRow[];
   indexes: DesignIndexRow[];
   primaryKeys: string[];
+  /** 当前数据库能不能改列注释；不能时整列不显示，而不是给一个填了会报错的输入框。 */
+  commentsSupported?: boolean;
   disabled?: boolean;
   dirty?: boolean;
   onReset?: () => void;
@@ -101,6 +104,9 @@ export function TableDefinitionEditor({
               { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber aria-label="字段长度" size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => patchColumn(row, { size: next || null })} /> },
               { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新字段'}允许为空`} disabled={disabled || row.deleted} checked={value} onChange={(event) => patchColumn(row, { nullable: event.target.checked })} /> },
               { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input aria-label="字段默认值" size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { defaultValue: event.target.value })} /> },
+              // 注释是这个产品最依赖的元数据（资源树、结构对比、AI 的结构搜索都在读它），
+              // 以前只能在数据库里改。不支持的方言直接不显示这一列。
+              ...(commentsSupported ? [{ title: '注释', dataIndex: 'remarks', key: 'remarks', width: 180, render: (value: string | undefined, row: DesignColumnRow) => <Input aria-label="字段注释" size="small" placeholder="说明这个字段是什么" disabled={disabled || row.deleted} value={value ?? ''} onChange={(event) => patchColumn(row, { remarks: event.target.value })} /> }] : []),
               { title: '主键', key: 'pk', width: 70, render: (_, row) => <Checkbox aria-label={`${row.name || '新字段'}设为主键`} disabled={disabled || row.deleted || !row.name} checked={primaryKeys.includes(row.name)} onChange={(event) => setPrimaryKeys((keys) => event.target.checked ? [...new Set([...keys, row.name])] : keys.filter((key) => key !== row.name))} /> },
               { title: '操作', key: 'action', width: 90, render: (_, row) => <Button size="small" danger disabled={disabled} onClick={() => removeColumn(row)}>{mode === 'edit' && row.deleted ? '恢复' : '删除'}</Button> }
             ]}
@@ -143,7 +149,8 @@ export function designColumns(detail: ObjectDetail): DesignColumnRow[] {
     nullable: column.nullable,
     defaultValue: column.defaultValue || '',
     originalName: column.name,
-    deleted: false
+    deleted: false,
+    remarks: column.remarks || ''
   }));
 }
 
@@ -162,7 +169,7 @@ export function designIndexes(detail: ObjectDetail): DesignIndexRow[] {
 
 export function newColumnRow(): DesignColumnRow {
   rowSequence += 1;
-  return { key: `new-column-${Date.now()}-${rowSequence}`, name: '', type: 'VARCHAR', size: 255, nullable: true, defaultValue: '', deleted: false };
+  return { key: `new-column-${Date.now()}-${rowSequence}`, name: '', type: 'VARCHAR', size: 255, nullable: true, defaultValue: '', deleted: false, remarks: '' };
 }
 
 export function newIndexRow(): DesignIndexRow {

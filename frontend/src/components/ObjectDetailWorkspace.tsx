@@ -75,6 +75,7 @@ export function ObjectDetailWorkspace({
   const isPhysicalTable = Boolean(detail && detail.type.toUpperCase().includes('TABLE') && !isView);
   const tableBrowseSupported = capabilities?.tableBrowse ?? true;
   const tableDesignSupported = capabilities?.tableDesign ?? true;
+  const columnCommentsSupported = capabilities?.columnComments ?? true;
   const tableLifecycleEnabled = isPhysicalTable && tableDesignSupported && !readonlyConnection;
   const detailKey = detail ? `${detail.schemaName || ''}.${detail.name}.${detail.type}` : '';
   const columnRows = useMemo(() => detail?.columns.map((column) => ({ ...column, key: column.name })) || [], [detail]);
@@ -188,6 +189,7 @@ export function ObjectDetailWorkspace({
                     disabled={isView || readonlyConnection || !tableDesignSupported || loading}
                     readonlyConnection={readonlyConnection}
                     unsupported={!tableDesignSupported}
+                    commentsSupported={columnCommentsSupported}
                     productionConfirmationText={productionConfirmationText}
                     onReloadDetail={onReloadDetail}
                     onDirtyChange={handleDesignDirtyChange}
@@ -528,12 +530,14 @@ function DdlViewer({ ddl, source }: { ddl: string; source?: string }) {
   );
 }
 
-function TableDesigner({ connectionId, detail, disabled, readonlyConnection, unsupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
+function TableDesigner({ connectionId, detail, disabled, readonlyConnection, unsupported, commentsSupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
   connectionId?: number;
   detail: ObjectDetail;
   disabled?: boolean;
   readonlyConnection?: boolean;
   unsupported?: boolean;
+  /** 当前数据库能不能改列注释；不能时设计器里不显示那一列。 */
+  commentsSupported?: boolean;
   productionConfirmationText?: string;
   onReloadDetail: () => void;
   onDirtyChange: (dirty: boolean) => void;
@@ -659,6 +663,7 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
         columns={columns}
         indexes={indexes}
         primaryKeys={primaryKeys}
+        commentsSupported={commentsSupported ?? true}
         disabled={disabled}
         dirty={dirty}
         onReset={resetDesign}

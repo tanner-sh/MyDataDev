@@ -90,6 +90,10 @@ public class DefaultDialect implements DatabaseDialect {
                 }
                 if (originalName == null) {
                     columnSql.add(addColumnSql(table, column));
+                    // ADD COLUMN 不带注释（MySQL 系除外，那边写在列定义里），补一条。
+                    if (blankToNull(column.remarks()) != null) {
+                        columnSql.addAll(columnCommentSql(table, column.name(), column.remarks()));
+                    }
                     continue;
                 }
                 String currentName = originalName;
@@ -135,6 +139,10 @@ public class DefaultDialect implements DatabaseDialect {
         }
         List<String> sql = new ArrayList<>();
         sql.add("CREATE TABLE " + table + " (" + String.join(", ", definitions) + ")");
+        // 建表时的注释单独成句：这套方言把注释写在 COMMENT ON 里，不在列定义里。
+        for (ColumnDesign column : columns) {
+            sql.addAll(columnCommentSql(table, column.name(), blankToNull(column.remarks()) == null ? null : column.remarks()));
+        }
         sql.addAll(indexSql(table, List.of(), design.indexes()));
         return sql;
     }
@@ -166,11 +174,35 @@ public class DefaultDialect implements DatabaseDialect {
             sql.add("ALTER TABLE " + table + " ALTER COLUMN " + quoteIdentifier(columnName)
                     + (blankToNull(column.defaultValue()) == null ? " DROP DEFAULT" : " SET DEFAULT " + column.defaultValue().trim()));
         }
+        if (commentChanged(original.remarks(), column.remarks())) {
+            sql.addAll(columnCommentSql(table, columnName, column.remarks()));
+        }
         return sql;
     }
 
     protected String addColumnSql(String table, ColumnDesign column) {
         return "ALTER TABLE " + table + " ADD COLUMN " + columnDefinition(column);
+    }
+
+    /**
+     * 列注释的 DDL。
+     *
+     * <p>默认走标准的 {@code COMMENT ON COLUMN}（PostgreSQL、Oracle、达梦、H2 都认）。MySQL 系
+     * 把注释写在列定义里，因此在那边覆盖成另一种写法；不支持注释的方言返回空。</p>
+     *
+     * <p>{@code remarks} 为 {@code null} 表示这次没打算改注释，空串表示清空 —— 两者必须分开，
+     * 否则任何一次改字段类型的操作都会顺手把注释抹掉。</p>
+     */
+    protected List<String> columnCommentSql(String table, String columnName, String remarks) {
+        if (remarks == null || !supportsColumnComments()) return List.of();
+        return List.of("COMMENT ON COLUMN " + table + "." + quoteIdentifier(columnName)
+                + " IS " + scriptLiteral(remarks));
+    }
+
+    /** 注释是不是变了。null（没提交）一律当作没变。 */
+    protected static boolean commentChanged(String original, String requested) {
+        if (requested == null) return false;
+        return !requested.equals(original == null ? "" : original);
     }
 
     protected String renameColumnSql(String table, String originalName, ColumnDesign column) {

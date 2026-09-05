@@ -44,6 +44,8 @@ export type DatabaseCapabilities = {
   nativeBackupMethods: string[];
   nativeRestoreMethods?: string[];
   schemaObjects?: SchemaObjectCapability[];
+  /** 能不能改列注释。SQLite 没有注释、SQL Server 要走扩展属性，这两家是 false。 */
+  columnComments?: boolean;
 };
 
 export type SchemaObjectKind = 'VIEW' | 'MATERIALIZED_VIEW' | 'SEQUENCE' | 'TRIGGER' | 'PROCEDURE' | 'FUNCTION';
@@ -120,7 +122,8 @@ export type ObjectRowCount = { value?: number | null; exact: boolean; elapsedMs:
 
 export type ObjectRelation = { constraintName?: string; pkSchemaName?: string; pkTableName: string; pkColumnName: string; fkSchemaName?: string; fkTableName: string; fkColumnName: string };
 export type ObjectRelations = { importedKeys: ObjectRelation[]; exportedKeys: ObjectRelation[] };
-export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean };
+/** remarks 为 undefined 表示这次不改注释，空串表示清空 —— 两者必须分开，否则改一次类型就会把注释抹掉。 */
+export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean; remarks?: string };
 export type IndexDesign = { name: string; columns: string[]; unique: boolean; originalName?: string; deleted: boolean };
 export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; structureVersion: string; confirmation?: string };
 export type TableDesignResponse = { sql: string[]; message: string };

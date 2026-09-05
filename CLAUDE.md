@@ -54,6 +54,7 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 几个必须先理解的中枢组件：
 
+- **列注释是可写的**（`ColumnDesign.remarks` + `DatabaseDialect.columnCommentSql`）。注释是这个产品最依赖的元数据 —— 资源树、结构对比、AI 的 `search_schema` 都在读它，业务词典候选整个是从表注释推的 —— 所以它必须能在产品里改，而不是只能去数据库里改。两条陷阱：**`remarks == null` 表示「这次不改」，空串才是「清空」**，混为一谈会让任何一次改类型的操作顺手抹掉注释；**MySQL 系的 `MODIFY COLUMN` 要重写整个列定义**，不把原注释填回去同样会丢。SQLite 与 SQL Server 明确不支持（`supportsColumnComments()` 返回 false，界面不显示这一列，服务端也会拦），不给半个实现。
 - **`core/DatabaseDialect` + `DialectRegistry`**：所有数据库差异（分页 SQL、EXPLAIN、DDL 生成、标识符引用、schema/catalog 语义、对象能力矩阵）都收敛到方言接口。`DialectRegistry` 按声明顺序做 `supports(dbType, jdbcUrl)` 首次匹配，顺序有意义（OceanBase 在 Oracle/MySQL 之前，`DefaultDialect` 兜底）。新增数据库支持 = 新增一个 dialect 并插入到正确位置，而不是在 service 里加 if。
 - **`service/ExecutionGuard`**：只读连接与生产连接的统一闸门。生产连接上的自由 SQL 与所有写操作都要求调用方回传与连接名完全相同的确认串，否则抛 `409 PRODUCTION_CONFIRMATION_REQUIRED`。表浏览生成的查询不走这个闸门。
 - **`service/RemoteDataSourceRegistry`**：目标库 HikariCP 连接池的缓存与淘汰，连接配置变更后要 `evict`。连接启用 SSH 隧道时，池与 `SshTunnel` 的生命周期绑定在同一个 `PoolEntry` 上；建池（含 SSH 握手）发生在注册表锁外面，`install` 负责收拾并发建出来的多余池。

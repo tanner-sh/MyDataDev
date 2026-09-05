@@ -8,6 +8,13 @@ import java.util.HexFormat;
 
 public class SqlServerDialect extends DefaultDialect {
 
+
+    /** SQL Server 的列注释是扩展属性（sp_addextendedproperty），不是 DDL，先不做 —— 半吊子的支持比明确不支持更糟。 */
+    @Override
+    public boolean supportsColumnComments() {
+        return false;
+    }
+
     @Override
     public String castToText(String expression) {
         return "CAST(" + expression + " AS NVARCHAR(MAX))";
@@ -22,7 +29,7 @@ public class SqlServerDialect extends DefaultDialect {
 
     @Override
     public DatabaseCapabilities capabilities() {
-        return new DatabaseCapabilities(true, true, false, false, List.of(), List.of(), SchemaObjectCapabilities.sqlServer());
+        return new DatabaseCapabilities(true, true, false, false, List.of(), List.of(), SchemaObjectCapabilities.sqlServer(), false);
     }
 
     @Override

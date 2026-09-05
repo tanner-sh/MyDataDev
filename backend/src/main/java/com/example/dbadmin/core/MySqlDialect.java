@@ -97,10 +97,30 @@ public class MySqlDialect extends DefaultDialect {
     protected List<String> alterColumnSql(String table, String columnName, ColumnInfo original, ColumnDesign column) {
         boolean changed = !sameType(original, column)
                 || original.nullable() != column.nullable()
-                || !java.util.Objects.equals(normalizeDefault(original.defaultValue()), normalizeDefault(column.defaultValue()));
+                || !java.util.Objects.equals(normalizeDefault(original.defaultValue()), normalizeDefault(column.defaultValue()))
+                || commentChanged(original.remarks(), column.remarks());
+        // MySQL 的 MODIFY COLUMN 要重写整个列定义，注释也在里面 —— 也就是说改类型时若不带上
+        // 原注释，注释就没了。这里在没提交新注释时把原注释填回去。
+        ColumnDesign effective = column.remarks() == null && original.remarks() != null && !original.remarks().isBlank()
+                ? new ColumnDesign(column.name(), column.type(), column.size(), column.nullable(),
+                        column.defaultValue(), column.originalName(), column.deleted(), original.remarks())
+                : column;
         return changed
-                ? List.of("ALTER TABLE " + table + " MODIFY COLUMN " + columnDefinition(column))
+                ? List.of("ALTER TABLE " + table + " MODIFY COLUMN " + columnDefinition(effective))
                 : List.of();
+    }
+
+    /** MySQL 系把注释写在列定义里，没有 COMMENT ON 这种独立语句。 */
+    @Override
+    protected List<String> columnCommentSql(String table, String columnName, String remarks) {
+        return List.of();
+    }
+
+    @Override
+    protected String columnDefinition(ColumnDesign column) {
+        String base = super.columnDefinition(column);
+        return column.remarks() == null || column.remarks().isBlank()
+                ? base : base + " COMMENT " + scriptLiteral(column.remarks());
     }
 
     @Override

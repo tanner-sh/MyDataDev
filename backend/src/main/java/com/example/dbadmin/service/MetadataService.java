@@ -948,6 +948,11 @@ public class MetadataService {
         if (!dialect.capabilities().tableDesign()) {
             throw new IllegalStateException("当前数据库类型暂不支持表结构设计。请使用数据库原生工具执行 DDL。");
         }
+        // 不支持注释的方言上，提交了注释就当场说清楚 —— 静默丢掉会让用户以为改成功了。
+        if (!dialect.supportsColumnComments() && request.columns() != null
+                && request.columns().stream().anyMatch(column -> column.remarks() != null && !column.deleted())) {
+            throw new IllegalStateException("当前数据库类型不支持修改列注释。");
+        }
         return dialect.alterTableSql(original.schemaName(), original.name(), original, request);
     }
 
