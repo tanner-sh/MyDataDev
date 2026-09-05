@@ -149,14 +149,51 @@ public class ExportService {
     }
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName, List<String> targetTableParts) throws Exception {
-        String normalizedFormat = normalizeFormat(format);
-        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         var statements = splitter.split(sql);
         if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
             throw new IllegalArgumentException("导出仅支持单条查询语句，不会执行写入或 DDL。");
         }
+        return prepareInternal(connectionId, statements.get(0).sql(), null, format, actor, productionConfirmation,
+                schemaName, targetTableParts, abbreviate(sql));
+    }
+
+    /**
+     * 导出一条由产品自己生成的查询（目前是表数据导出）。
+     *
+     * <p>与上面那道门的区别只有两处：SQL 不是用户写的，所以不做「单条查询」那道文本校验；
+     * 参数由调用方绑定，因为构造它的地方才知道每个值的 JDBC 类型。生产确认、只读作用域、
+     * 行数与字节上限、审计与历史全部照旧 —— 导出是把数据带出系统，这几道不能因为 SQL 是
+     * 我们自己拼的就省掉。</p>
+     */
+    public PreparedExport prepareGenerated(
+            long connectionId,
+            String sql,
+            DataEditService.StatementBinder binder,
+            String format,
+            String actor,
+            String productionConfirmation,
+            String schemaName,
+            String auditDetail
+    ) throws Exception {
+        return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation,
+                schemaName, null, auditDetail);
+    }
+
+    private PreparedExport prepareInternal(
+            long connectionId,
+            String sql,
+            DataEditService.StatementBinder binder,
+            String format,
+            String actor,
+            String productionConfirmation,
+            String schemaName,
+            List<String> targetTableParts,
+            String auditDetail
+    ) throws Exception {
+        String normalizedFormat = normalizeFormat(format);
+        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
-        executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statements.get(0).sql()), productionConfirmation);
+        executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         long started = System.nanoTime();
         Path file = Files.createTempFile("dbadmin-export-", "." + normalizedFormat);
@@ -165,17 +202,22 @@ public class ExportService {
              // connection itself is writable. Roll back SELECT routines with
              // transactional side effects and apply the JDBC read-only hint.
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
-             Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+             Statement statement = binder == null
+                     ? connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+                     : connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              OutputStream rawOutput = Files.newOutputStream(file);
              OutputStream output = new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES)) {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(EXPORT_MAX_ROWS + 1);
+            if (binder != null) binder.bind((java.sql.PreparedStatement) statement);
             boolean truncated;
-            try (ResultSet rs = statement.executeQuery(statements.get(0).sql())) {
+            try (ResultSet rs = binder == null
+                    ? statement.executeQuery(sql)
+                    : ((java.sql.PreparedStatement) statement).executeQuery()) {
                 truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget);
             }
             long elapsed = (System.nanoTime() - started) / 1_000_000;
-            audit.onConnection(actor, "SQL_EXPORT", connectionId, abbreviate(sql));
+            audit.onConnection(actor, "SQL_EXPORT", connectionId, auditDetail);
             history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "SUCCESS", elapsed, null, actor);
             return new PreparedExport(file, normalizedFormat, truncated, Files.size(file));
         } catch (Exception e) {

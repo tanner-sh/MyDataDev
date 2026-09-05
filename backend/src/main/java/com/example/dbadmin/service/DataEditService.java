@@ -679,6 +679,53 @@ public class DataEditService {
         return new Query(dialect.pageQuery(base.toString(), pageSize + 1, offset), parameters);
     }
 
+    /**
+     * 导出这张表：与浏览用的是同一条查询 —— 同样的筛选、排序、权限与类型绑定，只是去掉分页。
+     *
+     * <p>不让导出那边自己拼 WHERE：筛选算子的语义、标识符引用和类型绑定都在这里，复制一份
+     * 就等于多一处会和浏览结果对不上的地方 —— 用户看到 12 行、导出却得到 40 行，这种不一致
+     * 比没有导出更糟。</p>
+     *
+     * <p>绑定逻辑随查询一起交出去（{@link StatementBinder}），{@code BoundValue} 与类型转换
+     * 因此不必外泄。</p>
+     */
+    public TableExportQuery exportQuery(TableDataRequest request) throws Exception {
+        long connectionId = request.connectionId();
+        String schemaName = request.schemaName();
+        String tableName = request.tableName();
+        DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+        if (!dialect.capabilities().tableBrowse()) {
+            throw new IllegalStateException("当前数据库类型不支持表数据浏览。");
+        }
+        try (Connection connection = connections.open(connectionId)) {
+            RowIdentity identity = metadata.rowIdentity(connection, dbConnection, schemaName, tableName);
+            Map<String, ColumnDescriptor> descriptors = loadColumnDescriptors(connection, dialect, schemaName, tableName);
+            TableQueryPlan plan = tableQueryPlan(request, descriptors, dialect);
+            StringBuilder base = new StringBuilder("SELECT * FROM ").append(dialect.qualifiedName(schemaName, tableName));
+            List<BoundValue> parameters = new ArrayList<>(plan.parameters());
+            if (!plan.whereSql().isBlank()) base.append(" WHERE ").append(plan.whereSql());
+            List<String> orderBy = new ArrayList<>();
+            for (NormalizedSort sort : plan.sorts()) {
+                orderBy.add(dialect.quoteIdentifier(sort.column().name()) + " " + sort.direction());
+            }
+            // 没有排序时按行标识排：导出两次得到不同顺序的文件，对比起来毫无意义。
+            if (orderBy.isEmpty() && identity.stable()) {
+                identity.columns().forEach(column -> orderBy.add(dialect.quoteIdentifier(column) + " ASC"));
+            }
+            if (!orderBy.isEmpty()) base.append(" ORDER BY ").append(String.join(", ", orderBy));
+            return new TableExportQuery(base.toString(), statement -> bind(statement, parameters));
+        }
+    }
+
+    /** 把参数绑定交给调用方执行，绑定规则仍留在这里。 */
+    public interface StatementBinder {
+        void bind(PreparedStatement statement) throws Exception;
+    }
+
+    public record TableExportQuery(String sql, StatementBinder binder) {
+    }
+
     private void validateCursor(CursorState state, long connectionId, String schemaName, String tableName, List<String> keyColumns, String queryFingerprint) {
         if (state == null) return;
         if (state.version() != 2

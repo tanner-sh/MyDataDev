@@ -278,4 +278,37 @@ class ExportServiceTest {
         exportService.export(1L, sql, format, "admin", output);
         return output.toString(StandardCharsets.UTF_8);
     }
+
+    /**
+     * 产品自己生成的查询走另一道门：不做「单条查询」的文本校验，参数由调用方绑定。上限、
+     * 只读作用域与格式写出都还是同一套实现。
+     */
+    @Test
+    void exportsAGeneratedQueryWithBoundParameters() throws Exception {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+
+        ExportService.PreparedExport prepared = exportService.prepareGenerated(
+                1L, "SELECT id, name FROM export_values WHERE name = ?",
+                statement -> statement.setString(1, "Alice"),
+                "csv", "admin", null, null, "table:export_values");
+        prepared.writeTo(output);
+
+        String csv = output.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(csv).contains("Alice");
+        assertThat(prepared.truncated()).isFalse();
+    }
+
+    /** 绑定的值不能改变语句结构 —— 导出走的也是同一条注入防线。 */
+    @Test
+    void doesNotLetABoundValueChangeTheGeneratedStatement() throws Exception {
+        java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream();
+
+        exportService.prepareGenerated(
+                1L, "SELECT id FROM export_values WHERE name = ?",
+                statement -> statement.setString(1, "x' OR '1'='1"),
+                "csv", "admin", null, null, "table:export_values").writeTo(output);
+
+        // 只有表头，没有数据行。
+        assertThat(output.toString(java.nio.charset.StandardCharsets.UTF_8).trim().lines().count()).isEqualTo(1);
+    }
 }

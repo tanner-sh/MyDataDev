@@ -712,6 +712,13 @@ public final class ApiDtos {
     ) {
     }
 
+    /** 表数据导出：沿用浏览的查询条件，加一个导出格式。 */
+    public record TableExportRequest(
+            @NotNull @Valid TableDataRequest query,
+            @NotBlank @Size(max = 20) String format
+    ) {
+    }
+
     public record TableFilterRule(
             @NotBlank @Size(max = 240) String column,
             @NotBlank @Size(max = 24) String operator,

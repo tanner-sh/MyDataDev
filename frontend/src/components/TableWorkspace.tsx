@@ -7,6 +7,7 @@ import {
   CalculatorOutlined,
   CloudServerOutlined,
   DoubleLeftOutlined,
+  DownloadOutlined,
   EyeOutlined,
   LeftOutlined,
   MoreOutlined,
@@ -17,7 +18,7 @@ import {
   UndoOutlined,
   UploadOutlined
 } from '@ant-design/icons';
-import type { ActiveTable, RowChange, TableData, TableRow, WorkspaceStatus } from '../types';
+import type { ActiveTable, ExportFormat, RowChange, TableData, TableRow, WorkspaceStatus } from '../types';
 import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
@@ -50,6 +51,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCountRows,
   onBackToSql,
   onBackupTable,
+  onExport,
   onReload,
   onAddRow,
   onImportFile,
@@ -81,6 +83,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCountRows?: () => void;
   onBackToSql: () => void;
   onBackupTable?: () => void;
+  /** 导出当前表（含界面上的筛选与排序）；没有导出权限时不传。 */
+  onExport?: (format: ExportFormat) => void;
   onReload: () => void;
   onAddRow: () => void;
   onImportFile: (file: File) => void;
@@ -152,6 +156,26 @@ export const TableWorkspace = memo(function TableWorkspace({
           <TableQueryBuilder columns={tableData?.columns || []} value={tableQuery} disabled={!tableData || loading} onApply={onTableQueryChange} />
           <Space size={8} className="table-secondary-actions">
             <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading || !onBackupTable} onClick={onBackupTable}>备份此表</Button>
+            {/*
+              导出走的是浏览那条查询（服务端去掉分页重跑），所以导出的内容与屏幕上看到的
+              筛选、排序完全一致 —— 以前要先切到 SQL 手写一条 SELECT。
+            */}
+            <Dropdown
+              disabled={!tableData || loading || !onExport}
+              menu={{
+                items: [
+                  { key: 'csv', label: '导出 CSV' },
+                  { key: 'json', label: '导出 JSON' },
+                  { key: 'sql', label: '导出 SQL' },
+                  { key: 'xml', label: '导出 XML' },
+                  { key: 'markdown', label: '导出 Markdown' },
+                  { key: 'xlsx', label: '导出 Excel' }
+                ],
+                onClick: ({ key }) => onExport?.(key as ExportFormat)
+              }}
+            >
+              <Button size="small" icon={<DownloadOutlined />} disabled={!tableData || loading || !onExport}>导出</Button>
+            </Dropdown>
             <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
             <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || editingDisabled} onClick={onAddRow}>新增行</Button>
             <Upload

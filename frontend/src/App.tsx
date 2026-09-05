@@ -1555,6 +1555,48 @@ export default function App() {
     sqlHistoryState.setOpen(true);
   }
 
+  /**
+   * 导出当前这张表。
+   *
+   * <p>把界面上的筛选与排序原样发给服务端，由它用**浏览那条查询**去掉分页来取数 —— 前端不自己
+   * 拼 SELECT：筛选算子的语义和标识符引用都在后端，复制一份就会出现「界面上 12 行、导出 40 行」
+   * 这种对不上的情况。</p>
+   */
+  async function exportTable(format: ExportFormat) {
+    if (!selected || !activeTable) {
+      showInfo('请先打开一张表再导出');
+      return;
+    }
+    const confirmation = await requestProductionConfirmation('导出表数据');
+    if (selected.environment === 'prod' && !confirmation) return;
+    setTableLoading(true);
+    try {
+      const response = await apiResponse('/data/table/export', {
+        method: 'POST',
+        headers: productionConfirmationHeaders(confirmation),
+        body: JSON.stringify({
+          format,
+          query: {
+            connectionId: selected.id,
+            schemaName: activeTable.schemaName,
+            tableName: activeTable.tableName,
+            ...tableQuery
+          }
+        })
+      });
+      const blob = await response.blob();
+      downloadBlob(blob, `${activeTable.tableName}-${timestamp()}.${exportFileExtension(format)}`);
+      const rowLimit = response.headers.get('x-export-row-limit') || '10000';
+      const truncated = response.headers.get('x-export-truncated') === 'true';
+      toastApi.success(`已导出 ${format.toUpperCase()}：${activeTable.tableName}`
+        + `（最多 ${rowLimit} 行${truncated ? '，本次已截断' : ''}）`);
+    } catch (e) {
+      toastApi.error(`导出失败：${localizeError(e)}`);
+    } finally {
+      setTableLoading(false);
+    }
+  }
+
   async function exportSql(format: ExportFormat, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
@@ -2731,6 +2773,7 @@ export default function App() {
   const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
   const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
+  const exportTableEvent = useStableEvent((format: ExportFormat) => { void exportTable(format); });
   const changeTablePageEvent = useStableEvent((page: number) => confirmDiscardTableChanges(() => void loadTable(activeTable, { page }), `切换到第 ${page + 1} 页`));
   const changeTablePageSizeEvent = useStableEvent((pageSize: number) => confirmDiscardTableChanges(() => {
     layoutPreferences.setTablePageSize(pageSize);
@@ -3014,6 +3057,7 @@ export default function App() {
                 editingSupported={Boolean(selected?.capabilities?.tableEdit && hasConnectionPermission(selected, 'DATA_WRITE'))}
                 onBackToSql={returnFromTableEvent}
                 onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
+                onExport={selected && hasConnectionPermission(selected, 'EXPORT') ? exportTableEvent : undefined}
                 onReload={reloadTableEvent}
                 onPageChange={changeTablePageEvent}
                 onPageSizeChange={changeTablePageSizeEvent}
