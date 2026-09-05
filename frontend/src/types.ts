@@ -648,7 +648,32 @@ export type AiSettings = {
   effort: AiEffort;
   /** 后端只说 Key 配没配，永远不回传密文。 */
   apiKeyConfigured: boolean;
+  /** 每天全站的 token 上限，0 表示不限制。 */
+  dailyTokenBudget: number;
+  /** 每天每人的 token 上限，0 表示不限制。 */
+  userDailyTokenBudget: number;
 };
+
+/** token 用量与预算。额度按服务器本地自然日计，跨零点清零。 */
+export type AiUsage = {
+  dailyTokenBudget: number;
+  userDailyTokenBudget: number;
+  usedToday: number;
+  usedTodayByCaller: number;
+  days: number;
+  daily: AiUsageDay[];
+  actors: AiUsageActor[];
+};
+
+export type AiUsageDay = {
+  day: string;
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+};
+
+export type AiUsageActor = { actor: string; requests: number; tokens: number };
 
 export type AiConnectionPolicy = {
   connectionId: number;

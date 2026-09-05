@@ -86,6 +86,7 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 - **执行历史进入模型上下文前必须先过 `AiSqlShape.mask`**（`AiQueryHistoryService`）。历史里带着真实业务值 —— 手机号、金额、注释里的人名和工单号；抹掉字面量之后剩下的是查询骨架，这条工具才落得进「只发结构」这一档。绕开它就等于把这一档的承诺作废了。
 - **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
 - `AiAgentCoordinator` 管有界线程池、按用户并发上限与取消；`AiAgentMetrics` 出 Micrometer 指标，其中 `cache_read` 长期为 0 说明 prompt cache 的前缀被写脏了。
+- **预算闸门挂在 `AiSettingsService.requireEnabled(actor)` 上**，每条 AI 路径的第一行都走它；用量记在 `ai_usage_daily`（不从审计 detail 解析），单轮问答和 Agent 两条路记的是同一样东西，取消与失败也照记。额度只在请求开始前检查，所以最后一次请求可能小幅超出 —— 这是有意的，细节见 `docs/ai-assistant.md` 的 M13。
 - **系统提示、工具定义和历史消息是 prompt cache 的前缀，只许在尾部追加**：`AiPromptCachePrefixTest` 用剧本模型在 CI 里守着这条（系统提示逐字相等、消息只增不改、提示里不许出现当前年份）。往里塞时间戳这类每次都变的内容会让缓存命中率直接归零。审计 detail 里的 `seq=` 记着这次请求的工具调用序列 —— 汇总计数说不出它是搜了两次还是读了三次表。
 - **改 Agent 的 prompt、工具或循环之前先看评测集**（`service/ai/eval/`）：`AiSqlAgentLoopTest` 用剧本化的假模型在 CI 里守住整条循环，`AiSqlAgentEvalTest` 用真模型跑固定用例集出报告（要 `AI_EVAL_API_KEY`，默认跳过）。用例只校验「命中了哪些表」，改已有用例等于让历史分数不可比。
 

@@ -109,7 +109,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/auth/status", "/actuator/health", "/oauth2/**", "/login/oauth2/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/storage-profiles/**").authenticated()
-                        .requestMatchers("/api/admin/**", "/api/audit/**", "/api/mcp/**", "/api/ai/settings/**", "/api/ai/connections/**", "/api/storage-profiles/**").hasRole("ADMIN")
+                        .requestMatchers("/api/admin/**", "/api/audit/**", "/api/mcp/**", "/api/ai/settings/**", "/api/ai/connections/**", "/api/ai/usage", "/api/storage-profiles/**").hasRole("ADMIN")
                         .requestMatchers("/api/**").authenticated()
                         .requestMatchers("/actuator/**", "/h2-console/**").authenticated()
                         .anyRequest().permitAll())

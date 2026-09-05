@@ -7,6 +7,7 @@ import com.example.dbadmin.dto.AiDtos.AiProbeResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
 import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
+import com.example.dbadmin.dto.AiDtos.AiUsageResponse;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.repo.AiSettingsRepository;
 import com.example.dbadmin.repo.AuditRepository;
@@ -41,6 +42,7 @@ public class AiSettingsService {
     private final AuditRepository audit;
     private final CryptoService crypto;
     private final LlmClientFactory clients;
+    private final AiUsageService usage;
     private final AtomicReference<AiSettings> current = new AtomicReference<>(AiSettings.disabled());
 
     public AiSettingsService(
@@ -48,13 +50,15 @@ public class AiSettingsService {
             ConnectionService connections,
             AuditRepository audit,
             CryptoService crypto,
-            LlmClientFactory clients
+            LlmClientFactory clients,
+            AiUsageService usage
     ) {
         this.repository = repository;
         this.connections = connections;
         this.audit = audit;
         this.crypto = crypto;
         this.clients = clients;
+        this.usage = usage;
     }
 
     @PostConstruct
@@ -176,7 +180,17 @@ public class AiSettingsService {
 
     /**
      * AI 功能的总闸门。后续每个 AI 接口的第一行都该是它。
+     *
+     * <p>预算检查也挂在这里，而不是散在每个入口：闸门只要有第二个地方可以绕开，迟早会被绕开。
+     * 传 {@code actor} 是为了同时卡住每人每日额度 —— 全站额度挡不住一个人把大家的额度用完。</p>
      */
+    public AiSettings requireEnabled(String actor) {
+        AiSettings settings = requireEnabled();
+        usage.requireWithinBudget(actor, settings);
+        return settings;
+    }
+
+    /** 只判断功能开没开，不计额度。仅限本来就不产生 token 的路径（连通性测试、状态查询）。 */
     public AiSettings requireEnabled() {
         AiSettings settings = snapshot();
         if (!settings.enabled()) {
@@ -184,6 +198,15 @@ public class AiSettingsService {
                     "AI 功能尚未启用，请联系管理员在「AI 助手」设置中开启。");
         }
         return settings;
+    }
+
+    /** 记一次调用的 token 用量。 */
+    public void recordUsage(String actor, String model, long inputTokens, long outputTokens, long cacheReadTokens) {
+        usage.record(actor, model, inputTokens, outputTokens, cacheReadTokens);
+    }
+
+    public AiUsageResponse usageReport(int days, String actor) {
+        return usage.report(days, actor, snapshot());
     }
 
     /**

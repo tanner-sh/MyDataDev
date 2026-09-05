@@ -100,19 +100,19 @@ public class AiAssistantService {
 
     /** 自然语言转 SQL。产出只回到编辑器，这里没有任何执行入口。 */
     public String generate(long connectionId, String schemaName, String question, String actor) {
-        Prepared prepared = prepareGenerate(connectionId, schemaName, question);
+        Prepared prepared = prepareGenerate(connectionId, schemaName, question, actor);
         LlmResponse response = prepared.client().complete(prepared.request());
         writeAudit(ACTION_GENERATE, connectionId, prepared, response, actor);
         return response.text();
     }
 
     public SseEmitter generateStream(long connectionId, String schemaName, String question, String actor) {
-        Prepared prepared = prepareGenerate(connectionId, schemaName, question);
+        Prepared prepared = prepareGenerate(connectionId, schemaName, question, actor);
         return stream(prepared, ACTION_GENERATE, connectionId, actor);
     }
 
-    private Prepared prepareGenerate(long connectionId, String schemaName, String question) {
-        AiSettings current = settings.requireEnabled();
+    private Prepared prepareGenerate(long connectionId, String schemaName, String question, String actor) {
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
         DbConnection connection = connections.require(connectionId);
         SchemaContext context = contexts.forQuestion(connectionId, schemaName, question, policy);
@@ -129,19 +129,19 @@ public class AiAssistantService {
      * 在这里直接拒绝，而不是悄悄发一份「反正只有几行」的数据。</p>
      */
     public String interpret(long connectionId, String schemaName, String sql, String preview, String chartCandidates, String actor) {
-        Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates);
+        Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates, actor);
         LlmResponse response = prepared.client().complete(prepared.request());
         writeAudit(ACTION_INTERPRET, connectionId, prepared, response, actor);
         return response.text();
     }
 
     public SseEmitter interpretStream(long connectionId, String schemaName, String sql, String preview, String chartCandidates, String actor) {
-        Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates);
+        Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates, actor);
         return stream(prepared, ACTION_INTERPRET, connectionId, actor);
     }
 
-    private Prepared prepareInterpret(long connectionId, String schemaName, String sql, String preview, String chartCandidates) {
-        AiSettings current = settings.requireEnabled();
+    private Prepared prepareInterpret(long connectionId, String schemaName, String sql, String preview, String chartCandidates, String actor) {
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
         if (!policy.sharing().allowsSample()) {
             throw new ApiProblemException(HttpStatus.FORBIDDEN, "AI_SAMPLE_NOT_ALLOWED",
@@ -164,7 +164,7 @@ public class AiAssistantService {
      * 查询压满。</p>
      */
     public SseEmitter documentStream(long connectionId, String schemaName, List<String> tables, String actor) {
-        AiSettings current = settings.requireEnabled();
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
         DbConnection connection = connections.require(connectionId);
         List<String> targets = tables == null ? List.of() : tables.stream()
@@ -199,7 +199,7 @@ public class AiAssistantService {
      * 表名与列名，再查一遍元数据只是多花时间。</p>
      */
     public SseEmitter reviewScriptStream(long connectionId, String script, String actor) {
-        AiSettings current = settings.requireEnabled();
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
         DbConnection connection = connections.require(connectionId);
         LlmRequest request = LlmRequest.of(
@@ -216,19 +216,19 @@ public class AiAssistantService {
      * 算出来的，模型只在它们之上解释「为什么慢、建什么索引」，不重新判断一遍。</p>
      */
     public String explain(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
-        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings);
+        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings, actor);
         LlmResponse response = prepared.client().complete(prepared.request());
         writeAudit(ACTION_EXPLAIN, connectionId, prepared, response, actor);
         return response.text();
     }
 
     public SseEmitter explainStream(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
-        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings);
+        Prepared prepared = prepareExplain(connectionId, schemaName, sql, plan, findings, actor);
         return stream(prepared, ACTION_EXPLAIN, connectionId, actor);
     }
 
-    private Prepared prepareExplain(long connectionId, String schemaName, String sql, String plan, String findings) {
-        AiSettings current = settings.requireEnabled();
+    private Prepared prepareExplain(long connectionId, String schemaName, String sql, String plan, String findings, String actor) {
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
         DbConnection connection = connections.require(connectionId);
         SchemaContext context = contexts.forSql(connectionId, schemaName, sql, policy);
@@ -279,13 +279,20 @@ public class AiAssistantService {
     }
 
     private void writeAudit(String action, long connectionId, Prepared prepared, LlmResponse response, String actor) {
+        // 单轮问答此前只记字符数。字符不是计费单位，也不能和 Agent 那条路的数相加 —— 要卡额度，
+        // 两条路就得记同一样东西。
+        settings.recordUsage(actor, prepared.settings().model(),
+                response.inputTokens(), response.outputTokens(), response.cacheReadTokens());
         audit.onConnection(actor, action, connectionId,
                 "sharing=" + prepared.policy().sharing()
                         + " tables=" + prepared.context().tables().size()
                         + " sample=" + prepared.policy().sharing().allowsSample()
                         + " model=" + prepared.settings().model()
                         + " promptChars=" + (prepared.request().systemPrompt() == null ? 0 : prepared.request().systemPrompt().length())
-                        + " answerChars=" + (response.text() == null ? 0 : response.text().length()));
+                        + " answerChars=" + (response.text() == null ? 0 : response.text().length())
+                        + " inputTokens=" + response.inputTokens()
+                        + " outputTokens=" + response.outputTokens()
+                        + " cacheReadTokens=" + response.cacheReadTokens());
     }
 
     /** 方言提示只给类型，不给 JDBC URL —— URL 里常带主机名与库名，没必要发出去。 */

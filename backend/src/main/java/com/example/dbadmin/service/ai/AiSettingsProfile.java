@@ -18,6 +18,8 @@ public final class AiSettingsProfile {
     public static final String SECRET_MASK = ConnectionService.PASSWORD_MASK;
     public static final int MAX_MODEL_LENGTH = 128;
     public static final int MAX_BASE_URL_LENGTH = 512;
+    /** 单日预算的上限：十亿 token 一天，再高就等于没设，但能挡住多打几个零的手滑。 */
+    public static final long MAX_DAILY_BUDGET = 1_000_000_000L;
 
     private AiSettingsProfile() {
     }
@@ -38,7 +40,9 @@ public final class AiSettingsProfile {
         if (request.enabled() && (cipher == null || cipher.isBlank()) && requiresApiKey(provider)) {
             throw new IllegalArgumentException("启用 AI 之前请先填写 API Key。");
         }
-        return new AiSettings(request.enabled(), provider, baseUrl, model, cipher, effort);
+        return new AiSettings(request.enabled(), provider, baseUrl, model, cipher, effort,
+                budget(request.dailyTokenBudget(), previous.dailyTokenBudget(), "每日总预算"),
+                budget(request.userDailyTokenBudget(), previous.userDailyTokenBudget(), "每人每日预算"));
     }
 
     public static AiSettingsResponse summarize(AiSettings settings) {
@@ -49,8 +53,25 @@ public final class AiSettingsProfile {
                 value.baseUrl(),
                 value.model(),
                 value.effort().name(),
-                value.hasApiKey()
+                value.hasApiKey(),
+                value.dailyTokenBudget(),
+                value.userDailyTokenBudget()
         );
+    }
+
+    /**
+     * 预算的规范化。
+     *
+     * <p>缺字段沿用旧值，与 Key 的掩码语义一致：老客户端或只想改模型名的请求，不该把管理员
+     * 设好的额度顺手清零。要取消限制得显式传 0 —— 0 表示不限制。</p>
+     */
+    private static long budget(Long submitted, long previous, String label) {
+        if (submitted == null) return previous;
+        if (submitted < 0) throw new IllegalArgumentException(label + "不能为负数。");
+        if (submitted > MAX_DAILY_BUDGET) {
+            throw new IllegalArgumentException(label + "过大（上限 " + MAX_DAILY_BUDGET + " token）。");
+        }
+        return submitted;
     }
 
     /**

@@ -258,6 +258,28 @@ class AiSqlAgentLoopTest {
         }
     }
 
+    /**
+     * 预算闸门只有在记账可靠时才有意义，而「跑挂了就不记」会让最容易失控的那类请求
+     * （反复重试、每次都烧 token）刚好绕开额度。
+     */
+    @Test
+    void booksTheTokensEvenWhenTheRunEndsInAnError() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"客户\"]}")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            // 剧本只有一轮，第二轮抛异常 —— 但第一轮的 token 已经花出去了。
+            assertThat(harness.ask("查询客户").outcome()).isEqualTo("error");
+
+            org.mockito.Mockito.verify(harness.settings(), org.mockito.Mockito.timeout(5_000))
+                    .recordUsage(org.mockito.ArgumentMatchers.eq("eval"),
+                            org.mockito.ArgumentMatchers.eq("eval-model"),
+                            org.mockito.ArgumentMatchers.eq(100L),
+                            org.mockito.ArgumentMatchers.eq(20L),
+                            org.mockito.ArgumentMatchers.eq(0L));
+        }
+    }
+
     @Test
     void writesAnAuditRecordWithTheRunStatisticsEvenWhenTheModelFails() throws Exception {
         ScriptedLlmClient model = new ScriptedLlmClient(List.of(

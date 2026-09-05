@@ -75,6 +75,7 @@ public final class AiAgentHarness implements AutoCloseable {
     private final AiConversationStore conversations;
     private final AuditRepository audit;
     private final AiGlossaryService glossary;
+    private final AiSettingsService settingsService;
     private final MeterRegistry registry = new SimpleMeterRegistry();
 
     public AiAgentHarness(LlmClient client, List<com.example.dbadmin.service.ai.AiBusinessTerm> glossaryTerms) throws Exception {
@@ -116,7 +117,8 @@ public final class AiAgentHarness implements AutoCloseable {
                 glossary, history, new ObjectMapper());
 
         AiSettingsService settings = mock(AiSettingsService.class);
-        when(settings.requireEnabled()).thenReturn(new AiSettings(true,
+        settingsService = settings;
+        when(settings.requireEnabled(nullable(String.class))).thenReturn(new AiSettings(true,
                 com.example.dbadmin.service.ai.AiProvider.ANTHROPIC, null, modelLabel, null,
                 com.example.dbadmin.service.ai.AiEffort.HIGH));
         when(settings.requireSharedConnection(anyLong()))
@@ -130,6 +132,11 @@ public final class AiAgentHarness implements AutoCloseable {
                 new SqlStatementClassifier(), validator, conversations, glossary, metadataCache,
                 new AiAgentCoordinator(properties, provider(registry)), new AiAgentMetrics(provider(registry)),
                 properties);
+    }
+
+    /** 配置服务是 mock：这里用来验证 token 用量有没有被记账。 */
+    public AiSettingsService settings() {
+        return settingsService;
     }
 
     /** 词典服务是 mock：既用来喂词条，也用来验证「搜空的词有没有被记下来」。 */

@@ -113,6 +113,52 @@ class AiSettingsProfileTest {
                 .hasMessageContaining("模型名称");
     }
 
+    /**
+     * 只想改个模型名的请求不该把管理员设好的额度顺手清零 —— 缺字段沿用旧值，与 Key 的
+     * 掩码语义一致；要取消限制得显式传 0。
+     */
+    @Test
+    void keepsStoredBudgetsWhenTheRequestOmitsThem() {
+        AiSettings existing = new AiSettings(true, AiProvider.ANTHROPIC, null, "claude-opus-5",
+                "cipher", AiEffort.HIGH, 500_000, 50_000);
+        AiSettingsUpdateRequest request = new AiSettingsUpdateRequest(
+                true, "ANTHROPIC", null, "claude-sonnet-5", AiSettingsProfile.SECRET_MASK, "HIGH");
+
+        AiSettings updated = AiSettingsProfile.toSettings(request, existing, ENCRYPT);
+
+        assertThat(updated.dailyTokenBudget()).isEqualTo(500_000);
+        assertThat(updated.userDailyTokenBudget()).isEqualTo(50_000);
+    }
+
+    @Test
+    void treatsZeroAsNoLimit() {
+        AiSettings existing = new AiSettings(true, AiProvider.ANTHROPIC, null, "claude-opus-5",
+                "cipher", AiEffort.HIGH, 500_000, 50_000);
+        AiSettingsUpdateRequest request = new AiSettingsUpdateRequest(
+                true, "ANTHROPIC", null, "claude-opus-5", AiSettingsProfile.SECRET_MASK, "HIGH", 0L, 0L);
+
+        AiSettings updated = AiSettingsProfile.toSettings(request, existing, ENCRYPT);
+
+        assertThat(updated.dailyTokenBudget()).isZero();
+        assertThat(updated.userDailyTokenBudget()).isZero();
+    }
+
+    @Test
+    void rejectsNegativeAndAbsurdBudgets() {
+        AiSettingsUpdateRequest negative = new AiSettingsUpdateRequest(
+                false, "ANTHROPIC", null, "claude-opus-5", null, "HIGH", -1L, null);
+        AiSettingsUpdateRequest absurd = new AiSettingsUpdateRequest(
+                false, "ANTHROPIC", null, "claude-opus-5", null, "HIGH", null,
+                AiSettingsProfile.MAX_DAILY_BUDGET + 1);
+
+        assertThatThrownBy(() -> AiSettingsProfile.toSettings(negative, AiSettings.disabled(), ENCRYPT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每日总预算");
+        assertThatThrownBy(() -> AiSettingsProfile.toSettings(absurd, AiSettings.disabled(), ENCRYPT))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("每人每日预算");
+    }
+
     @Test
     void summaryNeverLeaksTheCiphertext() {
         AiSettings settings = new AiSettings(true, AiProvider.ANTHROPIC, null, "claude-opus-5", "cipher(secret)", AiEffort.MAX);

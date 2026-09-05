@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { ApiOutlined, BookOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { PanelLoading } from './PanelState';
@@ -12,7 +12,10 @@ import type {
   AiProbeResult,
   AiProvider,
   AiSchemaSharing,
-  AiSettings
+  AiSettings,
+  AiUsage,
+  AiUsageActor,
+  AiUsageDay
 } from '../types';
 import { alreadyInGlossary, gapsAsSuggestions, mergeSuggestions, pendingGaps } from '../aiGlossary';
 import {
@@ -22,6 +25,8 @@ import {
   AI_SHARING_HINTS,
   AI_SHARING_LABELS,
   applyProviderChange,
+  budgetUsage,
+  formatTokens,
   clearApiKeyPayload,
   sharingOptionsFor,
   summarizePolicies,
@@ -42,6 +47,7 @@ export function AiSettingsPanel() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [probe, setProbe] = useState<AiProbeResult>();
+  const [usage, setUsage] = useState<AiUsage>();
   const [glossaryPolicy, setGlossaryPolicy] = useState<AiConnectionPolicy>();
   const [glossary, setGlossary] = useState<AiGlossaryEntry[]>([]);
   const [glossaryLoading, setGlossaryLoading] = useState(false);
@@ -60,13 +66,15 @@ export function AiSettingsPanel() {
     setLoading(true);
     setError('');
     try {
-      const [nextSettings, nextPolicies] = await Promise.all([
+      const [nextSettings, nextPolicies, nextUsage] = await Promise.all([
         api<AiSettings>('/ai/settings'),
-        api<AiConnectionPolicy[]>('/ai/connections')
+        api<AiConnectionPolicy[]>('/ai/connections'),
+        api<AiUsage>('/ai/usage')
       ]);
       setSettings(nextSettings);
       setForm(toSettingsForm(nextSettings));
       setPolicies(nextPolicies);
+      setUsage(nextUsage);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'AI 设置加载失败');
     } finally {
@@ -83,6 +91,7 @@ export function AiSettingsPanel() {
       setSettings(next);
       setForm(toSettingsForm(next));
       setProbe(undefined);
+      setUsage(await api<AiUsage>('/ai/usage'));
       messageApi.success('AI 设置已保存');
     } catch (cause) {
       messageApi.error(cause instanceof Error ? cause.message : 'AI 设置保存失败');
@@ -288,6 +297,31 @@ export function AiSettingsPanel() {
               disabled={form.provider !== 'ANTHROPIC'}
             />
           </Form.Item>
+          <Form.Item
+            label="每日 token 预算"
+            extra="按服务器本地自然日计，跨零点清零；0 表示不限制。额度只在请求开始前检查，所以最后一次请求可能小幅超出。"
+          >
+            <Space.Compact style={{ width: '100%' }}>
+              <InputNumber
+                style={{ width: '50%' }}
+                min={0}
+                step={100000}
+                value={form.dailyTokenBudget}
+                addonBefore="全站"
+                placeholder="不限制"
+                onChange={(value) => setForm({ ...form, dailyTokenBudget: Number(value ?? 0) })}
+              />
+              <InputNumber
+                style={{ width: '50%' }}
+                min={0}
+                step={10000}
+                value={form.userDailyTokenBudget}
+                addonBefore="每人"
+                placeholder="不限制"
+                onChange={(value) => setForm({ ...form, userDailyTokenBudget: Number(value ?? 0) })}
+              />
+            </Space.Compact>
+          </Form.Item>
           <Space>
             <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={submit}>保存</Button>
             <Button icon={<ApiOutlined />} loading={testing} onClick={test} disabled={saving}>连通性测试</Button>
@@ -303,6 +337,8 @@ export function AiSettingsPanel() {
           />
         )}
       </Card>
+
+      {usage && <AiUsageCard usage={usage} />}
 
       <Card
         size="small"
@@ -453,6 +489,82 @@ export function AiSettingsPanel() {
 
 function splitList(value: string): string[] {
   return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 10);
+}
+
+/**
+ * token 用量。
+ *
+ * <p>回答两个问题：今天还剩多少额度，以及这些 token 花在谁身上。缓存读单独一列而不计入
+ * 消耗 —— 它说明的是省了多少，混进总数会让「今天贵了」这件事永远看不出来。</p>
+ *
+ * <p>不画图表：一张十四天的表在这个宽度里比折线更好读，也不必为它把图表依赖拉进首屏。</p>
+ */
+function AiUsageCard({ usage }: { usage: AiUsage }) {
+  const percent = budgetUsage(usage.usedToday, usage.dailyTokenBudget);
+  const noBudget = usage.dailyTokenBudget <= 0 && usage.userDailyTokenBudget <= 0;
+
+  return (
+    <Card
+      size="small"
+      title="token 用量"
+      extra={<Text type="secondary">最近 {usage.days} 天</Text>}
+    >
+      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+        <Text>
+          今日全站 <Text strong>{formatTokens(usage.usedToday)}</Text>
+          {usage.dailyTokenBudget > 0 ? ` / ${formatTokens(usage.dailyTokenBudget)}` : '（未设预算）'}
+          {usage.usedTodayByCaller > 0 && <Text type="secondary">{`，其中你用了 ${formatTokens(usage.usedTodayByCaller)}`}</Text>}
+        </Text>
+        {percent !== undefined && (
+          <Progress percent={percent} size="small" status={percent >= 100 ? 'exception' : 'normal'} />
+        )}
+        {noBudget && (
+          <Text type="secondary">未设预算：AI 请求不受额度限制。上面的「每日 token 预算」可以设一个上限。</Text>
+        )}
+      </Space>
+
+      {usage.daily.length === 0 ? (
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>这段时间还没有 AI 调用。</Paragraph>
+      ) : (
+        <Table<AiUsageDay>
+          size="small"
+          rowKey="day"
+          style={{ marginTop: 8 }}
+          dataSource={usage.daily}
+          pagination={false}
+          scroll={{ y: 180 }}
+          columns={[
+            { title: '日期', dataIndex: 'day', width: 110 },
+            { title: '请求', dataIndex: 'requests', width: 70 },
+            { title: '输入', dataIndex: 'inputTokens', width: 90, render: (value: number) => formatTokens(value) },
+            { title: '输出', dataIndex: 'outputTokens', width: 90, render: (value: number) => formatTokens(value) },
+            {
+              title: '缓存读', dataIndex: 'cacheReadTokens', width: 90,
+              render: (value: number) => (value > 0
+                ? <Text type="secondary">{formatTokens(value)}</Text>
+                : <Text type="secondary">—</Text>)
+            }
+          ]}
+        />
+      )}
+
+      {usage.actors.length > 0 && (
+        <Table<AiUsageActor>
+          size="small"
+          rowKey="actor"
+          style={{ marginTop: 8 }}
+          dataSource={usage.actors}
+          pagination={false}
+          scroll={{ y: 140 }}
+          columns={[
+            { title: '用户', dataIndex: 'actor', ellipsis: true },
+            { title: '请求', dataIndex: 'requests', width: 70 },
+            { title: 'token', dataIndex: 'tokens', width: 100, render: (value: number) => formatTokens(value) }
+          ]}
+        />
+      )}
+    </Card>
+  );
 }
 
 /**

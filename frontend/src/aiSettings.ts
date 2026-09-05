@@ -68,6 +68,10 @@ export type AiSettingsForm = {
   effort: AiEffort;
   /** 空串表示不改动（提交时转成掩码）；用户清空输入框用的是显式的「清除」动作。 */
   apiKey: string;
+  /** 每天全站 token 上限，0 表示不限制。 */
+  dailyTokenBudget: number;
+  /** 每天每人 token 上限，0 表示不限制。 */
+  userDailyTokenBudget: number;
 };
 
 export function toSettingsForm(settings?: AiSettings): AiSettingsForm {
@@ -78,7 +82,9 @@ export function toSettingsForm(settings?: AiSettings): AiSettingsForm {
     baseUrl: settings?.baseUrl || '',
     model: settings?.model || AI_PROVIDERS[provider].defaultModel,
     effort: settings?.effort || 'HIGH',
-    apiKey: ''
+    apiKey: '',
+    dailyTokenBudget: settings?.dailyTokenBudget ?? 0,
+    userDailyTokenBudget: settings?.userDailyTokenBudget ?? 0
   };
 }
 
@@ -95,6 +101,8 @@ export function toSettingsPayload(form: AiSettingsForm): {
   model: string;
   effort: AiEffort;
   apiKey: string;
+  dailyTokenBudget: number;
+  userDailyTokenBudget: number;
 } {
   const meta = AI_PROVIDERS[form.provider];
   return {
@@ -103,7 +111,9 @@ export function toSettingsPayload(form: AiSettingsForm): {
     baseUrl: meta.requiresBaseUrl ? form.baseUrl.trim() : null,
     model: form.model.trim() || meta.defaultModel,
     effort: form.effort,
-    apiKey: form.apiKey.trim() ? form.apiKey.trim() : AI_SECRET_MASK
+    apiKey: form.apiKey.trim() ? form.apiKey.trim() : AI_SECRET_MASK,
+    dailyTokenBudget: budgetValue(form.dailyTokenBudget),
+    userDailyTokenBudget: budgetValue(form.userDailyTokenBudget)
   };
 }
 
@@ -123,7 +133,36 @@ export function validateSettingsForm(form: AiSettingsForm, apiKeyConfigured: boo
   if (form.enabled && meta.requiresApiKey && !apiKeyConfigured && !form.apiKey.trim()) {
     return '启用 AI 之前请先填写 API Key。';
   }
+  if (form.dailyTokenBudget < 0 || form.userDailyTokenBudget < 0) return 'token 预算不能为负数，0 表示不限制。';
+  // 每人额度大于全站额度时，前者永远轮不到生效 —— 与其让人以为设了，不如当场说清楚。
+  if (form.dailyTokenBudget > 0 && form.userDailyTokenBudget > form.dailyTokenBudget) {
+    return '每人每日预算不能超过全站每日预算。';
+  }
   return undefined;
+}
+
+/**
+ * token 数的显示。
+ *
+ * <p>用「万」而不是千分位：预算一开就是几十万上百万，`1,234,567` 这样的数字在一张表里
+ * 要数位数才看得出量级，而这里要看的本来就只有量级。</p>
+ */
+export function formatTokens(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  if (value < 10_000) return String(Math.round(value));
+  const wan = value / 10_000;
+  return `${wan >= 100 ? Math.round(wan) : wan.toFixed(1)} 万`;
+}
+
+/** 今日额度用掉的百分比；没设预算时返回 undefined，界面据此不画进度条。 */
+export function budgetUsage(used: number, budget: number): number | undefined {
+  if (budget <= 0) return undefined;
+  return Math.min(100, Math.round((used / budget) * 100));
+}
+
+/** 输入框可能被清空成 null/NaN，这些都按「不限制」处理，而不是发一个 NaN 给后端。 */
+function budgetValue(value: number): number {
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 /** 切换服务商时的字段迁移：模型名回到新服务商的默认值，Key 输入框清空。 */

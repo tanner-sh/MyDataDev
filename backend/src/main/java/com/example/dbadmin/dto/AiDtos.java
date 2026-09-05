@@ -20,7 +20,9 @@ public final class AiDtos {
             String baseUrl,
             String model,
             String effort,
-            boolean apiKeyConfigured
+            boolean apiKeyConfigured,
+            long dailyTokenBudget,
+            long userDailyTokenBudget
     ) {
     }
 
@@ -31,8 +33,15 @@ public final class AiDtos {
             @Size(max = 512) String baseUrl,
             @Size(max = 128) String model,
             @Size(max = 2000) String apiKey,
-            @Size(max = 16) String effort
+            @Size(max = 16) String effort,
+            Long dailyTokenBudget,
+            Long userDailyTokenBudget
     ) {
+        /** 不带预算字段的请求：沿用已保存的额度，而不是把它清零。 */
+        public AiSettingsUpdateRequest(boolean enabled, String provider, String baseUrl, String model,
+                                       String apiKey, String effort) {
+            this(enabled, provider, baseUrl, model, apiKey, effort, null, null);
+        }
     }
 
     /** 连接的共享策略。列表按连接展开，未配置过的连接也会出现，档位是 {@code NONE}。 */
@@ -51,6 +60,36 @@ public final class AiDtos {
             @NotBlank @Size(max = 24) String sharing,
             Integer sampleRowLimit
     ) {
+    }
+
+    /**
+     * AI token 用量与预算。
+     *
+     * @param usedToday 全站今日已消耗（输入 + 输出）；缓存读单独统计，它说明的是省了多少
+     * @param usedTodayByCaller 当前这个用户今日已消耗
+     * @param days 回看窗口的天数
+     */
+    public record AiUsageResponse(
+            long dailyTokenBudget,
+            long userDailyTokenBudget,
+            long usedToday,
+            long usedTodayByCaller,
+            int days,
+            java.util.List<AiUsageDayResponse> daily,
+            java.util.List<AiUsageActorResponse> actors
+    ) {
+    }
+
+    public record AiUsageDayResponse(
+            String day,
+            int requests,
+            long inputTokens,
+            long outputTokens,
+            long cacheReadTokens
+    ) {
+    }
+
+    public record AiUsageActorResponse(String actor, int requests, long tokens) {
     }
 
     /** 连通性测试结果。失败时 {@code ok=false}，把上游原因原样带回界面。 */

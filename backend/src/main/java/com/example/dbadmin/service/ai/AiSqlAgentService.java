@@ -102,7 +102,7 @@ public class AiSqlAgentService {
     }
 
     public SseEmitter chatStream(AiChatRequest request, String actor, String ownerKey) {
-        AiSettings current = settings.requireEnabled();
+        AiSettings current = settings.requireEnabled(actor);
         AiConnectionPolicy policy = settings.requireSharedConnection(request.connectionId());
         DbConnection connection = connections.require(request.connectionId());
         AiConversationStore.Turn turn = conversations.begin(
@@ -294,6 +294,8 @@ public class AiSqlAgentService {
         } finally {
             if (!completed) conversations.fail(conversationTurn);
             metrics.request(outcome, started, inputTokens, outputTokens, cacheReadTokens);
+            // 取消和失败一样记账：token 在被打断之前已经花出去了。
+            settings.recordUsage(actor, current.model(), inputTokens, outputTokens, cacheReadTokens);
             // 取消同样要落审计：工具在被打断之前，往往已经把库结构发给外部模型了。
             audit.onConnection(actor, ACTION_CHAT, request.connectionId(),
                     "outcome=" + outcome

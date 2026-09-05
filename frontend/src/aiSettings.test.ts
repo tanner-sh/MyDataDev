@@ -7,6 +7,8 @@ import {
   clearApiKeyPayload,
   sharingOptionsFor,
   summarizePolicies,
+  budgetUsage,
+  formatTokens,
   toPolicyPayload,
   toSettingsForm,
   toSettingsPayload,
@@ -20,7 +22,9 @@ const SAVED: AiSettings = {
   baseUrl: null,
   model: 'claude-opus-5',
   effort: 'HIGH',
-  apiKeyConfigured: true
+  apiKeyConfigured: true,
+  dailyTokenBudget: 0,
+  userDailyTokenBudget: 0
 };
 
 describe('设置表单', () => {
@@ -132,5 +136,51 @@ describe('连接共享策略', () => {
       { connectionId: 3, connectionName: 'c', dbType: 'mysql', environment: 'test', production: false, sharing: 'STRUCTURE_AND_SAMPLE', sampleRowLimit: 5 }
     ];
     expect(summarizePolicies(policies)).toEqual({ total: 3, shared: 2, sampled: 1 });
+  });
+});
+
+describe('token 预算', () => {
+  it('回填已保存的额度，没配置时是 0（不限制）', () => {
+    expect(toSettingsForm({ ...SAVED, dailyTokenBudget: 500000, userDailyTokenBudget: 50000 }))
+      .toMatchObject({ dailyTokenBudget: 500000, userDailyTokenBudget: 50000 });
+    expect(toSettingsForm()).toMatchObject({ dailyTokenBudget: 0, userDailyTokenBudget: 0 });
+  });
+
+  /** 数字输入框清空后是 null/NaN，直接发出去会变成一个后端读不懂的值。 */
+  it('清空输入框按不限制提交，不发 NaN', () => {
+    const form = { ...toSettingsForm(SAVED), dailyTokenBudget: NaN, userDailyTokenBudget: -5 };
+
+    expect(toSettingsPayload(form)).toMatchObject({ dailyTokenBudget: 0, userDailyTokenBudget: 0 });
+  });
+
+  it('每人额度不能大于全站额度，否则前者永远轮不到生效', () => {
+    const form = { ...toSettingsForm(SAVED), dailyTokenBudget: 1000, userDailyTokenBudget: 2000 };
+
+    expect(validateSettingsForm(form, true)).toContain('每人每日预算');
+  });
+
+  it('全站不限制时，单独设每人额度是合法的', () => {
+    const form = { ...toSettingsForm(SAVED), dailyTokenBudget: 0, userDailyTokenBudget: 2000 };
+
+    expect(validateSettingsForm(form, true)).toBeUndefined();
+  });
+});
+
+describe('formatTokens 与 budgetUsage', () => {
+  it('万以下给原数，万以上给量级', () => {
+    expect(formatTokens(0)).toBe('0');
+    expect(formatTokens(9_999)).toBe('9999');
+    expect(formatTokens(12_300)).toBe('1.2 万');
+    expect(formatTokens(1_234_567)).toBe('123 万');
+  });
+
+  it('没设预算时不给百分比，界面据此不画进度条', () => {
+    expect(budgetUsage(500, 0)).toBeUndefined();
+    expect(budgetUsage(500, 1_000)).toBe(50);
+  });
+
+  /** 额度只在请求前检查，最后一次请求可以冲过头 —— 进度条不该出现 130%。 */
+  it('超出的部分封顶在 100%', () => {
+    expect(budgetUsage(1_300, 1_000)).toBe(100);
   });
 });

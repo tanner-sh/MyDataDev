@@ -26,29 +26,35 @@ public class AiSettingsRepository {
                 rs.getString("base_url"),
                 rs.getString("model"),
                 rs.getString("api_key_cipher"),
-                AiEffort.parse(rs.getString("effort"))
+                AiEffort.parse(rs.getString("effort")),
+                rs.getLong("daily_token_budget"),
+                rs.getLong("user_daily_token_budget")
         ));
         return rows.stream().findFirst();
     }
 
     public void insertSettings(AiSettings settings) {
         jdbc.update("""
-                INSERT INTO ai_settings(id, enabled, provider, base_url, model, api_key_cipher, effort)
-                VALUES (1, ?, ?, ?, ?, ?, ?)
+                INSERT INTO ai_settings(id, enabled, provider, base_url, model, api_key_cipher, effort,
+                                        daily_token_budget, user_daily_token_budget)
+                VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 settings.enabled(), settings.provider().name(), settings.baseUrl(),
-                settings.model(), settings.apiKeyCipher(), settings.effort().name());
+                settings.model(), settings.apiKeyCipher(), settings.effort().name(),
+                settings.dailyTokenBudget(), settings.userDailyTokenBudget());
     }
 
     public void updateSettings(AiSettings settings) {
         jdbc.update("""
                 UPDATE ai_settings SET
                     enabled = ?, provider = ?, base_url = ?, model = ?, api_key_cipher = ?,
-                    effort = ?, updated_at = CURRENT_TIMESTAMP
+                    effort = ?, daily_token_budget = ?, user_daily_token_budget = ?,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
                 """,
                 settings.enabled(), settings.provider().name(), settings.baseUrl(),
-                settings.model(), settings.apiKeyCipher(), settings.effort().name());
+                settings.model(), settings.apiKeyCipher(), settings.effort().name(),
+                settings.dailyTokenBudget(), settings.userDailyTokenBudget());
     }
 
     public List<AiConnectionPolicy> findPolicies() {

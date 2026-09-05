@@ -6,6 +6,7 @@ import com.example.dbadmin.dto.AiDtos.AiProbeResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
 import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
+import com.example.dbadmin.dto.AiDtos.AiUsageResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryEntryResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryGapDismissRequest;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryGapResponse;
@@ -47,6 +48,15 @@ public class AiSettingsController {
     @GetMapping("/settings")
     public AiSettingsResponse settings() {
         return settings.settingsResponse();
+    }
+
+    /** token 用量与预算。管理员可见 —— 里面有别人的用户名。 */
+    @GetMapping("/usage")
+    public AiUsageResponse usage(
+            @RequestParam(defaultValue = "14") int days,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return settings.usageReport(days, actor);
     }
 
     @PutMapping("/settings")
