@@ -736,6 +736,30 @@ public final class ApiDtos {
     }
 
     /**
+     * 一条连接的远程连接池状态。
+     *
+     * @param idleMillis 距上次借出的毫秒数；名额不够时被淘汰的就是空闲最久的那个
+     * @param tunnelAlive 隧道是否还活着；无隧道时为空
+     */
+    public record ConnectionPoolStatus(
+            long connectionId,
+            String connectionName,
+            int total,
+            int active,
+            int idle,
+            int waiting,
+            int maxPoolSize,
+            int pendingBorrows,
+            long idleMillis,
+            Boolean tunnelAlive
+    ) {
+    }
+
+    /** @param capacity 同时能存在多少个池；`pools.size()` 与它之差就是剩余名额 */
+    public record ConnectionPoolOverview(List<ConnectionPoolStatus> pools, int capacity) {
+    }
+
+    /**
      * 定时导出任务。
      *
      * @param productionConfirmation 生产连接上必填：定时任务没有交互确认的机会，那次确认在

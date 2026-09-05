@@ -217,7 +217,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
         </Space>
       </header>
 
-      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 'var(--space-md)' }} />}
+      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 'var(--space-3)' }} />}
 
       {!tasks.length && !error ? (
         <PanelEmpty

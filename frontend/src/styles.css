@@ -4802,6 +4802,17 @@ body.is-resizing-column * {
 }
 
 /* 分区自己的标题行：抽屉标题只写「管理」，具体在哪个分区由这里说明。 */
+/*
+  连接池概览。放在连接管理的最上面：名额被谁占着，本来就该在挑连接的地方看得见，
+  而不是等到报出 REMOTE_POOL_EXHAUSTED 才去别处找。
+*/
+.connection-pool-panel {
+  padding: var(--space-3);
+  margin-block-end: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
 .management-section-header {
   display: flex;
   align-items: center;

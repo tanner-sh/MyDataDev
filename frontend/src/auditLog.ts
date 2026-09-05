@@ -128,6 +128,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   BACKUP_DOWNLOAD: { label: '下载备份', category: 'backup' },
   BACKUP_HISTORY_DOWNLOAD: { label: '下载备份历史', category: 'backup' },
   AUDIT_EXPORT: { label: '导出审计日志', category: 'security' },
+  CONNECTION_POOL_CLOSE: { label: '关闭连接池', category: 'connection' },
   SCHEDULED_QUERY_CREATE: { label: '新建定时导出', category: 'sql' },
   SCHEDULED_QUERY_UPDATE: { label: '修改定时导出', category: 'sql' },
   SCHEDULED_QUERY_DELETE: { label: '删除定时导出', category: 'sql' },

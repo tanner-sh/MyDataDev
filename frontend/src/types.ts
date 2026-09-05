@@ -909,3 +909,22 @@ export type ScheduledExportRequest = {
   enabled: boolean;
   productionConfirmation?: string;
 };
+
+/** 一条连接的远程连接池状态。`tunnelAlive` 为 null 表示这条连接没有走 SSH 隧道。 */
+export type ConnectionPoolStatus = {
+  connectionId: number;
+  connectionName: string;
+  total: number;
+  active: number;
+  idle: number;
+  waiting: number;
+  maxPoolSize: number;
+  pendingBorrows: number;
+  idleMillis: number;
+  tunnelAlive: boolean | null;
+};
+
+export type ConnectionPoolOverview = {
+  pools: ConnectionPoolStatus[];
+  capacity: number;
+};

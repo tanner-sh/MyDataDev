@@ -238,6 +238,46 @@ public class RemoteDataSourceRegistry {
         }
     }
 
+    /**
+     * 池的当前状态，给运维界面用。
+     *
+     * <p>池此前只在出问题时才「被看见」—— 报出 REMOTE_POOL_EXHAUSTED 的那一刻，用户既不知道
+     * 20 个名额被谁占着，也不知道哪条早就闲着了。快照只读，不碰任何池的生命周期。</p>
+     *
+     * @param idleMillis 距上次借出的毫秒数；makeRoom 淘汰的就是这个值最大且空闲的那个
+     * @param tunnelAlive 隧道是否还活着；无隧道的连接为 {@code null}，隧道死掉的池下次借用时会重建
+     */
+    public record PoolSnapshot(long connectionId, int total, int active, int idle, int waiting,
+                               int maxPoolSize, int pendingBorrows, long idleMillis, Boolean tunnelAlive) {
+    }
+
+    public List<PoolSnapshot> poolSnapshot() {
+        List<Map.Entry<Long, PoolEntry>> entries;
+        synchronized (pools) {
+            entries = List.copyOf(pools.entrySet());
+        }
+        long now = System.nanoTime();
+        return entries.stream().map(entry -> {
+            PoolEntry pool = entry.getValue();
+            var mx = pool.dataSource().getHikariPoolMXBean();
+            return new PoolSnapshot(
+                    entry.getKey(),
+                    mx == null ? 0 : mx.getTotalConnections(),
+                    mx == null ? 0 : mx.getActiveConnections(),
+                    mx == null ? 0 : mx.getIdleConnections(),
+                    mx == null ? 0 : mx.getThreadsAwaitingConnection(),
+                    maximumPoolSize,
+                    pool.pendingBorrows(),
+                    Math.max(0, (now - pool.lastAccessNanos()) / 1_000_000),
+                    pool.tunnel() == null ? null : pool.tunnel().isOpen());
+        }).toList();
+    }
+
+    /** 同时能存在多少个池。快照里的条数除以它就是「还剩多少名额」。 */
+    public int capacity() {
+        return maxPools;
+    }
+
     public void evict(long connectionId) {
         PoolEntry removed;
         synchronized (pools) {

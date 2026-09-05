@@ -120,6 +120,7 @@ const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
+const ConnectionPoolPanel = lazy(() => import('./components/ConnectionPoolPanel').then((module) => ({ default: module.ConnectionPoolPanel })));
 const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then((module) => ({ default: module.McpSettingsPanel })));
 const AiSettingsPanel = lazy(() => import('./components/AiSettingsPanel').then((module) => ({ default: module.AiSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
@@ -3195,6 +3196,9 @@ export default function App() {
                     <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>
                   </Space>
                 </header>
+                <Suspense fallback={null}>
+                  <ConnectionPoolPanel open={activeDrawer === 'connections'} />
+                </Suspense>
                 <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
                   <ConnectionList
                     connections={connections}

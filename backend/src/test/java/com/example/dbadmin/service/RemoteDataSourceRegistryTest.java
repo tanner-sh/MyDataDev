@@ -37,6 +37,40 @@ class RemoteDataSourceRegistryTest {
         }
     }
 
+    /**
+     * 池此前只在报出 REMOTE_POOL_EXHAUSTED 的那一刻才「被看见」，而那条报错既说不出名额被谁
+     * 占着，也说不出哪个早就闲了。
+     */
+    @Test
+    void reportsWhatEachPoolIsHolding() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();
+        DbConnection connection = connection(1L, url);
+        try {
+            assertThat(registry.poolSnapshot()).isEmpty();
+            try (var held = registry.open(connection, "")) {
+                var busy = registry.poolSnapshot();
+                assertThat(busy).singleElement().satisfies(pool -> {
+                    assertThat(pool.connectionId()).isEqualTo(1L);
+                    assertThat(pool.active()).isEqualTo(1);
+                    assertThat(pool.total()).isGreaterThanOrEqualTo(1);
+                    assertThat(pool.maxPoolSize()).isGreaterThanOrEqualTo(2);
+                    // 直连没有隧道，不该显示成「隧道已断」。
+                    assertThat(pool.tunnelAlive()).isNull();
+                });
+                assertThat(held.isClosed()).isFalse();
+            }
+            assertThat(registry.poolSnapshot()).singleElement()
+                    .satisfies(pool -> assertThat(pool.active()).isZero());
+            assertThat(registry.capacity()).isEqualTo(RemoteDataSourceRegistry.MAX_POOLS);
+
+            registry.evict(1L);
+            assertThat(registry.poolSnapshot()).isEmpty();
+        } finally {
+            registry.close();
+        }
+    }
+
     @Test
     void replacesPoolWhenConnectionConfigurationChanges() throws Exception {
         RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();

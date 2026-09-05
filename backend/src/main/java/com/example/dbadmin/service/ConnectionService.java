@@ -117,6 +117,32 @@ public class ConnectionService {
         audit.onConnection(actor, "CONNECTION_DELETE", id, c.name(), c.jdbcUrl());
     }
 
+    /** 远程连接池的当前状态，给运维界面用。快照只读。 */
+    public java.util.List<RemoteDataSourceRegistry.PoolSnapshot> poolSnapshot() {
+        return dataSources.poolSnapshot();
+    }
+
+    /** 同时能存在多少个池；界面拿它算「还剩多少名额」。 */
+    public int poolCapacity() {
+        return dataSources.capacity();
+    }
+
+    /**
+     * 手动关闭一条连接的池。
+     *
+     * <p>与改连接配置时走的是同一条淘汰路径，只是这次由人触发：跳板机换过、目标库重启过、
+     * 或者名额被一堆闲池占着而自动淘汰又轮不到它。下一次请求会重新建池。</p>
+     *
+     * <p>手动事务开着时拒绝 —— 事务正握着池里的一条连接，关掉池等于把它连同未提交的改动
+     * 一起扔掉，而调用方以为事务还在。</p>
+     */
+    public void closePool(long id, String actor) {
+        DbConnection connection = require(id);
+        requireNoOpenTransaction(id, "关闭连接池");
+        evictConnection(id);
+        audit.onConnection(actor, "CONNECTION_POOL_CLOSE", id, connection.name(), "手动关闭远程连接池");
+    }
+
     /**
      * 手动事务开着时不许改动连接。
      *
