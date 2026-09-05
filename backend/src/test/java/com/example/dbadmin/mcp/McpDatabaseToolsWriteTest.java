@@ -11,6 +11,7 @@ import com.example.dbadmin.service.DataEditService;
 import com.example.dbadmin.service.ExecutionGuard;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.SqlExecutionRegistry;
+import com.example.dbadmin.service.SqlExecutionMetrics;
 import com.example.dbadmin.service.SqlScriptSplitter;
 import com.example.dbadmin.service.SqlService;
 import com.example.dbadmin.service.SqlStatementClassifier;
@@ -64,7 +65,8 @@ class McpDatabaseToolsWriteTest {
         SqlService sql = new SqlService(
                 connections, new AppProperties(), audit, new DialectRegistry(),
                 mock(SqlHistoryRepository.class), metadata, new SqlScriptSplitter(), new SqlStatementClassifier(),
-                new ExecutionGuard(), new SqlExecutionRegistry(), mock(DataEditService.class)
+                new ExecutionGuard(), new SqlExecutionRegistry(), mock(DataEditService.class),
+                new SqlExecutionMetrics()
         );
         McpConfigurationService configuration = mock(McpConfigurationService.class);
         when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(settings(), java.util.Set.of(), Map.of()));

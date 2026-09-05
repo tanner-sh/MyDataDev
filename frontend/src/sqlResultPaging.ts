@@ -1,4 +1,15 @@
-import type { SqlPageInfo, SqlPageNavigation } from './types';
+import type { SqlPageInfo, SqlPageNavigation, SqlResultSort, SqlSortDirection } from './types';
+
+/**
+ * 当前生效的排序。
+ *
+ * <p>每次翻页都要把它原样带上：排序是下推进 SQL 的，navigation 里丢了它，翻一页顺序就换了 ——
+ * 而用户只是点了「下一批」。</p>
+ */
+export function activeSqlSort(page: SqlPageInfo): SqlResultSort | null {
+  if (!page.sortColumn) return null;
+  return { column: page.sortColumn, direction: page.sortDirection === 'DESC' ? 'DESC' : 'ASC' };
+}
 
 export function sqlResultRangeLabel(page: SqlPageInfo, rowCount: number): string {
   if (rowCount === 0) return page.offset === 0 ? '0 / 0' : `${page.offset} / ${page.offset}`;
@@ -8,7 +19,22 @@ export function sqlResultRangeLabel(page: SqlPageInfo, rowCount: number): string
 }
 
 export function firstSqlPage(page: SqlPageInfo): SqlPageNavigation {
-  return { offset: 0, pageSize: page.requestedPageSize, previousOffsets: [] };
+  return { offset: 0, pageSize: page.requestedPageSize, previousOffsets: [], sort: activeSqlSort(page) };
+}
+
+/**
+ * 改排序：回到第一批。
+ *
+ * <p>换了顺序，第 3 页就不再是原来那批行了 —— 停在原偏移上等于把用户丢在结果集中间的某个
+ * 随机位置。传空列表示取消排序，回到查询本来的顺序。</p>
+ */
+export function sortedSqlPage(page: SqlPageInfo, column: string | null, direction: SqlSortDirection): SqlPageNavigation {
+  return {
+    offset: 0,
+    pageSize: page.requestedPageSize,
+    previousOffsets: [],
+    sort: column ? { column, direction } : null
+  };
 }
 
 export function previousSqlPage(page: SqlPageInfo): SqlPageNavigation | null {
@@ -17,7 +43,8 @@ export function previousSqlPage(page: SqlPageInfo): SqlPageNavigation | null {
   return {
     offset: offsets[offsets.length - 1],
     pageSize: page.requestedPageSize,
-    previousOffsets: offsets.slice(0, -1)
+    previousOffsets: offsets.slice(0, -1),
+    sort: activeSqlSort(page)
   };
 }
 
@@ -26,7 +53,8 @@ export function nextSqlPage(page: SqlPageInfo, rowCount: number): SqlPageNavigat
   return {
     offset: page.offset + rowCount,
     pageSize: page.requestedPageSize,
-    previousOffsets: [...(page.previousOffsets || []), page.offset]
+    previousOffsets: [...(page.previousOffsets || []), page.offset],
+    sort: activeSqlSort(page)
   };
 }
 
@@ -38,9 +66,14 @@ export function nextSqlPage(page: SqlPageInfo, rowCount: number): SqlPageNavigat
  * 第一页。</p>
  */
 export function currentSqlPage(page: SqlPageInfo): SqlPageNavigation {
-  return { offset: page.offset, pageSize: page.requestedPageSize, previousOffsets: page.previousOffsets || [] };
+  return {
+    offset: page.offset,
+    pageSize: page.requestedPageSize,
+    previousOffsets: page.previousOffsets || [],
+    sort: activeSqlSort(page)
+  };
 }
 
-export function resizedSqlPage(pageSize: number): SqlPageNavigation {
-  return { offset: 0, pageSize, previousOffsets: [] };
+export function resizedSqlPage(pageSize: number, page?: SqlPageInfo): SqlPageNavigation {
+  return { offset: 0, pageSize, previousOffsets: [], sort: page ? activeSqlSort(page) : null };
 }

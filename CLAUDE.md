@@ -92,6 +92,14 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 - **系统提示、工具定义和历史消息是 prompt cache 的前缀，只许在尾部追加**：`AiPromptCachePrefixTest` 用剧本模型在 CI 里守着这条（系统提示逐字相等、消息只增不改、提示里不许出现当前年份）。往里塞时间戳这类每次都变的内容会让缓存命中率直接归零。审计 detail 里的 `seq=` 记着这次请求的工具调用序列 —— 汇总计数说不出它是搜了两次还是读了三次表。
 - **改 Agent 的 prompt、工具或循环之前先看评测集**（`service/ai/eval/`）：`AiSqlAgentLoopTest` 用剧本化的假模型在 CI 里守住整条循环，`AiSqlAgentEvalTest` 用真模型跑固定用例集出报告（要 `AI_EVAL_API_KEY`，默认跳过）。用例只校验「命中了哪些表」，改已有用例等于让历史分数不可比。
 
+### 结果分页与排序
+
+SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuery`），**排序也下推到服务端**：`SqlSortPushdown` 把原查询包成 `SELECT * FROM (原 SQL) mdd_sorted ORDER BY "列" ASC` 再交给分页，改排序时 offset 归零。不要退回「只排当前这一页」—— 用户在第 1 页点一下列头，看到的是这 500 行内部有序，很容易当成整个结果集有序，这种错觉比没有排序更糟。表浏览那条路（`DataEditService`）本来就是服务端排序 + keyset/offset 分页，两条路的语义要一致。
+
+两个例外仍然是本地排序，界面上必须标出来：结果里有同名列时（按列标签排序在数据库那边是歧义的），以及结果压根不支持翻页时。列筛选目前一律是本地的，页脚的「筛选后 N / 本批 N 行」就是在说这件事。
+
+`SqlExecutionMetrics` 给查询、分页、脚本、执行计划四条路出 Micrometer 指标，**超时单独成一类**（顺着 cause 链找 `SQLTimeoutException`）：超时说明库慢了，一般报错通常是语句写错了，混在一个数里就指不出该看哪边。标签只有 `kind` 和 `outcome`，都是固定集合 —— 别往里加连接名或 SQL。
+
 ### 数据库迁移
 
 元数据库 schema 由 Flyway 管理，迁移是 **Java 类**，位于 `backend/src/main/java/db/migration/`（`V1__BaselineSchema.java` 等），不是 SQL 文件。`src/main/resources/*.sql` 是被迁移引用的脚本，直接改它们不会触发迁移。

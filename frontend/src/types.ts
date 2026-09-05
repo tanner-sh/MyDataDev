@@ -152,6 +152,9 @@ export type Metadata = {
   cacheHit?: boolean;
 };
 export type ResultColumn = { key: string; label: string; typeName: string };
+export type SqlSortDirection = 'ASC' | 'DESC';
+/** 服务端生效的排序：下推进 SQL 之后回传，界面据此在正确的列头上画箭头。 */
+export type SqlResultSort = { column: string; direction: SqlSortDirection };
 export type SqlPageInfo = {
   connectionId: number;
   schemaName?: string;
@@ -160,6 +163,8 @@ export type SqlPageInfo = {
   effectivePageSize: number;
   hasMore: boolean;
   previousOffsets?: number[];
+  sortColumn?: string | null;
+  sortDirection?: SqlSortDirection | null;
 };
 export type SqlResultSourceTable = { nameParts: string[] };
 export type SqlResult = {
@@ -175,7 +180,13 @@ export type SqlResult = {
   /** 单表来源且有稳定行定位字段时随结果下发，见 resultEditing.ts。 */
   edit?: import('./resultEditing').ResultEditInfo | null;
 };
-export type SqlPageNavigation = { offset: number; pageSize: number; previousOffsets: number[] };
+export type SqlPageNavigation = {
+  offset: number;
+  pageSize: number;
+  previousOffsets: number[];
+  /** 服务端排序；翻页时要原样带上，否则翻一页顺序就变了。 */
+  sort?: SqlResultSort | null;
+};
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';

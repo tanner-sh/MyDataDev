@@ -61,7 +61,8 @@ class SqlTransactionServiceTest {
         SqlService sqlService = new SqlService(
                 connections, properties, audit, dialects, mock(SqlHistoryRepository.class), metadata,
                 new SqlScriptSplitter(), new SqlStatementClassifier(), new ExecutionGuard(),
-                new SqlExecutionRegistry(), mock(DataEditService.class)
+                new SqlExecutionRegistry(), mock(DataEditService.class),
+                new SqlExecutionMetrics()
         );
         registry = new SqlTransactionRegistry(idleTimeout);
         service = new SqlTransactionService(

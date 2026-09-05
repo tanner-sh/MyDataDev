@@ -72,7 +72,9 @@ public class SqlController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         access.require(request.connectionId(), ConnectionPermission.QUERY);
-        return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName());
+        return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(),
+                actor, request.executionId(), productionConfirmation, request.schemaName(),
+                request.sortColumn(), request.sortDirection());
     }
 
     @PostMapping("/explain")

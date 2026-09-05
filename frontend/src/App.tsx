@@ -1406,7 +1406,10 @@ export default function App() {
           offset: navigation.offset,
           pageSize: navigation.pageSize,
           executionId,
-          schemaName: page.schemaName
+          schemaName: page.schemaName,
+          // 排序下推给服务端：只排当前这一页会让用户以为整个结果集有序。
+          sortColumn: navigation.sort?.column,
+          sortDirection: navigation.sort?.direction
         })
       });
       if (data.page) data.page.previousOffsets = navigation.previousOffsets;

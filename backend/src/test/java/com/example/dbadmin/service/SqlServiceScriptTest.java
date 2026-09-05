@@ -222,6 +222,43 @@ class SqlServiceScriptTest {
         assertThat(last.page().hasMore()).isFalse();
     }
 
+    /**
+     * 排序下推到 SQL 里，而不是让界面排当前这一页。只排一页的话，用户在第 1 页点一下列头看到的
+     * 是「这 500 行内部有序」，很容易当成整个结果集有序 —— 这里钉住的就是「第一页拿到的是全局
+     * 最大的那几行」。
+     */
+    @Test
+    void sortsTheWholeResultNotJustThePageInHand() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+        String sql = "select x from system_range(1, 5)";
+
+        var descending = service.executePage(1L, sql, 0, 2, "admin", null, null, null, "X", "DESC");
+        var secondPage = service.executePage(1L, sql, 2, 2, "admin", null, null, null, "X", "DESC");
+        var ascending = service.executePage(1L, sql, 0, 2, "admin", null, null, null, "X", "asc");
+
+        assertThat(descending.rows()).containsExactly(java.util.List.of("5"), java.util.List.of("4"));
+        assertThat(secondPage.rows()).containsExactly(java.util.List.of("3"), java.util.List.of("2"));
+        assertThat(ascending.rows()).containsExactly(java.util.List.of("1"), java.util.List.of("2"));
+        // 排序要随分页信息回传，否则翻一页箭头就掉了。
+        assertThat(descending.page().sortColumn()).isEqualTo("X");
+        assertThat(descending.page().sortDirection()).isEqualTo("DESC");
+        assertThat(ascending.page().sortDirection()).isEqualTo("ASC");
+    }
+
+    /** 不带排序时行为一个字都不变 —— 这条路每天都在走。 */
+    @Test
+    void leavesUnsortedPagingExactlyAsItWas() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        var page = service.executePage(1L, "select x from system_range(1, 3) order by x", 0, 2, "admin", null, null);
+
+        assertThat(page.rows()).containsExactly(java.util.List.of("1"), java.util.List.of("2"));
+        assertThat(page.page().sortColumn()).isNull();
+        assertThat(page.page().sortDirection()).isNull();
+    }
+
     @Test
     void returnsPagingMetadataForNewScriptClients() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
@@ -363,7 +400,8 @@ class SqlServiceScriptTest {
                 new SqlStatementClassifier(),
                 new ExecutionGuard(),
                 new SqlExecutionRegistry(),
-                mock(DataEditService.class)
+                mock(DataEditService.class),
+                new SqlExecutionMetrics()
         );
     }
 

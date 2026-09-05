@@ -98,7 +98,8 @@ class SqlServiceReadOnlyTest {
                 new SqlStatementClassifier(),
                 new ExecutionGuard(),
                 new SqlExecutionRegistry(),
-                mock(DataEditService.class)
+                mock(DataEditService.class),
+                new SqlExecutionMetrics()
         );
     }
 }

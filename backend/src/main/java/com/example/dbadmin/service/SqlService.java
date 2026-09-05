@@ -60,6 +60,7 @@ public class SqlService {
     private final ExecutionGuard executionGuard;
     private final SqlExecutionRegistry executions;
     private final DataEditService dataEdit;
+    private final SqlExecutionMetrics metrics;
 
     public SqlService(
             ConnectionService connections,
@@ -72,7 +73,8 @@ public class SqlService {
             SqlStatementClassifier classifier,
             ExecutionGuard executionGuard,
             SqlExecutionRegistry executions,
-            DataEditService dataEdit
+            DataEditService dataEdit,
+            SqlExecutionMetrics metrics
     ) {
         this.connections = connections;
         this.properties = properties;
@@ -85,6 +87,7 @@ public class SqlService {
         this.executionGuard = executionGuard;
         this.executions = executions;
         this.dataEdit = dataEdit;
+        this.metrics = metrics;
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName) throws Exception {
@@ -119,11 +122,13 @@ public class SqlService {
                     long elapsedMs = elapsed(started);
                     SqlResult result = emptyResult(statement.getUpdateCount(), elapsedMs, maxRows);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", elapsedMs, null, actor);
+                    metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
                     return result;
                 }
                 try (ResultSet rs = statement.getResultSet()) {
                     SqlResult result = readResult(rs, started, maxRows, dialect);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
+                    metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
                     return result;
                 }
             } finally {
@@ -132,6 +137,7 @@ public class SqlService {
         } catch (Exception e) {
             long elapsedMs = elapsed(started);
             history.insert(connectionId, sql, "EXECUTE", "FAILED", elapsedMs, error(e), actor);
+            metrics.failure(SqlExecutionMetrics.KIND_QUERY, started, e);
             throw e;
         } finally {
             // Some databases auto-commit part of a DDL statement before
@@ -296,10 +302,14 @@ public class SqlService {
             long elapsedMs = elapsed(scriptStarted);
             audit.onConnection(actor, "SQL_EXECUTE_SCRIPT", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", status, elapsedMs, errorMessage == null ? null : abbreviate(errorMessage), actor);
+            // 脚本跑完了但中间某条语句失败，同样按失败计 —— 用户眼里那就是一次没跑成的执行。
+            if ("SUCCESS".equals(status)) metrics.success(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted);
+            else metrics.failure(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted, null);
             return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged);
         } catch (Exception e) {
             long elapsedMs = elapsed(scriptStarted);
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsedMs, error(e), actor);
+            metrics.failure(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted, e);
             throw e;
         } finally {
             if (metadataChanged) metadata.invalidateConnection(connectionId);
@@ -361,6 +371,28 @@ public class SqlService {
             String productionConfirmation,
             String schemaName
     ) throws Exception {
+        return executePage(connectionId, sql, requestedOffset, requestedPageSize, actor, executionId,
+                productionConfirmation, schemaName, null, null);
+    }
+
+    /**
+     * 分页取一批结果，可选按某一列排序。
+     *
+     * <p>排序下推进 SQL，而不是让界面排当前这一页：结果本来就是分页的，只排一页会让用户以为
+     * 整个结果集有序。排序变化时由调用方把 offset 归零 —— 换了顺序，第 3 页就不是原来那批行了。</p>
+     */
+    public SqlResult executePage(
+            long connectionId,
+            String sql,
+            Integer requestedOffset,
+            Integer requestedPageSize,
+            String actor,
+            String executionId,
+            String productionConfirmation,
+            String schemaName,
+            String sortColumn,
+            String sortDirection
+    ) throws Exception {
         String executionSql = singleStatement(sql, "分页查询");
         if (!classifier.isAutomaticallyPageable(executionSql)) {
             throw new IllegalArgumentException("当前 SQL 不支持自动分页；仅支持未自带分页子句的单条 SELECT。");
@@ -375,7 +407,12 @@ public class SqlService {
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-        String pageSql = dialect.pageQuery(executionSql, pageSize + 1, offset);
+        String normalizedSortColumn = sortColumn == null || sortColumn.isBlank() ? null : sortColumn.trim();
+        String normalizedSortDirection = normalizedSortColumn == null
+                ? null : SqlSortPushdown.normalizeDirection(sortDirection);
+        // 排序包在里面、分页包在外面：方言只需要照常处理一条没有分页子句的 SELECT。
+        String sortedSql = SqlSortPushdown.apply(executionSql, normalizedSortColumn, normalizedSortDirection, dialect);
+        String pageSql = dialect.pageQuery(sortedSql, pageSize + 1, offset);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
@@ -388,14 +425,19 @@ public class SqlService {
                     SqlResult result = readPageResult(
                             rs, started, connectionId, offset, rawPageSize, pageSize,
                             dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection,
-                            executionSql
+                            // 就地编辑的判定要看用户写的那条 SQL，不是排序包装之后的。
+                            executionSql, normalizedSortColumn, normalizedSortDirection
                     );
                     audit.onConnection(actor, "SQL_QUERY_PAGE", connectionId, "offset=" + offset + "; " + abbreviate(sql));
+                    metrics.success(SqlExecutionMetrics.KIND_PAGE, started);
                     return result;
                 }
             } finally {
                 executions.unregister(registeredId, statement);
             }
+        } catch (Exception e) {
+            metrics.failure(SqlExecutionMetrics.KIND_PAGE, started, e);
+            throw e;
         }
     }
 
@@ -426,9 +468,11 @@ public class SqlService {
             SqlResult result = dialect.explain(connection, executionSql, properties.getSql().getMaxRows(), properties.getSql().getTimeoutSeconds());
             audit.onConnection(actor, "SQL_EXPLAIN", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXPLAIN", "SUCCESS", elapsed(started), null, actor);
+            metrics.success(SqlExecutionMetrics.KIND_EXPLAIN, started);
             return result;
         } catch (Exception e) {
             history.insert(connectionId, sql, "EXPLAIN", "FAILED", elapsed(started), error(e), actor);
+            metrics.failure(SqlExecutionMetrics.KIND_EXPLAIN, started, e);
             throw e;
         }
     }
@@ -531,7 +575,9 @@ public class SqlService {
             DatabaseDialect dialect,
             Connection connection,
             DbConnection dbConnection,
-            String executionSql
+            String executionSql,
+            String sortColumn,
+            String sortDirection
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -566,7 +612,8 @@ public class SqlService {
             }
         }
         boolean hasMore = payloadLimitReached || rs.next();
-        SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName);
+        SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore,
+                schemaName, sortColumn, sortDirection);
         return new SqlResult(
                 columns,
                 rows,

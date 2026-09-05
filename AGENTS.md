@@ -51,6 +51,10 @@ cd backend && mvn test
 cd frontend && npm run build
 ```
 
+同一组命令由 `.github/workflows/ci.yml` 在每次推送与每个 PR 上再跑一遍（后端测试、前端测试与构建、桌面端测试与主进程构建）。本地先跑是为了早点知道结果，不是为了替代 CI。
+
+改动被广泛依赖的构造器（例如 `SqlService`）之后，用 `mvn -o clean test-compile` 而不是增量编译：增量编译会拿着旧的 class 文件报「通过」，等到跑测试时才炸。
+
 ## Git 提交与 Pull Request 约定
 
 Git 提交信息统一使用中文，并且尽量详细。简单修改可使用一行中文标题；涉及多个模块或行为变化时，使用中文标题加多条中文说明，明确说明改了什么、为什么改、影响哪些功能。

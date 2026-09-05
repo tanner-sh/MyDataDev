@@ -60,7 +60,8 @@ class SqlServiceEditableResultTest {
         SqlService sql = new SqlService(
                 connections, properties, audit, dialects, mock(SqlHistoryRepository.class),
                 metadata, new SqlScriptSplitter(), new SqlStatementClassifier(), new ExecutionGuard(),
-                new SqlExecutionRegistry(), dataEdit
+                new SqlExecutionRegistry(), dataEdit,
+                new SqlExecutionMetrics()
         );
         return new Fixture(sql, url);
     }

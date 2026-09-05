@@ -8,7 +8,7 @@ import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface'
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
-import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
+import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sortedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
 import { filterResultRows, isNumericColumnType, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { explainFindings, explainRowLevels } from '../explainInsights';
 import { downloadBlob } from '../api';
@@ -89,6 +89,27 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const [view, setView] = useState<'table' | 'chart'>('table');
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
+  /**
+   * 排序能不能下推给服务端。
+   *
+   * <p>结果是分页的，所以只排当前这一批会让用户以为整个结果集有序 —— 能下推就一定下推。
+   * 唯一的例外是结果里有同名列（`SELECT a, a FROM t`）：按列标签排序在数据库那边是歧义的，
+   * 这时退回本地排序，并在页脚说明它只作用于当前批次。</p>
+   */
+  const serverSort = useMemo(() => {
+    if (!result?.page || !onPageChange) return null;
+    const labels = new Set<string>();
+    for (const column of result.columns) {
+      if (labels.has(column.label)) return null;
+      labels.add(column.label);
+    }
+    return result.page;
+  }, [onPageChange, result?.columns, result?.page]);
+  const serverSortOrder = useMemo(() => {
+    if (!serverSort?.sortColumn) return undefined;
+    const column = result?.columns.find((item) => item.label === serverSort.sortColumn);
+    return column ? { key: column.key, order: serverSort.sortDirection === 'DESC' ? 'descend' as const : 'ascend' as const } : undefined;
+  }, [result?.columns, serverSort?.sortColumn, serverSort?.sortDirection]);
   const columnSignature = result?.resultSet ? result.columns.map((column) => `${column.key}:${column.label}:${column.typeName}`).join('|') : '';
   // Wide results are capped at DEFAULT_VISIBLE_COLUMNS on load; say so, because
   // export and copy still cover every column.
@@ -300,7 +321,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             className: isNumericColumnType(column.typeName) ? 'numeric-column' : undefined,
             ellipsis: true,
             sorter: true,
-            sortOrder: sortState?.key === column.key ? sortState.order : null,
+            sortOrder: (serverSort ? serverSortOrder?.key === column.key ? serverSortOrder.order : null
+              : sortState?.key === column.key ? sortState.order : null),
             filteredValue: columnFilters[column.key] ? ['active'] : null,
             filterIcon: (filtered: boolean) => <FilterFilled className={filtered ? 'result-filter-icon-active' : undefined} />,
             filterDropdown: ({ confirm, close }: FilterDropdownProps) => (
@@ -337,7 +359,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     ];
   // editState / editingCell 刻意不在依赖里：它们经由记录到达单元格，正是 shouldCellUpdate 比较的东西。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState, visibleColumnKeys]);
+  }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, serverSortOrder, sortState, visibleColumnKeys]);
 
   const tableScrollWidth = useMemo(() => {
     if (!result?.resultSet) return 800;
@@ -493,8 +515,15 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resultTableChange = useCallback<NonNullable<TableProps<ResultRow>['onChange']>>((_pagination, _filters, sorter) => {
     const current = (Array.isArray(sorter) ? sorter[0] : sorter) as SorterResult<ResultRow>;
     const key = typeof current?.columnKey === 'string' ? current.columnKey : undefined;
+    if (serverSort) {
+      // 换了顺序就回到第一批：停在原偏移上等于把用户丢在结果集中间的随机位置。
+      const label = key ? result?.columns.find((column) => column.key === key)?.label : undefined;
+      onPageChange?.(sortedSqlPage(serverSort, current.order && label ? label : null,
+        current.order === 'descend' ? 'DESC' : 'ASC'));
+      return;
+    }
     setSortState(key && current.order ? { key, order: current.order } : undefined);
-  }, []);
+  }, [onPageChange, result?.columns, serverSort]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -728,6 +757,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               <Text type="secondary" className="grid-pagination-summary">
                 {rows.length === rowCount ? '' : `筛选后 ${rows.length} / 本批 ${rowCount} 行`}
                 {result.page.effectivePageSize < result.page.requestedPageSize ? `${rows.length === rowCount ? '' : ' · '}服务端单批上限 ${result.page.effectivePageSize}` : ''}
+                {/*
+                  结果有同名列时按列标签排序在数据库那边是歧义的，只能退回本地排序。这时必须
+                  说清楚它只排了这一批 —— 让人以为整个结果集有序，比不给排序更糟。
+                */}
+                {sortState ? ` · 仅本批排序` : ''}
               </Text>
               <div className="result-pagination-actions">
                 <Space size={4} className="result-range-navigation">
@@ -758,14 +792,18 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
                     onBlur={() => {
                       const nextSize = Math.min(MAX_SQL_PAGE_SIZE, Math.max(1, Math.round(pageSizeDraft || 500)));
                       if (nextSize !== pageSizeDraft) setPageSizeDraft(nextSize);
-                      if (nextSize !== result.page?.requestedPageSize) onPageChange?.(resizedSqlPage(nextSize));
+                      if (nextSize !== result.page?.requestedPageSize) onPageChange?.(resizedSqlPage(nextSize, result.page || undefined));
                     }}
                   />
                 </Space.Compact>
               </div>
             </>
           ) : (
-            <Text type="secondary" className="grid-pagination-summary">{rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`}（当前结果不支持翻页）</Text>
+            <Text type="secondary" className="grid-pagination-summary">
+              {rows.length === rowCount ? `共 ${rowCount} 行` : `筛选后 ${rows.length} / 共 ${rowCount} 行`}（当前结果不支持翻页）
+              {/* 结果被行数上限截断时，本地排序排的只是取回来的这些行，而不是整个结果集。 */}
+              {sortState && result.truncated ? ' · 仅对已取回的行排序' : ''}
+            </Text>
           )}
         </div>
       </div>

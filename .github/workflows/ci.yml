@@ -1,0 +1,87 @@
+name: 持续集成
+
+# 发布工作流只在打 tag 时跑，也就是说合并之前没有任何东西在执行 AGENTS.md 里那句
+# 「提交前至少运行 mvn test 与 npm run build」。这个工作流补的就是这一段：每次推送和
+# 每个 PR 都跑一遍，跑的命令与那份约定逐字一致。
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一个分支上连着推几次时，只留最后一次 —— 前面几次的结论已经没人看了。
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: 后端测试
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 运行后端测试
+        run: mvn test --batch-mode
+        working-directory: backend
+
+  frontend:
+    name: 前端测试与构建
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 运行前端测试
+        run: npm test
+        working-directory: frontend
+
+      # 构建同时会跑 check-build-budget.mjs：首屏资源数与懒加载链的 gzip 体积都有硬上限，
+      # 把重型模块拉进首屏会在这里失败，而不是等到发版才发现。
+      - name: 构建前端（含体积预算校验）
+        run: npm run build
+        working-directory: frontend
+
+  desktop:
+    name: 桌面端测试与类型检查
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: 安装桌面端依赖
+        run: npm ci
+        working-directory: desktop
+
+      - name: 运行桌面端测试
+        run: npm test
+        working-directory: desktop
+
+      # 主进程构建兼作类型检查；不跑 npm run make，原生打包要签名和各平台环境，那是发布工作流的事。
+      - name: 构建桌面端主进程
+        run: npm run build:main
+        working-directory: desktop

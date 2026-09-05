@@ -397,9 +397,27 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlPageRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer offset, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName) {
+    /**
+     * @param sortColumn 结果集里的列标签；服务端把排序下推进 SQL 再分页，而不是让界面只排当前这一页
+     * @param sortDirection {@code ASC} 或 {@code DESC}，空值按升序
+     */
+    public record SqlPageRequest(
+            @NotNull Long connectionId,
+            @NotBlank @Size(max = 2_000_000) String sql,
+            Integer offset,
+            Integer pageSize,
+            @Size(max = 120) String executionId,
+            @Size(max = 240) String schemaName,
+            @Size(max = 128) String sortColumn,
+            @Size(max = 8) String sortDirection
+    ) {
         public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize, String executionId) {
-            this(connectionId, sql, offset, pageSize, executionId, null);
+            this(connectionId, sql, offset, pageSize, executionId, null, null, null);
+        }
+
+        public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize,
+                              String executionId, String schemaName) {
+            this(connectionId, sql, offset, pageSize, executionId, schemaName, null, null);
         }
     }
 
@@ -436,9 +454,24 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore, String schemaName) {
+    /** {@code sortColumn} 回显当前生效的排序，界面据此在正确的列头上画箭头 —— 翻页后它不能丢。 */
+    public record SqlPageInfo(
+            long connectionId,
+            int offset,
+            int requestedPageSize,
+            int effectivePageSize,
+            boolean hasMore,
+            String schemaName,
+            String sortColumn,
+            String sortDirection
+    ) {
         public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
-            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null);
+            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null, null, null);
+        }
+
+        public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize,
+                           boolean hasMore, String schemaName) {
+            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName, null, null);
         }
     }
 
