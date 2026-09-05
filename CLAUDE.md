@@ -116,6 +116,8 @@ SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuer
 
 有状态但与界面无关的子系统抽成 `src/hooks/` 下的自定义 hook（`useBackgroundTasks`、`useSqlHistory`、`useVisiblePolling`、`useLayoutPreferences`），hook 内部依赖的纯逻辑再落到 `src/` 下的同名模块（`backgroundTaskStream.ts`、`sqlHistoryQuery.ts`）。新增「一组状态 + 一条取数路径」时优先走这条路，而不是继续往 `App.tsx` 里加 `useState`。
 
+编辑器里的「未知表名」波浪线（`src/sqlUnknownObjects.ts` + `SqlEditor` 的装饰层）用的就是补全那份对象清单，不打接口、不需要模型。**它只在清单确实完整时才提示** —— 资源树是分页的、还可能带着搜索关键字，拿一份筛过或只有第一页的清单去判断「不存在」会把正确的表名也划上线，那比没有提示更糟。CTE、表值函数、临时表、限定到别的 Schema 的引用一律跳过，比对折大小写。改这块时的默认方向永远是「宁可不提示」。
+
 **测试约定：纯逻辑从组件里抽出来，放在 `src/` 下的独立模块，每个模块配一个同名 `.test.ts`**（`sqlCompletion.ts`/`sqlCompletion.test.ts`、`resultGridData.ts`、`productionConfirmation.ts`、`tableLifecycle.ts` …）。仓库里没有组件渲染测试。新增行为时，先想清楚哪部分能抽成纯函数放进这类模块并补测试，而不是把逻辑埋进 `.tsx`。
 
 `src/api.ts` 的 `ApiError` 会解析后端问题详情中的 `code`、`confirmationText`、`statements`，前端据此弹出生产确认或未限定范围写操作的确认框 —— 后端新增这类错误码时要同步这里。

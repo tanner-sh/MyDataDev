@@ -16,6 +16,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
   onFormat,
   onExecute,
   completionSource,
+  onResolveUnknownObjects,
   onDefinitionProbe,
   onDefinitionActivate
 }: {
@@ -27,6 +28,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
   onFormat: () => void;
   onExecute: () => void;
   completionSource: SqlEditorProps['completionSource'];
+  onResolveUnknownObjects: SqlEditorProps['onResolveUnknownObjects'];
   onDefinitionProbe: SqlEditorProps['onDefinitionProbe'];
   onDefinitionActivate: SqlEditorProps['onDefinitionActivate'];
 }) {
@@ -119,6 +121,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
         onExecute={executeDisabled ? undefined : onExecute}
         onFormat={onFormat}
         completionSource={completionSource}
+        onResolveUnknownObjects={onResolveUnknownObjects}
         onDefinitionProbe={onDefinitionProbe}
         onDefinitionActivate={onDefinitionActivate}
       />

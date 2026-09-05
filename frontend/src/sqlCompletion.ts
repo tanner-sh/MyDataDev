@@ -723,7 +723,13 @@ function parseTableAt(
   };
 }
 
-function sqlCteNames(tokens: SqlToken[]): Set<string> {
+/**
+ * 同一段 SQL 里 WITH 定义出来的名字。
+ *
+ * <p>导出是给「未知对象提示」用的：CTE 在 FROM 后面看起来和真表一模一样，不把它们排除掉，
+ * 每一条带 WITH 的查询都会被画上一串红线。</p>
+ */
+export function sqlCteNames(tokens: SqlToken[]): Set<string> {
   const names = new Set<string>();
   let index = 0;
   if (!isKeyword(tokens[index], 'WITH')) return names;

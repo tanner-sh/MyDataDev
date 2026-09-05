@@ -88,4 +88,11 @@ export type SqlEditorProps = {
   onDefinitionProbe?: (offset: number | null) => SqlRange | null;
   /** 按住 Ctrl/Cmd 点击一个可跳转位置。 */
   onDefinitionActivate?: (offset: number) => void;
+  /**
+   * 问上层「这段 SQL 里有哪些表名在当前 Schema 里找不到」。
+   *
+   * 与定义跳转同一套分工：语义判断（哪些名字算未知）留在业务侧，画波浪线、跟随文档改动、
+   * 节流这些琐事在编辑器里。上层拿不准时返回空数组即可 —— 不提示永远好过误报。
+   */
+  onResolveUnknownObjects?: (sql: string) => SqlRange[];
 };

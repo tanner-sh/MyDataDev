@@ -14,6 +14,7 @@ import { AsyncResourceCache } from './asyncResourceCache';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
 import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier, type SqlTableReference } from './sqlCompletion';
+import { findUnknownObjects } from './sqlUnknownObjects';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
 import type {
@@ -2738,6 +2739,22 @@ export default function App() {
   });
   const openDiagramEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('diagram'), '打开 ER 图'));
   const sqlCompletionSourceEvent = useStableEvent((request: SqlCompletionRequest) => sqlCompletionResult(request));
+  /**
+   * 编辑器里的未知表名提示。
+   *
+   * 用的就是补全那份对象清单，所以不打接口。但只在清单**确实完整**时才提示：资源树是分页的，
+   * 而且可能带着搜索关键字 —— 拿一份筛过或只有第一页的清单去判断「不存在」，会把正确的表名
+   * 也划上线，那比没有提示更糟。
+   */
+  const resolveUnknownObjectsEvent = useStableEvent((sql: string) => {
+    const current = metadataRef.current;
+    if (!current) return [];
+    return findUnknownObjects(sql, {
+      complete: !current.hasMore && !metadataAppliedKeyword.trim(),
+      schemaName: current.selectedSchema || current.currentSchema || '',
+      names: current.objects.map((object) => object.name)
+    });
+  });
   const probeObjectDefinitionEvent = useStableEvent((offset: number | null) => probeObjectDefinition(offset));
   const activateObjectDefinitionEvent = useStableEvent((offset: number) => activateObjectDefinition(offset));
   const returnFromDiagramEvent = useStableEvent(() => setMode('sql'));
@@ -2988,6 +3005,7 @@ export default function App() {
                 onSqlChange={changeSqlEvent}
                 onEditorMount={mountSqlEditorEvent}
                 completionSource={sqlCompletionSourceEvent}
+                onResolveUnknownObjects={resolveUnknownObjectsEvent}
                 onDefinitionProbe={probeObjectDefinitionEvent}
                 onDefinitionActivate={activateObjectDefinitionEvent}
                 onFormat={formatSqlEvent}

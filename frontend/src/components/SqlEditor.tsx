@@ -28,6 +28,33 @@ const definitionMarkField = StateField.define<DecorationSet>({
 });
 
 /**
+ * 未知表名的波浪线。
+ *
+ * <p>和定义跳转同一套分工：上层只回答「哪几段是当前 Schema 里找不到的表名」，画线、跟随
+ * 文档改动和节流都在这里。计算是纯前端的（补全本来就拿着这份对象清单），所以不打接口，
+ * 但仍然节流到停止输入之后 —— 边打字边标红没有意义，用户正打到一半的名字当然还不存在。</p>
+ */
+const setUnknownObjectMarks = StateEffect.define<SqlRange[]>();
+const unknownObjectMark = Decoration.mark({ class: 'sql-unknown-object' });
+const unknownObjectField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    for (const effect of transaction.effects) {
+      if (!effect.is(setUnknownObjectMarks)) continue;
+      return Decoration.set(effect.value
+          .filter((range) => range.end > range.start)
+          .map((range) => unknownObjectMark.range(range.start, range.end)), true);
+    }
+    // 文档一改，上一轮算出来的位置就不再对得上；等节流结束后重算。
+    return transaction.docChanged ? Decoration.none : marks;
+  },
+  provide: (field) => EditorView.decorations.from(field)
+});
+
+/** 停止输入多久之后才去算未知表名。 */
+const UNKNOWN_OBJECT_DELAY_MS = 400;
+
+/**
  * SQL 编辑器（CodeMirror 6）。
  *
  * <p>对外只暴露 sqlEditorTypes.ts 里那套按字符偏移量表达的接口，CodeMirror 的类型不外泄。
@@ -45,7 +72,8 @@ export default function SqlEditor({
   onFormat,
   completionSource,
   onDefinitionProbe,
-  onDefinitionActivate
+  onDefinitionActivate,
+  onResolveUnknownObjects
 }: SqlEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -53,8 +81,8 @@ export default function SqlEditor({
   const themeCompartment = useRef(new Compartment()).current;
   const readOnlyCompartment = useRef(new Compartment()).current;
   // 回调和动态配置放在 ref 里：普通 React 渲染不重建编辑器，也不会丢掉撤销历史和光标位置。
-  const callbacks = useRef({ onChange, onExecute, onFormat, completionSource, onDefinitionProbe, onDefinitionActivate, themeMode, readOnly });
-  callbacks.current = { onChange, onExecute, onFormat, completionSource, onDefinitionProbe, onDefinitionActivate, themeMode, readOnly };
+  const callbacks = useRef({ onChange, onExecute, onFormat, completionSource, onDefinitionProbe, onDefinitionActivate, onResolveUnknownObjects, themeMode, readOnly });
+  callbacks.current = { onChange, onExecute, onFormat, completionSource, onDefinitionProbe, onDefinitionActivate, onResolveUnknownObjects, themeMode, readOnly };
   const applyingValueRef = useRef(false);
 
   useEffect(() => {
@@ -63,6 +91,7 @@ export default function SqlEditor({
 
     let modifierPressed = false;
     let markedRange: SqlRange | null = null;
+    let unknownObjectTimer = 0;
     let hoveredOffset: number | null = null;
     let definitionProbeActive = false;
 
@@ -105,6 +134,18 @@ export default function SqlEditor({
       markedRange = null;
     };
 
+    const scheduleUnknownObjectScan = (view: EditorView) => {
+      window.clearTimeout(unknownObjectTimer);
+      if (!callbacks.current.onResolveUnknownObjects) return;
+      unknownObjectTimer = window.setTimeout(() => {
+        const resolve = callbacks.current.onResolveUnknownObjects;
+        if (!resolve || !viewRef.current) return;
+        const marks = resolve(view.state.doc.toString());
+        // 空进空出也要 dispatch：表建出来之后，那条线得自己消失。
+        view.dispatch({ effects: setUnknownObjectMarks.of(marks) });
+      }, UNKNOWN_OBJECT_DELAY_MS);
+    };
+
     const createEditorState = (document: string) => {
       clearDefinitionAfterDocumentChange();
       return EditorState.create({
@@ -115,6 +156,7 @@ export default function SqlEditor({
             format: () => callbacks.current.onFormat?.()
           }),
           definitionMarkField,
+          unknownObjectField,
           themeCompartment.of(EditorView.theme({}, { dark: callbacks.current.themeMode === 'dark' })),
           readOnlyCompartment.of(EditorState.readOnly.of(Boolean(callbacks.current.readOnly))),
           autocompletion({
@@ -122,7 +164,10 @@ export default function SqlEditor({
             icons: false
           }),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) clearDefinitionAfterDocumentChange();
+            if (update.docChanged) {
+              clearDefinitionAfterDocumentChange();
+              scheduleUnknownObjectScan(update.view);
+            }
             if (!update.docChanged || applyingValueRef.current) return;
             callbacks.current.onChange(update.state.doc.toString());
           }),
@@ -157,6 +202,8 @@ export default function SqlEditor({
       state: createEditorState(value)
     });
     viewRef.current = view;
+    // 打开一个已经有内容的标签页时也扫一遍，否则提示要等到用户先改一个字才出现。
+    scheduleUnknownObjectScan(view);
 
     // 修饰键是在 window 上跟的：光标停着不动、只按下 Ctrl 时也要出现高亮。
     const handleModifierChange = (event: KeyboardEvent) => {
@@ -206,6 +253,7 @@ export default function SqlEditor({
       window.removeEventListener('keydown', handleModifierChange);
       window.removeEventListener('keyup', handleModifierChange);
       window.removeEventListener('blur', clearOnBlur);
+      window.clearTimeout(unknownObjectTimer);
       clearDefinitionProbe(view, true);
       if (typeof disposeMount === 'function') disposeMount();
       view.destroy();

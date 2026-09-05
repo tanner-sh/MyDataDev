@@ -35,7 +35,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
   /** 这条连接是否开了样本档：只有开了才允许把查询结果发给模型解读。 */
@@ -69,6 +69,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
   onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
   onEditorMount: SqlEditorOnMount;
   completionSource: SqlEditorProps['completionSource'];
+  onResolveUnknownObjects: SqlEditorProps['onResolveUnknownObjects'];
   onDefinitionProbe: SqlEditorProps['onDefinitionProbe'];
   onDefinitionActivate: SqlEditorProps['onDefinitionActivate'];
   onFormat: (liveSql?: string) => void;
@@ -562,6 +563,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ aiAvailable, aiSampleAl
             executeDisabled={!canExecute || loading}
             onMount={onEditorMount}
             completionSource={completionSource}
+            onResolveUnknownObjects={onResolveUnknownObjects}
             onDefinitionProbe={onDefinitionProbe}
             onDefinitionActivate={onDefinitionActivate}
             onChange={editorChangeEvent}
