@@ -114,6 +114,19 @@ public class BackupController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.retryUpload(id, historyId, actor));
     }
 
+    /**
+     * 校验一份备份文件：完整读一遍并比对 SHA-256。
+     *
+     * <p>用 POST 而不是 GET：它要把整份文件过一遍网络和磁盘，不该被当成可缓存、可预取的读操作。</p>
+     */
+    @PostMapping("/{id}/history/{historyId}/verify")
+    public com.example.dbadmin.dto.ApiDtos.BackupVerificationResponse verify(
+            @PathVariable long id, @PathVariable long historyId,
+            @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        access.requireBackupTask(id);
+        return service.verifyHistory(id, historyId, actor);
+    }
+
     @GetMapping("/{id}/download")
     public ResponseEntity<StreamingResponseBody> download(@PathVariable long id,
             @RequestHeader(value = "X-User", required = false) String actor) {

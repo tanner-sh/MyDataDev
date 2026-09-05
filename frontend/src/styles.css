@@ -4404,6 +4404,12 @@ body.is-resizing-column * {
 }
 
 /* 结构对比：两端选择器并排，差异明细在展开行里 */
+.backup-history-verification {
+  display: block;
+  margin-top: 4px;
+  font-size: var(--text-sm);
+}
+
 /*
   未知表名：波浪线而不是背景色。它是一条提示不是一个错误 —— 清单可能刚好没刷新，
   背景色的份量会让人以为查询已经不能跑了。

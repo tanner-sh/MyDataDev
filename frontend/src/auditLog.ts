@@ -89,6 +89,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   BACKUP_TASK_CANCEL: { label: '取消备份', category: 'backup' },
   BACKUP_TASK_CANCELLED: { label: '备份已取消', category: 'backup' },
   BACKUP_HISTORY_DELETE: { label: '删除备份历史', category: 'backup', dangerous: true },
+  BACKUP_VERIFY: { label: '校验备份文件', category: 'backup' },
   BACKUP_UPLOAD_FAILED: { label: '备份上传失败', category: 'backup' },
   BACKUP_UPLOAD_RETRY: { label: '重试备份上传', category: 'backup' },
   BACKUP_UPLOAD_RETRY_SUCCESS: { label: '备份上传重试成功', category: 'backup' },

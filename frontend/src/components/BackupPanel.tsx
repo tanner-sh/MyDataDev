@@ -13,6 +13,7 @@ import {
   PlayCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  SafetyCertificateOutlined,
   RightOutlined
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -20,6 +21,7 @@ import type {
   ActiveTable,
   BackupEditorRequest,
   BackupHistory,
+  BackupVerification,
   BackupHistoryPage,
   BackupMethod,
   BackupSchedulePreview,
@@ -209,6 +211,8 @@ function BackupTasksPanel({
   const [cancellingHistoryId, setCancellingHistoryId] = useState<number | null>(null);
   const [retryingHistoryId, setRetryingHistoryId] = useState<number | null>(null);
   const [deleteHistoryFiles, setDeleteHistoryFiles] = useState<Record<number, boolean>>({});
+  const [verifyingHistoryId, setVerifyingHistoryId] = useState<number | null>(null);
+  const [verifications, setVerifications] = useState<Record<number, BackupVerification>>({});
   const [schedulePreview, setSchedulePreview] = useState<BackupSchedulePreview | null>(null);
   const [schedulePreviewError, setSchedulePreviewError] = useState('');
   const [schedulePreviewLoading, setSchedulePreviewLoading] = useState(false);
@@ -543,6 +547,28 @@ function BackupTasksPanel({
       toast.error(`重试上传失败：${(error as Error).message}`);
     } finally {
       setRetryingHistoryId(null);
+    }
+  }
+
+  /**
+   * 校验一份备份文件。
+   *
+   * 整份文件要过一遍网络和磁盘，所以做成显式动作而不是打开面板就自动跑 —— 一屏十条历史
+   * 就是十次全量读取。
+   */
+  async function verifyHistory(historyId: number) {
+    if (!historyTask) return;
+    setVerifyingHistoryId(historyId);
+    try {
+      const result = await api<BackupVerification>(
+        `/backups/${historyTask.id}/history/${historyId}/verify`, { method: 'POST' });
+      setVerifications((current) => ({ ...current, [historyId]: result }));
+      if (result.checksumMatches) toast.success(result.message);
+      else toast.warning(result.message);
+    } catch (error) {
+      toast.error(`校验失败：${(error as Error).message}`);
+    } finally {
+      setVerifyingHistoryId(null);
     }
   }
 
@@ -1007,6 +1033,18 @@ function BackupTasksPanel({
                     {history.phase === 'UPLOAD_FAILED' && history.stagingAvailable && <Tooltip title="使用本地暂存文件重新上传到文件服务">
                       <Button size="small" type="text" icon={<ReloadOutlined />} aria-label="重试上传" loading={retryingHistoryId === history.id} disabled={retryingHistoryId !== null || deletingHistoryId !== null} onClick={() => void retryUpload(history.id)} />
                     </Tooltip>}
+                    <Tooltip title={(history.fileAvailable ?? Boolean(history.filePath))
+                      ? '完整读一遍并比对校验和（不会恢复数据）' : '没有可校验的备份文件'}>
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<SafetyCertificateOutlined />}
+                        aria-label="校验备份文件"
+                        loading={verifyingHistoryId === history.id}
+                        disabled={!(history.fileAvailable ?? Boolean(history.filePath)) || verifyingHistoryId !== null || deletingHistoryId !== null}
+                        onClick={() => void verifyHistory(history.id)}
+                      />
+                    </Tooltip>
                     <Tooltip title={(history.fileAvailable ?? Boolean(history.filePath)) ? '下载备份文件' : '没有可下载的备份文件'}>
                       <Button size="small" type="text" icon={<DownloadOutlined />} aria-label="下载备份文件" disabled={!(history.fileAvailable ?? Boolean(history.filePath)) || loading || deletingHistoryId !== null} onClick={() => historyTask && onDownloadHistory(historyTask.id, history.id)} />
                     </Tooltip>
@@ -1021,6 +1059,13 @@ function BackupTasksPanel({
                       <Tooltip title="删除备份历史"><Button size="small" type="text" danger icon={<DeleteOutlined />} aria-label="删除备份历史" loading={deletingHistoryId === history.id} disabled={historyTask?.lastStatus === 'RUNNING' || (loading && deletingHistoryId !== history.id)} /></Tooltip>
                     </Popconfirm>
                   </Space>
+                  {/* 校验结论留在这一行上：toast 会消失，而这是用户下次决定敢不敢用这份备份的依据。 */}
+                  {verifications[history.id] && (
+                    <Text type={verifications[history.id].checksumMatches ? 'success' : 'warning'} className="backup-history-verification">
+                      {verifications[history.id].message}
+                      {` · 读取 ${formatFileSize(verifications[history.id].bytesRead)}，耗时 ${Math.max(1, Math.round(verifications[history.id].elapsedMs / 1000))} 秒`}
+                    </Text>
+                  )}
                 </article>
               ))}
             </div>

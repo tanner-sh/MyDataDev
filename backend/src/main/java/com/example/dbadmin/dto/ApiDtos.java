@@ -427,6 +427,28 @@ public final class ApiDtos {
     ) {
     }
 
+    /**
+     * 一次备份校验的结果。
+     *
+     * <p>{@code checksumMatches} 是唯一的硬结论：SHA-256 与备份当时记下的一致，就说明这份文件
+     * 与写出来那一刻逐字节相同（远端存储的话，顺带证明它还取得回来）。{@code looksComplete}
+     * 只是文本备份尾部的形状提示，各家 dump 的收尾写法不完全一致，不作为成败判据。</p>
+     */
+    public record BackupVerificationResponse(
+            long historyId,
+            boolean readable,
+            boolean checksumMatches,
+            boolean sizeMatches,
+            Boolean looksComplete,
+            long bytesRead,
+            Long recordedSize,
+            String checksum,
+            String recordedChecksum,
+            long elapsedMs,
+            String message
+    ) {
+    }
+
     public record TableLifecycleRequest(
             @NotBlank @Size(max = 20) String operation,
             @Size(max = 240) String schemaName,

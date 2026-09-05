@@ -646,6 +646,74 @@ public class BackupService {
         return path;
     }
 
+    /**
+     * 校验一份备份：把它完整读一遍，比对大小与 SHA-256。
+     *
+     * <p><b>这是文件级校验，不是恢复演练。</b>它回答的是「文件还在吗、内容有没有变、远端还
+     * 取得回来吗」—— 这三件事恰好覆盖了现实中最常见的备份失效：上传截断、远端存储损坏或被
+     * 清理、备份进程被杀留下半成品。SHA-256 与备份当时记下的一致，就说明这份文件与写出来
+     * 那一刻逐字节相同。</p>
+     *
+     * <p>真正的「恢复演练」（在一个临时 Schema 上跑一遍再删掉）需要一个可写的临时库、建库
+     * 权限，以及一条保证清理的路径，那是另一件事，不在这里做 —— 说清楚边界比给一个名字像
+     * 演练、实际只读了文件的功能要好。</p>
+     *
+     * <p>整份文件要过一遍网络和磁盘，所以这是一个显式动作而不是自动检查。</p>
+     */
+    public com.example.dbadmin.dto.ApiDtos.BackupVerificationResponse verifyHistory(
+            long taskId, long historyId, String actor) throws Exception {
+        BackupTask task = repository.findById(taskId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup task not found: " + taskId));
+        BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
+                .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));
+        if (!history.fileAvailable()) throw new IllegalStateException("该备份历史没有可校验的文件。");
+
+        long started = System.nanoTime();
+        BackupVerification verification = new BackupVerification();
+        boolean readable = true;
+        String failure = null;
+        try {
+            writeHistoryFile(taskId, historyId, verification);
+        } catch (Exception error) {
+            readable = false;
+            failure = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        }
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+        String checksum = readable ? verification.checksum() : null;
+        String recorded = history.checksumSha256();
+        boolean checksumMatches = readable && recorded != null && recorded.equalsIgnoreCase(checksum);
+        boolean sizeMatches = readable && (history.fileSize() == null || history.fileSize() == verification.size());
+        Boolean looksComplete = readable && isTextBackup(history.fileFormat())
+                ? BackupVerification.looksComplete(verification.tailText()) : null;
+
+        String message = message(readable, recorded, checksumMatches, sizeMatches, looksComplete, failure);
+        audit.onConnection(actor, "BACKUP_VERIFY", task.connectionId(), "backup:" + task.name(),
+                "history=" + historyId + " readable=" + readable + " checksum="
+                        + (recorded == null ? "unrecorded" : checksumMatches) + " bytes=" + verification.size());
+        return new com.example.dbadmin.dto.ApiDtos.BackupVerificationResponse(
+                historyId, readable, checksumMatches, sizeMatches, looksComplete,
+                verification.size(), history.fileSize(), checksum, recorded, elapsedMs, message);
+    }
+
+    /** 文本备份才谈得上「尾部完整」；Oracle 的 .dmp 是二进制，只有校验和说得上话。 */
+    private static boolean isTextBackup(String fileFormat) {
+        return fileFormat == null || !fileFormat.toUpperCase(java.util.Locale.ROOT).contains("DMP");
+    }
+
+    private static String message(
+            boolean readable, String recorded, boolean checksumMatches,
+            boolean sizeMatches, Boolean looksComplete, String failure
+    ) {
+        if (!readable) return "备份文件读取失败：" + failure;
+        if (recorded == null) return "这份备份没有记录校验和（早于该功能的历史记录），已确认文件可以完整读出。";
+        if (!checksumMatches) return "校验和与备份当时记录的不一致，这份文件已经不可信，请重新备份。";
+        if (!sizeMatches) return "校验和一致但文件大小与记录不符，请确认存储是否被改动过。";
+        if (Boolean.FALSE.equals(looksComplete)) {
+            return "校验和一致，但文件末尾不像一条写完的语句 —— 备份当时可能就被中断了，恢复前请再确认。";
+        }
+        return "校验通过：文件可完整读出，校验和与备份当时一致。";
+    }
+
     public DownloadInfo historyDownloadInfo(long taskId, long historyId) throws Exception {
         BackupHistory history = historyRepository.findByTaskIdAndId(taskId, historyId)
                 .orElseThrow(() -> new IllegalArgumentException("Backup history not found: " + historyId));

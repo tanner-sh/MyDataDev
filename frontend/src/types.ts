@@ -247,6 +247,26 @@ export type BackupTask = {
   lastStorageObjectKey?: string;
   lastFileAvailable?: boolean;
 };
+/**
+ * 一次备份校验的结果。
+ *
+ * checksumMatches 是唯一的硬结论：与备份当时记下的 SHA-256 一致，说明文件逐字节没变
+ * （远端存储的话，顺带证明它还取得回来）。looksComplete 只是文本备份尾部的形状提示。
+ */
+export type BackupVerification = {
+  historyId: number;
+  readable: boolean;
+  checksumMatches: boolean;
+  sizeMatches: boolean;
+  looksComplete?: boolean | null;
+  bytesRead: number;
+  recordedSize?: number | null;
+  checksum?: string | null;
+  recordedChecksum?: string | null;
+  elapsedMs: number;
+  message: string;
+};
+
 export type BackupHistory = {
   id: number;
   taskId: number;
