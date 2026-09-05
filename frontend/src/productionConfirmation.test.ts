@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   matchesProductionConnectionName,
+  validateProductionConfirmation,
   normalizeProductionConfirmation,
   PRODUCTION_CONFIRMATION_HEADER,
   productionConfirmationHeaders
@@ -46,5 +47,23 @@ describe('productionConfirmationHeaders', () => {
     expect(() => new Headers(productionConfirmationHeaders('生产订单库'))).not.toThrow();
     // 对照组：不编码就是今天线上的行为。
     expect(() => new Headers({ [PRODUCTION_CONFIRMATION_HEADER]: '生产订单库' })).toThrow();
+  });
+});
+
+describe('validateProductionConfirmation', () => {
+  it('确认串对上时返回规范化后的值', () => {
+    expect(validateProductionConfirmation('  生产库  ', '生产库')).toEqual({ ok: true, value: '生产库' });
+  });
+
+  /** 两种失败要分开说：没填是「还没开始」，填错是「可能选错了连接」—— 后者才是这道闸门的理由。 */
+  it('空输入与不匹配给不同的文案', () => {
+    expect(validateProductionConfirmation('   ', '生产库'))
+      .toEqual({ ok: false, message: '请输入生产连接名：生产库' });
+    expect(validateProductionConfirmation('测试库', '生产库'))
+      .toEqual({ ok: false, message: '连接名不匹配，请输入：生产库' });
+  });
+
+  it('大小写与全角不做宽松匹配', () => {
+    expect(validateProductionConfirmation('PROD', 'prod').ok).toBe(false);
   });
 });

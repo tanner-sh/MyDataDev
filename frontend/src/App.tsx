@@ -47,7 +47,8 @@ import {
   type ManagementSection
 } from './managementSections';
 import { backgroundImportPrompt, importRoute, oversizedRowsRoute, type ImportRoute } from './dataImport';
-import { matchesProductionConnectionName, normalizeProductionConfirmation, productionConfirmationHeaders } from './productionConfirmation';
+import { productionConfirmationHeaders } from './productionConfirmation';
+import { useProductionConfirmation } from './hooks/useProductionConfirmation';
 import { createUuid } from './createUuid';
 import type { ObjectSearchHit } from './objectSearch';
 import { appendSnippetToSql, snippetDraftFromSql, type SqlSnippet, type SqlSnippetDraft } from './sqlSnippets';
@@ -105,7 +106,6 @@ const METADATA_CACHE_TTL_MS = 10 * 60 * 1000;
 const METADATA_SEARCH_DEBOUNCE_MS = 500;
 const OBJECT_DETAIL_PREFETCH_DELAY_MS = 250;
 const MAX_SQL_TABS = 20;
-type ProductionConfirmationRequest = { action: string; expected: string };
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
@@ -144,8 +144,6 @@ export default function App() {
   const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
   const [sqlSessionRevision, setSqlSessionRevision] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({ kind: 'idle', text: '就绪' });
-  const [productionConfirmationRequest, setProductionConfirmationRequest] = useState<ProductionConfirmationRequest | null>(null);
-  const [productionConfirmationInput, setProductionConfirmationInput] = useState('');
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataBlockingLoading, setMetadataBlockingLoading] = useState(false);
@@ -226,8 +224,10 @@ export default function App() {
   const sqlTabsRef = useRef(sqlTabs);
   const activeSqlTabIdRef = useRef(activeSqlTabId);
   const sqlSessionConnectionIdRef = useRef<number | null>(null);
-  const productionConfirmationResolverRef = useRef<((value: string | undefined) => void) | null>(null);
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
+  // 生产确认的一组状态搬进了 hooks/useProductionConfirmation：它是「一组状态 + 一条异步流程」，
+  // 正是 CLAUDE.md 里说的该抽成自定义 hook 的形状。
+  const productionConfirmation = useProductionConfirmation(useCallback((message: string) => toastApi.error(message), [toastApi]));
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
   // 管理员在抽屉里改完 AI 设置后要立刻反映到工作台，所以抽屉一关就重取一次。
@@ -443,41 +443,10 @@ export default function App() {
     toastApi.info(text);
   }
 
+  /** 只有生产连接才需要二次确认；非生产连接由 hook 直接放行。 */
   function requestProductionConfirmation(action: string): Promise<string | undefined> {
-    if (!selected || selected.environment !== 'prod') return Promise.resolve(undefined);
-    const request = { action, expected: selected.name };
-    return new Promise((resolve) => {
-      productionConfirmationResolverRef.current?.(undefined);
-      productionConfirmationResolverRef.current = resolve;
-      setProductionConfirmationInput('');
-      setProductionConfirmationRequest(request);
-    });
-  }
-
-  function cancelProductionConfirmation() {
-    const resolve = productionConfirmationResolverRef.current;
-    productionConfirmationResolverRef.current = null;
-    setProductionConfirmationRequest(null);
-    setProductionConfirmationInput('');
-    resolve?.(undefined);
-  }
-
-  function confirmProductionConfirmation() {
-    if (!productionConfirmationRequest) return;
-    const input = normalizeProductionConfirmation(productionConfirmationInput);
-    if (!input) {
-      toastApi.error(`请输入生产连接名：${productionConfirmationRequest.expected}`);
-      return;
-    }
-    if (!matchesProductionConnectionName(input, productionConfirmationRequest.expected)) {
-      toastApi.error(`连接名不匹配，请输入：${productionConfirmationRequest.expected}`);
-      return;
-    }
-    const resolve = productionConfirmationResolverRef.current;
-    productionConfirmationResolverRef.current = null;
-    setProductionConfirmationRequest(null);
-    setProductionConfirmationInput('');
-    resolve?.(input);
+    return productionConfirmation.requestConfirmation(
+      action, selected?.environment === 'prod' ? selected.name : undefined);
   }
 
   function requestUnscopedMutationConfirmation(statements: Array<{ index: number; sql: string }>): Promise<boolean> {
@@ -1973,7 +1942,7 @@ export default function App() {
   // A dialog or drawer has focus of its own; acting on the workspace behind it
   // would be surprising. The explorer toggle is exempt because it is also how a
   // user closes the mobile explorer drawer.
-  const overlayOpen = Boolean(productionConfirmationRequest)
+  const overlayOpen = Boolean(productionConfirmation.request)
     || activeDrawer !== null
     || connectionEditor.mode !== 'closed'
     || tableCreateOpen
@@ -2907,23 +2876,23 @@ export default function App() {
         )}
       </Suspense>
       <Modal
-        open={Boolean(productionConfirmationRequest)}
-        title={productionConfirmationRequest ? `确认在生产连接上${productionConfirmationRequest.action}` : undefined}
+        open={Boolean(productionConfirmation.request)}
+        title={productionConfirmation.request ? `确认在生产连接上${productionConfirmation.request.action}` : undefined}
         okText="确认执行"
         cancelText="取消"
         okButtonProps={{ danger: true }}
-        onOk={confirmProductionConfirmation}
-        onCancel={cancelProductionConfirmation}
+        onOk={productionConfirmation.confirm}
+        onCancel={productionConfirmation.cancel}
         destroyOnHidden
       >
-        {productionConfirmationRequest && (
+        {productionConfirmation.request && (
           <TypedConfirmationFields
             autoFocus="production"
             production={{
-              expected: productionConfirmationRequest.expected,
-              value: productionConfirmationInput,
+              expected: productionConfirmation.request.expected,
+              value: productionConfirmation.input,
               ariaLabel: '输入生产连接名确认操作',
-              onChange: setProductionConfirmationInput
+              onChange: productionConfirmation.setInput
             }}
           />
         )}

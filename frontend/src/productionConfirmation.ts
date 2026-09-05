@@ -9,6 +9,24 @@ export function matchesProductionConnectionName(value: string, expected: string)
 }
 
 /**
+ * 校验用户输入的确认串。
+ *
+ * <p>两种失败要分开说：什么都没填，和填了但对不上。前者是「还没开始」，后者是「可能选错了
+ * 连接」—— 后一种正是这道闸门存在的理由，文案含糊会让人以为只是打错字。</p>
+ */
+export function validateProductionConfirmation(
+  input: string,
+  expected: string
+): { ok: true; value: string } | { ok: false; message: string } {
+  const value = normalizeProductionConfirmation(input);
+  if (!value) return { ok: false, message: `请输入生产连接名：${expected}` };
+  if (!matchesProductionConnectionName(value, expected)) {
+    return { ok: false, message: `连接名不匹配，请输入：${expected}` };
+  }
+  return { ok: true, value };
+}
+
+/**
  * 构造生产确认请求头。
  *
  * 确认串就是连接名，而本项目的连接名几乎必然含中文。HTTP 头值只能是 ISO-8859-1：直接把
