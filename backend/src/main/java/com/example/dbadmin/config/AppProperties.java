@@ -17,6 +17,7 @@ public class AppProperties {
     private String cryptoKeyFile = "./secrets/mydatadev-master.key";
     private final Sql sql = new Sql();
     private final Backup backup = new Backup();
+    private final ScheduledQuery scheduledQuery = new ScheduledQuery();
     private final Restore restore = new Restore();
     private final SqlFile sqlFile = new SqlFile();
     private final NativeTools nativeTools = new NativeTools();
@@ -52,6 +53,10 @@ public class AppProperties {
 
     public Backup getBackup() {
         return backup;
+    }
+
+    public ScheduledQuery getScheduledQuery() {
+        return scheduledQuery;
     }
 
     public Restore getRestore() {
@@ -265,6 +270,29 @@ public class AppProperties {
 
         public void setTimeoutSeconds(int timeoutSeconds) {
             this.timeoutSeconds = timeoutSeconds;
+        }
+    }
+
+    /** 定时导出：产物目录与单次任务的上限。 */
+    public static class ScheduledQuery {
+        private String directory = "./exports";
+        /** 每个任务最多保留几个产物文件；再多就把最旧的删掉，免得磁盘被慢慢填满。 */
+        private int keepFiles = 30;
+
+        public String getDirectory() {
+            return directory;
+        }
+
+        public void setDirectory(String directory) {
+            this.directory = directory;
+        }
+
+        public int getKeepFiles() {
+            return keepFiles;
+        }
+
+        public void setKeepFiles(int keepFiles) {
+            this.keepFiles = keepFiles;
         }
     }
 

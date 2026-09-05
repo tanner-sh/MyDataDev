@@ -149,12 +149,22 @@ public class ExportService {
     }
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName, List<String> targetTableParts) throws Exception {
+        return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, productionConfirmation,
+                schemaName, targetTableParts, abbreviate(sql));
+    }
+
+    /**
+     * 「导出的 SQL 必须是单条查询」这条规则的唯一定义，返回规范化后的那条语句。
+     *
+     * <p>定时导出在**保存任务时**就调它一次：一条写操作留到半夜由调度线程发现，代价是白等
+     * 一晚上加一条谁也没看见的失败记录。</p>
+     */
+    public String requireSingleQuery(String sql) {
         var statements = splitter.split(sql);
         if (statements.size() != 1 || !classifier.isQuery(statements.get(0).sql())) {
             throw new IllegalArgumentException("导出仅支持单条查询语句，不会执行写入或 DDL。");
         }
-        return prepareInternal(connectionId, statements.get(0).sql(), null, format, actor, productionConfirmation,
-                schemaName, targetTableParts, abbreviate(sql));
+        return statements.get(0).sql();
     }
 
     /**

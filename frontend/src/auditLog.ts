@@ -127,7 +127,11 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   TABLE_VIEW: { label: '查看表数据', category: 'data' },
   BACKUP_DOWNLOAD: { label: '下载备份', category: 'backup' },
   BACKUP_HISTORY_DOWNLOAD: { label: '下载备份历史', category: 'backup' },
-  AUDIT_EXPORT: { label: '导出审计日志', category: 'security' }
+  AUDIT_EXPORT: { label: '导出审计日志', category: 'security' },
+  SCHEDULED_QUERY_CREATE: { label: '新建定时导出', category: 'sql' },
+  SCHEDULED_QUERY_UPDATE: { label: '修改定时导出', category: 'sql' },
+  SCHEDULED_QUERY_DELETE: { label: '删除定时导出', category: 'sql' },
+  SCHEDULED_QUERY_RUN: { label: '执行定时导出', category: 'sql' }
 };
 
 export function auditActionLabel(action: string): string {

@@ -115,6 +115,7 @@ const OBJECT_DETAIL_PREFETCH_DELAY_MS = 250;
 const MAX_SQL_TABS = 20;
 const BackupPanel = lazy(() => import('./components/BackupPanel').then((module) => ({ default: module.BackupPanel })));
 const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel').then((module) => ({ default: module.ConnectionFormPanel })));
+const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPanel').then((module) => ({ default: module.ScheduledExportPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -3244,6 +3245,16 @@ export default function App() {
                   />
                 </Suspense>
               </div>
+            )}
+
+            {activeDrawer === 'scheduled-exports' && (
+              <Suspense fallback={<PanelLoading text="正在加载定时导出…" />}>
+                <ScheduledExportPanel
+                  connections={connections}
+                  defaultConnectionId={selected?.id}
+                  onOpenInSqlTab={openSchemaDiffScript}
+                />
+              </Suspense>
             )}
 
             {activeDrawer === 'schema-diff' && (

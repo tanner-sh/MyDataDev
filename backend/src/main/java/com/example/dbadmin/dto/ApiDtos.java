@@ -735,6 +735,31 @@ public final class ApiDtos {
     public record SqlHistoryGroup(String text, int hits, long averageMs, String lastSeenAt) {
     }
 
+    /**
+     * 定时导出任务。
+     *
+     * @param productionConfirmation 生产连接上必填：定时任务没有交互确认的机会，那次确认在
+     *                               创建时完成，运行时凭它放行
+     */
+    public record ScheduledQueryRequest(
+            @NotNull Long connectionId,
+            @NotBlank @Size(max = 120) String name,
+            @NotBlank @Size(max = 200_000) String sql,
+            @Size(max = 20) String exportFormat,
+            @NotBlank @Size(max = 120) String cron,
+            @Size(max = 60) String scheduleZone,
+            boolean enabled,
+            @Size(max = 120) String productionConfirmation
+    ) {
+    }
+
+    /** @param nextRunAt 下次执行时间；停用或 cron 不可解析时为空 */
+    public record ScheduledQueryResponse(
+            com.example.dbadmin.model.ScheduledQuery task,
+            Instant nextRunAt
+    ) {
+    }
+
     public record TableExportRequest(
             @NotNull @Valid TableDataRequest query,
             @NotBlank @Size(max = 20) String format

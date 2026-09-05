@@ -6,7 +6,7 @@ import type { ConnectionPermission } from './accessControl';
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'schema-diff' | 'data-diff' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
+export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'data-diff' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
 
 export type ManagementSectionMeta = {
   key: ManagementSection;
@@ -22,6 +22,8 @@ export type ManagementSectionMeta = {
 export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'connections', label: '连接管理' },
   { key: 'backups', label: '备份与恢复', requiresConnection: true, requiresPermission: 'BACKUP_RESTORE' },
+  // 定时导出把数据带出系统，与手动导出同档：EXPORT 之外还要 QUERY。
+  { key: 'scheduled-exports', label: '定时导出', requiresPermission: 'EXPORT' },
   { key: 'schema-diff', label: '结构对比' },
   // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
   { key: 'data-diff', label: '数据对比', requiresPermission: 'QUERY' },

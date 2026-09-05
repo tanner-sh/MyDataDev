@@ -873,3 +873,39 @@ export type AiProbeResult = {
 
 /** AI 可用性快照：功能开没开、哪些连接被授权了。不含任何配置细节。 */
 export type AiStatus = { enabled: boolean; sharedConnectionIds: number[]; sampledConnectionIds: number[] };
+
+/** 一条定时导出任务。`zoneId` 是后端算出的生效时区，`scheduleZone` 为空时回落到服务端默认值。 */
+export type ScheduledExportTask = {
+  id: number;
+  connectionId: number;
+  name: string;
+  sql: string;
+  exportFormat: string;
+  cron: string;
+  scheduleZone?: string;
+  zoneId?: string;
+  enabled: boolean;
+  productionConfirmed: boolean;
+  lastRunAt?: string;
+  lastStatus?: string;
+  lastMessage?: string;
+  lastFile?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ScheduledExportResponse = {
+  task: ScheduledExportTask;
+  nextRunAt?: string;
+};
+
+export type ScheduledExportRequest = {
+  connectionId: number;
+  name: string;
+  sql: string;
+  exportFormat: string;
+  cron: string;
+  scheduleZone?: string;
+  enabled: boolean;
+  productionConfirmation?: string;
+};

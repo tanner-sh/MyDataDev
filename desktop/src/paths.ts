@@ -6,6 +6,8 @@ export type DesktopPaths = {
   home: string;
   data: string;
   backups: string;
+  /** 定时导出的产物目录。 */
+  exports: string;
   sqlFiles: string;
   logs: string;
   secretFile: string;
@@ -27,6 +29,7 @@ export function resolveDesktopPaths(platform: NodeJS.Platform, environment: Desk
     home,
     data: platformPath.join(home, 'data'),
     backups: platformPath.join(home, 'backups'),
+    exports: platformPath.join(home, 'exports'),
     sqlFiles: platformPath.join(home, 'sql-files'),
     logs: platformPath.join(home, 'logs'),
     secretFile: platformPath.join(home, 'desktop-secret.json')

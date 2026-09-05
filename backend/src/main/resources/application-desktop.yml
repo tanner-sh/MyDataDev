@@ -23,6 +23,8 @@ app:
   crypto-key-source: STDIN
   backup:
     directory: ${MYDATADEV_DESKTOP_HOME}/backups
+  scheduled-query:
+    directory: ${MYDATADEV_DESKTOP_HOME}/exports
   sql-file:
     directory: ${MYDATADEV_DESKTOP_HOME}/sql-files
   desktop:

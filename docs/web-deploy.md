@@ -30,6 +30,7 @@ JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动
 | `./data` | H2 元数据库：Web 用户、连接配置、加密后的密码、SQL 历史、审计、MCP Agent、任务记录。 |
 | `./secrets` | 系统自动生成的主密钥；必须限制为服务账号可读，并与元数据库一起安全备份。 |
 | `./backups` | 备份文件与远端上传失败的暂存文件。 |
+| `./exports` | 定时导出任务的产物；每个任务只保留最近若干份（`app.scheduled-query.keep-files`，默认 30）。 |
 | `./sql-files` | 大 SQL 文件执行任务的上传文件。 |
 | `./logs` | 应用日志。 |
 
@@ -43,6 +44,7 @@ JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动
 java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web \
   --server.port=9000 \
   --app.backup.directory=/data/mydatadev/backups \
+  --app.scheduled-query.directory=/data/mydatadev/exports \
   --app.sql-file.directory=/data/mydatadev/sql-files \
   --spring.datasource.url='jdbc:h2:file:/data/mydatadev/db-admin;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_ON_EXIT=FALSE;AUTO_SERVER=FALSE;FILE_LOCK=FS;TRACE_LEVEL_FILE=0'
 ```

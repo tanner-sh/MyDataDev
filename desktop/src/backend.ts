@@ -92,6 +92,7 @@ export class BackendManager {
     await Promise.all([
       mkdir(this.options.desktopPaths.data, { recursive: true }),
       mkdir(this.options.desktopPaths.backups, { recursive: true }),
+      mkdir(this.options.desktopPaths.exports, { recursive: true }),
       mkdir(this.options.desktopPaths.sqlFiles, { recursive: true }),
       mkdir(this.options.desktopPaths.logs, { recursive: true }),
       access(this.options.java),
