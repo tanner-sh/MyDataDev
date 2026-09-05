@@ -184,6 +184,23 @@ public final class AiDtos {
     ) {
     }
 
+    /**
+     * AI 搜过、这个库里什么都没搜到的业务词。
+     *
+     * @param hits 被搜空过多少次；反复搜不到的那个词，正是这条连接上真正缺的说法
+     */
+    public record AiGlossaryGapResponse(
+            String term,
+            int hits,
+            java.time.Instant lastSeenAt
+    ) {
+    }
+
+    public record AiGlossaryGapDismissRequest(
+            @NotNull @Size(max = 50) java.util.List<@NotBlank @Size(max = 120) String> terms
+    ) {
+    }
+
     public record AiGlossaryEntryResponse(
             long id,
             String term,

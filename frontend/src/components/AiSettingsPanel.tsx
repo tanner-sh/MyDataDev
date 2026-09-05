@@ -6,6 +6,7 @@ import { PanelLoading } from './PanelState';
 import type {
   AiConnectionPolicy,
   AiGlossaryEntry,
+  AiGlossaryGap,
   AiGlossarySuggestion,
   AiGlossarySuggestions,
   AiProbeResult,
@@ -13,7 +14,7 @@ import type {
   AiSchemaSharing,
   AiSettings
 } from '../types';
-import { alreadyInGlossary, mergeSuggestions } from '../aiGlossary';
+import { alreadyInGlossary, gapsAsSuggestions, mergeSuggestions, pendingGaps } from '../aiGlossary';
 import {
   AI_EFFORTS,
   AI_MAX_SAMPLE_ROWS,
@@ -48,6 +49,7 @@ export function AiSettingsPanel() {
   const [suggestions, setSuggestions] = useState<AiGlossarySuggestions>();
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [pickedTerms, setPickedTerms] = useState<string[]>([]);
+  const [gaps, setGaps] = useState<AiGlossaryGap[]>([]);
   const [error, setError] = useState('');
   const [messageApi, messageContext] = message.useMessage();
 
@@ -152,11 +154,18 @@ export function AiSettingsPanel() {
 
   async function openGlossary(policy: AiConnectionPolicy) {
     setSuggestions(undefined);
+    setGaps([]);
     setPickedTerms([]);
     setGlossaryPolicy(policy);
     setGlossaryLoading(true);
     try {
-      setGlossary(await api<AiGlossaryEntry[]>(`/ai/connections/${policy.connectionId}/glossary`));
+      const [entries, missing] = await Promise.all([
+        api<AiGlossaryEntry[]>(`/ai/connections/${policy.connectionId}/glossary`),
+        // 待补词条随词典一起拉：它不需要用户先点「生成候选」，本来就是攒好在那儿的。
+        api<AiGlossaryGap[]>(`/ai/connections/${policy.connectionId}/glossary/gaps`)
+      ]);
+      setGlossary(entries);
+      setGaps(missing);
     } catch (cause) {
       messageApi.error(cause instanceof Error ? cause.message : '业务词典加载失败');
       setGlossaryPolicy(undefined);
@@ -185,6 +194,25 @@ export function AiSettingsPanel() {
       messageApi.error(cause instanceof Error ? cause.message : '业务词典保存失败');
     } finally {
       setGlossarySaving(false);
+    }
+  }
+
+  /** 把待补词条搬进下面的表格。对象名留空 —— 那部分只有人知道，这里正是要人来填。 */
+  function adoptGaps(picked: AiGlossaryGap[]) {
+    const merged = mergeSuggestions(glossary, gapsAsSuggestions(picked));
+    const added = merged.length - glossary.length;
+    setGlossary(merged);
+    messageApi.success(added > 0 ? `已加入 ${added} 条，填上它们对应的表再保存` : '选中的业务词都已存在');
+  }
+
+  async function dismissGap(term: string) {
+    if (!glossaryPolicy) return;
+    try {
+      setGaps(await api<AiGlossaryGap[]>(`/ai/connections/${glossaryPolicy.connectionId}/glossary/gaps`, {
+        method: 'DELETE', body: JSON.stringify({ terms: [term] })
+      }));
+    } catch (cause) {
+      messageApi.error(cause instanceof Error ? cause.message : '忽略失败');
     }
   }
 
@@ -365,6 +393,11 @@ export function AiSettingsPanel() {
         <Paragraph type="secondary">
           把“客户、活跃用户”等业务说法映射到真实表或视图。AI 搜索结构时会优先使用这些映射；多个别名或对象用逗号分隔。
         </Paragraph>
+        <GlossaryGaps
+          gaps={pendingGaps(glossary, gaps)}
+          onAdopt={adoptGaps}
+          onDismiss={(term) => void dismissGap(term)}
+        />
         <GlossarySuggestions
           loading={suggestionsLoading}
           data={suggestions}
@@ -420,6 +453,45 @@ export function AiSettingsPanel() {
 
 function splitList(value: string): string[] {
   return value.split(/[,，]/).map((item) => item.trim()).filter(Boolean).slice(0, 10);
+}
+
+/**
+ * 待补词条：AI 搜过、这个库里什么都没搜到的业务词。
+ *
+ * <p>和下面的候选词条正好互补。候选是从表注释推的，推出来的词本来就能被 search_schema 搜到；
+ * 而这里的每一条都是有人真的问过、AI 真的没找到的 —— 词典里最值钱的恰恰是这一半，它不可能
+ * 从库里推出来，只能从真实提问里采。所以这块排在候选前面。</p>
+ *
+ * <p>「忽略」是必要的出口：模型偶尔会搜一些谁也补不了的词，没有出口的话这张清单会越积越长，
+ * 最后没人看。</p>
+ */
+function GlossaryGaps({ gaps, onAdopt, onDismiss }: {
+  gaps: AiGlossaryGap[];
+  onAdopt: (gaps: AiGlossaryGap[]) => void;
+  onDismiss: (term: string) => void;
+}) {
+  if (gaps.length === 0) return null;
+
+  return (
+    <Card
+      size="small"
+      style={{ marginBottom: 12 }}
+      title={`AI 没找到的说法 · ${gaps.length} 个`}
+      extra={<Button size="small" type="primary" onClick={() => onAdopt(gaps)}>全部加入</Button>}
+    >
+      <Paragraph type="secondary" style={{ marginTop: 0 }}>
+        有人这么问过，但这个库里搜不到对应的表或字段。补上它指向哪张表，AI 下次就找得到了。
+      </Paragraph>
+      <Space size={4} wrap>
+        {gaps.map((gap) => (
+          <Tag key={gap.term} closable onClose={() => onDismiss(gap.term)} style={{ marginInlineEnd: 0 }}>
+            {gap.term}
+            {gap.hits > 1 && <Text type="secondary">{` ×${gap.hits}`}</Text>}
+          </Tag>
+        ))}
+      </Space>
+    </Card>
+  );
 }
 
 /**

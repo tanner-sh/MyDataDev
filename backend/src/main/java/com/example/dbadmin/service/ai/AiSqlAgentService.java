@@ -48,6 +48,8 @@ public class AiSqlAgentService {
     public static final String ACTION_CHAT = "AI_AGENT_CHAT";
     private static final int MAX_AGENT_ROUNDS = 8;
     private static final int MAX_TOOL_CALLS = 16;
+    /** 审计里最多留多长的工具序列。超过这个长度的那次请求，问题不在序列细节上。 */
+    private static final int MAX_LOGGED_TOOL_CALLS = 24;
     private static final long MAX_OUTPUT_TOKENS = 4_000;
     private static final Pattern SQL_FENCE = Pattern.compile("(?is)```sql\\s*(.*?)```");
 
@@ -60,6 +62,7 @@ public class AiSqlAgentService {
     private final SqlStatementClassifier classifier;
     private final AiSqlValidationService validator;
     private final AiConversationStore conversations;
+    private final AiGlossaryService glossary;
     private final MetadataCacheService metadataCache;
     private final AiAgentCoordinator coordinator;
     private final AiAgentMetrics metrics;
@@ -75,6 +78,7 @@ public class AiSqlAgentService {
             SqlStatementClassifier classifier,
             AiSqlValidationService validator,
             AiConversationStore conversations,
+            AiGlossaryService glossary,
             MetadataCacheService metadataCache,
             AiAgentCoordinator coordinator,
             AiAgentMetrics metrics,
@@ -89,6 +93,7 @@ public class AiSqlAgentService {
         this.classifier = classifier;
         this.validator = validator;
         this.conversations = conversations;
+        this.glossary = glossary;
         this.metadataCache = metadataCache;
         this.coordinator = coordinator;
         this.metrics = metrics;
@@ -162,6 +167,10 @@ public class AiSqlAgentService {
     ) {
         int toolCalls = 0;
         int objectsRead = 0;
+        // 汇总计数说不清「它摸索了多久」：搜了两次还是读了三次表，只有序列看得出来。
+        List<String> toolSequence = new ArrayList<>();
+        // 搜空的检索词：用户的说法和这个库的命名对不上的现场，此前只用来决定要不要重试就丢了。
+        Set<String> unmatchedQueries = new LinkedHashSet<>();
         int rounds = 0;
         long inputTokens = 0;
         long outputTokens = 0;
@@ -230,6 +239,7 @@ public class AiSqlAgentService {
                 List<LlmToolResult> results = new ArrayList<>();
                 for (LlmToolCall call : modelTurn.toolCalls()) {
                     AiAgentCoordinator.checkCancelled();
+                    if (toolSequence.size() < MAX_LOGGED_TOOL_CALLS) toolSequence.add(call.name());
                     if (++toolCalls > MAX_TOOL_CALLS) {
                         results.add(new LlmToolResult(call.id(),
                                 "本次请求的工具调用次数已达到上限，请根据已有信息回答或询问用户。", true));
@@ -243,6 +253,7 @@ public class AiSqlAgentService {
                     if (!result.error() && "search_schema".equals(call.name())) {
                         searched = true;
                         searchFoundObjects |= result.objectCount() > 0;
+                        unmatchedQueries.addAll(result.unmatchedQueries());
                     }
                     if (!result.error() && "describe_objects".equals(call.name()) && result.objectCount() > 0) {
                         described = true;
@@ -293,11 +304,32 @@ public class AiSqlAgentService {
                             + " rounds=" + rounds
                             + " tools=" + toolCalls
                             + " objects=" + objectsRead
+                            + (toolSequence.isEmpty() ? "" : " seq=" + String.join(",", toolSequence))
                             + " inputTokens=" + inputTokens
                             + " outputTokens=" + outputTokens
                             + " cacheReadTokens=" + cacheReadTokens
                             + " model=" + current.model());
+            // 排在审计之后：审计是「一定要写」的那条，词典缺口只是旁路信息，不该挡在它前面。
+            recordGlossaryGaps(request.connectionId(), unmatchedQueries);
             Thread.interrupted();
+        }
+    }
+
+    /**
+     * 把搜空的检索词攒进「词典待补」清单。
+     *
+     * <p>放在 finally 里而不是成功分支：请求失败或被取消时搜出来的空词一样是缺口，甚至更是
+     * —— 搜不到东西本来就是它答不出来的原因之一。</p>
+     *
+     * <p>整段吞掉异常。这条记录是给管理员看的旁路信息，为了它让一次已经跑完的 AI 回答失败，
+     * 换谁都不划算。</p>
+     */
+    private void recordGlossaryGaps(long connectionId, Set<String> unmatchedQueries) {
+        if (unmatchedQueries.isEmpty()) return;
+        try {
+            glossary.recordGaps(connectionId, unmatchedQueries);
+        } catch (RuntimeException e) {
+            log.debug("记录词典缺口失败：{}", e.toString());
         }
     }
 

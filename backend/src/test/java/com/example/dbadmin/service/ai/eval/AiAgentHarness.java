@@ -74,6 +74,7 @@ public final class AiAgentHarness implements AutoCloseable {
     private final AiSqlAgentService agent;
     private final AiConversationStore conversations;
     private final AuditRepository audit;
+    private final AiGlossaryService glossary;
     private final MeterRegistry registry = new SimpleMeterRegistry();
 
     public AiAgentHarness(LlmClient client, List<com.example.dbadmin.service.ai.AiBusinessTerm> glossaryTerms) throws Exception {
@@ -102,7 +103,7 @@ public final class AiAgentHarness implements AutoCloseable {
         MetadataCacheService metadataCache = new MetadataCacheService();
         MetadataService metadata = new MetadataService(
                 connections, new DialectRegistry(), audit, metadataCache, new ExecutionGuard());
-        AiGlossaryService glossary = mock(AiGlossaryService.class);
+        glossary = mock(AiGlossaryService.class);
         when(glossary.terms(anyLong())).thenReturn(glossaryTerms);
 
         AppProperties properties = new AppProperties();
@@ -126,9 +127,14 @@ public final class AiAgentHarness implements AutoCloseable {
 
         conversations = new AiConversationStore(properties);
         agent = new AiSqlAgentService(settings, connections, clients, tools, audit, new SqlScriptSplitter(),
-                new SqlStatementClassifier(), validator, conversations, metadataCache,
+                new SqlStatementClassifier(), validator, conversations, glossary, metadataCache,
                 new AiAgentCoordinator(properties, provider(registry)), new AiAgentMetrics(provider(registry)),
                 properties);
+    }
+
+    /** 词典服务是 mock：既用来喂词条，也用来验证「搜空的词有没有被记下来」。 */
+    public AiGlossaryService glossary() {
+        return glossary;
     }
 
     /** 问一句话，等它跑完，把回答、结构依据和这次的运行数据一起带回来。 */
@@ -141,8 +147,22 @@ public final class AiAgentHarness implements AutoCloseable {
         return ask(question, failure, null);
     }
 
+    /** 在已有会话里接着问 —— 多轮之间的上下文是否稳定增长，只有同一段会话里才看得出来。 */
+    public Run askIn(String conversationId, String question) throws Exception {
+        return ask(conversationId, question, null, null);
+    }
+
     /** 带着执行现场来问：失败原文，或成功但结果不对的形状。 */
     public Run ask(
+            String question,
+            com.example.dbadmin.dto.AiDtos.AiExecutionFailure failure,
+            com.example.dbadmin.dto.AiDtos.AiExecutionOutcome outcome
+    ) throws Exception {
+        return ask(null, question, failure, outcome);
+    }
+
+    private Run ask(
+            String conversationId,
             String question,
             com.example.dbadmin.dto.AiDtos.AiExecutionFailure failure,
             com.example.dbadmin.dto.AiDtos.AiExecutionOutcome outcome
@@ -158,7 +178,8 @@ public final class AiAgentHarness implements AutoCloseable {
         }).when(audit).onConnection(nullable(String.class), anyString(), anyLong(), anyString());
 
         long started = System.nanoTime();
-        agent.chatStream(new AiChatRequest(CONNECTION_ID, SCHEMA, null, question, null, failure, outcome), "eval", OWNER);
+        agent.chatStream(new AiChatRequest(CONNECTION_ID, SCHEMA, conversationId, question, null, failure, outcome),
+                "eval", OWNER);
         if (!finished.await(5, TimeUnit.MINUTES)) throw new IllegalStateException("Agent 请求超时，且没有写审计");
         Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
 

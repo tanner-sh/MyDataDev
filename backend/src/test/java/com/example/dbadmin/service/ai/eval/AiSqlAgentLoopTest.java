@@ -34,6 +34,8 @@ class AiSqlAgentLoopTest {
             assertThat(run.number("rounds")).isEqualTo(4);
             assertThat(run.number("tools")).isEqualTo(2);
             assertThat(run.number("objects")).isGreaterThan(0);
+            // 汇总计数说不出它是搜了两次还是读了三次表；序列说得出，事后筛「哪类问题让它反复摸索」靠的是这个。
+            assertThat(run.stats()).containsEntry("seq", "search_schema,describe_objects");
 
             // 校验失败那一轮的错误原文必须作为用户消息回到模型，否则它没有修正的依据。
             List<LlmAgentMessage> fourthRound = model.seen().get(3).messages();
@@ -211,6 +213,48 @@ class AiSqlAgentLoopTest {
             assertThat(run.answer()).doesNotContain("DELETE");
             List<LlmAgentMessage> fourthRound = model.seen().get(3).messages();
             assertThat(fourthRound.get(fourthRound.size() - 1).text()).contains("SELECT");
+        }
+    }
+
+    /**
+     * 搜空的检索词是词典缺口的现场采样：注释里推得出的词本来就搜得到，推不出的那半份
+     * （用户嘴里的「会员」「买家」）只能从真实提问里采。此前这个信号只用来决定要不要重试，
+     * 用完就丢了。
+     */
+    @Test
+    void remembersTheWordsItSearchedForAndFoundNothingFor() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"会员\",\"客户\"]}"),
+                toolCall("t2", "describe_objects", "{\"names\":[\"T_CRM_0021\"]}"),
+                answer("```sql\nSELECT CUST_NM FROM T_CRM_0021\n```")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            AiAgentHarness.Run run = harness.ask("查询会员名称");
+
+            assertThat(run.outcome()).isEqualTo("success");
+            // 「客户」搜得到，只有「会员」该被记下来 —— 记下搜得到的词等于把清单变成噪音。
+            org.mockito.ArgumentCaptor<java.util.Collection<String>> recorded =
+                    org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+            // 缺口记录排在审计之后，而审计才是 harness 等的那个信号 —— 这里要给它一点追上来的时间。
+            org.mockito.Mockito.verify(harness.glossary(), org.mockito.Mockito.timeout(5_000))
+                    .recordGaps(org.mockito.ArgumentMatchers.eq(AiAgentHarness.CONNECTION_ID), recorded.capture());
+            assertThat(recorded.getValue()).containsExactly("会员");
+        }
+    }
+
+    /** 请求跑挂了，搜空的词一样是缺口 —— 搜不到东西本来就是它答不出来的原因之一。 */
+    @Test
+    void remembersThoseWordsEvenWhenTheRequestNeverFinishes() throws Exception {
+        ScriptedLlmClient model = new ScriptedLlmClient(List.of(
+                toolCall("t1", "search_schema", "{\"queries\":[\"会员\"]}")));
+
+        try (AiAgentHarness harness = new AiAgentHarness(model, List.of())) {
+            // 剧本只有一轮，第二轮直接抛异常。
+            assertThat(harness.ask("查询会员名称").outcome()).isEqualTo("error");
+
+            org.mockito.Mockito.verify(harness.glossary(), org.mockito.Mockito.timeout(5_000))
+                    .recordGaps(org.mockito.ArgumentMatchers.eq(AiAgentHarness.CONNECTION_ID),
+                            org.mockito.ArgumentMatchers.argThat(terms -> terms.contains("会员")));
         }
     }
 

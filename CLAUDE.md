@@ -80,11 +80,13 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 - **会话在服务端**（`AiConversationStore`），浏览器只提交当前这句话加一个会话 ID。工具结果和「是否已经检查过结构」的标记都不经浏览器 —— 否则客户端可以伪造「模型已经看过表结构」的历史，把 grounding 变成摆设。会话按字符数而不是条数淘汰：里面存的是工具结果原文。
 - **候选 SQL 的编译校验走 `DatabaseDialect.compileQuery`**，不要在 `service/ai` 里直接 `prepareStatement`。默认实现是 prepare + 读结果列元数据，PostgreSQL/Oracle/SQL Server 上确实不执行；但 Connector/J 的客户端预编译会把查询真跑一遍且不继承 `queryTimeout`，所以 MySQL 系覆盖成 `EXPLAIN`。新增方言时先确认驱动行为。校验入口只收 SELECT/WITH（`SqlStatementClassifier.isSelectQuery`）。
 - **执行报错的诊断走 Agent，不要再开单次问答的路。** 最常见的报错是「字段/表不存在」，而报错里提到的名字本来就是错的 —— 只看那条 SQL 提到的表根本查不出正确名称，必须能搜结构、查词典。失败现场经 `AiChatRequest.failure` 传入，由 `AiChatPrompt` 加上不可信标注后才进模型：错误原文来自目标库，拼进用户消息就和用户的指令没区别了。
+- **词典的另一半从「搜空的检索词」来**（`AiGlossaryGaps` + `ai_glossary_gap`）：`search_schema` 一个对象都没搜到的词，就是用户的说法和这个库的命名对不上的现场。`AiSqlAgentService` 在 `finally` 里汇总落库（失败和取消也记），整段吞异常 —— 这是旁路信息，不该让一次已经跑完的回答失败。筛选规则与下面那条同源：超过十二个汉字的是描述不是名字。这是唯一一处会落库的用户提问派生物，边界写在 `docs/ai-assistant.md` 的 7.8。
 - **业务词典的候选从表注释推**（`AiGlossarySuggestions`），但不自动落库：注释里的词本来就能被 `search_schema` 搜到，自动生成的词条不算新信息 —— 词典不可替代的是用户嘴里的「会员」「买家」，那只能人补。目标是把「从零填写」变成「审阅和补别名」。
 - **结果回流只发形状不发数据**（`frontend/src/aiResultShape.ts`）：行数、耗时、每列的空值数与不同取值数，全是计数。这样它才落在「只发结构」档；要发真实数据行是另一个入口（结果解读），那边要求连接开到样本档。
 - **执行历史进入模型上下文前必须先过 `AiSqlShape.mask`**（`AiQueryHistoryService`）。历史里带着真实业务值 —— 手机号、金额、注释里的人名和工单号；抹掉字面量之后剩下的是查询骨架，这条工具才落得进「只发结构」这一档。绕开它就等于把这一档的承诺作废了。
 - **每次 Agent 请求都要落一条 `AI_AGENT_CHAT` 审计，取消也不例外** —— 被取消时结构往往已经发给外部模型了。
 - `AiAgentCoordinator` 管有界线程池、按用户并发上限与取消；`AiAgentMetrics` 出 Micrometer 指标，其中 `cache_read` 长期为 0 说明 prompt cache 的前缀被写脏了。
+- **系统提示、工具定义和历史消息是 prompt cache 的前缀，只许在尾部追加**：`AiPromptCachePrefixTest` 用剧本模型在 CI 里守着这条（系统提示逐字相等、消息只增不改、提示里不许出现当前年份）。往里塞时间戳这类每次都变的内容会让缓存命中率直接归零。审计 detail 里的 `seq=` 记着这次请求的工具调用序列 —— 汇总计数说不出它是搜了两次还是读了三次表。
 - **改 Agent 的 prompt、工具或循环之前先看评测集**（`service/ai/eval/`）：`AiSqlAgentLoopTest` 用剧本化的假模型在 CI 里守住整条循环，`AiSqlAgentEvalTest` 用真模型跑固定用例集出报告（要 `AI_EVAL_API_KEY`，默认跳过）。用例只校验「命中了哪些表」，改已有用例等于让历史分数不可比。
 
 ### 数据库迁移

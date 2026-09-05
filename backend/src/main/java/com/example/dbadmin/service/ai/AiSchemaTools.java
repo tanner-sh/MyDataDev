@@ -247,7 +247,12 @@ public class AiSchemaTools {
         String summary = results.isEmpty() ? "没有找到相关对象" : "找到 " + results.size() + " 个候选对象";
         if (queries.size() > 1) summary += "（" + queries.size() + " 个检索词）";
         if (!glossaryHits.isEmpty()) summary += "，命中 " + glossaryHits.size() + " 条业务词典";
-        return new ToolExecution(root.toString(), summary, false, results.size(), List.of());
+        // 逐词的命中数刚才已经算给模型看了，顺手也留给编排层：搜空的词就是词典缺的那个说法。
+        List<String> unmatched = perQueryCounts.entrySet().stream()
+                .filter(entry -> entry.getValue() == 0)
+                .map(Map.Entry::getKey)
+                .toList();
+        return new ToolExecution(root.toString(), summary, false, results.size(), List.of(), unmatched);
     }
 
     /** 读检索词：优先多词的 queries，模型仍然写单数 query 时也认。 */
@@ -702,15 +707,27 @@ public class AiSchemaTools {
         };
     }
 
+    /**
+     * @param unmatchedQueries 这次 search_schema 里一个对象都没搜到的检索词。用户的说法和这个库的
+     *                         命名对不上的现场就在这儿，编排层据此攒出「词典待补」清单
+     */
     public record ToolExecution(
             String content,
             String summary,
             boolean error,
             int objectCount,
-            List<AiGroundingReference> evidence
+            List<AiGroundingReference> evidence,
+            List<String> unmatchedQueries
     ) {
         public ToolExecution {
             evidence = evidence == null ? List.of() : List.copyOf(evidence);
+            unmatchedQueries = unmatchedQueries == null ? List.of() : List.copyOf(unmatchedQueries);
+        }
+
+        /** 除了结构搜索，其他工具都没有「检索词」这个概念。 */
+        public ToolExecution(String content, String summary, boolean error, int objectCount,
+                             List<AiGroundingReference> evidence) {
+            this(content, summary, error, objectCount, evidence, List.of());
         }
     }
 

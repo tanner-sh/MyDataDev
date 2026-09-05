@@ -7,11 +7,14 @@ import com.example.dbadmin.dto.AiDtos.AiSettingsResponse;
 import com.example.dbadmin.dto.AiDtos.AiSettingsUpdateRequest;
 import com.example.dbadmin.dto.AiDtos.AiStatusResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryEntryResponse;
+import com.example.dbadmin.dto.AiDtos.AiGlossaryGapDismissRequest;
+import com.example.dbadmin.dto.AiDtos.AiGlossaryGapResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossarySuggestionsResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryUpdateRequest;
 import com.example.dbadmin.service.ai.AiGlossaryService;
 import com.example.dbadmin.service.ai.AiSettingsService;
 import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -86,6 +89,21 @@ public class AiSettingsController {
             @RequestParam(defaultValue = "30") int limit
     ) throws Exception {
         return glossary.suggest(id, schemaName, limit);
+    }
+
+    /** AI 搜过但一无所获的词：注释里推不出来的那半份词典，只能从真实提问里采。 */
+    @GetMapping("/connections/{id}/glossary/gaps")
+    public List<AiGlossaryGapResponse> glossaryGaps(@PathVariable long id) {
+        return glossary.gaps(id);
+    }
+
+    @DeleteMapping("/connections/{id}/glossary/gaps")
+    public List<AiGlossaryGapResponse> dismissGlossaryGaps(
+            @PathVariable long id,
+            @Valid @RequestBody AiGlossaryGapDismissRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) {
+        return glossary.dismissGaps(id, request.terms(), actor);
     }
 
     @PutMapping("/connections/{id}/glossary")

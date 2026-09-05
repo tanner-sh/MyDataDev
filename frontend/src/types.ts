@@ -675,6 +675,13 @@ export type AiGlossarySuggestions = {
   uncommentedObjects: string[];
 };
 
+/** AI 搜过、这个库里什么都没搜到的业务词。注释推不出的那半份词典只能从真实提问里采。 */
+export type AiGlossaryGap = {
+  term: string;
+  hits: number;
+  lastSeenAt?: string | null;
+};
+
 export type AiGlossaryEntry = {
   id: number;
   term: string;

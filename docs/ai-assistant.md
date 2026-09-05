@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `POST` | `/api/ai/sql/generate` | 自然语言 → SQL |
 | `GET`/`PUT` | `/api/ai/connections/{id}/glossary` | 连接级业务词典（管理员） |
 | `GET` | `/api/ai/connections/{id}/glossary/suggestions` | 从表注释推候选词条；只读，不落库 |
+| `GET`/`DELETE` | `/api/ai/connections/{id}/glossary/gaps` | AI 搜过却一无所获的业务词；DELETE 是「忽略」 |
 | `POST` | `/api/ai/sql/chat/stream` | 自然语言 → 元数据工具 → 编译校验 → SQL；只提交当前这句话，历史在服务端会话里 |
 | `GET`/`DELETE` | `/api/ai/sql/conversations/{id}` | 刷新后恢复可见消息；删除等于新建对话 |
 | `POST` | `/api/ai/sql/chat/{requestId}/cancel` | 取消正在跑的 Agent 请求 |
@@ -169,7 +170,8 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 4. **不给 AI 执行权**：`/api/ai/*` 下没有任何执行入口，产出只能回到编辑器。
 5. **Key 与数据库密码同级**：`CryptoService` 加密后入库，桌面模式自然落进操作系统安全存储。
 6. **权限**：AI 设置与连接策略均为 `requiresAdmin`，API Key 只由管理员维护、普通用户看不到（读接口一律掩码）；调用侧要求连接的 `QUERY` 权限。
-7. **审计**：每次调用写审计，走 `AuditRepository.onConnection(...)`，记录动作、连接、共享档位与模型，不记录用户输入的自然语言原文（避免二次泄露），只记长度与是否带样本。
+7. **审计**：每次调用写审计，走 `AuditRepository.onConnection(...)`，记录动作、连接、共享档位与模型，不记录用户输入的自然语言原文（避免二次泄露），只记长度与是否带样本。M12 起额外记一条工具序列（`seq=search_schema,describe_objects,…`），它只有工具名，不含任何参数。
+8. **只有搜空的业务词会落库**：M12 的「词典待补清单」把 `search_schema` 一无所获的检索词写进 `ai_glossary_gap`。这触到了决策 3 的边界，所以边界画在这里 —— 落库的是模型提炼出的单个业务词（超过十二个汉字的整句、纯数字和纯符号都会被 `AiGlossaryGaps` 挡掉），不是用户那句话；而且只有「什么都没搜到」的词才留下，搜到了的一律不记。管理员可以在词典面板上逐个「忽略」，词条补上之后自动销账。
 
 新增动作码（需同步 `frontend/src/auditLog.ts`，否则 `AuditActionLabelCoverageTest` 会失败），建议新增审计分类 `ai`：
 
@@ -340,6 +342,21 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 
 前端合并逻辑在 `frontend/src/aiGlossary.ts`：业务词在后端有唯一约束，重名会让整批保存失败，而那要等到点保存时才报错 —— 在合并这一步就挡掉，用户根本碰不到那个错误。
 
+### M12 — 把已经产生却被丢掉的信号接起来 · 已完成
+
+这一期没加新功能，做的是三处「数据已经在手上、只差接根线」的地方。
+
+**词典待补清单：搜空的检索词就是缺口的现场采样。** M11 从表注释推候选，能推出来的都是注释里已经有的词 —— 而它自己也写了，词典真正不可替代的是用户嘴里的「会员」「买家」，那些不在任何注释里。这半份此前完全没有来源，其实每天都在产生：`search_schema` 搜了一个词、一个对象都没搜到，就说明用户的说法和这个库的命名对不上。这个信号原本只用来决定要不要让模型重试（`searchFoundObjects`），用完就丢。
+
+- `AiSchemaTools.ToolExecution` 多带一个 `unmatchedQueries`（逐词命中数本来就算给模型看了，顺手留给编排层）；`AiSqlAgentService` 在 `finally` 里汇总落库，**请求失败或被取消也照记** —— 搜不到东西本来就是它答不出来的原因之一。
+- 记录整段吞异常：这是给管理员看的旁路信息，为它让一次已经跑完的 AI 回答失败不划算。
+- **筛选沿用 M11 那条规则**（`AiGlossaryGaps`，纯逻辑）：超过十二个汉字的不是名字是描述，纯数字和纯符号谁也补不了，一次请求最多记十个，一条连接最多留两百条。词典里已有的词（含别名）先剔掉 —— 管理员已经为那个词给过答案，再列出来只会让人重复补同一个词。
+- 界面上排在候选词条**前面**：候选是从库里推的，而这一条条都是有人真的问过、AI 真的没找到的。保存词典时自动销账，也可以逐个「忽略」——没有出口的清单会越积越长，最后没人看。
+
+**工具序列进审计。** 优化基线那次，两处浪费是靠逐条用例的调用序列看出来的，而线上此前只有汇总计数：「6 次工具调用」说不出它是搜了两次还是读了三次表。审计 detail 里加 `seq=`，事后能筛出哪类问题让它反复摸索。只记工具名，不记参数。
+
+**prompt cache 前缀的回归测试**（`AiPromptCachePrefixTest`）。「缓存读 token」此前只有跑真模型才拿得到，等到有人在系统提示里塞进一个时间戳，要到下一次手动评测才会发现，而那时账单已经按全价出过好几轮。现在用剧本模型把同一件事变成 CI 断言：系统提示和工具定义在所有轮次里逐字相等、消息只准在尾部增长、系统提示里不许出现当前年份。写这条测试时顺手做了变异验证 —— 往系统提示里注入 `Instant.now()`，两个用例都会红。
+
 ### 评测集 — 改这套 Agent 之前先跑一遍
 
 用例、固定库结构和打分逻辑都在 `backend/src/test/java/com/example/dbadmin/service/ai/eval/`，固定库是 `src/test/resources/ai-eval-schema.sql`。
@@ -401,6 +418,7 @@ AI_EVAL_API_KEY=... AI_EVAL_MODEL=... AI_EVAL_BASE_URL=https://自建网关/v1 m
 - 编译校验不得在目标库上真正取数：新增方言时确认 `compileQuery` 的驱动行为，别默认继承
 - Agent 请求无论成功、失败还是取消，都要在审计里留下一条 `AI_AGENT_CHAT`
 - 改动 Agent 的 prompt、工具或循环后，跑一次 `AiSqlAgentEvalTest` 并对比上一次的通过率与 token
+- 系统提示、工具定义与历史消息构成 prompt cache 的前缀：只许在尾部追加，`AiPromptCachePrefixTest` 会卡住
 
 ## 10. 已定决策
 

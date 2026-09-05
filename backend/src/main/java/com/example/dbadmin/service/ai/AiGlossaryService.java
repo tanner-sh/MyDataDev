@@ -1,10 +1,12 @@
 package com.example.dbadmin.service.ai;
 
 import com.example.dbadmin.dto.AiDtos.AiGlossaryEntryRequest;
+import com.example.dbadmin.dto.AiDtos.AiGlossaryGapResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryEntryResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossarySuggestionResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossarySuggestionsResponse;
 import com.example.dbadmin.dto.AiDtos.AiGlossaryUpdateRequest;
+import com.example.dbadmin.repo.AiGlossaryGapRepository;
 import com.example.dbadmin.repo.AiGlossaryRepository;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.ConnectionService;
@@ -14,6 +16,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -25,6 +28,7 @@ public class AiGlossaryService {
     public static final int MAX_SUGGESTIONS = 50;
 
     private final AiGlossaryRepository repository;
+    private final AiGlossaryGapRepository gaps;
     private final ConnectionService connections;
     private final AuditRepository audit;
     private final AiSchemaTools tools;
@@ -37,12 +41,14 @@ public class AiGlossaryService {
 
     public AiGlossaryService(
             AiGlossaryRepository repository,
+            AiGlossaryGapRepository gaps,
             ConnectionService connections,
             AuditRepository audit,
             @org.springframework.context.annotation.Lazy AiSchemaTools tools,
             AiQueryHistoryService queryHistory
     ) {
         this.repository = repository;
+        this.gaps = gaps;
         this.connections = connections;
         this.audit = audit;
         // AiSchemaTools 也依赖本服务（search_schema 要读词典），@Lazy 打断这个环。
@@ -84,9 +90,45 @@ public class AiGlossaryService {
         connections.require(connectionId);
         List<AiBusinessTerm> entries = normalize(connectionId, request.entries());
         repository.replace(connectionId, entries);
+        // 词典里已经有的说法不再是缺口 —— 补完还挂在待补清单上，这份清单很快就没人看了。
+        gaps.delete(connectionId, AiGlossaryGaps.covered(entries));
         cached.invalidate(connectionId);
         audit.onConnection(actor, "AI_GLOSSARY_UPDATE", connectionId, "entries=" + entries.size());
         return list(connectionId);
+    }
+
+    /** AI 搜过但这个库里什么都没搜到的词。 */
+    public List<AiGlossaryGapResponse> gaps(long connectionId) {
+        connections.require(connectionId);
+        return gaps.findByConnectionId(connectionId).stream()
+                .map(gap -> new AiGlossaryGapResponse(gap.term(), gap.hits(), gap.lastSeenAt()))
+                .toList();
+    }
+
+    /**
+     * 记下一次 Agent 请求里搜空的检索词。
+     *
+     * <p>词典里已有的说法先剔掉：管理员已经为那个词给过答案，再搜不到说明问题出在它指向的
+     * 对象上，而不是缺一条词条 —— 混进这张清单只会让人重复补同一个词。</p>
+     */
+    public void recordGaps(long connectionId, Collection<String> searchedWithoutMatch) {
+        List<String> candidates = AiGlossaryGaps.candidates(searchedWithoutMatch);
+        if (candidates.isEmpty()) return;
+        Set<String> covered = AiGlossaryGaps.covered(terms(connectionId));
+        List<String> missing = candidates.stream()
+                .filter(term -> !covered.contains(AiGlossaryGaps.normalize(term)))
+                .toList();
+        if (!missing.isEmpty()) gaps.record(connectionId, missing);
+    }
+
+    /** 管理员判断某个词不值得补：从清单里划掉，别让它每次都占着位置。 */
+    public List<AiGlossaryGapResponse> dismissGaps(long connectionId, List<String> terms, String actor) {
+        connections.require(connectionId);
+        int removed = gaps.delete(connectionId, terms == null ? List.of() : terms);
+        if (removed > 0) {
+            audit.onConnection(actor, "AI_GLOSSARY_GAP_DISMISS", connectionId, "terms=" + removed);
+        }
+        return gaps(connectionId);
     }
 
     public List<AiBusinessTerm> terms(long connectionId) {
