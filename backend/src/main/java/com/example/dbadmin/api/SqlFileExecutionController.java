@@ -62,13 +62,14 @@ public class SqlFileExecutionController {
             @RequestParam(required = false) String schemaName,
             @RequestParam String tableName,
             @RequestParam(required = false) String fileName,
+            @RequestParam(required = false, defaultValue = "INSERT") String conflictMode,
             @RequestHeader(value = "X-User", required = false) String actor,
             HttpServletRequest request
     ) throws Exception {
         access.require(connectionId, ConnectionPermission.DATA_WRITE);
         try (var input = request.getInputStream()) {
             return ResponseEntity.ok(dataImports.uploadCsv(
-                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor));
+                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor, conflictMode));
         }
     }
 
@@ -84,13 +85,14 @@ public class SqlFileExecutionController {
             @RequestParam(required = false) String schemaName,
             @RequestParam String tableName,
             @RequestParam(required = false) String fileName,
+            @RequestParam(required = false, defaultValue = "INSERT") String conflictMode,
             @RequestHeader(value = "X-User", required = false) String actor,
             HttpServletRequest request
     ) throws Exception {
         access.require(connectionId, ConnectionPermission.DATA_WRITE);
         try (var input = request.getInputStream()) {
             return ResponseEntity.ok(dataImports.uploadXlsx(
-                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor));
+                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor, conflictMode));
         }
     }
 

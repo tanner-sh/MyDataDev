@@ -43,6 +43,7 @@ public class DataImportService {
 
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
+    private final MetadataService metadata;
     private final DataEditService dataEdit;
     private final SqlFileExecutionService sqlFiles;
     private final ExecutionGuard executionGuard;
@@ -50,12 +51,14 @@ public class DataImportService {
     public DataImportService(
             ConnectionService connections,
             DialectRegistry dialectRegistry,
+            MetadataService metadata,
             DataEditService dataEdit,
             SqlFileExecutionService sqlFiles,
             ExecutionGuard executionGuard
     ) {
         this.connections = connections;
         this.dialectRegistry = dialectRegistry;
+        this.metadata = metadata;
         this.dataEdit = dataEdit;
         this.sqlFiles = sqlFiles;
         this.executionGuard = executionGuard;
@@ -78,7 +81,20 @@ public class DataImportService {
             InputStream input,
             String actor
     ) throws Exception {
-        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor,
+        return uploadCsv(connectionId, schemaName, tableName, fileName, contentLength, input, actor, "INSERT");
+    }
+
+    public SqlFileExecutionResponse uploadCsv(
+            long connectionId,
+            String schemaName,
+            String tableName,
+            String fileName,
+            long contentLength,
+            InputStream input,
+            String actor,
+            String conflictMode
+    ) throws Exception {
+        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor, conflictMode,
                 () -> new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8)));
     }
 
@@ -98,7 +114,20 @@ public class DataImportService {
             InputStream input,
             String actor
     ) throws Exception {
-        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor,
+        return uploadXlsx(connectionId, schemaName, tableName, fileName, contentLength, input, actor, "INSERT");
+    }
+
+    public SqlFileExecutionResponse uploadXlsx(
+            long connectionId,
+            String schemaName,
+            String tableName,
+            String fileName,
+            long contentLength,
+            InputStream input,
+            String actor,
+            String conflictMode
+    ) throws Exception {
+        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor, conflictMode,
                 () -> new XlsxStreamReader(input));
     }
 
@@ -109,6 +138,7 @@ public class DataImportService {
             String fileName,
             long contentLength,
             String actor,
+            String conflictMode,
             RowSourceFactory sourceFactory
     ) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
@@ -128,18 +158,29 @@ public class DataImportService {
         }
         if (tableColumns.isEmpty()) throw new IllegalArgumentException("未找到目标表的字段：" + tableName);
 
+        List<String> keyColumns = primaryKeys(connectionId, schemaName, tableName);
+        String normalizedMode = conflictMode == null || conflictMode.isBlank() ? "INSERT" : conflictMode.trim().toUpperCase(java.util.Locale.ROOT);
+        DatabaseDialect.ImportConflictStyle style = dialect.importConflictStyle(
+                normalizedMode, List.copyOf(tableColumns), keyColumns);
+        if (style == null) {
+            // 说清楚是「这个数据库做不到」还是「这张表没有主键」—— 两种情况用户要做的事完全不同。
+            throw new IllegalArgumentException(keyColumns.isEmpty()
+                    ? "目标表没有主键，无法按主键判断重复；请改用「直接插入」，或先给表加主键。"
+                    : "当前数据库类型不支持导入时的「" + modeLabel(normalizedMode) + "」策略，请改用「直接插入」。");
+        }
+
         return sqlFiles.uploadScript(
                 connectionId,
                 importScriptName(fileName, tableName),
                 contentLength > 0 ? contentLength * SCRIPT_SIZE_FACTOR : 0,
                 out -> {
                     try (ImportRowSource source = sourceFactory.open()) {
-                        return "rows=" + convert(source, out, dialect, schemaName, tableName, tableColumns, fileName);
+                        return "rows=" + convert(source, out, dialect, schemaName, tableName, tableColumns, fileName, style);
                     }
                 },
                 actor,
                 "DATA_IMPORT_UPLOAD",
-                "table=" + tableName + "; file=" + fileName
+                "table=" + tableName + "; file=" + fileName + "; conflict=" + normalizedMode
         );
     }
 
@@ -151,6 +192,20 @@ public class DataImportService {
             String tableName,
             Set<String> tableColumns,
             String fileName
+    ) throws Exception {
+        return convert(source, writer, dialect, schemaName, tableName, tableColumns, fileName,
+                DatabaseDialect.ImportConflictStyle.plain());
+    }
+
+    static long convert(
+            ImportRowSource source,
+            Writer writer,
+            DatabaseDialect dialect,
+            String schemaName,
+            String tableName,
+            Set<String> tableColumns,
+            String fileName,
+            DatabaseDialect.ImportConflictStyle style
     ) throws Exception {
         String kind = source.label();
         List<String> header = source.readRow();
@@ -183,7 +238,7 @@ public class DataImportService {
                         "第 " + (rows + 2) + " 行有 " + row.size() + " 个字段，与表头的 " + columns.size() + " 列不一致。"
                 );
             }
-            if (inBatch == 0) writer.write("INSERT INTO " + qualified + " (" + columnList + ") VALUES\n");
+            if (inBatch == 0) writer.write(style.insertKeyword() + " " + qualified + " (" + columnList + ") VALUES\n");
             else writer.write(",\n");
             writer.write("  (");
             for (int index = 0; index < row.size(); index++) {
@@ -194,13 +249,30 @@ public class DataImportService {
             rows++;
             inBatch++;
             if (inBatch >= ROWS_PER_STATEMENT) {
-                writer.write(";\n\n");
+                writer.write(style.conflictClause() + ";\n\n");
                 inBatch = 0;
             }
         }
-        if (inBatch > 0) writer.write(";\n");
+        if (inBatch > 0) writer.write(style.conflictClause() + ";\n");
         if (rows == 0) throw new IllegalArgumentException(kind + "文件只有表头，没有数据行。");
         return rows;
+    }
+
+    /** 目标表的主键；读不到就当没有（由上层决定这算不算问题）。 */
+    private List<String> primaryKeys(long connectionId, String schemaName, String tableName) {
+        try {
+            return metadata.detail(connectionId, schemaName, tableName).primaryKeys();
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private static String modeLabel(String mode) {
+        return switch (mode) {
+            case "SKIP" -> "跳过重复行";
+            case "UPSERT" -> "更新已存在的行";
+            default -> mode;
+        };
     }
 
     /** 行来源的构造时机要推迟到真正开始落盘时 —— 上传流只能读一次。 */

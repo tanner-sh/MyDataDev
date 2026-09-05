@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
-import { Button, ConfigProvider, Drawer, Input, Modal, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
@@ -46,7 +46,14 @@ import {
   resolveManagementSection,
   type ManagementSection
 } from './managementSections';
-import { backgroundImportPrompt, importRoute, oversizedRowsRoute, type ImportRoute } from './dataImport';
+import {
+  backgroundImportPrompt,
+  IMPORT_CONFLICT_OPTIONS,
+  importRoute,
+  oversizedRowsRoute,
+  type ImportConflictMode,
+  type ImportRoute
+} from './dataImport';
 import { productionConfirmationHeaders } from './productionConfirmation';
 import { useProductionConfirmation } from './hooks/useProductionConfirmation';
 import { createUuid } from './createUuid';
@@ -2334,15 +2341,33 @@ export default function App() {
       return;
     }
     const target = activeTable.schemaName || metadata?.selectedSchema || metadata?.currentSchema || undefined;
-    showInfo(backgroundImportPrompt(activeTable.tableName, route));
-    setSqlFileCandidate({
-      requestId: ++sqlFileRequestSeqRef.current,
-      file,
-      connection: selected,
-      dataImport: { schemaName: target, tableName: activeTable.tableName, format: route.format }
+    const tableName = activeTable.tableName;
+    // 先问一句「重复了怎么办」：跳过会悄悄少写一部分行，更新会覆盖库里已有的值，
+    // 两件事都不该默默发生。默认仍是「直接插入」，与以前的行为一致。
+    let conflictMode: ImportConflictMode = 'INSERT';
+    modalApi.confirm({
+      title: `导入到 ${tableName}`,
+      width: 520,
+      okText: '开始导入',
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text type="secondary">{backgroundImportPrompt(tableName, route)}</Typography.Text>
+          <Typography.Text>目标表里已经有同主键的行时：</Typography.Text>
+          <ImportConflictChoice onChange={(mode) => { conflictMode = mode; }} />
+        </Space>
+      ),
+      onOk: () => {
+        setSqlFileCandidate({
+          requestId: ++sqlFileRequestSeqRef.current,
+          file,
+          connection: selected,
+          dataImport: { schemaName: target, tableName, format: route.format, conflictMode }
+        });
+        setSqlFileFeatureLoaded(true);
+        setSqlFileTasksOpen(true);
+      }
     });
-    setSqlFileFeatureLoaded(true);
-    setSqlFileTasksOpen(true);
   }
 
   async function importRows(file: File) {
@@ -3399,6 +3424,33 @@ function sameTable(
   return (left.schemaName || '') === (right.schemaName || '')
     && (left.tableName || left.name) === (right.tableName || right.name);
 }
+
+
+/**
+ * 导入冲突策略的选择。
+ *
+ * <p>做成受控组件而不是直接在 confirm 里塞 Radio.Group：Modal.confirm 的 content 只渲染一次，
+ * 没有自己的 state，直接放非受控控件的话选了哪一项拿不回来。</p>
+ */
+function ImportConflictChoice({ onChange }: { onChange: (mode: ImportConflictMode) => void }) {
+  const [mode, setMode] = useState<ImportConflictMode>('INSERT');
+  return (
+    <Radio.Group
+      value={mode}
+      onChange={(event) => { setMode(event.target.value); onChange(event.target.value); }}
+    >
+      <Space direction="vertical" size={4}>
+        {IMPORT_CONFLICT_OPTIONS.map((option) => (
+          <Radio key={option.value} value={option.value}>
+            {option.label}
+            <Typography.Text type="secondary">{` — ${option.hint}`}</Typography.Text>
+          </Radio>
+        ))}
+      </Space>
+    </Radio.Group>
+  );
+}
+
 
 function sqlStatusFromTab(tab: SqlTab): WorkspaceStatus {
   const text = tab.message || '就绪';

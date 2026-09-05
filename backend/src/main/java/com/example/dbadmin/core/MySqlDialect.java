@@ -17,6 +17,32 @@ public class MySqlDialect extends DefaultDialect {
     private static final String IDENTIFIER_QUOTE = String.valueOf((char) 96);
 
 
+
+    /**
+     * MySQL 系：跳过重复改语句前缀（INSERT IGNORE），更新已存在加 ON DUPLICATE KEY UPDATE。
+     *
+     * <p>它不需要显式的冲突目标 —— 任何唯一键冲突都会触发，这与 PostgreSQL 的语义略有差别，
+     * 但正是 MySQL 用户预期的行为。</p>
+     */
+    @Override
+    public ImportConflictStyle importConflictStyle(String mode, java.util.List<String> columns, java.util.List<String> keyColumns) {
+        String normalized = mode == null ? "" : mode.toUpperCase(java.util.Locale.ROOT);
+        return switch (normalized) {
+            case "INSERT" -> ImportConflictStyle.plain();
+            case "SKIP" -> new ImportConflictStyle("INSERT IGNORE INTO", "");
+            case "UPSERT" -> {
+                String updates = columns.stream()
+                        .filter(column -> keyColumns == null || keyColumns.stream().noneMatch(key -> key.equalsIgnoreCase(column)))
+                        .map(column -> quoteIdentifier(column) + " = VALUES(" + quoteIdentifier(column) + ")")
+                        .collect(java.util.stream.Collectors.joining(", "));
+                yield updates.isBlank()
+                        ? new ImportConflictStyle("INSERT IGNORE INTO", "")
+                        : new ImportConflictStyle("INSERT INTO", " ON DUPLICATE KEY UPDATE " + updates);
+            }
+            default -> null;
+        };
+    }
+
     @Override
     public String castToText(String expression) {
         return "CAST(" + expression + " AS CHAR)";

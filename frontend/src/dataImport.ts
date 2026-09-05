@@ -18,6 +18,20 @@ export type ImportFileInfo = { name: string; size: number };
 /** 后台导入的两种源格式，对应两个上传端点。 */
 export type BackgroundImportFormat = 'csv' | 'xlsx';
 
+/**
+ * 目标表里已经有同主键的行时怎么办。
+ *
+ * <p>默认仍是 INSERT（撞了就整批失败）—— 它最安全，也和以前的行为一致。另外两档要用户明确
+ * 选择：SKIP 会悄悄少写一部分行，UPSERT 会覆盖库里已有的值，两件事都不该默默发生。</p>
+ */
+export type ImportConflictMode = 'INSERT' | 'SKIP' | 'UPSERT';
+
+export const IMPORT_CONFLICT_OPTIONS: ReadonlyArray<{ value: ImportConflictMode; label: string; hint: string }> = [
+  { value: 'INSERT', label: '直接插入', hint: '遇到重复主键就报错中止，不写入任何一行（默认）' },
+  { value: 'SKIP', label: '跳过重复行', hint: '已存在的行原样保留，只写入新行' },
+  { value: 'UPSERT', label: '更新已存在的行', hint: '按主键覆盖已有行的其余字段' }
+];
+
 export type ImportRoute =
   /** 浏览器内解析，落到待提交变更里，用户可以逐行核对后再提交。 */
   | { kind: 'inline' }
@@ -100,6 +114,7 @@ export function backgroundImportPath(params: {
   tableName: string;
   fileName: string;
   format?: BackgroundImportFormat;
+  conflictMode?: ImportConflictMode;
 }): string {
   const query = new URLSearchParams({
     connectionId: String(params.connectionId),
@@ -107,6 +122,7 @@ export function backgroundImportPath(params: {
     fileName: params.fileName
   });
   if (params.schemaName) query.set('schemaName', params.schemaName);
+  if (params.conflictMode && params.conflictMode !== 'INSERT') query.set('conflictMode', params.conflictMode);
   return `/sql-file-executions/${params.format === 'xlsx' ? 'xlsx' : 'csv'}-imports?${query.toString()}`;
 }
 

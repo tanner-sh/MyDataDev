@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundImportPath,
+  IMPORT_CONFLICT_OPTIONS,
   formatImportSize,
   importFileExtension,
   importRoute,
@@ -121,5 +122,22 @@ describe('backgroundImportPath 的格式分流', () => {
 
   it('未指定格式时按 CSV 处理，保持旧行为', () => {
     expect(backgroundImportPath(base)).toContain('csv-imports');
+  });
+});
+
+describe('导入冲突策略', () => {
+  const base = { connectionId: 7, tableName: 'orders', fileName: 'a.csv' };
+
+  /** 默认那一档不进 URL：老客户端与新客户端发出的请求因此完全一样。 */
+  it('只有非默认策略才出现在上传地址里', () => {
+    expect(backgroundImportPath(base)).not.toContain('conflictMode');
+    expect(backgroundImportPath({ ...base, conflictMode: 'INSERT' })).not.toContain('conflictMode');
+    expect(backgroundImportPath({ ...base, conflictMode: 'SKIP' })).toContain('conflictMode=SKIP');
+    expect(backgroundImportPath({ ...base, conflictMode: 'UPSERT' })).toContain('conflictMode=UPSERT');
+  });
+
+  it('三档都有说明，默认是最安全的那档', () => {
+    expect(IMPORT_CONFLICT_OPTIONS.map((option) => option.value)).toEqual(['INSERT', 'SKIP', 'UPSERT']);
+    expect(IMPORT_CONFLICT_OPTIONS.every((option) => option.hint.length > 0)).toBe(true);
   });
 });

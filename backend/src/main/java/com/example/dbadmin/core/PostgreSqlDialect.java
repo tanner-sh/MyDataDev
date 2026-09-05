@@ -12,6 +12,34 @@ import java.util.Locale;
 
 public class PostgreSqlDialect extends DefaultDialect {
 
+
+    /**
+     * PostgreSQL 用 ON CONFLICT。更新档必须给出冲突目标（主键列），所以目标表没有主键时
+     * 只能拒绝 —— 猜一个列去当冲突键，猜错就是把别人的数据覆盖掉。
+     */
+    @Override
+    public ImportConflictStyle importConflictStyle(String mode, java.util.List<String> columns, java.util.List<String> keyColumns) {
+        String normalized = mode == null ? "" : mode.toUpperCase(java.util.Locale.ROOT);
+        return switch (normalized) {
+            case "INSERT" -> ImportConflictStyle.plain();
+            case "SKIP" -> new ImportConflictStyle("INSERT INTO", " ON CONFLICT DO NOTHING");
+            case "UPSERT" -> {
+                if (keyColumns == null || keyColumns.isEmpty()) yield null;
+                String target = keyColumns.stream().map(this::quoteIdentifier)
+                        .collect(java.util.stream.Collectors.joining(", "));
+                String updates = columns.stream()
+                        .filter(column -> keyColumns.stream().noneMatch(key -> key.equalsIgnoreCase(column)))
+                        .map(column -> quoteIdentifier(column) + " = EXCLUDED." + quoteIdentifier(column))
+                        .collect(java.util.stream.Collectors.joining(", "));
+                // 除主键外没有别的列可更新时，「更新已存在」实际就等于「跳过」。
+                yield updates.isBlank()
+                        ? new ImportConflictStyle("INSERT INTO", " ON CONFLICT (" + target + ") DO NOTHING")
+                        : new ImportConflictStyle("INSERT INTO", " ON CONFLICT (" + target + ") DO UPDATE SET " + updates);
+            }
+            default -> null;
+        };
+    }
+
     @Override
     public String castToText(String expression) {
         return "CAST(" + expression + " AS TEXT)";

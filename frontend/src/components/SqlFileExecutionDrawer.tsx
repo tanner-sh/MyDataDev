@@ -99,7 +99,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   async function upload(
     file: File,
     targetConnectionId: number,
-    dataImport?: { schemaName?: string; tableName: string; format: 'csv' | 'xlsx' }
+    dataImport?: { schemaName?: string; tableName: string; format: 'csv' | 'xlsx'; conflictMode?: 'INSERT' | 'SKIP' | 'UPSERT' }
   ) {
     if (!dataImport && !file.name.toLowerCase().endsWith('.sql')) {
       toast.error('只支持 .sql 文件');

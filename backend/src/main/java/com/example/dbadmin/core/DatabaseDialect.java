@@ -85,6 +85,33 @@ public interface DatabaseDialect {
     String dropTableSql(String schemaName, String tableName);
 
     /**
+     * 导入时遇到主键冲突怎么办：把一条批量 INSERT 改写成「跳过重复」或「更新已存在」。
+     *
+     * <p>导入最常见的场景恰恰是「上次导错了，改完再来一次」，而各家的写法完全不同 ——
+     * MySQL 改的是语句前缀（{@code INSERT IGNORE}），PostgreSQL 加的是后缀
+     * （{@code ON CONFLICT}），Oracle 要整条换成 {@code MERGE}。所以这里只声明形状，
+     * 具体写法留给方言；不支持的方言返回 {@code null}，由上层给出一句说得清楚的错误，
+     * 而不是生成一条跑不通的脚本。</p>
+     *
+     * @param keyColumns 冲突判定依据的列（目标表主键）；为空表示判断不了
+     */
+    default ImportConflictStyle importConflictStyle(String mode, List<String> columns, List<String> keyColumns) {
+        return "INSERT".equalsIgnoreCase(mode) ? ImportConflictStyle.plain() : null;
+    }
+
+    /**
+     * 一条批量 INSERT 的前后缀。
+     *
+     * @param insertKeyword 语句开头，通常是 {@code INSERT INTO}
+     * @param conflictClause 值列表之后的子句，可能为空
+     */
+    record ImportConflictStyle(String insertKeyword, String conflictClause) {
+        public static ImportConflictStyle plain() {
+            return new ImportConflictStyle("INSERT INTO", "");
+        }
+    }
+
+    /**
      * 这个方言能不能改列注释。
      *
      * <p>注释是这个产品最依赖的元数据（资源树、结构对比、AI 的结构搜索都在读它），却长期

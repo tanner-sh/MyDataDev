@@ -524,7 +524,7 @@ export type SqlFileCandidate = {
   connection: Connection;
   /** 存在时表示这是一份要转成 INSERT 脚本的 CSV，而不是直接执行的 SQL 文件。 */
   /** 数据导入任务：目标表加源文件格式（CSV / Excel 走不同的上传端点）。 */
-  dataImport?: { schemaName?: string; tableName: string; format: 'csv' | 'xlsx' };
+  dataImport?: { schemaName?: string; tableName: string; format: 'csv' | 'xlsx'; conflictMode?: 'INSERT' | 'SKIP' | 'UPSERT' };
 };
 export type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml' | 'markdown' | 'xlsx';

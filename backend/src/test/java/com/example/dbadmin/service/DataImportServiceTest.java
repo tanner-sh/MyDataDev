@@ -168,4 +168,56 @@ class DataImportServiceTest {
         String name = DataImportService.importScriptName("x".repeat(400) + ".csv", "orders");
         assertThat(name).hasSizeLessThanOrEqualTo(200).endsWith(".sql");
     }
+
+    /**
+     * 导入最常见的场景是「上次导错了，改完再来一次」，而此前只会生成裸 INSERT：目标表里已有
+     * 同主键的行时整批失败。各家的写法完全不同，所以收敛在方言里。
+     */
+    @Test
+    void writesSkipAndUpsertClausesPerDialect() throws Exception {
+        var columns = java.util.List.of("id", "name");
+        var keys = java.util.List.of("id");
+
+        var pgSkip = new com.example.dbadmin.core.PostgreSqlDialect().importConflictStyle("SKIP", columns, keys);
+        var pgUpsert = new com.example.dbadmin.core.PostgreSqlDialect().importConflictStyle("UPSERT", columns, keys);
+        var mysqlSkip = new com.example.dbadmin.core.MySqlDialect().importConflictStyle("SKIP", columns, keys);
+        var mysqlUpsert = new com.example.dbadmin.core.MySqlDialect().importConflictStyle("UPSERT", columns, keys);
+
+        assertThat(pgSkip.conflictClause()).isEqualTo(" ON CONFLICT DO NOTHING");
+        assertThat(pgUpsert.conflictClause()).isEqualTo(" ON CONFLICT (\"id\") DO UPDATE SET \"name\" = EXCLUDED.\"name\"");
+        // MySQL 改的是语句前缀，不是后缀。
+        assertThat(mysqlSkip.insertKeyword()).isEqualTo("INSERT IGNORE INTO");
+        assertThat(mysqlUpsert.conflictClause()).isEqualTo(" ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)");
+    }
+
+    /** PostgreSQL 的更新档必须给出冲突目标；猜一个列去当主键，猜错就是覆盖别人的数据。 */
+    @Test
+    void refusesUpsertWithoutAKey() {
+        assertThat(new com.example.dbadmin.core.PostgreSqlDialect()
+                .importConflictStyle("UPSERT", java.util.List.of("a"), java.util.List.of())).isNull();
+        // 没有实现这套写法的方言一律返回 null，由上层给出说得清楚的错误。
+        assertThat(new com.example.dbadmin.core.OracleDialect()
+                .importConflictStyle("SKIP", java.util.List.of("a"), java.util.List.of("a"))).isNull();
+    }
+
+    /** 除主键外没有别的列可更新时，「更新已存在」实际就等于「跳过」。 */
+    @Test
+    void degradesUpsertToSkipWhenEveryColumnIsPartOfTheKey() {
+        var style = new com.example.dbadmin.core.PostgreSqlDialect()
+                .importConflictStyle("UPSERT", java.util.List.of("id"), java.util.List.of("id"));
+
+        assertThat(style.conflictClause()).isEqualTo(" ON CONFLICT (\"id\") DO NOTHING");
+    }
+
+    @Test
+    void putsTheConflictClauseAtTheEndOfEachStatement() throws Exception {
+        java.io.StringWriter out = new java.io.StringWriter();
+        try (CsvStreamReader reader = new CsvStreamReader(new java.io.StringReader("id,name\n1,A\n"))) {
+            DataImportService.convert(reader, out, DIALECT, "shop", "orders", COLUMNS, "orders.csv",
+                    new com.example.dbadmin.core.DatabaseDialect.ImportConflictStyle(
+                            "INSERT INTO", " ON CONFLICT DO NOTHING"));
+        }
+
+        assertThat(out.toString()).contains("ON CONFLICT DO NOTHING;");
+    }
 }
