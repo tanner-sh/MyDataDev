@@ -44,8 +44,17 @@ describe('importRoute', () => {
     expect(importRoute({ name: 'rows.sql', size: 100 }, 0, 1000)).toEqual({ kind: 'inline' });
   });
 
+  /** Excel 由服务端解析（日期这类信息只写在样式里），所以它一律走后台，不看大小。 */
+  it('Excel 一律走后台导入', () => {
+    const route = importRoute({ name: 'data.xlsx', size: 10 }, 0, 1000);
+
+    expect(route.kind).toBe('background');
+    expect(route.kind === 'background' && route.format).toBe('xlsx');
+    expect(importRoute({ name: 'big.xlsx', size: 50 * 1024 * 1024 }, 0, 1000).kind).toBe('background');
+  });
+
   it('不认识的扩展名直接拒绝', () => {
-    expect(importRoute({ name: 'data.xlsx', size: 10 }, 0, 1000).kind).toBe('unsupported');
+    expect(importRoute({ name: 'data.parquet', size: 10 }, 0, 1000).kind).toBe('unsupported');
     expect(importRoute({ name: 'noext', size: 10 }, 0, 1000).kind).toBe('unsupported');
   });
 
@@ -98,5 +107,19 @@ describe('oversizedRowsRoute', () => {
     const route = oversizedRowsRoute({ name: 'orders.json', size: 100 * 1024 }, 1001, 1000);
     expect(route.kind).toBe('unsupported');
     expect(route.kind === 'unsupported' && route.message).toContain('CSV');
+  });
+});
+
+describe('backgroundImportPath 的格式分流', () => {
+  const base = { connectionId: 7, tableName: 'orders', fileName: 'a.csv' };
+
+  it('CSV 与 Excel 走各自的上传端点', () => {
+    expect(backgroundImportPath(base)).toContain('/sql-file-executions/csv-imports?');
+    expect(backgroundImportPath({ ...base, format: 'xlsx', fileName: 'a.xlsx' }))
+      .toContain('/sql-file-executions/xlsx-imports?');
+  });
+
+  it('未指定格式时按 CSV 处理，保持旧行为', () => {
+    expect(backgroundImportPath(base)).toContain('csv-imports');
   });
 });

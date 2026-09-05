@@ -52,7 +52,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     if (!open || !candidate || handledCandidateRef.current === candidate.requestId) return;
     handledCandidateRef.current = candidate.requestId;
     setConnectionId(candidate.connection.id);
-    void upload(candidate.file, candidate.connection.id, candidate.csvImport);
+    void upload(candidate.file, candidate.connection.id, candidate.dataImport);
   }, [candidate?.requestId, open]);
 
   useVisiblePolling({
@@ -96,13 +96,17 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
    * <p>CSV 导入与 SQL 文件走同一个入口：区别只在上传地址 —— CSV 由服务端流式转成批量 INSERT
    * 脚本，之后的解析、确认、执行、取消完全共用同一套 UI 与后台管线。</p>
    */
-  async function upload(file: File, targetConnectionId: number, csvImport?: { schemaName?: string; tableName: string }) {
-    if (!csvImport && !file.name.toLowerCase().endsWith('.sql')) {
+  async function upload(
+    file: File,
+    targetConnectionId: number,
+    dataImport?: { schemaName?: string; tableName: string; format: 'csv' | 'xlsx' }
+  ) {
+    if (!dataImport && !file.name.toLowerCase().endsWith('.sql')) {
       toast.error('只支持 .sql 文件');
       return;
     }
-    if (csvImport && !file.name.toLowerCase().endsWith('.csv')) {
-      toast.error('后台导入只支持 .csv 文件');
+    if (dataImport && !file.name.toLowerCase().endsWith(`.${dataImport.format}`)) {
+      toast.error(`后台导入只支持 .${dataImport.format} 文件`);
       return;
     }
     uploadAbortRef.current?.abort();
@@ -112,14 +116,14 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     setUploadProgress(0);
     setConfirmation('');
     try {
-      const path = csvImport
-        ? backgroundImportPath({ connectionId: targetConnectionId, ...csvImport, fileName: file.name })
+      const path = dataImport
+        ? backgroundImportPath({ connectionId: targetConnectionId, ...dataImport, fileName: file.name })
         : `/sql-file-executions/uploads?${new URLSearchParams({ connectionId: String(targetConnectionId), fileName: file.name }).toString()}`;
       const job = await uploadBinary<SqlFileExecution>(path, file, setUploadProgress, controller.signal);
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       setFocusedId(job.id);
-      toast.success(csvImport
-        ? `CSV 已转换为导入 ${csvImport.tableName} 的脚本，确认后即可开始写入`
+      toast.success(dataImport
+        ? `${dataImport.format === 'xlsx' ? 'Excel' : 'CSV'} 已转换为导入 ${dataImport.tableName} 的脚本，确认后即可开始写入`
         : 'SQL 文件上传完成，正在后台解析');
       await loadJobs(targetConnectionId, false);
     } catch (error) {

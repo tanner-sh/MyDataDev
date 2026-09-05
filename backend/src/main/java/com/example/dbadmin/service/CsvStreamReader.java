@@ -14,7 +14,12 @@ import java.util.List;
  *
  * <p>不做类型推断 —— 值一律以文本交给上层，由目标列的类型决定怎么绑定。</p>
  */
-final class CsvStreamReader implements AutoCloseable {
+final class CsvStreamReader implements ImportRowSource {
+    @Override
+    public String label() {
+        return "CSV";
+    }
+
     /** 单个字段的上限，防止一份畸形文件把整行读成一个巨大的字符串。 */
     static final int MAX_FIELD_CHARS = 1_000_000;
 
@@ -36,7 +41,8 @@ final class CsvStreamReader implements AutoCloseable {
     }
 
     /** 读下一行；到达文件末尾返回 {@code null}。空行（只有换行）会被跳过。 */
-    List<String> readRow() throws IOException {
+    @Override
+    public List<String> readRow() throws IOException {
         while (!endOfInput) {
             List<String> row = readRowInternal();
             if (row == null) return null;

@@ -78,6 +78,39 @@ public class DataImportService {
             InputStream input,
             String actor
     ) throws Exception {
+        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor,
+                () -> new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8)));
+    }
+
+    /**
+     * 接收一份 Excel（.xlsx），按第一个工作表转成 INSERT 脚本。
+     *
+     * <p>与 CSV 走同一条管线，区别只在读行那一步。Excel 比 CSV 多一层麻烦：日期在文件里
+     * 就是个数字，是不是日期只写在样式里 —— 那部分由 {@link XlsxStreamReader} 还原，
+     * 这里拿到的已经是文本。</p>
+     */
+    public SqlFileExecutionResponse uploadXlsx(
+            long connectionId,
+            String schemaName,
+            String tableName,
+            String fileName,
+            long contentLength,
+            InputStream input,
+            String actor
+    ) throws Exception {
+        return upload(connectionId, schemaName, tableName, fileName, contentLength, actor,
+                () -> new XlsxStreamReader(input));
+    }
+
+    private SqlFileExecutionResponse upload(
+            long connectionId,
+            String schemaName,
+            String tableName,
+            String fileName,
+            long contentLength,
+            String actor,
+            RowSourceFactory sourceFactory
+    ) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
         // 导入是写操作。只读连接在这里就该被挡住，而不是等脚本转换完、任务建好之后才报错。
         executionGuard.requireWritableConnection(dbConnection);
@@ -100,8 +133,8 @@ public class DataImportService {
                 importScriptName(fileName, tableName),
                 contentLength > 0 ? contentLength * SCRIPT_SIZE_FACTOR : 0,
                 out -> {
-                    try (CsvStreamReader csv = new CsvStreamReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
-                        return "rows=" + convert(csv, out, dialect, schemaName, tableName, tableColumns, fileName);
+                    try (ImportRowSource source = sourceFactory.open()) {
+                        return "rows=" + convert(source, out, dialect, schemaName, tableName, tableColumns, fileName);
                     }
                 },
                 actor,
@@ -111,7 +144,7 @@ public class DataImportService {
     }
 
     static long convert(
-            CsvStreamReader csv,
+            ImportRowSource source,
             Writer writer,
             DatabaseDialect dialect,
             String schemaName,
@@ -119,9 +152,10 @@ public class DataImportService {
             Set<String> tableColumns,
             String fileName
     ) throws Exception {
-        List<String> header = csv.readRow();
-        if (header == null || header.isEmpty()) throw new IllegalArgumentException("CSV 文件为空或缺少表头行。");
-        if (header.size() > MAX_COLUMNS) throw new IllegalArgumentException("CSV 列数超过 " + MAX_COLUMNS + "。");
+        String kind = source.label();
+        List<String> header = source.readRow();
+        if (header == null || header.isEmpty()) throw new IllegalArgumentException(kind + "文件为空或缺少表头行。");
+        if (header.size() > MAX_COLUMNS) throw new IllegalArgumentException(kind + "列数超过 " + MAX_COLUMNS + "。");
 
         List<String> columns = new ArrayList<>(header.size());
         for (String raw : header) {
@@ -130,7 +164,7 @@ public class DataImportService {
                     .filter(candidate -> candidate.equalsIgnoreCase(name))
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "CSV 表头里的列在目标表中不存在：" + name + "（表字段：" + String.join("、", tableColumns) + "）"
+                            kind + "表头里的列在目标表中不存在：" + name + "（表字段：" + String.join("、", tableColumns) + "）"
                     ));
             columns.add(matched);
         }
@@ -143,7 +177,7 @@ public class DataImportService {
         long rows = 0;
         int inBatch = 0;
         List<String> row;
-        while ((row = csv.readRow()) != null) {
+        while ((row = source.readRow()) != null) {
             if (row.size() != columns.size()) {
                 throw new IllegalArgumentException(
                         "第 " + (rows + 2) + " 行有 " + row.size() + " 个字段，与表头的 " + columns.size() + " 列不一致。"
@@ -165,8 +199,13 @@ public class DataImportService {
             }
         }
         if (inBatch > 0) writer.write(";\n");
-        if (rows == 0) throw new IllegalArgumentException("CSV 文件只有表头，没有数据行。");
+        if (rows == 0) throw new IllegalArgumentException(kind + "文件只有表头，没有数据行。");
         return rows;
+    }
+
+    /** 行来源的构造时机要推迟到真正开始落盘时 —— 上传流只能读一次。 */
+    private interface RowSourceFactory {
+        ImportRowSource open() throws Exception;
     }
 
     /**

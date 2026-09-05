@@ -155,7 +155,7 @@ export const TableWorkspace = memo(function TableWorkspace({
             <Button size="small" icon={<ReloadOutlined />} disabled={!activeTable || loading} onClick={onReload}>刷新数据</Button>
             <Button size="small" icon={<PlusOutlined />} disabled={!tableData || loading || editingDisabled} onClick={onAddRow}>新增行</Button>
             <Upload
-              accept=".csv,.json,.sql"
+              accept=".csv,.xlsx,.json,.sql"
               showUploadList={false}
               disabled={!tableData || loading || editingDisabled}
               beforeUpload={(file) => {
@@ -163,7 +163,7 @@ export const TableWorkspace = memo(function TableWorkspace({
                 return false;
               }}
             >
-              <Tooltip title="CSV / JSON / SQL。小文件直接进待提交变更，可逐行核对；超过 10 MB 的 CSV 自动转成后台导入任务，带进度且可取消。">
+              <Tooltip title="CSV / Excel / JSON / SQL。小文件直接进待提交变更，可逐行核对；Excel 与超过 10 MB 的 CSV 自动转成后台导入任务，带进度且可取消。">
                 <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
               </Tooltip>
             </Upload>
@@ -200,7 +200,7 @@ export const TableWorkspace = memo(function TableWorkspace({
             ref={importInputRef}
             className="visually-hidden"
             type="file"
-            accept=".csv,.json,.sql"
+            accept=".csv,.xlsx,.json,.sql"
             tabIndex={-1}
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];

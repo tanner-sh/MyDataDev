@@ -72,6 +72,28 @@ public class SqlFileExecutionController {
         }
     }
 
+    /**
+     * 上传一份 Excel（.xlsx），按第一个工作表转成 INSERT 脚本。
+     *
+     * <p>与 CSV 是同一条管线，只是解析那一步不同。单开一个端点而不是给 csv-imports 加参数：
+     * 上传是流式的，格式必须在读第一个字节之前就确定。</p>
+     */
+    @PostMapping(value = "/xlsx-imports", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public ResponseEntity<SqlFileExecutionResponse> uploadXlsx(
+            @RequestParam long connectionId,
+            @RequestParam(required = false) String schemaName,
+            @RequestParam String tableName,
+            @RequestParam(required = false) String fileName,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            HttpServletRequest request
+    ) throws Exception {
+        access.require(connectionId, ConnectionPermission.DATA_WRITE);
+        try (var input = request.getInputStream()) {
+            return ResponseEntity.ok(dataImports.uploadXlsx(
+                    connectionId, schemaName, tableName, fileName, request.getContentLengthLong(), input, actor));
+        }
+    }
+
     @PostMapping("/{id}/start")
     public ResponseEntity<SqlFileExecutionResponse> start(
             @PathVariable long id,

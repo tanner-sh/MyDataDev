@@ -2325,7 +2325,7 @@ export default function App() {
       requestId: ++sqlFileRequestSeqRef.current,
       file,
       connection: selected,
-      csvImport: { schemaName: target, tableName: activeTable.tableName }
+      dataImport: { schemaName: target, tableName: activeTable.tableName, format: route.format }
     });
     setSqlFileFeatureLoaded(true);
     setSqlFileTasksOpen(true);

@@ -6,17 +6,23 @@
  *
  * <p>超过这个量级的 CSV 改走后端的大文件管线：服务端流式转成批量 INSERT，复用 SQL 文件执行
  * 的进度、取消与每连接并发闸门。这里只负责判断走哪条路，以及把原因讲清楚。</p>
+ *
+ * <p>Excel 一律走后台：浏览器这一侧只会写 xlsx（导出），不会读 —— 解析在服务端，那里还要
+ * 处理日期这类只写在样式里的信息。</p>
  */
 
 export const INLINE_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 
 export type ImportFileInfo = { name: string; size: number };
 
+/** 后台导入的两种源格式，对应两个上传端点。 */
+export type BackgroundImportFormat = 'csv' | 'xlsx';
+
 export type ImportRoute =
   /** 浏览器内解析，落到待提交变更里，用户可以逐行核对后再提交。 */
   | { kind: 'inline' }
   /** 交给后端转成 INSERT 脚本后台执行。 */
-  | { kind: 'background'; reason: string }
+  | { kind: 'background'; reason: string; format: BackgroundImportFormat }
   | { kind: 'unsupported'; message: string };
 
 export function importFileExtension(name: string): string {
@@ -38,16 +44,20 @@ export function formatImportSize(bytes: number): string {
  */
 export function importRoute(file: ImportFileInfo, pendingChanges: number, maxChanges: number): ImportRoute {
   const extension = importFileExtension(file.name);
-  if (extension !== 'csv' && extension !== 'json' && extension !== 'sql') {
-    return { kind: 'unsupported', message: '仅支持导入 CSV、JSON、SQL 文件。' };
+  if (extension !== 'csv' && extension !== 'xlsx' && extension !== 'json' && extension !== 'sql') {
+    return { kind: 'unsupported', message: '仅支持导入 CSV、Excel、JSON、SQL 文件。' };
   }
   const tooLarge = file.size > INLINE_IMPORT_MAX_BYTES;
+  // Excel 不在浏览器里解析：日期这类信息只写在样式里，那部分逻辑在服务端。
+  if (extension === 'xlsx') {
+    return { kind: 'background', reason: 'Excel 文件由服务端解析', format: 'xlsx' };
+  }
   if (extension === 'csv') {
     if (tooLarge) {
-      return { kind: 'background', reason: `文件 ${formatImportSize(file.size)}，超过浏览器内解析的 ${formatImportSize(INLINE_IMPORT_MAX_BYTES)} 上限` };
+      return { kind: 'background', format: 'csv', reason: `文件 ${formatImportSize(file.size)}，超过浏览器内解析的 ${formatImportSize(INLINE_IMPORT_MAX_BYTES)} 上限` };
     }
     if (pendingChanges >= maxChanges) {
-      return { kind: 'background', reason: `当前已有 ${pendingChanges} 项待提交变更，无法再放入导入行` };
+      return { kind: 'background', format: 'csv', reason: `当前已有 ${pendingChanges} 项待提交变更，无法再放入导入行` };
     }
     return { kind: 'inline' };
   }
@@ -75,7 +85,7 @@ export function oversizedRowsRoute(
   maxChanges: number
 ): Extract<ImportRoute, { kind: 'background' | 'unsupported' }> {
   if (importFileExtension(file.name) === 'csv') {
-    return { kind: 'background', reason: `解析出 ${rows} 行，超过浏览器内一次可提交的 ${maxChanges} 项变更上限` };
+    return { kind: 'background', format: 'csv', reason: `解析出 ${rows} 行，超过浏览器内一次可提交的 ${maxChanges} 项变更上限` };
   }
   return {
     kind: 'unsupported',
@@ -89,6 +99,7 @@ export function backgroundImportPath(params: {
   schemaName?: string;
   tableName: string;
   fileName: string;
+  format?: BackgroundImportFormat;
 }): string {
   const query = new URLSearchParams({
     connectionId: String(params.connectionId),
@@ -96,7 +107,7 @@ export function backgroundImportPath(params: {
     fileName: params.fileName
   });
   if (params.schemaName) query.set('schemaName', params.schemaName);
-  return `/sql-file-executions/csv-imports?${query.toString()}`;
+  return `/sql-file-executions/${params.format === 'xlsx' ? 'xlsx' : 'csv'}-imports?${query.toString()}`;
 }
 
 export function backgroundImportPrompt(target: string, route: Extract<ImportRoute, { kind: 'background' }>): string {
