@@ -21,6 +21,12 @@ public class OracleDialect extends DefaultDialect {
     // OceanBase Oracle mode.
     private static final String PAGE_ROW_COLUMN = "DBADMIN_PAGE_RN";
 
+
+    @Override
+    public String castToText(String expression) {
+        return "TO_CHAR(" + expression + ")";
+    }
+
     @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("ORACLE_EXP"), List.of("ORACLE_IMP"), SchemaObjectCapabilities.oracleFamily());

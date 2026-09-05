@@ -16,6 +16,12 @@ import java.util.Optional;
 public class MySqlDialect extends DefaultDialect {
     private static final String IDENTIFIER_QUOTE = String.valueOf((char) 96);
 
+
+    @Override
+    public String castToText(String expression) {
+        return "CAST(" + expression + " AS CHAR)";
+    }
+
     @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mysql());

@@ -9,6 +9,12 @@ import java.util.Locale;
 import java.util.HexFormat;
 
 public class DamengDialect extends DefaultDialect {
+
+    @Override
+    public String castToText(String expression) {
+        return "TO_CHAR(" + expression + ")";
+    }
+
     @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, false, List.of(), List.of(), SchemaObjectCapabilities.oracleFamily());

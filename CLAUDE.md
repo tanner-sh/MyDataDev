@@ -98,9 +98,11 @@ MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的�
 
 ### 结果分页与排序
 
-SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuery`），**排序也下推到服务端**：`SqlSortPushdown` 把原查询包成 `SELECT * FROM (原 SQL) mdd_sorted ORDER BY "列" ASC` 再交给分页，改排序时 offset 归零。不要退回「只排当前这一页」—— 用户在第 1 页点一下列头，看到的是这 500 行内部有序，很容易当成整个结果集有序，这种错觉比没有排序更糟。表浏览那条路（`DataEditService`）本来就是服务端排序 + keyset/offset 分页，两条路的语义要一致。
+SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuery`），**排序与列筛选都下推到服务端**：`SqlResultPushdown` 把原查询包成 `SELECT * FROM (原 SQL) mdd_view WHERE … ORDER BY …` 再交给分页，改排序或改筛选时 offset 归零。不要退回「只作用于当前这一页」—— 用户在第 1 页点一下列头或漏斗，看到的是这 500 行内部的结论，很容易当成整个结果集的结论，这种错觉比没有功能更糟。表浏览那条路（`DataEditService`）本来就是服务端筛选 + 排序 + keyset/offset 分页，两条路的语义要一致。
 
-两个例外仍然是本地排序，界面上必须标出来：结果里有同名列时（按列标签排序在数据库那边是歧义的），以及结果压根不支持翻页时。列筛选目前一律是本地的，页脚的「筛选后 N / 本批 N 行」就是在说这件事。
+三条约定不要动：**筛选值一律绑定参数**（列名是标识符靠方言引用转义，值来自输入框，拼进去就是注入点，有测试盯着）；**列先转文本再比**（`DatabaseDialect.castToText`，各家写法不同，数字列、时间列、布尔列因此能共用一套「包含/等于/为空」语义）；**NULL 与空串同样落进「为空」**（前端原本就是这个行为，下推不该悄悄改掉）。
+
+两个例外仍然走本地筛选与排序，界面上必须标出来：结果里有同名列时（按列标签排序或筛选在数据库那边是歧义的），以及结果压根不支持翻页时。
 
 `SqlExecutionMetrics` 给查询、分页、脚本、执行计划四条路出 Micrometer 指标，**超时单独成一类**（顺着 cause 链找 `SQLTimeoutException`）：超时说明库慢了，一般报错通常是语句写错了，混在一个数里就指不出该看哪边。标签只有 `kind` 和 `outcome`，都是固定集合 —— 别往里加连接名或 SQL。
 

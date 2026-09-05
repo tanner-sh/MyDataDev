@@ -1,4 +1,10 @@
-import type { SqlPageInfo, SqlPageNavigation, SqlResultSort, SqlSortDirection } from './types';
+import type {
+  SqlPageInfo,
+  SqlPageNavigation,
+  SqlResultFilterRequest,
+  SqlResultSort,
+  SqlSortDirection
+} from './types';
 
 /**
  * 当前生效的排序。
@@ -11,6 +17,11 @@ export function activeSqlSort(page: SqlPageInfo): SqlResultSort | null {
   return { column: page.sortColumn, direction: page.sortDirection === 'DESC' ? 'DESC' : 'ASC' };
 }
 
+/** 当前生效的筛选。和排序一样，翻页时必须原样带上。 */
+export function activeSqlFilters(page: SqlPageInfo): SqlResultFilterRequest[] {
+  return page.filters ? [...page.filters] : [];
+}
+
 export function sqlResultRangeLabel(page: SqlPageInfo, rowCount: number): string {
   if (rowCount === 0) return page.offset === 0 ? '0 / 0' : `${page.offset} / ${page.offset}`;
   const start = page.offset + 1;
@@ -19,7 +30,13 @@ export function sqlResultRangeLabel(page: SqlPageInfo, rowCount: number): string
 }
 
 export function firstSqlPage(page: SqlPageInfo): SqlPageNavigation {
-  return { offset: 0, pageSize: page.requestedPageSize, previousOffsets: [], sort: activeSqlSort(page) };
+  return {
+    offset: 0,
+    pageSize: page.requestedPageSize,
+    previousOffsets: [],
+    sort: activeSqlSort(page),
+    filters: activeSqlFilters(page)
+  };
 }
 
 /**
@@ -33,7 +50,24 @@ export function sortedSqlPage(page: SqlPageInfo, column: string | null, directio
     offset: 0,
     pageSize: page.requestedPageSize,
     previousOffsets: [],
-    sort: column ? { column, direction } : null
+    sort: column ? { column, direction } : null,
+    filters: activeSqlFilters(page)
+  };
+}
+
+/**
+ * 改筛选：同样回到第一批。
+ *
+ * <p>换了筛选条件，第 3 页就不再是原来那批行 —— 与改排序同理。排序保持不变：用户改的是
+ * 「看哪些行」，不是「怎么排」。</p>
+ */
+export function filteredSqlPage(page: SqlPageInfo, filters: SqlResultFilterRequest[]): SqlPageNavigation {
+  return {
+    offset: 0,
+    pageSize: page.requestedPageSize,
+    previousOffsets: [],
+    sort: activeSqlSort(page),
+    filters
   };
 }
 
@@ -44,7 +78,8 @@ export function previousSqlPage(page: SqlPageInfo): SqlPageNavigation | null {
     offset: offsets[offsets.length - 1],
     pageSize: page.requestedPageSize,
     previousOffsets: offsets.slice(0, -1),
-    sort: activeSqlSort(page)
+    sort: activeSqlSort(page),
+    filters: activeSqlFilters(page)
   };
 }
 
@@ -54,7 +89,8 @@ export function nextSqlPage(page: SqlPageInfo, rowCount: number): SqlPageNavigat
     offset: page.offset + rowCount,
     pageSize: page.requestedPageSize,
     previousOffsets: [...(page.previousOffsets || []), page.offset],
-    sort: activeSqlSort(page)
+    sort: activeSqlSort(page),
+    filters: activeSqlFilters(page)
   };
 }
 
@@ -70,10 +106,17 @@ export function currentSqlPage(page: SqlPageInfo): SqlPageNavigation {
     offset: page.offset,
     pageSize: page.requestedPageSize,
     previousOffsets: page.previousOffsets || [],
-    sort: activeSqlSort(page)
+    sort: activeSqlSort(page),
+    filters: activeSqlFilters(page)
   };
 }
 
 export function resizedSqlPage(pageSize: number, page?: SqlPageInfo): SqlPageNavigation {
-  return { offset: 0, pageSize, previousOffsets: [], sort: page ? activeSqlSort(page) : null };
+  return {
+    offset: 0,
+    pageSize,
+    previousOffsets: [],
+    sort: page ? activeSqlSort(page) : null,
+    filters: page ? activeSqlFilters(page) : []
+  };
 }

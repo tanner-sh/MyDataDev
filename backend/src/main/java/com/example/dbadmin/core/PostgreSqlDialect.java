@@ -11,6 +11,12 @@ import java.util.List;
 import java.util.Locale;
 
 public class PostgreSqlDialect extends DefaultDialect {
+
+    @Override
+    public String castToText(String expression) {
+        return "CAST(" + expression + " AS TEXT)";
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         return "postgresql".equalsIgnoreCase(dbType)

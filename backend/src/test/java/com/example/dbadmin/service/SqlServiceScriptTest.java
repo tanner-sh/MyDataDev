@@ -246,6 +246,54 @@ class SqlServiceScriptTest {
         assertThat(ascending.page().sortDirection()).isEqualTo("ASC");
     }
 
+    /**
+     * 筛选同样下推：只筛当前这一批的话，「筛选后 3 行」这个数字根本没有意义 —— 它说的是
+     * 「这一批里有 3 行」，而用户以为是整个结果集里有 3 行。
+     */
+    @Test
+    void filtersTheWholeResultAndBindsTheValue() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(url, "sa", "");
+             java.sql.Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE notes(id INT PRIMARY KEY, body VARCHAR(50))");
+            statement.execute("INSERT INTO notes VALUES (1, '50%_off'), (2, 'Nothing'), (3, NULL), (4, 'off season')");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+        String sql = "select id, body from notes";
+
+        var contains = service.executePage(1L, sql, 0, 10, "admin", null, null, null, "ID", "ASC",
+                java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlResultFilter("BODY", "contains", "off")));
+        var empty = service.executePage(1L, sql, 0, 10, "admin", null, null, null, null, null,
+                java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlResultFilter("BODY", "empty", null)));
+        // % 和 _ 是用户输入的字面量，不是通配符。
+        var literalWildcards = service.executePage(1L, sql, 0, 10, "admin", null, null, null, null, null,
+                java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlResultFilter("BODY", "contains", "%_")));
+
+        // INT 列按数字回传（BIGINT/DECIMAL 才为了保精度转成字符串），这里比的是数字。
+        assertThat(contains.rows()).extracting(row -> row.get(0)).containsExactly(1, 4);
+        assertThat(empty.rows()).extracting(row -> row.get(0)).containsExactly(3);
+        assertThat(literalWildcards.rows()).extracting(row -> row.get(0)).containsExactly(1);
+        assertThat(contains.page().filters()).hasSize(1);
+    }
+
+    /** 筛选值一律绑定，不拼进 SQL。 */
+    @Test
+    void doesNotLetAFilterValueChangeTheStatement() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (java.sql.Connection connection = java.sql.DriverManager.getConnection(url, "sa", "");
+             java.sql.Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE notes(id INT PRIMARY KEY, body VARCHAR(50))");
+            statement.execute("INSERT INTO notes VALUES (1, 'ok')");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+
+        var result = service.executePage(1L, "select id, body from notes", 0, 10, "admin", null, null, null, null, null,
+                java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlResultFilter(
+                        "BODY", "equals", "x' OR '1'='1")));
+
+        assertThat(result.rows()).isEmpty();
+    }
+
     /** 不带排序时行为一个字都不变 —— 这条路每天都在走。 */
     @Test
     void leavesUnsortedPagingExactlyAsItWas() throws Exception {

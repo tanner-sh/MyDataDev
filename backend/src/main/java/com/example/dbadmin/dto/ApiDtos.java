@@ -469,8 +469,24 @@ public final class ApiDtos {
     }
 
     /**
+     * 结果网格的一个列筛选。
+     *
+     * <p>语义与前端一致（按文本、忽略大小写、NULL 等同空串），所以下推之后用户看到的行为不变，
+     * 变的只是它作用在整个结果集上而不是当前这一批。</p>
+     *
+     * @param operator contains / notContains / equals / notEquals / empty / notEmpty
+     */
+    public record SqlResultFilter(
+            @NotBlank @Size(max = 128) String column,
+            @NotBlank @Size(max = 20) String operator,
+            @Size(max = 2000) String value
+    ) {
+    }
+
+    /**
      * @param sortColumn 结果集里的列标签；服务端把排序下推进 SQL 再分页，而不是让界面只排当前这一页
      * @param sortDirection {@code ASC} 或 {@code DESC}，空值按升序
+     * @param filters 列筛选，同样下推 —— 只筛当前这一批会让「筛选后 3 行」这个数字失去意义
      */
     public record SqlPageRequest(
             @NotNull Long connectionId,
@@ -480,15 +496,20 @@ public final class ApiDtos {
             @Size(max = 120) String executionId,
             @Size(max = 240) String schemaName,
             @Size(max = 128) String sortColumn,
-            @Size(max = 8) String sortDirection
+            @Size(max = 8) String sortDirection,
+            @Size(max = 30) List<@jakarta.validation.Valid SqlResultFilter> filters
     ) {
+        public SqlPageRequest {
+            filters = filters == null ? List.of() : List.copyOf(filters);
+        }
+
         public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize, String executionId) {
-            this(connectionId, sql, offset, pageSize, executionId, null, null, null);
+            this(connectionId, sql, offset, pageSize, executionId, null, null, null, List.of());
         }
 
         public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize,
                               String executionId, String schemaName) {
-            this(connectionId, sql, offset, pageSize, executionId, schemaName, null, null);
+            this(connectionId, sql, offset, pageSize, executionId, schemaName, null, null, List.of());
         }
     }
 
@@ -525,7 +546,10 @@ public final class ApiDtos {
         }
     }
 
-    /** {@code sortColumn} 回显当前生效的排序，界面据此在正确的列头上画箭头 —— 翻页后它不能丢。 */
+    /**
+     * {@code sortColumn} 与 {@code filters} 回显当前生效的排序和筛选，界面据此在正确的列头上画
+     * 箭头和漏斗 —— 翻页后它们不能丢。
+     */
     public record SqlPageInfo(
             long connectionId,
             int offset,
@@ -534,15 +558,20 @@ public final class ApiDtos {
             boolean hasMore,
             String schemaName,
             String sortColumn,
-            String sortDirection
+            String sortDirection,
+            List<SqlResultFilter> filters
     ) {
+        public SqlPageInfo {
+            filters = filters == null ? List.of() : List.copyOf(filters);
+        }
+
         public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize, boolean hasMore) {
-            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null, null, null);
+            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, null, null, null, List.of());
         }
 
         public SqlPageInfo(long connectionId, int offset, int requestedPageSize, int effectivePageSize,
                            boolean hasMore, String schemaName) {
-            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName, null, null);
+            this(connectionId, offset, requestedPageSize, effectivePageSize, hasMore, schemaName, null, null, List.of());
         }
     }
 

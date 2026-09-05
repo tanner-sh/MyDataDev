@@ -7,6 +7,12 @@ import java.util.Locale;
 import java.util.HexFormat;
 
 public class SqlServerDialect extends DefaultDialect {
+
+    @Override
+    public String castToText(String expression) {
+        return "CAST(" + expression + " AS NVARCHAR(MAX))";
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);

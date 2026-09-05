@@ -84,6 +84,17 @@ public interface DatabaseDialect {
 
     String dropTableSql(String schemaName, String tableName);
 
+    /**
+     * 把一个表达式转成文本，供大小写无关的模糊筛选使用。
+     *
+     * <p>结果网格的列筛选按文本语义工作（包含、等于、为空），而列本身可能是数字、时间或布尔。
+     * 各家的转换写法差别不小 —— Oracle 是 {@code TO_CHAR}、SQL Server 要 {@code NVARCHAR(MAX)}、
+     * ClickHouse 是 {@code toString} —— 所以收敛到方言里，而不是在筛选那边写一串 if。</p>
+     */
+    default String castToText(String expression) {
+        return "CAST(" + expression + " AS VARCHAR(4000))";
+    }
+
     default String quoteIdentifier(String identifier) {
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }

@@ -8,7 +8,15 @@ import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface'
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
-import { firstSqlPage, nextSqlPage, previousSqlPage, resizedSqlPage, sortedSqlPage, sqlResultRangeLabel } from '../sqlResultPaging';
+import {
+  filteredSqlPage,
+  firstSqlPage,
+  nextSqlPage,
+  previousSqlPage,
+  resizedSqlPage,
+  sortedSqlPage,
+  sqlResultRangeLabel
+} from '../sqlResultPaging';
 import { filterResultRows, isNumericColumnType, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { explainFindings, explainRowLevels } from '../explainInsights';
 import { downloadBlob } from '../api';
@@ -105,6 +113,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     }
     return result.page;
   }, [onPageChange, result?.columns, result?.page]);
+  /** 网格的筛选状态 → 请求形状。列 key 到标签的映射只有这里知道。 */
+  const toServerFilters = useCallback((filters: ResultColumnFilters) => {
+    const columns = result?.columns || [];
+    return Object.entries(filters).flatMap(([key, filter]) => {
+      const column = columns.find((item) => item.key === key);
+      return column ? [{ column: column.label, operator: filter.operator, value: filter.value }] : [];
+    });
+  }, [result?.columns]);
   const serverSortOrder = useMemo(() => {
     if (!serverSort?.sortColumn) return undefined;
     const column = result?.columns.find((item) => item.label === serverSort.sortColumn);
@@ -118,6 +134,24 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   useEffect(() => {
     if (result?.page?.requestedPageSize) setPageSizeDraft(result.page.requestedPageSize);
   }, [result?.page?.requestedPageSize]);
+
+  /**
+   * 服务端回传的筛选反填到列头。
+   *
+   * <p>翻页、重新执行、切回这个标签页之后，漏斗图标必须还亮着 —— 否则用户会以为筛选没生效，
+   * 而实际上服务端仍在按它取数。</p>
+   */
+  useEffect(() => {
+    const columns = result?.columns;
+    const serverFilters = result?.page?.filters;
+    if (!columns || !serverFilters) return;
+    const restored: ResultColumnFilters = {};
+    for (const filter of serverFilters) {
+      const column = columns.find((item) => item.label === filter.column);
+      if (column) restored[column.key] = { operator: filter.operator as ResultFilterOperator, value: filter.value || '' };
+    }
+    setColumnFilters((current) => (sameFilters(current, restored) ? current : restored));
+  }, [result?.columns, result?.page?.filters]);
 
   // Row selection refers to the rows currently on screen, so it cannot survive
   // a page turn.
@@ -329,15 +363,18 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               <ResultFilterDropdown
                 condition={columnFilters[column.key]}
                 onApply={(condition) => {
-                  setColumnFilters((current) => ({ ...current, [column.key]: condition }));
+                  const next = { ...columnFilters, [column.key]: condition };
+                  setColumnFilters(next);
+                  // 能下推就下推：只筛当前这一批的话，「筛选后 3 行」说的是「这一批里 3 行」，
+                  // 而用户以为是整个结果集里 3 行。
+                  if (serverSort) onPageChange?.(filteredSqlPage(serverSort, toServerFilters(next)));
                   confirm({ closeDropdown: true });
                 }}
                 onReset={() => {
-                  setColumnFilters((current) => {
-                    const next = { ...current };
-                    delete next[column.key];
-                    return next;
-                  });
+                  const next = { ...columnFilters };
+                  delete next[column.key];
+                  setColumnFilters(next);
+                  if (serverSort) onPageChange?.(filteredSqlPage(serverSort, toServerFilters(next)));
                   close();
                 }}
               />
@@ -359,7 +396,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     ];
   // editState / editingCell 刻意不在依赖里：它们经由记录到达单元格，正是 shouldCellUpdate 比较的东西。
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, serverSortOrder, sortState, visibleColumnKeys]);
+  }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, onPageChange, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, serverSortOrder, sortState, toServerFilters, visibleColumnKeys]);
 
   const tableScrollWidth = useMemo(() => {
     if (!result?.resultSet) return 800;
@@ -373,13 +410,15 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const rows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
     const originalIndexes = new Map(result.rows.map((values, index) => [values, index]));
-    return sortResultRows(filterResultRows(result.rows, result.columns, columnFilters), result.columns, sortState).map((values) => {
+    // 服务端已经筛过了，本地再筛一遍只会把「大小写折叠」这类细微差异算两次。
+    const visibleRows = serverSort ? result.rows : filterResultRows(result.rows, result.columns, columnFilters);
+    return sortResultRows(visibleRows, result.columns, sortState).map((values) => {
       const rowIndex = originalIndexes.get(values) ?? 0;
       const edits = resultRowEdits(editState, rowIndex);
       const editingColumn = editingCell?.startsWith(`${rowIndex}:`) ? editingCell.slice(String(rowIndex).length + 1) : undefined;
       return { values, key: String(rowOffset + rowIndex), rowIndex, edits, editingColumn };
     });
-  }, [columnFilters, editState, editingCell, result?.columns, result?.resultSet, result?.rows, rowOffset, sortState]);
+  }, [columnFilters, editState, editingCell, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, sortState]);
 
   // 有数值列才提供图表入口；判定用未筛选的原始结果，免得筛掉几行就把入口弄没了。
   const chartable = useMemo(
@@ -956,6 +995,14 @@ function ResultFilterDropdown({ condition, onApply, onReset }: {
  * 可编辑列点一下进入输入态，回车或失焦提交，Esc 放弃。改过但未提交的格子高亮，
  * 用的是与表数据工作区一致的交互。
  */
+/** 两组筛选是不是同一份；不比的话每次回传都会重设一次 state，白白多渲染一轮。 */
+function sameFilters(left: ResultColumnFilters, right: ResultColumnFilters): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((key) => left[key].operator === right[key]?.operator && left[key].value === right[key]?.value);
+}
+
 const ResultCell = memo(function ResultCell({ row, columnIndex, columnLabel, editable, onBeginEdit, onCommitEdit }: {
   row: ResultRow;
   columnIndex: number;

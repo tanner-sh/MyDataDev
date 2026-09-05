@@ -13,6 +13,7 @@ import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
 import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlPageInfo;
+import com.example.dbadmin.dto.ApiDtos.SqlResultFilter;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlStatementResult;
@@ -372,7 +373,23 @@ public class SqlService {
             String schemaName
     ) throws Exception {
         return executePage(connectionId, sql, requestedOffset, requestedPageSize, actor, executionId,
-                productionConfirmation, schemaName, null, null);
+                productionConfirmation, schemaName, null, null, List.of());
+    }
+
+    public SqlResult executePage(
+            long connectionId,
+            String sql,
+            Integer requestedOffset,
+            Integer requestedPageSize,
+            String actor,
+            String executionId,
+            String productionConfirmation,
+            String schemaName,
+            String sortColumn,
+            String sortDirection
+    ) throws Exception {
+        return executePage(connectionId, sql, requestedOffset, requestedPageSize, actor, executionId,
+                productionConfirmation, schemaName, sortColumn, sortDirection, List.of());
     }
 
     /**
@@ -391,7 +408,8 @@ public class SqlService {
             String productionConfirmation,
             String schemaName,
             String sortColumn,
-            String sortDirection
+            String sortDirection,
+            List<SqlResultFilter> filters
     ) throws Exception {
         String executionSql = singleStatement(sql, "分页查询");
         if (!classifier.isAutomaticallyPageable(executionSql)) {
@@ -409,24 +427,33 @@ public class SqlService {
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         String normalizedSortColumn = sortColumn == null || sortColumn.isBlank() ? null : sortColumn.trim();
         String normalizedSortDirection = normalizedSortColumn == null
-                ? null : SqlSortPushdown.normalizeDirection(sortDirection);
-        // 排序包在里面、分页包在外面：方言只需要照常处理一条没有分页子句的 SELECT。
-        String sortedSql = SqlSortPushdown.apply(executionSql, normalizedSortColumn, normalizedSortDirection, dialect);
-        String pageSql = dialect.pageQuery(sortedSql, pageSize + 1, offset);
+                ? null : SqlResultPushdown.normalizeDirection(sortDirection);
+        List<SqlResultFilter> normalizedFilters = filters == null ? List.of() : filters;
+        // 筛选和排序包在里面、分页包在外面：方言只需要照常处理一条没有分页子句的 SELECT。
+        SqlResultPushdown.Shaped shaped = SqlResultPushdown.apply(
+                executionSql, normalizedFilters, normalizedSortColumn, normalizedSortDirection, dialect);
+        String pageSql = dialect.pageQuery(shaped.sql(), pageSize + 1, offset);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
-             Statement statement = connection.createStatement()) {
+             // 筛选值一律绑定，绝不拼进 SQL：列名是标识符可以引用转义，值来自输入框，拼进去就是注入点。
+             Statement statement = shaped.hasParameters()
+                     ? connection.prepareStatement(pageSql) : connection.createStatement()) {
             dialect.configureReadStatement(connection, statement, Math.min(pageSize + 1, 500), properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(pageSize + 1);
+            for (int index = 0; index < shaped.parameters().size(); index++) {
+                ((java.sql.PreparedStatement) statement).setObject(index + 1, shaped.parameters().get(index));
+            }
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
-                try (ResultSet rs = statement.executeQuery(pageSql)) {
+                try (ResultSet rs = shaped.hasParameters()
+                        ? ((java.sql.PreparedStatement) statement).executeQuery()
+                        : statement.executeQuery(pageSql)) {
                     SqlResult result = readPageResult(
                             rs, started, connectionId, offset, rawPageSize, pageSize,
                             dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection,
                             // 就地编辑的判定要看用户写的那条 SQL，不是排序包装之后的。
-                            executionSql, normalizedSortColumn, normalizedSortDirection
+                            executionSql, normalizedSortColumn, normalizedSortDirection, normalizedFilters
                     );
                     audit.onConnection(actor, "SQL_QUERY_PAGE", connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     metrics.success(SqlExecutionMetrics.KIND_PAGE, started);
@@ -577,7 +604,8 @@ public class SqlService {
             DbConnection dbConnection,
             String executionSql,
             String sortColumn,
-            String sortDirection
+            String sortDirection,
+            List<SqlResultFilter> filters
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -613,7 +641,7 @@ public class SqlService {
         }
         boolean hasMore = payloadLimitReached || rs.next();
         SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore,
-                schemaName, sortColumn, sortDirection);
+                schemaName, sortColumn, sortDirection, filters);
         return new SqlResult(
                 columns,
                 rows,

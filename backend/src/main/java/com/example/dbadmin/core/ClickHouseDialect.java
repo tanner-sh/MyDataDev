@@ -7,6 +7,12 @@ import java.util.Locale;
 import java.util.HexFormat;
 
 public class ClickHouseDialect extends DefaultDialect {
+
+    @Override
+    public String castToText(String expression) {
+        return "toString(" + expression + ")";
+    }
+
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);

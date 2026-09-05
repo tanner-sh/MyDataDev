@@ -74,7 +74,7 @@ public class SqlController {
         access.require(request.connectionId(), ConnectionPermission.QUERY);
         return sqlService.executePage(request.connectionId(), request.sql(), request.offset(), request.pageSize(),
                 actor, request.executionId(), productionConfirmation, request.schemaName(),
-                request.sortColumn(), request.sortDirection());
+                request.sortColumn(), request.sortDirection(), request.filters());
     }
 
     @PostMapping("/explain")

@@ -153,6 +153,8 @@ export type Metadata = {
 };
 export type ResultColumn = { key: string; label: string; typeName: string };
 export type SqlSortDirection = 'ASC' | 'DESC';
+/** 服务端生效的列筛选；语义与前端一致（按文本、忽略大小写、NULL 等同空串）。 */
+export type SqlResultFilterRequest = { column: string; operator: string; value?: string | null };
 /** 服务端生效的排序：下推进 SQL 之后回传，界面据此在正确的列头上画箭头。 */
 export type SqlResultSort = { column: string; direction: SqlSortDirection };
 export type SqlPageInfo = {
@@ -165,6 +167,7 @@ export type SqlPageInfo = {
   previousOffsets?: number[];
   sortColumn?: string | null;
   sortDirection?: SqlSortDirection | null;
+  filters?: SqlResultFilterRequest[] | null;
 };
 export type SqlResultSourceTable = { nameParts: string[] };
 export type SqlResult = {
@@ -186,6 +189,8 @@ export type SqlPageNavigation = {
   previousOffsets: number[];
   /** 服务端排序；翻页时要原样带上，否则翻一页顺序就变了。 */
   sort?: SqlResultSort | null;
+  /** 服务端筛选；同样要跟着翻页走。 */
+  filters?: SqlResultFilterRequest[] | null;
 };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };

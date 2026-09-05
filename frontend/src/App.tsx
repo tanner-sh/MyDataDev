@@ -1378,9 +1378,10 @@ export default function App() {
           pageSize: navigation.pageSize,
           executionId,
           schemaName: page.schemaName,
-          // 排序下推给服务端：只排当前这一页会让用户以为整个结果集有序。
+          // 排序与筛选都下推给服务端：只作用于当前这一页会让用户以为看到的是全量结论。
           sortColumn: navigation.sort?.column,
-          sortDirection: navigation.sort?.direction
+          sortDirection: navigation.sort?.direction,
+          filters: navigation.filters || []
         })
       });
       if (data.page) data.page.previousOffsets = navigation.previousOffsets;
