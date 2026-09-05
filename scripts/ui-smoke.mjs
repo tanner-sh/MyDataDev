@@ -4,15 +4,26 @@
  * 为什么不是 Playwright：它要下载一份约 150MB 的浏览器，而这个仓库一贯不为一次检查引依赖。
  * Chrome DevTools Protocol 走 WebSocket，Node 自带，够用。
  *
- * 用法（需要先把前后端跑起来）：
- *   cd backend && mvn spring-boot:run
- *   cd frontend && npm run dev
- *   node scripts/ui-smoke.mjs [--url http://localhost:5173] [--shots ./ui-shots]
+ * 两种用法：
  *
- * 检查项刻意只覆盖「结构还在不在」：抽屉能不能开、六个管理分区能不能切、结果区能不能出。
+ * 1）自己拉起 Web 发行包（推荐，跑的是真正发出去的那个产物）：
+ *      node scripts/build-web-bundle.mjs      # 先产出 release-assets/*-web.jar
+ *      node scripts/ui-smoke.mjs --serve [--shots ./ui-shots]
+ *
+ * 2）连到已经跑着的开发服务器：
+ *      cd backend && mvn spring-boot:run
+ *      cd frontend && npm run dev
+ *      node scripts/ui-smoke.mjs [--url http://localhost:5173] [--shots ./ui-shots]
+ *
+ * --serve 启动的实例带 --app.auth.mode=DISABLED：这里检查的是界面结构，不是登录流程
+ * （登录、CSRF、H2 控制台关闭那几条由 release.yml 的 Web 发行包烟测在 HTTP 层覆盖）。
+ * 数据写进 --work 指定的目录（默认 .ui-smoke-run），每次跑完不清 —— 出问题时那份日志是唯一线索。
+ *
+ * 检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
  * 视觉细节靠人看截图 —— 脚本不该假装自己能判断好不好看。
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { spawn } from 'node:child_process';
 
 const CHROME = process.env.CHROME_PATH
@@ -22,7 +33,10 @@ const option = (name, fallback) => {
   const index = args.indexOf(name);
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 };
-const APP_URL = option('--url', 'http://localhost:5173');
+const SERVE = args.includes('--serve');
+const SERVE_PORT = Number(option('--serve-port', '8099'));
+const WORK_DIR = option('--work', '.ui-smoke-run');
+const APP_URL = SERVE ? `http://127.0.0.1:${SERVE_PORT}` : option('--url', 'http://localhost:5173');
 const SHOT_DIR = option('--shots', '');
 const PORT = 9333;
 
@@ -88,6 +102,64 @@ async function session(url) {
   };
 }
 
+/** 找一个 Web 发行包 JAR：命令行给的优先，其次 release-assets，最后 Maven 的输出目录。 */
+function locateJar() {
+  const explicit = option('--serve', '');
+  if (explicit && !explicit.startsWith('--')) return explicit;
+  const candidates = [];
+  try {
+    for (const name of readdirSync('release-assets')) {
+      if (name.endsWith('-web.jar')) candidates.push(path.join('release-assets', name));
+    }
+  } catch {
+    // 没打过发行包，下面再看 target。
+  }
+  // 目录里可能留着好几个版本的产物，按修改时间挑最新的那个 —— 按目录顺序拿，
+  // 冒烟跑的可能是上一个版本，而这种「跑错东西」的失败最难看出来。
+  candidates.sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs);
+  candidates.push(path.join('backend', 'target', 'mydatadev-web.jar'));
+  const found = candidates.find((candidate) => existsSync(candidate));
+  if (!found) {
+    throw new Error('找不到 Web 发行包 JAR，先跑 node scripts/build-web-bundle.mjs，或用 --serve <jar> 指定');
+  }
+  return path.resolve(found);
+}
+
+/**
+ * 拉起 Web 发行包并等它就绪。
+ *
+ * 主密钥不从环境变量传：后端首次启动会在工作目录下自己生成一份，重复跑也就能复用同一份数据。
+ */
+async function startServer() {
+  const jar = locateJar();
+  mkdirSync(WORK_DIR, { recursive: true });
+  const log = openSync(path.join(WORK_DIR, 'server.log'), 'w');
+  console.log(`启动 ${path.basename(jar)} → ${APP_URL}`);
+  const server = spawn('java', [
+    '-jar', jar,
+    '--spring.profiles.active=web',
+    `--server.port=${SERVE_PORT}`,
+    '--app.auth.mode=DISABLED'
+  ], { cwd: WORK_DIR, stdio: ['ignore', log, log] });
+
+  let exited = false;
+  server.on('exit', () => { exited = true; });
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    if (exited) break;
+    try {
+      const response = await fetch(`${APP_URL}/actuator/health`);
+      if (response.ok) return server;
+    } catch {
+      // 还没起来
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  server.kill();
+  throw new Error(`后端没能在 3 分钟内就绪，看 ${path.join(WORK_DIR, 'server.log')}`);
+}
+
+const server = SERVE ? await startServer() : null;
+
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   '--hide-scrollbars', '--force-device-scale-factor=1',
@@ -127,7 +199,12 @@ try {
     JSON.stringify([...document.querySelectorAll('.management-nav-item')].map((n) => (n.textContent || '').trim()))
   `);
   const labels = JSON.parse(sections || '[]');
-  check('六个管理分区', labels.length === 6, `实际 ${labels.length}：${labels.join(' / ')}`);
+  // 断言「关键分区还在」而不是一个固定条数：分区会随功能增减，写死数字会让每加一个功能
+  // 都要来改这里，改着改着这条检查就没人当回事了。少一个关键分区才是真的故障。
+  const requiredSections = ['连接管理', '结构对比', '数据对比'];
+  const missingSections = requiredSections.filter((name) => !labels.includes(name));
+  check('关键管理分区都在', missingSections.length === 0,
+    `缺少 ${missingSections.join('、')}；实际 ${labels.length} 个：${labels.join(' / ')}`);
 
   for (const label of labels) {
     const clicked = await page.evaluate(`
@@ -205,6 +282,7 @@ try {
 } finally {
   page?.close();
   chrome.kill();
+  server?.kill();
 }
 
 if (failures.length > 0) {

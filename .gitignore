@@ -22,3 +22,7 @@ desktop/.dev-data/
 
 /release-assets/
 /build/
+
+# 界面冒烟的产物：--serve 起的实例数据与日志，以及截图。
+.ui-smoke-run/
+ui-shots/
