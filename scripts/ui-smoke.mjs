@@ -19,7 +19,12 @@
  * （登录、CSRF、H2 控制台关闭那几条由 release.yml 的 Web 发行包烟测在 HTTP 层覆盖）。
  * 数据写进 --work 指定的目录（默认 .ui-smoke-run），每次跑完不清 —— 出问题时那份日志是唯一线索。
  *
- * 检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
+ * --serve 模式下还会经 API 播一条 H2 连接和一张 240 行的表，然后走一遍真正每天都在走的路：
+ * 选连接 → 打开表 → 翻页 → 改一格 → 提交 → 导出菜单。改完那一格是回库里读出来核对的，
+ * 因为界面上显示改过了不代表真的写进去了。此前冒烟只看得到空壳，而空壳恰恰是最不容易坏的
+ * 部分 —— 需要先选连接才可用的「备份与恢复」「活动会话」两个分区，过去每次都打印「已跳过」。
+ *
+ * 剩下的检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
  * 视觉细节靠人看截图 —— 脚本不该假装自己能判断好不好看。
  */
 import { existsSync, mkdirSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -39,6 +44,8 @@ const WORK_DIR = option('--work', '.ui-smoke-run');
 const APP_URL = SERVE ? `http://127.0.0.1:${SERVE_PORT}` : option('--url', 'http://localhost:5173');
 const SHOT_DIR = option('--shots', '');
 const PORT = 9333;
+const SEED_CONNECTION_NAME = 'UI 冒烟库';
+const SEED_TABLE = 'smoke_orders';
 
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -158,7 +165,58 @@ async function startServer() {
   throw new Error(`后端没能在 3 分钟内就绪，看 ${path.join(WORK_DIR, 'server.log')}`);
 }
 
+/**
+ * 播一条真的 H2 连接和一张有数据的表。
+ *
+ * <p>这一段走 API 而不是界面：它是准备工作，不是被测对象。有了它，冒烟才能覆盖「选连接 →
+ * 打开表 → 翻页 → 改一格 → 提交 → 导出」这条真正每天都在走的路 —— 此前冒烟只看得到空壳，
+ * 而空壳恰恰是最不容易坏的部分。</p>
+ */
+async function seedSmokeData() {
+  console.log('播种一条 H2 连接与 240 行数据…');
+  const post = async (path, body) => {
+    const response = await fetch(`${APP_URL}/api${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User': 'ui-smoke' },
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) throw new Error(`${path} 返回 ${response.status}：${(await response.text()).slice(0, 300)}`);
+    return response.json();
+  };
+  const existing = await (await fetch(`${APP_URL}/api/connections`, { headers: { 'X-User': 'ui-smoke' } })).json();
+  const found = existing.find((connection) => connection.name === SEED_CONNECTION_NAME);
+  const connection = found || await post('/connections', {
+    name: SEED_CONNECTION_NAME,
+    dbType: 'h2',
+    // 内存库跟着后端进程活着；冒烟结束进程退出，什么都不留下。
+    jdbcUrl: 'jdbc:h2:mem:ui-smoke;DB_CLOSE_DELAY=-1',
+    username: 'sa',
+    password: '',
+    environment: 'dev',
+    readonly: false
+  });
+  const run = (sql) => post('/sql/execute', { connectionId: connection.id, sql });
+  await run(`DROP TABLE IF EXISTS ${SEED_TABLE}`);
+  await run(`CREATE TABLE ${SEED_TABLE}(id INT PRIMARY KEY, customer VARCHAR(60) NOT NULL, amount INT NOT NULL)`);
+  // 240 行：默认每页 100 行，翻页才是真的翻页而不是一页装得下。
+  await run(`INSERT INTO ${SEED_TABLE} SELECT X, '客户' || X, X * 3 FROM SYSTEM_RANGE(1, 240)`);
+  return connection.id;
+}
+
+async function readSeedCustomer(connectionId, id) {
+  const response = await fetch(`${APP_URL}/api/sql/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-User': 'ui-smoke' },
+    body: JSON.stringify({ connectionId, sql: `SELECT customer FROM ${SEED_TABLE} WHERE id = ${id}` })
+  });
+  const payload = await response.json();
+  return String(payload?.rows?.[0]?.[0] ?? '');
+}
+
 const server = SERVE ? await startServer() : null;
+// 播种放在打开浏览器之前：有了连接，「备份与恢复」「活动会话」这些要先选连接才可用的分区
+// 才会被真的检查到，而不是每次都打印一行「已跳过」。
+const seedConnectionId = SERVE ? await seedSmokeData() : null;
 
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
@@ -276,6 +334,179 @@ try {
     // 关不掉同样是故障：overlayOpen 会一直为真，把全局快捷键锁死。
     check('连接表单可以关闭', (await page.evaluate(`document.querySelectorAll('.ant-modal-container').length`)) === 0);
   }
+  if (SERVE) {
+    const connectionId = seedConnectionId;
+    // 先关掉管理抽屉：它开着的时候会把焦点困在抽屉里，后面的单元格编辑要靠焦点。
+    await page.evaluate(`
+      (() => {
+        const close = document.querySelector('.ant-drawer-open .ant-drawer-close');
+        if (close) close.click();
+      })()
+    `);
+    await page.sleep(1500);
+
+    // 页头的连接下拉：antd 的 Select 听的是 mousedown，直接 click() 打不开。
+    const openedSwitcher = await page.evaluate(`
+      (() => {
+        const selector = document.querySelector('.connection-select .ant-select-selector')
+          || document.querySelector('.connection-switcher .ant-select-selector')
+          || document.querySelector('.connection-switcher input');
+        if (!selector) {
+          return { ok: false, html: (document.querySelector('.connection-switcher') || document.body).innerHTML.slice(0, 300) };
+        }
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          selector.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        }
+        return { ok: true };
+      })()
+    `);
+    check('页头能打开连接下拉', openedSwitcher.ok === true, openedSwitcher.html || '');
+    await page.sleep(1200);
+    const picked = await page.evaluate(`
+      (() => {
+        const option = [...document.querySelectorAll('.ant-select-item-option')]
+          .find((node) => (node.textContent || '').includes(${JSON.stringify(SEED_CONNECTION_NAME)}));
+        if (!option) return false;
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          option.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        }
+        return true;
+      })()
+    `);
+    check('可以在页头选中连接', picked);
+    await page.sleep(6000);
+
+    const openedTable = await page.evaluate(`
+      (() => {
+        const button = [...document.querySelectorAll('button[aria-label]')]
+          .find((node) => /^打开 .*的表数据$/.test(node.getAttribute('aria-label') || '')
+            && (node.getAttribute('aria-label') || '').toLowerCase().includes(${JSON.stringify(SEED_TABLE)}));
+        if (!button) return false;
+        button.click();
+        return true;
+      })()
+    `);
+    check('资源树里能找到播种的表', openedTable);
+    await page.sleep(6000);
+
+    const firstPage = await page.evaluate(`
+      (() => {
+        const rows = document.querySelectorAll('.table-grid-pane .ant-table-row');
+        const first = rows[0];
+        return { rows: rows.length, firstCell: first ? (first.textContent || '').slice(0, 40) : '' };
+      })()
+    `);
+    check('表数据加载出来了', firstPage.rows > 0, `实际 ${firstPage.rows} 行`);
+    await page.shot('05-表数据');
+
+    const turned = await page.evaluate(`
+      (() => {
+        const button = [...document.querySelectorAll('.table-pagination-actions button')]
+          .find((node) => (node.textContent || '').includes('下一页'));
+        if (!button || button.disabled) return false;
+        button.click();
+        return true;
+      })()
+    `);
+    await page.sleep(4000);
+    const secondPage = await page.evaluate(`
+      (() => {
+        const first = document.querySelector('.table-grid-pane .ant-table-row');
+        return first ? (first.textContent || '').slice(0, 40) : '';
+      })()
+    `);
+    // 翻页翻的是服务端的下一批，不是同一批数据换个显示 —— 所以首行必须变。
+    check('可以翻到下一页', turned && Boolean(secondPage) && secondPage !== firstPage.firstCell,
+      `第一页「${firstPage.firstCell}」第二页「${secondPage}」`);
+
+    await page.evaluate(`
+      (() => {
+        const button = [...document.querySelectorAll('.table-pagination-actions button')]
+          .find((node) => (node.textContent || '').includes('第一页'));
+        if (button && !button.disabled) button.click();
+      })()
+    `);
+    await page.sleep(4000);
+
+    // 改一格：进编辑态 → 写值 → 回车 → 提交。React 受控输入要用原生 setter 赋值，
+    // 直接改 value 不会触发 onChange。
+    const edited = await page.evaluate(`
+      (() => {
+        const cell = [...document.querySelectorAll('.table-grid-pane [aria-label]')]
+          .find((node) => /^CUSTOMER|^customer/i.test(node.getAttribute('aria-label') || '')
+            && (node.getAttribute('aria-label') || '').includes('第 1 行'));
+        if (!cell) return 'no-cell';
+        cell.focus();
+        cell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        return 'activated';
+      })()
+    `);
+    await page.sleep(1500);
+    // 用 CDP 真正「打字」：React 的受控输入不认 JS 直接赋 value（它的 valueTracker 会把这次
+    // 变化当成没发生），而 Input.insertText 走的是浏览器自己的输入路径。
+    const focused = await page.evaluate(`
+      (() => {
+        const input = [...document.querySelectorAll('.editable-cell-control input')][0];
+        if (!input) return 'no-input';
+        input.focus();
+        input.select();
+        return 'focused';
+      })()
+    `);
+    if (focused === 'focused') await page.send('Input.insertText', { text: '冒烟改过的客户' });
+    await page.sleep(400);
+    const committed = await page.evaluate(`
+      (() => {
+        const input = [...document.querySelectorAll('.editable-cell-control input')][0];
+        if (!input) return 'no-input';
+        const typed = input.value;
+        // 单元格是在 blur 时落草稿的（回车也只是 blur 一下）。
+        input.blur();
+        return 'typed:' + typed;
+      })()
+    `);
+    await page.sleep(1200);
+    const submitted = await page.evaluate(`
+      (() => {
+        const buttons = [...document.querySelectorAll('.table-primary-actions button')]
+          .map((node) => ({ text: (node.textContent || '').trim(), disabled: node.disabled }));
+        const button = [...document.querySelectorAll('.table-primary-actions button')]
+          .find((node) => (node.textContent || '').startsWith('提交'));
+        const status = (document.querySelector('.workspace-status-bar') || {}).textContent || '';
+        if (!button || button.disabled) return { ok: false, buttons, status: status.slice(0, 120) };
+        button.click();
+        return { ok: true, buttons, status: status.slice(0, 120) };
+      })()
+    `);
+    await page.sleep(5000);
+    const stored = submitted.ok ? await readSeedCustomer(connectionId, 1) : '';
+    // 读库而不是读界面：界面上显示改过了，不代表这一次真的写进去了。
+    check('单元格编辑能提交到库里', stored === '冒烟改过的客户',
+      `编辑=${edited} 输入=${committed} 提交=${JSON.stringify(submitted)} 库里=「${stored}」`);
+    await page.shot('06-表数据编辑');
+
+    const exported = await page.evaluate(`
+      (() => {
+        const button = [...document.querySelectorAll('.table-secondary-actions button, .table-toolbar-actions button')]
+          .find((node) => (node.textContent || '').trim() === '导出');
+        if (!button || button.disabled) return false;
+        for (const type of ['mouseover', 'mouseenter', 'mousedown', 'mouseup', 'click']) {
+          button.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+        }
+        return true;
+      })()
+    `);
+    await page.sleep(1500);
+    const exportMenu = await page.evaluate(`
+      (() => {
+        const items = [...document.querySelectorAll('.ant-dropdown-menu-item')].map((node) => (node.textContent || '').trim());
+        return items.filter((text) => text.startsWith('导出'));
+      })()
+    `);
+    check('导出菜单列出格式', exported && exportMenu.includes('导出 CSV') && exportMenu.includes('导出 Excel'),
+      exportMenu.join('/'));
+  }
+
   // 命令面板：快捷键是它唯一的入口，坏了不会有任何界面痕迹 —— 这正是 Ctrl/Cmd+P 的对象
   // 搜索曾经悄悄失灵过一整轮的原因（渲染块被删掉，快捷键还在）。
   await page.evaluate(`

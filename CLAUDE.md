@@ -8,8 +8,9 @@ MyDataDev 是一个数据库工作台，由三个模块组成：`backend`（Spri
 
 ```bash
 # 界面冒烟（用系统 Chrome，不装 Playwright）
+# --serve 会播一条 H2 连接和 240 行数据，走一遍 选连接→打开表→翻页→改一格→提交→导出
 node scripts/ui-smoke.mjs --serve --shots ./ui-shots   # 自己拉起 release-assets 里的 Web 发行包
-node scripts/ui-smoke.mjs --shots ./ui-shots           # 连到已经跑着的前后端
+node scripts/ui-smoke.mjs --shots ./ui-shots           # 连到已经跑着的前后端（不播种）
 
 # 后端（无 mvnw wrapper，直接用 mvn）
 # 首次启动自动生成 backend/secrets/mydatadev-master.key
