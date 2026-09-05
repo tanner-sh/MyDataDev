@@ -1212,34 +1212,40 @@ body.is-resizing-column * {
   font-size: var(--text-md);
 }
 
-.object-search-modal .ant-modal-body {
+.object-search-modal .ant-modal-body,
+.command-palette-modal .ant-modal-body {
   padding: 0;
 }
 
-.object-search-modal .ant-input-affix-wrapper {
+.object-search-modal .ant-input-affix-wrapper,
+.command-palette-modal .ant-input-affix-wrapper {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   border-radius: 0;
 }
 
-.object-search-results {
+.object-search-results,
+.command-palette-results {
   max-height: 420px;
   min-height: 120px;
   padding: 6px;
   overflow: auto;
 }
 
-.object-search-group + .object-search-group {
+.object-search-group + .object-search-group,
+.command-palette-group + .command-palette-group {
   margin-top: 6px;
 }
 
-.object-search-group-label {
+.object-search-group-label,
+.command-palette-group-label {
   display: block;
   padding: 4px 10px;
   font-size: var(--text-sm);
 }
 
-.object-search-hit {
+.object-search-hit,
+.command-palette-item {
   width: 100%;
   min-width: 0;
   padding: 7px 10px;
@@ -1255,23 +1261,27 @@ body.is-resizing-column * {
   font: inherit;
 }
 
-.object-search-hit.is-selected {
+.object-search-hit.is-selected,
+.command-palette-item.is-selected {
   background: var(--primary-soft);
 }
 
-.object-search-hit-icon {
+.object-search-hit-icon,
+.command-palette-item-icon {
   flex: 0 0 auto;
   color: var(--text-secondary);
 }
 
-.object-search-hit-name {
+.object-search-hit-name,
+.command-palette-item-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.object-search-hit-schema {
+.object-search-hit-schema,
+.command-palette-item-hint {
   flex: 0 0 auto;
   font-size: var(--text-sm);
 }
@@ -1281,10 +1291,17 @@ body.is-resizing-column * {
   margin-inline-end: 0;
 }
 
-.object-search-hit-action {
+.object-search-hit-action,
+.command-palette-item-note {
   margin-left: auto;
   flex: 0 0 auto;
   font-size: var(--text-sm);
+}
+
+/* 不可用的命令仍然列出来 —— 「需要先选一条连接」比让它凭空消失更说得清楚。 */
+.command-palette-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .object-search-error {
@@ -1292,7 +1309,8 @@ body.is-resizing-column * {
   padding: 16px;
 }
 
-.object-search-footer {
+.object-search-footer,
+.command-palette-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;

@@ -3,6 +3,7 @@ import type { DbObject } from './types';
 const FAVORITE_CONNECTIONS_KEY = 'db-admin-favorite-connections-v1';
 const FAVORITE_OBJECTS_KEY = 'db-admin-favorite-objects-v1';
 const RECENT_OBJECTS_KEY = 'db-admin-recent-objects-v1';
+const RECENT_COMMANDS_KEY = 'db-admin-recent-commands-v1';
 const MAX_RECENT_OBJECTS = 16;
 
 type PreferenceStorage = Pick<Storage, 'getItem' | 'setItem'>;
@@ -47,6 +48,16 @@ export function readFavoriteConnectionIds(storage: PreferenceStorage | null = de
 
 export function writeFavoriteConnectionIds(ids: number[], storage: PreferenceStorage | null = defaultStorage()) {
   writeArray(FAVORITE_CONNECTIONS_KEY, [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))], storage);
+}
+
+/** 命令面板里最近用过的命令 id，最新的在前。上限由 commandPalette.ts 的 RECENT_COMMAND_LIMIT 定。 */
+export function readRecentCommandIds(storage: PreferenceStorage | null = defaultStorage()) {
+  return readArray<unknown>(RECENT_COMMANDS_KEY, storage)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+export function writeRecentCommandIds(ids: string[], storage: PreferenceStorage | null = defaultStorage()) {
+  writeArray(RECENT_COMMANDS_KEY, ids.filter(Boolean), storage);
 }
 
 export function objectPreferenceKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name' | 'type'>) {

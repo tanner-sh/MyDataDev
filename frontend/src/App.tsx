@@ -28,7 +28,7 @@ import type {
 import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
 import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
-import { readFavoriteConnectionIds, writeFavoriteConnectionIds } from './workspacePreferences';
+import { readFavoriteConnectionIds, readRecentCommandIds, writeFavoriteConnectionIds, writeRecentCommandIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import {
   hasMoreSqlHistory,
@@ -81,7 +81,9 @@ import {
   type SqlTransactionState
 } from './sqlTransaction';
 import { prefetchWhenIdle } from './idlePrefetch';
-import { resolveAppShortcut, type AppShortcut } from './keyboardShortcuts';
+import { resolveAppShortcut, SHORTCUT_HINTS, type AppShortcut } from './keyboardShortcuts';
+import { rememberCommand } from './commandPalette';
+import type { PaletteAction } from './components/CommandPalette';
 import { IDLE_TABLE_ROW_COUNT, rowCountErrorMessage, rowCountFailure, type TableRowCountState } from './tableRowCount';
 import { EMPTY_TABLE_QUERY, type TableQuery } from './tableQuery';
 import { AppHeader } from './components/AppHeader';
@@ -128,6 +130,7 @@ const AccessManagementPanel = lazy(() => import('./components/AccessManagementPa
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
 const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
+const CommandPalette = lazy(() => import('./components/CommandPalette').then((module) => ({ default: module.CommandPalette })));
 const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
 const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
@@ -197,6 +200,8 @@ export default function App() {
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => readRecentCommandIds());
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [transactionState, setTransactionState] = useState<SqlTransactionState>(IDLE_SQL_TRANSACTION);
   const [activeTableRelations, setActiveTableRelations] = useState<ObjectRelations | null>(null);
@@ -2002,6 +2007,7 @@ export default function App() {
     || sqlHistoryState.open
     || sqlFileTasksOpen
     || objectSearchOpen
+    || commandPaletteOpen
     || snippetsOpen;
 
   shortcutHandlerRef.current = (shortcut: AppShortcut, event: KeyboardEvent) => {
@@ -2009,6 +2015,12 @@ export default function App() {
       event.preventDefault();
       if (compactLayout) setMobileExplorerOpen((current) => !current);
       else layoutPreferences.toggleExplorer();
+      return;
+    }
+    if (shortcut.kind === 'open-command-palette') {
+      // 命令面板在任何界面下都该开得起来 —— 它本身就是「我不知道这个功能在哪」的出口。
+      event.preventDefault();
+      setCommandPaletteOpen((current) => !current);
       return;
     }
     if (shortcut.kind === 'open-object-search') {
@@ -2728,6 +2740,126 @@ export default function App() {
   const cancelSqlEvent = useStableEvent(() => cancelSqlExecution());
   const exportSqlEvent = useStableEvent((format: ExportFormat, liveSql?: string) => exportSql(format, liveSql));
   const openSqlHistoryEvent = useStableEvent(() => openSqlHistory());
+
+  /**
+   * 命令面板的清单。
+   *
+   * <p>这里不新增任何能力，只是把已有入口的名字变成可搜索的 —— 备份在管理抽屉里、历史在
+   * SQL 工具条上、切换连接在页头，每加一个入口，其余入口就更难被想起来。不可用的命令也
+   * 列出来并说明原因：「需要先选一条连接」比让它凭空消失更说得清楚。</p>
+   */
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const needsConnection = selected ? undefined : '需要先选择一条连接';
+    const actions: PaletteAction[] = [
+      {
+        id: 'search.objects',
+        title: '搜索数据库对象',
+        section: '导航',
+        keywords: 'search object table view find',
+        hint: SHORTCUT_HINTS.openObjectSearch,
+        disabledReason: needsConnection,
+        run: () => setObjectSearchOpen(true)
+      },
+      {
+        id: 'layout.explorer',
+        title: '显示 / 隐藏资源管理器',
+        section: '导航',
+        keywords: 'explorer sidebar toggle',
+        hint: SHORTCUT_HINTS.toggleExplorer,
+        run: () => (compactLayout ? setMobileExplorerOpen((current) => !current) : layoutPreferences.toggleExplorer())
+      },
+      {
+        id: 'layout.theme',
+        title: '切换深色 / 浅色主题',
+        section: '导航',
+        keywords: 'theme dark light',
+        run: () => layoutPreferences.setThemeMode((current) => (current === 'light' ? 'dark' : 'light'))
+      },
+      {
+        id: 'sql.new-tab',
+        title: '新建 SQL 标签页',
+        section: 'SQL',
+        keywords: 'new sql tab query',
+        hint: SHORTCUT_HINTS.newSqlTab,
+        disabledReason: needsConnection,
+        run: () => { setMode('sql'); addSqlTab(); }
+      },
+      {
+        id: 'sql.history',
+        title: 'SQL 执行历史',
+        section: 'SQL',
+        keywords: 'history log slow failed',
+        disabledReason: needsConnection,
+        run: () => void openSqlHistory()
+      },
+      {
+        id: 'sql.snippets',
+        title: 'SQL 片段库',
+        section: 'SQL',
+        keywords: 'snippet template',
+        run: () => { setSnippetDraft(undefined); setSnippetsOpen(true); }
+      },
+      {
+        id: 'sql.file-tasks',
+        title: '大 SQL 文件执行',
+        section: 'SQL',
+        keywords: 'file import script batch',
+        disabledReason: needsConnection,
+        run: () => openSqlFileTasks()
+      },
+      {
+        id: 'connection.new',
+        title: '新建连接',
+        section: '连接',
+        keywords: 'new connection add database',
+        run: () => { setActiveDrawer('connections'); openNewConnectionEditor(); }
+      },
+      {
+        id: 'connection.refresh',
+        title: '刷新连接列表',
+        section: '连接',
+        keywords: 'refresh reload connections',
+        run: () => void refreshConnections()
+      }
+    ];
+    // 管理抽屉的每个分区都是一条命令：分区自己已经声明了「要不要连接、要什么权限」，
+    // 这里直接复用那份判断，不要再写一遍。
+    for (const section of MANAGEMENT_SECTIONS) {
+      if (!isManagementSectionVisible(section.key, isCurrentUserAdmin(), isAuthenticationEnabled())) continue;
+      const available = isManagementSectionAvailable(
+        section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
+      actions.push({
+        id: `manage.${section.key}`,
+        // 「打开 AI 助手」而不是「打开AI 助手」：中文与拉丁字母之间要留一个空格。
+        title: `打开${/^[A-Za-z]/.test(section.label) ? ' ' : ''}${section.label}`,
+        section: '管理',
+        keywords: section.key,
+        disabledReason: available ? undefined : (selected ? '当前连接缺少该功能权限' : '需要先选择一条连接'),
+        run: () => openManagement(section.key)
+      });
+    }
+    for (const connection of connections) {
+      if (connection.id === selected?.id) continue;
+      actions.push({
+        id: `connection.switch.${connection.id}`,
+        title: `切换到 ${connection.name}`,
+        section: '连接',
+        keywords: `${connection.dbType} switch connection ${connection.name}`,
+        run: () => selectConnection(connection)
+      });
+    }
+    return actions;
+  }, [compactLayout, connections, layoutPreferences, selected]);
+
+  const runPaletteAction = useStableEvent((action: PaletteAction) => {
+    setRecentCommandIds((current) => {
+      const next = rememberCommand(current, action.id);
+      writeRecentCommandIds(next);
+      return next;
+    });
+    action.run();
+  });
+
   const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
   const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());
   const openSnippetsEvent = useStableEvent(() => {
@@ -3415,6 +3547,28 @@ export default function App() {
             selected={selected}
             onClose={closeSqlFileTasksEvent}
             onMetadataChanged={handleSqlFileMetadataEvent}
+          />
+        </Suspense>
+      )}
+      {objectSearchOpen && (
+        <Suspense fallback={null}>
+          <ObjectSearchPalette
+            open
+            connectionId={selected?.id}
+            schemaName={activeSqlSchema}
+            onClose={() => setObjectSearchOpen(false)}
+            onOpenHit={openObjectSearchHit}
+          />
+        </Suspense>
+      )}
+      {commandPaletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            open
+            actions={paletteActions}
+            recentIds={recentCommandIds}
+            onClose={() => setCommandPaletteOpen(false)}
+            onRun={runPaletteAction}
           />
         </Suspense>
       )}

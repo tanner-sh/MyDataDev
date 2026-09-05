@@ -276,6 +276,36 @@ try {
     // 关不掉同样是故障：overlayOpen 会一直为真，把全局快捷键锁死。
     check('连接表单可以关闭', (await page.evaluate(`document.querySelectorAll('.ant-modal-container').length`)) === 0);
   }
+  // 命令面板：快捷键是它唯一的入口，坏了不会有任何界面痕迹 —— 这正是 Ctrl/Cmd+P 的对象
+  // 搜索曾经悄悄失灵过一整轮的原因（渲染块被删掉，快捷键还在）。
+  await page.evaluate(`
+    (() => {
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+      document.dispatchEvent(escape);
+    })()
+  `);
+  await page.sleep(800);
+  await page.evaluate(`
+    (() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true }));
+    })()
+  `);
+  await page.sleep(1500);
+  const palette = await page.evaluate(`
+    (() => {
+      const modal = document.querySelector('.command-palette-modal');
+      if (!modal) return { open: false };
+      return {
+        open: true,
+        commands: modal.querySelectorAll('.command-palette-item').length,
+        hasManagement: modal.textContent.includes('打开连接管理')
+      };
+    })()
+  `);
+  check('命令面板可以用快捷键打开', palette.open === true);
+  check('命令面板列出了命令', (palette.commands || 0) > 0 && palette.hasManagement === true);
+  if (palette.open) await page.shot('04-命令面板');
+
 } catch (error) {
   failures.push(String(error.message || error));
   console.log(`  ✗ ${error.message || error}`);

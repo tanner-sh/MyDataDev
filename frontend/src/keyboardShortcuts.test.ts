@@ -49,6 +49,18 @@ describe('resolveAppShortcut', () => {
   });
 });
 
+describe('命令面板快捷键', () => {
+  /** Ctrl/Cmd+P 搜库里的对象，Ctrl/Cmd+K 搜应用能做的事 —— 两者点开之后去的地方完全不同。 */
+  it('Ctrl/Cmd+K 打开命令面板', () => {
+    expect(resolveAppShortcut(press({ key: 'k', code: 'KeyK', metaKey: true }))).toEqual({ kind: 'open-command-palette' });
+    expect(resolveAppShortcut(press({ key: 'K', code: 'KeyK', ctrlKey: true }))).toEqual({ kind: 'open-command-palette' });
+  });
+
+  it('不带修饰键时是普通输入', () => {
+    expect(resolveAppShortcut(press({ key: 'k', code: 'KeyK' }))).toBeUndefined();
+  });
+});
+
 describe('全局对象搜索快捷键', () => {
   it('Ctrl/Cmd+P 打开对象搜索', () => {
     expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP', metaKey: true }))).toEqual({ kind: 'open-object-search' });
