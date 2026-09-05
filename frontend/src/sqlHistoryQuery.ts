@@ -60,3 +60,21 @@ export function sqlHistoryRequestParams(connectionId: number, query: SqlHistoryQ
   params.set('scope', query.scope || 'mine');
   return params.toString();
 }
+
+/**
+ * 统计概览的一句话。
+ *
+ * <p>失败率而不是失败数：20 次里失败 3 次和 2000 次里失败 3 次，是完全不同的两件事。
+ * 一次执行都没有时不要显示 0%（那会让人以为「一切正常」），直接说没有记录。</p>
+ */
+export function historyStatsSummary(stats: {
+  days: number;
+  summary: { total: number; failed: number; averageMs: number; slowestMs: number };
+}): string {
+  const { days, summary } = stats;
+  if (summary.total === 0) return `最近 ${days} 天没有执行记录。`;
+  const failureRate = Math.round((summary.failed / summary.total) * 100);
+  return `最近 ${days} 天执行 ${summary.total} 次`
+    + `，失败 ${summary.failed} 次（${failureRate}%）`
+    + `，平均 ${summary.averageMs}ms，最慢 ${summary.slowestMs}ms。`;
+}

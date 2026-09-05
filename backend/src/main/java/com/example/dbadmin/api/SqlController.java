@@ -171,6 +171,36 @@ public class SqlController {
         return sqlService.history(connectionId, keyword, limit, actorUserId);
     }
 
+    /**
+     * 执行统计：最慢的查询、失败最多的语句、执行人分布。
+     *
+     * <p>范围判定与历史列表逐字一致（默认只看自己的，看全部要管理员）—— 统计是同一批数据的
+     * 另一个视角，权限不该松一档。</p>
+     */
+    @GetMapping("/history/stats")
+    public com.example.dbadmin.dto.ApiDtos.SqlHistoryStats historyStats(
+            @RequestParam long connectionId,
+            @RequestParam(required = false, defaultValue = "7") int days,
+            @RequestParam(required = false, defaultValue = "mine") String scope,
+            Authentication authentication
+    ) {
+        access.require(connectionId, ConnectionPermission.QUERY);
+        WebIdentity identity = authentication != null && authentication.getPrincipal() instanceof WebIdentity webIdentity
+                ? webIdentity : null;
+        boolean allUsers = "all".equalsIgnoreCase(scope);
+        if (!allUsers && !"mine".equalsIgnoreCase(scope)) {
+            throw new IllegalArgumentException("不支持的 SQL 历史范围：" + scope);
+        }
+        if (allUsers && identity != null && !"ADMIN".equals(identity.role())) {
+            throw new ApiProblemException(
+                    org.springframework.http.HttpStatus.FORBIDDEN,
+                    "SQL_HISTORY_ALL_ADMIN_REQUIRED",
+                    "只有管理员可以查看该连接中全部用户的 SQL 历史。"
+            );
+        }
+        return sqlService.historyStats(connectionId, days, identity != null && !allUsers ? identity.userId() : null);
+    }
+
     @PostMapping("/completions")
     public java.util.List<SqlCompletionItem> completions(@Valid @RequestBody SqlCompletionRequest request) {
         access.require(request.connectionId(), ConnectionPermission.VIEW_METADATA);

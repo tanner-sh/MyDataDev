@@ -7,7 +7,8 @@ import {
   nextSqlHistoryLimit,
   SQL_HISTORY_MAX_LIMIT,
   SQL_HISTORY_PAGE_SIZE,
-  sqlHistoryRequestParams
+  sqlHistoryRequestParams,
+  historyStatsSummary
 } from './sqlHistoryQuery';
 
 describe('hasMoreSqlHistory', () => {
@@ -66,5 +67,19 @@ describe('sqlHistoryRequestParams', () => {
   it('requests all visible history when explicitly selected', () => {
     expect(sqlHistoryRequestParams(7, { keyword: '', limit: 50, scope: 'all' }))
       .toBe('connectionId=7&limit=50&scope=all');
+  });
+});
+
+describe('historyStatsSummary', () => {
+  /** 失败率而不是失败数：20 次里失败 3 次和 2000 次里失败 3 次是两回事。 */
+  it('给出失败率与耗时', () => {
+    expect(historyStatsSummary({ days: 7, summary: { total: 20, failed: 3, averageMs: 45, slowestMs: 900 } }))
+      .toBe('最近 7 天执行 20 次，失败 3 次（15%），平均 45ms，最慢 900ms。');
+  });
+
+  /** 一次都没执行时显示 0% 会让人以为「一切正常」。 */
+  it('没有记录时直说没有记录', () => {
+    expect(historyStatsSummary({ days: 30, summary: { total: 0, failed: 0, averageMs: 0, slowestMs: 0 } }))
+      .toBe('最近 30 天没有执行记录。');
   });
 });

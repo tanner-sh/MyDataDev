@@ -4404,6 +4404,12 @@ body.is-resizing-column * {
 }
 
 /* 结构对比：两端选择器并排，差异明细在展开行里 */
+.history-stats-section {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--space-sm);
+}
+
 .backup-history-verification {
   display: block;
   margin-top: 4px;

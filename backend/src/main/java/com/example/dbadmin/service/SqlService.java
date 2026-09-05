@@ -550,6 +550,11 @@ public class SqlService {
         return executions.cancel(executionId);
     }
 
+    /** 执行统计：同一批历史数据的另一个视角，取数与范围判定都交给仓储层。 */
+    public com.example.dbadmin.dto.ApiDtos.SqlHistoryStats historyStats(long connectionId, int days, Long actorUserId) {
+        return history.stats(connectionId, days, actorUserId, 10);
+    }
+
     public List<SqlHistoryResponse> history(long connectionId, Integer limit) {
         return history(connectionId, null, limit);
     }

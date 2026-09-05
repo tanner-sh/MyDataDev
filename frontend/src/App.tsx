@@ -3375,6 +3375,7 @@ export default function App() {
         <Suspense fallback={null}>
           <SqlHistoryDrawer
             open={sqlHistoryState.open}
+            connectionId={selected?.id}
             history={sqlHistoryState.rows}
             keyword={sqlHistoryState.query.keyword}
             scope={sqlHistoryState.query.scope || 'mine'}

@@ -713,6 +713,28 @@ public final class ApiDtos {
     }
 
     /** 表数据导出：沿用浏览的查询条件，加一个导出格式。 */
+    /**
+     * SQL 执行的统计视角。
+     *
+     * <p>耗时、状态、执行人本来就记在 sql_history 里，只是从来没被聚合过 ——「哪条最慢」
+     * 「哪条一直在失败」此前只能靠人一页页翻列表。</p>
+     */
+    public record SqlHistoryStats(
+            int days,
+            SqlHistorySummary summary,
+            List<SqlHistoryResponse> slowest,
+            List<SqlHistoryGroup> failures,
+            List<SqlHistoryGroup> busiest
+    ) {
+    }
+
+    public record SqlHistorySummary(int total, int failed, long averageMs, long slowestMs) {
+    }
+
+    /** @param text 分组依据：失败排行里是 SQL 原文，执行人排行里是用户名 */
+    public record SqlHistoryGroup(String text, int hits, long averageMs, String lastSeenAt) {
+    }
+
     public record TableExportRequest(
             @NotNull @Valid TableDataRequest query,
             @NotBlank @Size(max = 20) String format

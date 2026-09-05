@@ -484,6 +484,17 @@ export type SqlTab = {
    */
   errorDetail?: string;
 };
+/** SQL 执行统计：同一批历史数据的另一个视角。 */
+export type SqlHistoryStats = {
+  days: number;
+  summary: { total: number; failed: number; averageMs: number; slowestMs: number };
+  slowest: SqlHistory[];
+  failures: SqlHistoryGroup[];
+  busiest: SqlHistoryGroup[];
+};
+
+export type SqlHistoryGroup = { text: string; hits: number; averageMs: number; lastSeenAt: string };
+
 export type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; actorUserId?: number; createdAt: string };
 export type SqlFileExecutionStatus = 'ANALYZING' | 'READY' | 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
 export type SqlFileExecution = {
