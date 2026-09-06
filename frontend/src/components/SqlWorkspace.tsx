@@ -277,16 +277,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, onResto
   /**
    * AI 给的 SQL 只落到编辑器里，执行与否由用户决定。
    *
-   * 诊断的结果追加到当前标签页（用户正对着这条 SQL 改），生成的结果开新标签页
-   * （手里那条还没写完，不该被覆盖）。
+   * 单轮问答（解读结果、数据字典、同步脚本审阅）产出的 SQL 一律追加到当前标签页 ——
+   * 用户正对着这条 SQL 在看。要开新标签页的是 Agent 抽屉那条路，它直接用
+   * {@code onOpenSqlInNewTab}（见下面的 onInsertSql）。
    */
   function insertAiSql(sql: string) {
-    if (aiRequest?.action === 'generate') {
-      onOpenSqlInNewTab(sql, 'AI 生成的 SQL');
-    } else {
-      updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
-      commitDraft();
-    }
+    updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${sql}`);
+    commitDraft();
     setAiRequest(undefined);
   }
 

@@ -97,32 +97,6 @@ public final class AiDtos {
     }
 
     /**
-     * 报错诊断请求。
-     *
-     * <p>SQL 与报错原文都由前端原样回传：后端不留会话，也不从 SQL 历史里翻 —— 用户看到的
-     * 那一屏才是要诊断的东西。</p>
-     */
-    public record AiDiagnoseRequest(
-            long connectionId,
-            @Size(max = 200) String schemaName,
-            @NotBlank @Size(max = 20000) String sql,
-            @NotBlank @Size(max = 10000) String errorMessage
-    ) {
-    }
-
-    /**
-     * 自然语言转 SQL 的请求。
-     *
-     * <p>问题原文不落任何一张表：既不进 sql_history，也不进审计，只活在这一次请求里。</p>
-     */
-    public record AiGenerateRequest(
-            long connectionId,
-            @Size(max = 200) String schemaName,
-            @NotBlank @Size(max = 2000) String question
-    ) {
-    }
-
-    /**
      * 多轮 SQL 对话。浏览器只提交当前这句话；历史和工具结果绑定在服务端短期会话里，
      * 避免客户端伪造模型已经检查过的结构。
      */
@@ -316,9 +290,6 @@ public final class AiDtos {
     }
 
     /** 一次问答的回答。文本是 Markdown，前端只做代码块提取，不整段渲染 HTML。 */
-    public record AiAnswerResponse(String text) {
-    }
-
     /**
      * 给所有登录用户的可用性快照。
      *

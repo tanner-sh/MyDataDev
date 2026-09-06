@@ -116,7 +116,6 @@ CREATE TABLE IF NOT EXISTS ai_connection_policy (
 | `PUT` | `/api/ai/settings` | 保存配置；Key 为 `******` 时沿用旧值 |
 | `POST` | `/api/ai/settings/test` | 连通性测试，只发一条最小请求 |
 | `GET`/`PUT` | `/api/ai/connections/{id}/policy` | 连接级共享策略 |
-| `POST` | `/api/ai/sql/generate` | 自然语言 → SQL |
 | `GET`/`PUT` | `/api/ai/connections/{id}/glossary` | 连接级业务词典（管理员） |
 | `GET` | `/api/ai/connections/{id}/glossary/suggestions` | 从表注释推候选词条；只读，不落库 |
 | `GET`/`DELETE` | `/api/ai/connections/{id}/glossary/gaps` | AI 搜过却一无所获的业务词；DELETE 是「忽略」 |
@@ -178,7 +177,7 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 
 | 动作码 | 中文名 |
 | --- | --- |
-| `AI_GENERATE_SQL` | AI 生成 SQL |
+| `AI_GENERATE_SQL` | AI 生成 SQL（M9 起由 Agent 取代，不再写入，历史记录仍在） |
 | `AI_DIAGNOSE_ERROR` | AI 诊断执行报错（M9 起不再写入，历史记录仍在） |
 | `AI_EXPLAIN_INSIGHT` | AI 解读执行计划 |
 | `AI_SETTINGS_UPDATE` | 修改 AI 设置 |
@@ -226,7 +225,14 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 1. `ReadOnlyQueryScope` 从包内可见改为 public。取样本行要走同一套只读保护（只读事务 + 回滚 + 恢复），与其在 `service/ai` 里再抄一份，不如共用这个已经验证过的实现。
 2. 新增 `AiAuditActionsTest`。AI 这一侧几个入口共用一条写审计的路径，动作码是变量，`AuditActionLabelCoverageTest` 的正则扫不到；动作码集中在 `AiAssistantService.AUDIT_ACTIONS`，由新测试盯着中文名。
 
-### M3 — 自然语言 → SQL · 已完成
+### M3 — 自然语言 → SQL · 已完成（后被 M9 取代）
+
+> 这一节记录的是 M3 当时的做法，代码已经删除：单轮「自然语言转 SQL」整条路
+> （`POST /api/ai/sql/generate`、`AiAssistantService.generate`、`AiPromptBuilder.generate`、
+> `SchemaContextBuilder.forQuestion` 与下面的 `TableSelector`）由 M9 的 Agent 取代。
+> 选表这件事本身没有消失，只是换了做法：不再由后端用关键词替模型挑八张表，而是让模型
+> 自己调 `search_schema` 去搜 —— 它知道自己还缺什么，而关键词匹配不知道。保留本节是因为
+> 「为什么当初这样选表」对理解现在的取舍仍然有用。
 
 - `TableSelector`（后端，纯逻辑）：从整库表清单里挑最多 8 张相关表。打分只用三件确定的事 —— 表名是否被问题原文提到、词块重合、同分时短名优先。选不出来就一张不给，让模型明说「看不到相关的表」，好过拿八张无关表编一条 SQL。
 - `SchemaContextBuilder.forQuestion`：候选表来自元数据目录（走缓存），再交给 `TableSelector`。
@@ -273,7 +279,7 @@ Agent 的多轮循环有两个缓存断点：一个打在系统提示上（缓�
 - **校验入口只收 SELECT（可带 WITH 前缀）。** SHOW、DESCRIBE、EXPLAIN 也是只读的，但它们能不能被「只解析不取数」地校验各方言差别很大，`EXPLAIN ANALYZE SELECT` 在 PostgreSQL 上更是真跑一遍。`SqlStatementClassifier.isSelectQuery` 把这道判断收在一处，模型的系统提示和重试提示同步收窄。
 - **校验失败自动回到模型修正**，失败原文作为下一轮的用户消息；修正次数受同一个轮次上限约束。
 - **`AiAgentCoordinator`**：有界线程池 + 队列 + 按用户并发上限，取消靠 `Thread.interrupt()`。局限要知道：轮次之间的 `checkCancelled()` 是有效的，但如果 provider 的 HTTP 客户端不响应中断（OkHttp 就不响应），正在进行的那次模型调用仍会跑完才停。
-- **审计对取消也写一条。** 取消发生时，工具往往已经把库结构发给外部模型了 —— 只记成功和失败，等于这次外发在审计里查不到。审计动作码是独立的 `AI_AGENT_CHAT`，和单轮 `AI_GENERATE_SQL` 分开筛。
+- **审计对取消也写一条。** 取消发生时，工具往往已经把库结构发给外部模型了 —— 只记成功和失败，等于这次外发在审计里查不到。审计动作码是独立的 `AI_AGENT_CHAT`，和单轮问答那几个动作码（`AI_INTERPRET_RESULT` 等）分开筛。
 - **最终回答流式输出。** Agent 每轮开始时发 `answer-reset`，前端据此丢掉上一轮的开场白或没通过校验的候选 SQL，正文随 `delta` 增量显示。OpenAI 兼容协议下 `LlmClient.turn` 退化成非流式（写完一次性回调），行为与之前一致。
 - **连接级业务词典**（`ai_business_glossary`，V15 迁移）：管理员维护「业务词 → 别名 → 真实对象名」，`search_schema` 命中词典的对象直接加权。词典是 AI 唯一能看到的、库里没有的知识来源。
 

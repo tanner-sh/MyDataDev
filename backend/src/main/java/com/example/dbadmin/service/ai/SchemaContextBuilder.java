@@ -3,7 +3,6 @@ package com.example.dbadmin.service.ai;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
-import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.model.DbConnection;
@@ -60,27 +59,7 @@ public class SchemaContextBuilder {
         return forTables(connectionId, schemaName, SqlTableReferences.extract(sql), policy);
     }
 
-    /**
-     * 按自然语言问题选表。
-     *
-     * <p>候选表来自元数据目录（走缓存），挑哪几张交给 {@link TableSelector}。选不出来时返回空
-     * 上下文而不是把整库塞进去 —— 让模型明说「看不到相关的表」，比拿八张无关表编一条 SQL 好。</p>
-     */
-    public SchemaContext forQuestion(long connectionId, String schemaName, String question, AiConnectionPolicy policy) {
-        List<String> candidates;
-        try {
-            candidates = metadata.completionCatalog(connectionId, schemaName, false).objects().stream()
-                    .map(DbObject::name)
-                    .filter(name -> name != null && !name.isBlank())
-                    .toList();
-        } catch (Exception e) {
-            log.debug("AI 选表时读取元数据目录失败：{}", e.toString());
-            candidates = List.of();
-        }
-        return forTables(connectionId, schemaName, new LinkedHashSet<>(TableSelector.select(question, candidates)), policy);
-    }
-
-    public SchemaContext forTables(long connectionId, String schemaName, Set<String> references, AiConnectionPolicy policy) {
+        public SchemaContext forTables(long connectionId, String schemaName, Set<String> references, AiConnectionPolicy policy) {
         DbConnection connection = connections.require(connectionId);
         if (references.isEmpty()) return SchemaContext.empty(connection.dbType(), schemaName);
 

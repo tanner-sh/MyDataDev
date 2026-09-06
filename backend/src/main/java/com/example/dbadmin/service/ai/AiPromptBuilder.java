@@ -42,21 +42,6 @@ public final class AiPromptBuilder {
         return text.toString();
     }
 
-    /** 自然语言转 SQL：只要一条语句，不解释一堆。 */
-    public static String generate(String question, boolean readonlyConnection) {
-        String constraint = readonlyConnection
-                ? "这是一条只读连接，只能给 SELECT 语句。"
-                : "如果需求本身是写操作，可以给写语句，但要在 SQL 前一句话点明它会修改数据。";
-        return """
-                把下面的需求写成一条 SQL。%s
-                先给 SQL（```sql 代码块，只给一条语句），再用一两句话说明它做了什么、有哪些前提。
-                如果需求含糊到写不出确定的 SQL，直接说缺什么信息，不要猜着写。
-
-                需求：
-                %s
-                """.formatted(constraint, clamp(question, MAX_SQL_CHARS));
-    }
-
     /**
      * 结果集解读与图表推荐。
      *

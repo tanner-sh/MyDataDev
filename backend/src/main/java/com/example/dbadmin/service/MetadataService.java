@@ -143,10 +143,6 @@ public class MetadataService {
         );
     }
 
-    public CompletionCatalogResponse completionCatalog(long connectionId, String requestedNamespace, boolean refresh) throws Exception {
-        return completionCatalog(connectionId, requestedNamespace, null, 100, refresh);
-    }
-
     public BackupTargetPage backupTargetNamespaces(long connectionId, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);

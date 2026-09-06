@@ -111,7 +111,7 @@ class MetadataServiceTest {
         assertThat(lastPage.totalObjectsExact()).isTrue();
         assertThat(lastPage.totalObjects()).isEqualTo(2);
 
-        var completionCatalog = service.completionCatalog(1L, response.selectedSchema(), false);
+        var completionCatalog = service.completionCatalog(1L, response.selectedSchema(), null, 100, false);
         assertThat(completionCatalog.namespaceKind()).isEqualTo("SCHEMA");
         assertThat(completionCatalog.selectedSchema()).isEqualTo(response.selectedSchema());
         assertThat(completionCatalog.objects()).extracting("name")

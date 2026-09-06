@@ -40,12 +40,6 @@ class AiPromptBuilderTest {
         assertThat(prompt).contains("你没有执行权限");
     }
 
-    @Test
-    void generatePromptPinsReadonlyConnectionsToSelect() {
-        assertThat(AiPromptBuilder.generate("统计上周订单数", true)).contains("只能给 SELECT 语句");
-        assertThat(AiPromptBuilder.generate("把过期订单标记为关闭", false)).contains("会修改数据");
-    }
-
     /** 确定性规则已经得出的结论要一并发过去，模型只在其上解释，而不是重新判断一遍。 */
     @Test
     void interpretPromptWarnsThatOnlyAPreviewWasSeen() {

@@ -47,6 +47,12 @@ public class AiAssistantService {
      * {@code AuditActionLabelCoverageTest} 那条正则只认字面量，扫不到它们。
      * {@link com.example.dbadmin.service.ai.AiAuditActionsTest} 盯着这个数组。</p>
      */
+    /**
+     * 历史动作码：单轮「自然语言转 SQL」已由 {@link AiSqlAgentService} 取代，没有任何代码
+     * 再写这一条。但已经落库的 audit_log 行还带着它，所以它必须留在 {@link #AUDIT_ACTIONS}
+     * 里 —— 那份清单保的是「这个码在界面上有中文名」，不是「我们还会写它」。删掉它，
+     * 旧审计记录就会在抽屉里显示成一串英文常量，而且没有测试会拦住。
+     */
     public static final String ACTION_GENERATE = "AI_GENERATE_SQL";
     public static final String ACTION_EXPLAIN = "AI_EXPLAIN_INSIGHT";
     public static final String ACTION_INTERPRET = "AI_INTERPRET_RESULT";
@@ -98,43 +104,12 @@ public class AiAssistantService {
         }
     }
 
-    /** 自然语言转 SQL。产出只回到编辑器，这里没有任何执行入口。 */
-    public String generate(long connectionId, String schemaName, String question, String actor) {
-        Prepared prepared = prepareGenerate(connectionId, schemaName, question, actor);
-        LlmResponse response = prepared.client().complete(prepared.request());
-        writeAudit(ACTION_GENERATE, connectionId, prepared, response, actor);
-        return response.text();
-    }
-
-    public SseEmitter generateStream(long connectionId, String schemaName, String question, String actor) {
-        Prepared prepared = prepareGenerate(connectionId, schemaName, question, actor);
-        return stream(prepared, ACTION_GENERATE, connectionId, actor);
-    }
-
-    private Prepared prepareGenerate(long connectionId, String schemaName, String question, String actor) {
-        AiSettings current = settings.requireEnabled(actor);
-        AiConnectionPolicy policy = settings.requireSharedConnection(connectionId);
-        DbConnection connection = connections.require(connectionId);
-        SchemaContext context = contexts.forQuestion(connectionId, schemaName, question, policy);
-        LlmRequest request = LlmRequest.of(
-                AiPromptBuilder.system(context, dialectHint(connection)),
-                AiPromptBuilder.generate(question, connection.readonly()));
-        return new Prepared(clients.create(current), request, current, policy, context);
-    }
-
     /**
      * 解读一批查询结果。
      *
      * <p>这是唯一会把真实数据发出去的入口，因此额外要求连接开了样本档：只读结构的连接
      * 在这里直接拒绝，而不是悄悄发一份「反正只有几行」的数据。</p>
      */
-    public String interpret(long connectionId, String schemaName, String sql, String preview, String chartCandidates, String actor) {
-        Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates, actor);
-        LlmResponse response = prepared.client().complete(prepared.request());
-        writeAudit(ACTION_INTERPRET, connectionId, prepared, response, actor);
-        return response.text();
-    }
-
     public SseEmitter interpretStream(long connectionId, String schemaName, String sql, String preview, String chartCandidates, String actor) {
         Prepared prepared = prepareInterpret(connectionId, schemaName, sql, preview, chartCandidates, actor);
         return stream(prepared, ACTION_INTERPRET, connectionId, actor);

@@ -2,14 +2,12 @@ package com.example.dbadmin.api;
 
 import com.example.dbadmin.access.ConnectionAccessService;
 import com.example.dbadmin.access.ConnectionPermission;
-import com.example.dbadmin.dto.AiDtos.AiAnswerResponse;
 import com.example.dbadmin.dto.AiDtos.AiCancelResponse;
 import com.example.dbadmin.dto.AiDtos.AiChatRequest;
 import com.example.dbadmin.dto.AiDtos.AiConversationResponse;
 import com.example.dbadmin.dto.AiDtos.AiDocumentRequest;
 import com.example.dbadmin.dto.AiDtos.AiInterpretRequest;
 import com.example.dbadmin.dto.AiDtos.AiReviewScriptRequest;
-import com.example.dbadmin.dto.AiDtos.AiGenerateRequest;
 import com.example.dbadmin.service.ai.AiAssistantService;
 import com.example.dbadmin.service.ai.AiSqlAgentService;
 import com.example.dbadmin.auth.WebIdentityContext;
@@ -49,26 +47,6 @@ public class AiAssistantController {
         this.assistant = assistant;
         this.agent = agent;
         this.access = access;
-    }
-
-    @PostMapping("/generate")
-    public AiAnswerResponse generate(
-            @Valid @RequestBody AiGenerateRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return new AiAnswerResponse(assistant.generate(
-                request.connectionId(), request.schemaName(), request.question(), actor));
-    }
-
-    @PostMapping("/generate/stream")
-    public SseEmitter generateStream(
-            @Valid @RequestBody AiGenerateRequest request,
-            @RequestHeader(value = "X-User", required = false) String actor
-    ) {
-        requireQuery(request.connectionId());
-        return assistant.generateStream(
-                request.connectionId(), request.schemaName(), request.question(), actor);
     }
 
     @PostMapping("/interpret/stream")
