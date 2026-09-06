@@ -422,8 +422,11 @@ public class SqlService {
                 ? null : SqlResultPushdown.normalizeDirection(sortDirection);
         List<SqlResultFilter> normalizedFilters = filters == null ? List.of() : filters;
         // 筛选和排序包在里面、分页包在外面：方言只需要照常处理一条没有分页子句的 SELECT。
+        // 先过 EmbeddableSql：没有筛选也没有排序时 apply 会原样返回，那条 SQL 会被方言直接
+        // 追加分页子句 —— 原文末尾停在一行注释里的话，LIMIT/OFFSET 会整段落进注释，翻页于是
+        // 每一页都返回第一页且不报错。
         SqlResultPushdown.Shaped shaped = SqlResultPushdown.apply(
-                executionSql, normalizedFilters, normalizedSortColumn, normalizedSortDirection, dialect);
+                EmbeddableSql.of(executionSql), normalizedFilters, normalizedSortColumn, normalizedSortDirection, dialect);
         String pageSql = dialect.pageQuery(shaped.sql(), pageSize + 1, offset);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);

@@ -2,6 +2,7 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.core.CellSerializer;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.core.SchemaObjectKind;
@@ -32,9 +33,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.sql.Blob;
 import java.sql.CallableStatement;
-import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -60,6 +59,8 @@ public class SchemaObjectService {
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final int MAX_CELL_TEXT = 100_000;
     private static final long MAX_RESULT_TEXT = 20_000_000;
+    /** CLOB 先读回多少字符用于判断截断。与 SQL 工作台那条路同值：例程结果就显示在同一张网格里。 */
+    private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
     private static final Pattern IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
     private static final String DEFINITION_IDENTIFIER = "(?:\"(?:\"\"|[^\"])+\"|`(?:``|[^`])+`|\\[(?:]]|[^]])+]|[A-Za-z_][A-Za-z0-9_$#]*)";
     private static final Pattern DEFINITION_ACTION = Pattern.compile("(?is)^(CREATE(?:\\s+OR\\s+(?:REPLACE|ALTER))?|ALTER)\\s+");
@@ -577,19 +578,18 @@ public class SchemaObjectService {
         };
     }
 
+    /**
+     * 例程执行结果的单元格取值。
+     *
+     * <p>走的是与 SQL 工作台、表数据浏览、执行计划、导出完全同一套规则（{@link CellSerializer}）——
+     * 这里产出的也是一个 {@code SqlResult}，渲染在同一张结果网格里。自己再抄一份的下场是漂移：
+     * 这条路此前用 {@code value.toString()} 收尾，整点时间戳因此比别处多一个 {@code .0}；
+     * {@code BigInteger} 也漏在了「转成字符串」那一档外面，被当成 JSON 数字发出去，
+     * 而浏览器按双精度解析 —— MySQL 的 {@code BIGINT UNSIGNED} 正是 {@code BigInteger}，
+     * 19 位的 ID 会被静默改写。</p>
+     */
     private Object serializable(Object value, int maxText) throws Exception {
-        if (value == null) return null;
-        if (value instanceof Clob clob) {
-            int visible = (int) Math.min(clob.length(), Math.min(maxText, MAX_CELL_TEXT));
-            String text = visible <= 0 ? "" : clob.getSubString(1, visible);
-            return clob.length() > visible ? text + "… <CLOB 已截断>" : text;
-        }
-        if (value instanceof Blob blob) return "<BLOB " + blob.length() + " bytes>";
-        if (value instanceof byte[] bytes) return "<BINARY " + bytes.length + " bytes>";
-        if (value instanceof Long || value instanceof BigDecimal) return value.toString();
-        if (value instanceof Number || value instanceof Boolean) return value;
-        String text = value.toString();
-        return text.length() > maxText ? text.substring(0, Math.max(maxText, 0)) + "… <文本已截断>" : text;
+        return CellSerializer.serialize(value, maxText, MAX_CLOB_WINDOW_CHARS);
     }
 
     private String routineSql(DatabaseDialect dialect, String family, SchemaObjectKind kind, SchemaObjectSummary object, List<SchemaObjectParameter> parameters) {

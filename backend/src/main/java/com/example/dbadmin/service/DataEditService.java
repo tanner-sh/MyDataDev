@@ -1003,7 +1003,9 @@ public class DataEditService {
                 || value instanceof Boolean) {
             return false;
         }
-        return value.toString().length() > Math.max(maxTextChars, 0);
+        // 长度要按实际会写出去的文本量，也就是 CellSerializer 那一套规则来数（Timestamp 少两个
+        // 字符）。这里再抄一个 toString()，就是「标了截断却没截」这类漂移的下一个入口。
+        return CellSerializer.text(value).length() > Math.max(maxTextChars, 0);
     }
 
     private String normalize(String value) {

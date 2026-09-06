@@ -39,11 +39,14 @@ class CellSerializerTest {
     /**
      * 这条是这个类存在的理由。
      *
-     * <p>查询结果、表数据浏览、执行计划、导出四条路只有 CLOB 读取窗口不同，对同一个非 CLOB
-     * 的值必须给出完全一样的东西。历史上 {@code DefaultDialect} 与 {@code ExportService} 因为
-     * 够不着 {@code service} 包内可见的文本化规则，各自退回了 {@code value.toString()}，于是
-     * 执行计划和导出文件里的 Timestamp 多出一个 {@code .0}，而屏幕上没有 —— 导出尤其要紧，
-     * 它的整个卖点就是「和屏幕上看到的一致」。窗口参数化之后这类漂移不该再出现。</p>
+     * <p>查询结果、表数据浏览、执行计划、导出、例程执行结果五条路只有 CLOB 读取窗口不同，
+     * 对同一个非 CLOB 的值必须给出完全一样的东西。历史上 {@code DefaultDialect} 与
+     * {@code ExportService} 因为够不着 {@code service} 包内可见的文本化规则，各自退回了
+     * {@code value.toString()}，于是执行计划和导出文件里的 Timestamp 多出一个 {@code .0}，
+     * 而屏幕上没有 —— 导出尤其要紧，它的整个卖点就是「和屏幕上看到的一致」。
+     * {@code SchemaObjectService}（例程执行结果，渲染在同一张网格里）当时没被一起收进来，
+     * 除了那位 {@code .0} 还多丢一样东西：{@code BigInteger} 漏在「转成字符串」那一档外面，
+     * 被当成 JSON 数字发出去，而浏览器按双精度解析。窗口参数化之后这类漂移不该再出现。</p>
      */
     @Test
     void everyPathAgreesOnValuesThatAreNotClobs() throws Exception {
@@ -57,12 +60,16 @@ class CellSerializerTest {
             Object tableBrowse = CellSerializer.serialize(value, CELL, 4_096);
             Object explain = CellSerializer.serialize(value, CELL, 100_000);
             Object export = CellSerializer.serialize(value, CELL, 10_000);
+            Object routine = CellSerializer.serialize(value, CELL, 10_000);
             assertThat(tableBrowse).as("表数据浏览与查询结果对 %s 不一致", value).isEqualTo(sqlResult);
             assertThat(explain).as("执行计划与查询结果对 %s 不一致", value).isEqualTo(sqlResult);
             assertThat(export).as("导出与查询结果对 %s 不一致", value).isEqualTo(sqlResult);
+            assertThat(routine).as("例程执行结果与查询结果对 %s 不一致", value).isEqualTo(sqlResult);
         }
-        // 具体到那次漂移：三条路都不该出现 JDBC 补的那位 .0。
+        // 具体到那两处漂移：哪条路都不该出现 JDBC 补的那位 .0，BigInteger 也必须是文本。
         assertThat(CellSerializer.serialize(timestamp, CELL, 100_000)).isEqualTo("2025-09-18 14:30:00");
+        assertThat(CellSerializer.serialize(new BigInteger("9007199254740993"), CELL, 10_000))
+                .isEqualTo("9007199254740993");
     }
 
     @Test

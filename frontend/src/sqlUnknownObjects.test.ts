@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { findUnknownObjects, type KnownSchemaObjects } from './sqlUnknownObjects';
 
-const known: KnownSchemaObjects = { complete: true, schemaName: 'shop', names: ['orders', 'app_user'] };
+const known: KnownSchemaObjects = { hasMore: false, loadedKeyword: '', schemaName: 'shop', names: ['orders', 'app_user'] };
 
 function marks(sql: string, overrides: Partial<KnownSchemaObjects> = {}): string[] {
   return findUnknownObjects(sql, { ...known, ...overrides }).map((mark) => mark.name);
@@ -21,9 +21,20 @@ describe('findUnknownObjects', () => {
   });
 
   /** 资源树是分页的：第 2 页上的表不该被说成不存在。 */
-  it('清单没取全时整个功能关掉', () => {
-    expect(marks('SELECT * FROM whatever', { complete: false })).toEqual([]);
+  it('清单还有下一页时整个功能关掉', () => {
+    expect(marks('SELECT * FROM whatever', { hasMore: true })).toEqual([]);
     expect(marks('SELECT * FROM whatever', { names: [] })).toEqual([]);
+  });
+
+  /**
+   * 曾经的静默故障：搜索框是表/视图/存储过程共用的，在表分区搜过关键字之后切到视图分区，
+   * 界面上的关键字被清空，而表清单还是那份筛过的 —— 于是所有没匹配上关键字的正确表名
+   * 都被划上红线。所以判据是「取这份清单时用的关键字」，不是界面上当前的那个。
+   */
+  it('清单是按关键字筛出来的时候同样关掉', () => {
+    expect(marks('SELECT * FROM orders')).toEqual([]);
+    expect(marks('SELECT * FROM invoices', { loadedKeyword: 'order' })).toEqual([]);
+    expect(marks('SELECT * FROM invoices', { loadedKeyword: '  ' })).toEqual(['invoices']);
   });
 
   /** CTE 在 FROM 后面和真表长得一模一样，不排除的话每条 WITH 查询都会挂一串红线。 */

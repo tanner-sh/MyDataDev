@@ -8,7 +8,8 @@
  * 之后真的写错时也不会再看。所以下面每一条规则都往「不提示」的方向让步：</p>
  *
  * <ul>
- *   <li>对象清单没取全（资源树是分页的）时整个功能关掉 —— 第 2 页上的表不该被说成不存在；</li>
+ *   <li>对象清单没取全（还有下一页，或者它是按关键字筛出来的）时整个功能关掉 ——
+ *       第 2 页上的表、以及没匹配上关键字的表，都不该被说成不存在；</li>
  *   <li>WITH 定义的名字、子查询别名一律跳过，它们在 FROM 后面和真表长得一样；</li>
  *   <li>表值函数（<code>FROM unnest(x)</code>）跳过：那是函数不是表；</li>
  *   <li>带库名/模式名限定且不是当前 Schema 的跳过 —— 我们手上没有那个 Schema 的清单；</li>
@@ -19,8 +20,19 @@
 import { parseSqlTableReferences, sqlCteNames, tokenizeSql, type SqlToken } from './sqlCompletion';
 
 export type KnownSchemaObjects = {
-  /** 当前 Schema 的对象清单是否完整。分页没取完时一律不提示。 */
-  complete: boolean;
+  /**
+   * 清单还有没有下一页。资源树是分页的，第 2 页上的表不该被说成不存在。
+   */
+  hasMore: boolean;
+  /**
+   * 这份清单是用哪个关键字取回来的；非空就说明它是筛过的，同样不能用来判断「不存在」。
+   *
+   * 这里要的是「**取这份清单时**用的关键字」，不是「界面上当前生效的关键字」。两者会脱钩：
+   * 搜索框是表、视图、存储过程共用的，切到视图分区会把界面上的关键字清空，而表清单还是上一次
+   * 筛过的那份。传错了不会有任何报错，只会让正确的表名被划上红线 —— 所以判定放在这里，
+   * 调用方只负责把事实交出来。
+   */
+  loadedKeyword: string;
   /** 清单所属的 Schema；限定名与它不同的引用不参与判断。 */
   schemaName: string;
   names: string[];
@@ -29,7 +41,7 @@ export type KnownSchemaObjects = {
 export type UnknownObjectMark = { start: number; end: number; name: string };
 
 export function findUnknownObjects(sql: string, known: KnownSchemaObjects): UnknownObjectMark[] {
-  if (!known.complete || known.names.length === 0 || !sql.trim()) return [];
+  if (known.hasMore || known.loadedKeyword.trim() || known.names.length === 0 || !sql.trim()) return [];
   const knownNames = new Set(known.names.map(fold));
   const schema = fold(known.schemaName);
   const tokens = tokenizeSql(sql).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');

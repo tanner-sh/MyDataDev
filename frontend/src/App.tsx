@@ -158,6 +158,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
+  /**
+   * 当前 metadata.objects 这份清单是用哪个关键字取回来的。
+   *
+   * 不能拿 metadataAppliedKeyword 代替：那个值同时服务于视图/存储过程分区（SchemaObjectManager
+   * 自己按它取数），所以在**没有重新加载表清单**的情况下也会被改写 —— 切换对象类型就会把它清空，
+   * 而 metadata.objects 还是上一次按关键字筛过的表。两者一脱钩，「未知表名」提示就会拿一份筛过的
+   * 清单去断言「这张表不存在」，把正确的表名划上红线。
+   */
+  const [metadataObjectsKeyword, setMetadataObjectsKeyword] = useState('');
   const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
   const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(() => readSqlSession(null, undefined, workspaceOwner)?.tabs || [{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }]);
   const [activeSqlTabId, setActiveSqlTabId] = useState(() => readSqlSession(null, undefined, workspaceOwner)?.activeTabId || 'query-1');
@@ -982,6 +991,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       if (requestId !== metadataRequestSeqRef.current || selectedIdRef.current !== conn.id) return;
       setMetadataQuery((current) => ({ ...current, schema: data.selectedSchema || '' }));
       if (options.applyKeyword !== false) setMetadataAppliedKeyword(keyword);
+      // 和对象清单同时落地：这份清单就是这个关键字取回来的，中间不留下任何两者不一致的时刻。
+      setMetadataObjectsKeyword(keyword.trim());
       setMetadata((current) => {
         if (!options.append || !current) {
           return data;
@@ -3033,15 +3044,16 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   /**
    * 编辑器里的未知表名提示。
    *
-   * 用的就是补全那份对象清单，所以不打接口。但只在清单**确实完整**时才提示：资源树是分页的，
-   * 而且可能带着搜索关键字 —— 拿一份筛过或只有第一页的清单去判断「不存在」，会把正确的表名
-   * 也划上线，那比没有提示更糟。
+   * 用的就是补全那份对象清单，所以不打接口。清单完不完整由 findUnknownObjects 自己判断 ——
+   * 这里只把事实交出去：还有没有下一页，以及这份清单是用哪个关键字取回来的。
+   * 关键字要用 metadataObjectsKeyword 而不是 metadataAppliedKeyword，原因写在那个 state 上。
    */
   const resolveUnknownObjectsEvent = useStableEvent((sql: string) => {
     const current = metadataRef.current;
     if (!current) return [];
     return findUnknownObjects(sql, {
-      complete: !current.hasMore && !metadataAppliedKeyword.trim(),
+      hasMore: current.hasMore,
+      loadedKeyword: metadataObjectsKeyword,
       schemaName: current.selectedSchema || current.currentSchema || '',
       names: current.objects.map((object) => object.name)
     });

@@ -17,7 +17,8 @@ import java.util.Locale;
  *
  * <p>做法是把原查询包一层：{@code SELECT * FROM (原 SQL) mdd_view WHERE … ORDER BY …}。不往
  * 原文末尾追加 —— 原查询自己可能已经带了 ORDER BY，追加只会变成语法错误或更糟的静默改写。
- * 分页由方言的 {@code pageQuery} 在最外面再包一次，三件事互不干涉。</p>
+ * 分页由方言的 {@code pageQuery} 在最外面再包一次，三件事互不干涉。原文先过
+ * {@link EmbeddableSql}：结尾的分号或行注释会让这一层的闭括号落进注释里。</p>
  *
  * <p><b>筛选值一律走绑定参数，绝不拼进 SQL。</b>列名是标识符，只能靠方言的引用规则转义；
  * 而值来自输入框，拼进去就是注入点。类型也是绑定参数的理由：把列转成文本再比，数字列、
@@ -87,7 +88,7 @@ public final class SqlResultPushdown {
         }
 
         StringBuilder shaped = new StringBuilder("SELECT * FROM (")
-                .append(stripTrailingSemicolon(sql))
+                .append(EmbeddableSql.of(sql))
                 .append(") ").append(ALIAS);
         if (!where.isEmpty()) shaped.append(" WHERE ").append(where);
         if (sortColumn != null) {
@@ -139,13 +140,6 @@ public final class SqlResultPushdown {
                 throw new IllegalArgumentException("列名包含非法字符。");
             }
         }
-        return trimmed;
-    }
-
-    /** 结尾的分号会让子查询语法错误，而 SQL 工作台里带分号是常态。 */
-    private static String stripTrailingSemicolon(String sql) {
-        String trimmed = sql == null ? "" : sql.trim();
-        while (trimmed.endsWith(";")) trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
         return trimmed;
     }
 }
