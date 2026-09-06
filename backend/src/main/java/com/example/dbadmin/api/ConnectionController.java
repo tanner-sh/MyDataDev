@@ -82,15 +82,13 @@ public class ConnectionController {
     }
 
     @PostMapping("/test")
-    public MessageResponse test(@Valid @RequestBody TestConnectionRequest request) throws Exception {
-        service.test(request);
-        return new MessageResponse(true, "connection ok");
+    public com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse test(@Valid @RequestBody TestConnectionRequest request) throws Exception {
+        return new com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse(true, "连接测试成功", service.diagnose(request));
     }
 
     @PostMapping("/{id}/test")
-    public MessageResponse testExisting(@PathVariable long id, @Valid @RequestBody(required = false) ConnectionRequest request) throws Exception {
+    public com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse testExisting(@PathVariable long id, @Valid @RequestBody(required = false) ConnectionRequest request) throws Exception {
         access.require(id, ConnectionPermission.CONNECTION_ADMIN);
-        service.testExisting(id, request);
-        return new MessageResponse(true, "connection ok");
+        return new com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse(true, "连接测试成功", service.diagnoseExisting(id, request));
     }
 }

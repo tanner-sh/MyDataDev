@@ -36,6 +36,8 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_EXECUTE_SCRIPT: { label: '执行 SQL 脚本', category: 'sql' },
   SQL_QUERY_PAGE: { label: '查询结果翻页', category: 'sql' },
   SQL_EXPLAIN: { label: '查看执行计划', category: 'sql' },
+  DATA_CONFLICT_READ: { label: '查看数据编辑冲突', category: 'data' },
+  SQL_EXPORT_DOWNLOAD: { label: '下载定时导出文件', category: 'sql' },
   SQL_EXPORT: { label: '导出查询结果', category: 'sql' },
   SQL_UNSCOPED_MUTATION_CONFIRMED: { label: '确认执行无 WHERE 的写操作', category: 'sql', dangerous: true },
   SQL_FILE_UPLOAD: { label: '上传 SQL 文件', category: 'file' },

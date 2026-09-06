@@ -8,7 +8,7 @@ import {
 } from './backgroundTasks';
 
 function summary(backups: number, restores: number, sqlFiles: number) {
-  return { backups, restores, sqlFiles, total: backups + restores + sqlFiles };
+  return { backups, restores, sqlFiles, exports: 0, total: backups + restores + sqlFiles };
 }
 
 describe('summarizeBackgroundTasks', () => {
@@ -43,7 +43,7 @@ describe('backgroundTaskLabel', () => {
 describe('backgroundTaskCompletionMessage', () => {
   it('reports the kinds that stopped', () => {
     expect(backgroundTaskCompletionMessage(summary(1, 0, 0), summary(0, 0, 0)))
-      .toBe('1 个备份任务已结束，可在备份与恢复中查看结果。');
+      .toBe('1 个备份任务已结束，可在管理中的备份与恢复或定时导出中查看结果。');
     expect(backgroundTaskCompletionMessage(summary(2, 1, 0), summary(1, 1, 0)))
       .toBe('1 个备份任务已结束。');
   });

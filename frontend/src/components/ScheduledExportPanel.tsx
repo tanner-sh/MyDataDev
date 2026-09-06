@@ -24,7 +24,8 @@ import {
   PlusOutlined,
   ReloadOutlined
 } from '@ant-design/icons';
-import { api } from '../api';
+import { useVisiblePolling } from '../hooks/useVisiblePolling';
+import { api, apiResponse, downloadBlob } from '../api';
 import {
   WEEKDAY_OPTIONS,
   browserTimeZone,
@@ -36,7 +37,7 @@ import {
 } from '../backupSchedule';
 import type { BackupScheduleKind, CronWeekday } from '../backupSchedule';
 import { SCHEDULED_EXPORT_FORMATS, nextRunLabel, scheduledExportStatus, validateScheduledExport } from '../scheduledExport';
-import type { Connection, ScheduledExportRequest, ScheduledExportResponse } from '../types';
+import type { ScheduledExportRun, Connection, ScheduledExportRequest, ScheduledExportResponse } from '../types';
 import { formatHistoryTime, localizeError } from '../utils';
 import { PanelEmpty, PanelLoading } from './PanelState';
 
@@ -73,6 +74,9 @@ type ScheduledExportPanelProps = {
 export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenInSqlTab }: ScheduledExportPanelProps) {
   const [form] = Form.useForm<ScheduledExportFormValues>();
   const [toast, holder] = message.useMessage();
+  const [historyTask, setHistoryTask] = useState<number>();
+  const [runs, setRuns] = useState<ScheduledExportRun[]>([]);
+  const [historyError, setHistoryError] = useState('');
   const [tasks, setTasks] = useState<ScheduledExportResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -88,8 +92,8 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
   const editingConnection = connections.find((item) => item.id === editingConnectionId);
   const isProduction = editingConnection?.environment === 'prod';
 
-  const reload = useCallback(async () => {
-    setLoading(true);
+  const reload = useCallback(async (quiet = false) => {
+    if (!quiet) setLoading(true);
     try {
       setTasks(await api<ScheduledExportResponse[]>('/scheduled-queries'));
       setError(null);
@@ -103,6 +107,22 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useVisiblePolling({ enabled: true, intervalMs: 3_000, immediate: false, task: () => reload(true) });
+  useVisiblePolling({ enabled: historyTask != null, resetKey: historyTask, intervalMs: 3_000, immediate: true, task: async () => {
+    try { setRuns(await api<ScheduledExportRun[]>(`/scheduled-queries/${historyTask}/runs`)); setHistoryError(''); }
+    catch (error) { setHistoryError(localizeError(error)); }
+  } });
+
+  async function downloadRun(run: ScheduledExportRun) {
+    try { const response = await apiResponse(`/scheduled-queries/${run.taskId}/runs/${run.id}/download`); downloadBlob(await response.blob(), run.fileName || 'export'); }
+    catch (failure) { toast.error(localizeError(failure)); }
+  }
+
+  async function cancelRun(id: number) {
+    try { await api(`/scheduled-queries/${id}/cancel`, { method: 'POST' }); toast.info('已请求取消，等待任务结束'); await reload(true); }
+    catch (failure) { toast.error(localizeError(failure)); }
+  }
 
   function openEditor(existing?: ScheduledExportResponse) {
     const task = existing?.task;
@@ -173,8 +193,8 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
     try {
       const result = await api<ScheduledExportResponse>(`/scheduled-queries/${id}/run`, { method: 'POST' });
       // 立即运行与到点自动运行走同一条路：失败也记在任务上，所以这里读回来的状态才是结论。
-      if (result.task.lastStatus === 'SUCCESS') toast.success(result.task.lastMessage || '导出完成');
-      else toast.error(result.task.lastMessage || '导出失败');
+      if (result.task.lastStatus === 'FAILED') toast.error(result.task.lastMessage || '导出失败');
+      else toast.success('任务已进入后台，可在执行历史中查看进度和下载文件');
       await reload();
     } catch (failure) {
       toast.error(localizeError(failure));
@@ -207,6 +227,15 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
   return (
     <div className="management-section">
       {holder}
+      <Modal title="导出执行历史 · 最近 50 次" open={historyTask != null} onCancel={() => setHistoryTask(undefined)} footer={null} width={840}>
+        {historyError && <Alert type="error" showIcon title={historyError} />}
+        <Table rowKey="id" size="small" dataSource={runs} pagination={{ pageSize: 10 }} columns={[
+          { title: '开始时间', dataIndex: 'startedAt', render: value => formatHistoryTime(value) },
+          { title: '状态', dataIndex: 'status', render: value => scheduledExportStatus({ enabled: true, lastStatus: value }).label },
+          { title: '说明', dataIndex: 'message', render: value => <span style={{ overflowWrap: 'anywhere' }}>{value}</span> },
+          { title: '产物', render: (_, run) => run.downloadable ? <Button size="small" onClick={() => void downloadRun(run)}>下载 · {Math.ceil(run.fileSize / 1024)} KB</Button> : <Text type="secondary">{run.status === 'SUCCESS' ? '已按保留策略清理' : '尚无文件'}</Text> }
+        ]} />
+      </Modal>
       <header className="management-section-header">
         <Text strong>定时导出</Text>
         <Space size={8}>
@@ -222,7 +251,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
       {!tasks.length && !error ? (
         <PanelEmpty
           title="还没有定时导出任务"
-          description="定时跑一条查询并把结果写成文件 —— 产物留在服务端的导出目录里，只保留最近若干份。"
+          description="定时跑一条查询并把结果写成文件 —— 在执行历史中下载产物；文件按任务独立保留最近若干份。"
           action={<Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()} disabled={!connections.length}>新建任务</Button>}
         />
       ) : (
@@ -291,14 +320,17 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
             {
               title: '操作',
               key: 'actions',
-              width: 190,
+              width: 310,
               render: (_, row) => (
-                <Space size={4}>
+                <Space size={4} wrap>
+                  <Button size="small" onClick={() => { setRuns([]); setHistoryTask(row.task.id); }}>历史与下载</Button>
+                  {['QUEUED', 'RUNNING', 'CANCELLING'].includes(row.task.lastStatus || '') && <Button size="small" disabled={row.task.lastStatus === 'CANCELLING'} onClick={() => void cancelRun(row.task.id)}>取消任务</Button>}
                   <Tooltip title="立即运行一次">
                     <Button
                       size="small"
                       icon={<PlayCircleOutlined />}
                       loading={runningId === row.task.id}
+                      disabled={['QUEUED', 'RUNNING', 'CANCELLING'].includes(row.task.lastStatus || '')}
                       onClick={() => void runNow(row.task.id)}
                     />
                   </Tooltip>
@@ -310,7 +342,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
                   <Tooltip title="编辑">
                     <Button size="small" icon={<EditOutlined />} onClick={() => openEditor(row)} />
                   </Tooltip>
-                  <Popconfirm title="删除这条定时导出任务？" description="已导出的文件不会被删除。" onConfirm={() => void remove(row.task.id)}>
+                  <Popconfirm title="删除这条定时导出任务？" description="将删除任务、运行记录及本任务目录内的导出文件。" onConfirm={() => void remove(row.task.id)}>
                     <Button size="small" danger icon={<DeleteOutlined />} />
                   </Popconfirm>
                 </Space>

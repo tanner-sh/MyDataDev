@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SqlTab } from './types';
-import { MAX_STORED_SQL_TABS, normalizeSqlSession, readSqlSession, sqlSessionStorageKey, writeSqlSession } from './sqlSessionStorage';
+import { MAX_STORED_SQL_TABS, normalizeSqlSession, readSqlSession, sqlSessionStorageKey, writeSqlSession, rememberClosedSqlTab, restoreClosedSqlTab } from './sqlSessionStorage';
 
 function tab(id: string, sql = `select '${id}'`): SqlTab {
   return {
@@ -25,6 +25,26 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe('SQL session storage', () => {
+  it('isolates drafts and recently closed tabs by user and connection', () => {
+    const storage = memoryStorage();
+    writeSqlSession(1, [tab('alice')], 'alice', storage, 'alice');
+    expect(readSqlSession(1, storage, 'bob')).toBeUndefined();
+    rememberClosedSqlTab(1, tab('closed'), 'alice', storage);
+    expect(restoreClosedSqlTab(2, 'alice', storage)).toBeUndefined();
+    expect(restoreClosedSqlTab(1, 'bob', storage)).toBeUndefined();
+    expect(restoreClosedSqlTab(1, 'alice', storage)?.sql).toBe("select 'closed'");
+    expect(restoreClosedSqlTab(1, 'alice', storage)).toBeUndefined();
+    expect(readSqlSession(1, storage, 'alice')?.tabs[0].id).toBe('alice');
+  });
+
+  it('keeps the ten most recently closed drafts and handles quota errors', () => {
+    const storage = memoryStorage();
+    for (let i = 0; i < 12; i++) rememberClosedSqlTab(1, tab(String(i)), 'alice', storage);
+    for (let i = 11; i >= 2; i--) expect(restoreClosedSqlTab(1, 'alice', storage)?.id).toBe(String(i));
+    expect(restoreClosedSqlTab(1, 'alice', storage)).toBeUndefined();
+    expect(rememberClosedSqlTab(1, tab('a'), 'alice', { getItem: () => null, setItem: () => { throw new Error('quota'); } })).toBe(false);
+  });
+
   it('isolates sessions by connection and excludes result data', () => {
     const storage = memoryStorage();
     expect(writeSqlSession(7, [tab('a')], 'a', storage)).toBe(true);

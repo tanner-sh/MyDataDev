@@ -331,13 +331,16 @@ public class DataEditService {
                         } else {
                             // UPDATE/DELETE must remain individually observable so optimistic
                             // predicates cannot be bypassed by JDBC SUCCESS_NO_INFO batch results.
-                            for (PreparedOperation operation : batch) {
+                            for (int operationIndex = index; operationIndex < end; operationIndex++) {
+                                PreparedOperation operation = operations.get(operationIndex);
                                 bind(statement, operation.parameters());
                                 int count = statement.executeUpdate();
                                 if (count != 1) {
-                                    throw new IllegalStateException(count == 0
-                                            ? "数据已被其他操作修改或删除，本次提交已回滚。"
-                                            : "行定位条件影响了多行数据，本次提交已回滚。");
+                                    if (count == 0) throw new com.example.dbadmin.api.ApiProblemException(
+                                            org.springframework.http.HttpStatus.CONFLICT, "DATA_EDIT_CONFLICT",
+                                            "数据已被其他操作修改或删除，本次提交已回滚。",
+                                            Map.of("changeIndex", operationIndex, "keyToken", request.changes().get(operationIndex).keyToken()));
+                                    throw new IllegalStateException("行定位条件影响了多行数据，本次提交已回滚。");
                                 }
                                 affected += count;
                             }
@@ -369,6 +372,44 @@ public class DataEditService {
 
     public DataCommitResponse commit(DataPreviewRequest request, String actor) throws Exception {
         return commit(request, actor, null);
+    }
+
+    /** 根据服务端签名的行令牌读取冲突现场，仍使用参数绑定，不接收自由 SQL。 */
+    public Map<String, Object> conflictRow(DataPreviewRequest request, String actor) throws Exception {
+        if (request.changes() == null || request.changes().size() != 1) throw new IllegalArgumentException("请选择一条冲突记录。");
+        RowChange change = request.changes().get(0);
+        DbConnection db = connections.require(request.connectionId());
+        DatabaseDialect dialect = dialectRegistry.dialectFor(db);
+        try (Connection connection = connections.open(request.connectionId())) {
+            RowIdentity identity = metadata.rowIdentity(connection, db, request.schemaName(), request.tableName());
+            if (!identity.stable()) throw new IllegalArgumentException("当前表没有稳定的行标识。");
+            Map<String, ColumnDescriptor> columns = loadColumnDescriptors(connection, dialect, request.schemaName(), request.tableName());
+            Map<String, BoundValue> key = validatedLocator(request, change.keyToken(), columns, identity.columns());
+            Map<String, Object> requested = canonicalValues(change.values(), columns, true);
+            List<String> names = requested.isEmpty() ? identity.columns() : new ArrayList<>(requested.keySet());
+            WhereClause where = whereClause(key, Map.of(), dialect, columns);
+            String sql = "SELECT " + names.stream().map(dialect::quoteIdentifier).collect(Collectors.joining(", "))
+                    + " FROM " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " WHERE " + where.sql();
+            try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
+                statement.setMaxRows(2);
+                bind(statement, where.parameters());
+                Map<String, Object> values = new LinkedHashMap<>();
+                boolean found;
+                boolean truncated = false;
+                try (ResultSet rs = statement.executeQuery()) {
+                    found = rs.next();
+                    if (found) for (int index = 1; index <= names.size(); index++) {
+                        Object raw = readDisplayValue(rs, rs.getMetaData(), index);
+                        truncated |= serializedValueWouldTruncate(raw, MAX_TABLE_CELL_TEXT_CHARS);
+                        values.put(names.get(index - 1), serializableValue(raw, MAX_TABLE_CELL_TEXT_CHARS));
+                    }
+                    if (found && rs.next()) throw new IllegalArgumentException("行标识匹配多行，请刷新表结构。");
+                }
+                audit.onConnection(actor, "DATA_CONFLICT_READ", request.connectionId(), "table:" + request.tableName());
+                return Map.of("found", found, "values", values, "truncated", truncated);
+            }
+        }
     }
 
     private List<PreparedOperation> operations(Connection connection, DataPreviewRequest request) throws Exception {

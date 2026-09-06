@@ -1,7 +1,8 @@
+import { workspaceIdentity } from './auth';
 import type { SqlTab } from './types';
 
 export const MAX_STORED_SQL_TABS = 20;
-const STORAGE_PREFIX = 'db-admin:sql-session:v1:';
+const STORAGE_PREFIX = 'db-admin:sql-session:v2:';
 
 type SessionStorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
@@ -23,14 +24,14 @@ export type SqlSession = {
   tabs: SqlTab[];
 };
 
-export function sqlSessionStorageKey(connectionId?: number | null) {
-  return `${STORAGE_PREFIX}${connectionId == null ? 'unselected' : connectionId}`;
+export function sqlSessionStorageKey(connectionId?: number | null, owner = workspaceIdentity()) {
+  return `${STORAGE_PREFIX}${encodeURIComponent(owner)}:${connectionId == null ? 'unselected' : connectionId}`;
 }
 
-export function readSqlSession(connectionId?: number | null, storage = browserSessionStorage()): SqlSession | undefined {
+export function readSqlSession(connectionId?: number | null, storage = browserSessionStorage(), owner = workspaceIdentity()): SqlSession | undefined {
   if (!storage) return undefined;
   try {
-    const serialized = storage.getItem(sqlSessionStorageKey(connectionId));
+    const serialized = storage.getItem(sqlSessionStorageKey(connectionId, owner));
     return serialized ? normalizeSqlSession(JSON.parse(serialized) as unknown) : undefined;
   } catch {
     return undefined;
@@ -41,7 +42,8 @@ export function writeSqlSession(
   connectionId: number | null | undefined,
   tabs: SqlTab[],
   activeTabId: string,
-  storage = browserSessionStorage()
+  storage = browserSessionStorage(),
+  owner = workspaceIdentity()
 ) {
   if (!storage) return false;
   const storedTabs = tabs.slice(0, MAX_STORED_SQL_TABS).map<StoredSqlTab>((tab) => ({
@@ -57,7 +59,7 @@ export function writeSqlSession(
     tabs: storedTabs
   };
   try {
-    storage.setItem(sqlSessionStorageKey(connectionId), JSON.stringify(session));
+    storage.setItem(sqlSessionStorageKey(connectionId, owner), JSON.stringify(session));
     return true;
   } catch {
     return false;
@@ -96,7 +98,7 @@ export function normalizeSqlSession(value: unknown): SqlSession | undefined {
 function browserSessionStorage(): SessionStorageLike | undefined {
   if (typeof window === 'undefined') return undefined;
   try {
-    return window.sessionStorage;
+    return window.localStorage;
   } catch {
     return undefined;
   }
@@ -104,4 +106,26 @@ function browserSessionStorage(): SessionStorageLike | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/** 最近关闭的十个草稿同样只保存 SQL，不保留查询结果。 */
+export function rememberClosedSqlTab(connectionId: number | null, tab: SqlTab, owner = workspaceIdentity(), storage = browserSessionStorage()) {
+  if (!storage) return false;
+  const key = sqlSessionStorageKey(connectionId, owner) + ':closed';
+  try {
+    const old = normalizeSqlSession(JSON.parse(storage.getItem(key) || 'null'))?.tabs || [];
+    return writeSqlSession(connectionId, [tab, ...old.filter(item => item.id !== tab.id)].slice(0, 10), tab.id,
+      { getItem: () => storage.getItem(key), setItem: (_, value) => storage.setItem(key, value) }, owner);
+  } catch { return false; }
+}
+
+export function restoreClosedSqlTab(connectionId: number | null, owner = workspaceIdentity(), storage = browserSessionStorage()): SqlTab | undefined {
+  if (!storage) return undefined;
+  const key = sqlSessionStorageKey(connectionId, owner) + ':closed';
+  try {
+    const tabs = normalizeSqlSession(JSON.parse(storage.getItem(key) || 'null'))?.tabs || [];
+    const [tab, ...rest] = tabs;
+    storage.setItem(key, JSON.stringify({ version: 1, tabs: rest, activeTabId: rest[0]?.id || '' }));
+    return tab;
+  } catch { return undefined; }
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { API } from '../constants';
 import { api } from '../api';
 import {
   backgroundTaskPolling,
@@ -28,8 +29,9 @@ import { useVisiblePolling } from './useVisiblePolling';
  * 后台任务会活得比开启它的抽屉久（定时备份甚至没有抽屉），所以只要选中了连接就一直订阅，
  * 而不是只在面板可见时。标签页切到后台时 useVisiblePolling 会自己停下。
  */
-export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, onCompletion }: {
+export function useBackgroundTasks({ connectionId, watchingTasks, backupAllowed = true, exportAllowed = false, locked = false, onOperations, onCompletion }: {
   connectionId?: number;
+  backupAllowed?: boolean; exportAllowed?: boolean; locked?: boolean;
   /** 备份抽屉开着或已知有任务在跑：降级轮询时用更快的节奏。 */
   watchingTasks: boolean;
   /** 每次拿到快照都会回调，用于刷新抽屉里的实时行。 */
@@ -37,6 +39,7 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
   /** 有任务结束时的提示文案。 */
   onCompletion: (message: string) => void;
 }) {
+  const operationsRef = useRef<ActiveOperations>({ backups: [], restores: [], sqlFiles: [], exports: [] });
   const [summary, setSummary] = useState<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
   const [streamState, setStreamState] = useState<BackgroundStreamState>('connecting');
   const summaryRef = useRef<BackgroundTaskSummary>(EMPTY_BACKGROUND_TASK_SUMMARY);
@@ -48,6 +51,7 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
   connectionIdRef.current = connectionId;
 
   const apply = useCallback((operations: ActiveOperations) => {
+    operationsRef.current = operations;
     operationsEvent(operations);
     const next = summarizeBackgroundTasks(operations);
     const previous = summaryRef.current;
@@ -62,6 +66,7 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
    * 计数属于某一条连接，换连接时必须清零，否则第一份快照会把上一条连接的任务播报成「已结束」。
    */
   const reset = useCallback(() => {
+    operationsRef.current = { backups: [], restores: [], sqlFiles: [], exports: [] };
     summaryRef.current = EMPTY_BACKGROUND_TASK_SUMMARY;
     setSummary(EMPTY_BACKGROUND_TASK_SUMMARY);
   }, []);
@@ -74,7 +79,7 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
   }, []);
 
   useEffect(() => {
-    if (!connectionId) return;
+    if (!connectionId || !backupAllowed || locked) return;
     streamStateRef.current = 'connecting';
     setStreamState('connecting');
     if (typeof EventSource === 'undefined') {
@@ -86,7 +91,7 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
       const operations = parseBackgroundTaskEvent((event as MessageEvent).data);
       // 快照到得晚、连接已经切走时直接丢掉，否则会把别人的任务算到当前连接头上。
       if (!operations || connectionIdRef.current !== connectionId) return;
-      apply(operations);
+      apply({ ...operations, exports: operationsRef.current.exports });
     });
     source.onopen = () => advance('open');
     source.onerror = () => {
@@ -94,10 +99,10 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
       advance(source.readyState === EventSource.CLOSED ? 'closed' : 'retrying');
     };
     return () => source.close();
-  }, [advance, apply, connectionId]);
+  }, [advance, apply, connectionId, backupAllowed, locked]);
 
   useVisiblePolling({
-    enabled: Boolean(connectionId),
+    enabled: Boolean(connectionId) && backupAllowed && !locked,
     intervalMs: backgroundTaskPolling(streamState, { watchingTasks }).intervalMs,
     resetKey: connectionId,
     immediate: true,
@@ -107,10 +112,29 @@ export function useBackgroundTasks({ connectionId, watchingTasks, onOperations, 
       try {
         const active = await api<ActiveOperations>(`/restores/operations/active?connectionId=${id}`);
         if (connectionIdRef.current !== id) return;
-        apply(active);
+        apply({ ...active, exports: operationsRef.current.exports });
       } catch {
         // 轮询是尽力而为：保留上一次已知状态，用户还可以手动刷新。
       }
+    }
+  });
+
+  useEffect(() => {
+    if (!connectionId || !exportAllowed || locked || typeof EventSource === 'undefined') return;
+    const source = new EventSource(`${API}/scheduled-queries/stream?connectionId=${connectionId}`);
+    source.addEventListener('operations', event => {
+      const operations = parseBackgroundTaskEvent((event as MessageEvent).data);
+      if (operations && connectionIdRef.current === connectionId) apply({ ...operationsRef.current, exports: operations.exports || [] });
+    });
+    return () => source.close();
+  }, [connectionId, exportAllowed, locked, apply]);
+
+  useVisiblePolling({ enabled: Boolean(connectionId) && exportAllowed && !locked, intervalMs: 5_000, resetKey: connectionId, immediate: true,
+    task: async () => {
+      try {
+        const exports = await api<NonNullable<ActiveOperations['exports']>>(`/scheduled-queries/active?connectionId=${connectionId}`);
+        if (connectionIdRef.current === connectionId) apply({ ...operationsRef.current, exports });
+      } catch { /* 保留上一次状态，恢复连接后对账 */ }
     }
   });
 

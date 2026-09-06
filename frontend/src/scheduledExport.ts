@@ -60,6 +60,11 @@ export function scheduledExportStatus(task: Pick<ScheduledExportTask, 'enabled' 
   color: string;
   label: string;
 } {
+  if (task.lastStatus === 'QUEUED') return { color: 'blue', label: '等待执行' };
+  if (task.lastStatus === 'RUNNING') return { color: 'processing', label: '正在导出' };
+  if (task.lastStatus === 'CANCELLING') return { color: 'orange', label: '正在取消' };
+  if (task.lastStatus === 'CANCELLED') return { color: 'default', label: '已取消' };
+  if (task.lastStatus === 'INTERRUPTED') return { color: 'orange', label: '重启中断' };
   if (task.lastStatus === 'FAILED') return { color: 'red', label: '上次失败' };
   if (task.lastStatus === 'SUCCESS') return { color: task.enabled ? 'green' : 'default', label: '上次成功' };
   return { color: 'default', label: '尚未执行' };

@@ -34,6 +34,7 @@ const { Text } = Typography;
 const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
 
 export const TableWorkspace = memo(function TableWorkspace({
+  initialScrollTop, onViewScroll, onUndo, onRedo, canUndo, canRedo,
   activeTable,
   tableData,
   tableRows,
@@ -66,6 +67,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onPageSizeChange,
   onTableQueryChange
 }: {
+  initialScrollTop?: number; onViewScroll?: (top: number) => void;
+  onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
   activeTable: ActiveTable | null;
   tableData: TableData | null;
   tableRows: TableRow[];
@@ -220,6 +223,10 @@ export const TableWorkspace = memo(function TableWorkspace({
               <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount || ''}</Button>
             </Tooltip>
           </Space>
+          <Space size={4}>
+            <Button size="small" disabled={!canUndo || loading} onClick={onUndo}>撤销一步</Button>
+            <Button size="small" disabled={!canRedo || loading} onClick={onRedo}>重做</Button>
+          </Space>
           <input
             ref={importInputRef}
             className="visually-hidden"
@@ -235,7 +242,7 @@ export const TableWorkspace = memo(function TableWorkspace({
         </div>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
+        <EditableTable initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
       </div>
       <div className="grid-pagination table-pagination">
         <Space size={8} className="grid-pagination-summary">

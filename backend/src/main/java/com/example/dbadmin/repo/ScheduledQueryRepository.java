@@ -1,13 +1,14 @@
 package com.example.dbadmin.repo;
 
 import com.example.dbadmin.model.ScheduledQuery;
+import com.example.dbadmin.model.ScheduledQueryRun;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -42,7 +43,7 @@ public class ScheduledQueryRepository {
                     INSERT INTO scheduled_query(connection_id, name, sql_text, export_format, cron, schedule_zone,
                                                 enabled, production_confirmed)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, Statement.RETURN_GENERATED_KEYS);
+                    """, new String[]{"id"});
             statement.setLong(1, task.connectionId());
             statement.setString(2, task.name());
             statement.setString(3, task.sql());
@@ -78,6 +79,67 @@ public class ScheduledQueryRepository {
                        updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """, Timestamp.from(runAt), status, message == null ? null : abbreviate(message), file, id);
+    }
+
+    @Transactional
+    public void beginRun(String runId, ScheduledQuery task, Instant at) {
+        jdbc.update("INSERT INTO scheduled_query_run(id, task_id, connection_id, task_name, status, message, started_at) VALUES (?, ?, ?, ?, 'QUEUED', '等待执行', ?)",
+                runId, task.id(), task.connectionId(), task.name(), Timestamp.from(at));
+        recordRun(task.id(), at, "QUEUED", "等待执行", null);
+    }
+
+    public void progressRun(String id, String status, String message) {
+        jdbc.update("UPDATE scheduled_query_run SET status = ?, message = ? WHERE id = ? AND finished_at IS NULL", status, abbreviate(message), id);
+    }
+
+    public void finishRun(String id, String status, String message, String fileName, String filePath, long size) {
+        jdbc.update("UPDATE scheduled_query_run SET status = ?, message = ?, finished_at = CURRENT_TIMESTAMP, file_name = ?, file_path = ?, file_size = ? WHERE id = ?",
+                status, abbreviate(message), fileName, filePath, size, id);
+    }
+
+    public void prepareRunFile(String id, String message, String name, String path, long size) {
+        jdbc.update("UPDATE scheduled_query_run SET message = ?, file_name = ?, file_path = ?, file_size = ? WHERE id = ? AND finished_at IS NULL",
+                message, name, path, size, id);
+    }
+
+    @Transactional
+    public void completeRun(String id, long taskId, Instant at, String status, String message, String name, String path, long size) {
+        finishRun(id, status, message, name, path, size);
+        recordRun(taskId, at, status, message, path);
+    }
+
+    public List<ScheduledQueryRun> runs(long taskId, int limit) {
+        return jdbc.query("SELECT * FROM scheduled_query_run WHERE task_id = ? ORDER BY started_at DESC, id DESC LIMIT ?",
+                (rs, ignored) -> mapRun(rs), taskId, Math.max(1, Math.min(limit, 200)));
+    }
+
+    public Optional<ScheduledQueryRun> run(String id) {
+        return jdbc.query("SELECT * FROM scheduled_query_run WHERE id = ?", (rs, ignored) -> mapRun(rs), id).stream().findFirst();
+    }
+
+    public List<ScheduledQueryRun> activeRuns(Long connectionId) {
+        String sql = "SELECT * FROM scheduled_query_run WHERE finished_at IS NULL";
+        return connectionId == null
+                ? jdbc.query(sql + " ORDER BY started_at", (rs, ignored) -> mapRun(rs))
+                : jdbc.query(sql + " AND connection_id = ? ORDER BY started_at", (rs, ignored) -> mapRun(rs), connectionId);
+    }
+
+    public void expireFile(String path) {
+        jdbc.update("UPDATE scheduled_query_run SET file_path = NULL WHERE file_path = ?", path);
+    }
+
+    @Transactional
+    public void recoverInterruptedRuns() {
+        jdbc.update("UPDATE scheduled_query SET last_status = 'INTERRUPTED', last_message = '服务已重启，上次导出中断，请重新运行。' WHERE id IN (SELECT task_id FROM scheduled_query_run WHERE finished_at IS NULL)");
+        jdbc.update("UPDATE scheduled_query_run SET status = 'INTERRUPTED', message = '服务已重启，上次导出中断，请重新运行。', finished_at = CURRENT_TIMESTAMP, file_path = NULL WHERE finished_at IS NULL");
+    }
+
+    private static ScheduledQueryRun mapRun(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Timestamp finished = rs.getTimestamp("finished_at");
+        return new ScheduledQueryRun(rs.getString("id"), rs.getLong("task_id"), rs.getLong("connection_id"),
+                rs.getString("task_name"), rs.getString("status"), rs.getString("message"),
+                rs.getTimestamp("started_at").toInstant(), finished == null ? null : finished.toInstant(),
+                rs.getString("file_name"), rs.getString("file_path"), rs.getLong("file_size"));
     }
 
     public void delete(long id) {

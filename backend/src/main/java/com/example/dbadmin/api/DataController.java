@@ -103,6 +103,14 @@ public class DataController {
         return service.preview(request);
     }
 
+    @PostMapping("/conflict-row")
+    public java.util.Map<String, Object> conflictRow(@Valid @RequestBody DataPreviewRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
+        return service.conflictRow(request, actor);
+    }
+
     @PostMapping("/commit")
     public DataCommitResponse commit(
             @Valid @RequestBody DataPreviewRequest request,

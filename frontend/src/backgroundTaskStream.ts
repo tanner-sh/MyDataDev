@@ -79,7 +79,7 @@ export function parseBackgroundTaskEvent(data: unknown): ActiveOperations | null
     if (!Array.isArray(parsed.backups) || !Array.isArray(parsed.restores) || !Array.isArray(parsed.sqlFiles)) {
       return null;
     }
-    return { backups: parsed.backups, restores: parsed.restores, sqlFiles: parsed.sqlFiles };
+    return { backups: parsed.backups, restores: parsed.restores, sqlFiles: parsed.sqlFiles, ...(Array.isArray(parsed.exports) ? { exports: parsed.exports } : {}) };
   } catch {
     return null;
   }

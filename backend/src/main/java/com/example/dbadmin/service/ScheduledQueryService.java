@@ -14,6 +14,15 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 
 import java.io.OutputStream;
+import com.example.dbadmin.model.ScheduledQueryRun;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
+import java.sql.Statement;
+import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.LinkOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -49,19 +58,28 @@ public class ScheduledQueryService {
     private final ExportService exports;
     private final AuditRepository audit;
     private final AppProperties properties;
+    private final BackgroundTaskControl backgroundControl;
+    private final Map<Long, RunControl> running = new ConcurrentHashMap<>();
+    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 2, 30, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(16), runnable -> {
+                Thread thread = new Thread(runnable, "scheduled-export");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public ScheduledQueryService(
             ScheduledQueryRepository repository,
             ConnectionService connections,
             ExportService exports,
             AuditRepository audit,
-            AppProperties properties
+            AppProperties properties, BackgroundTaskControl backgroundControl
     ) {
         this.repository = repository;
         this.connections = connections;
         this.exports = exports;
         this.audit = audit;
         this.properties = properties;
+        this.backgroundControl = backgroundControl;
     }
 
     public List<ScheduledQuery> list(Long connectionId) {
@@ -81,7 +99,8 @@ public class ScheduledQueryService {
         return require(id);
     }
 
-    public ScheduledQuery update(long id, ScheduledQueryRequest request, String actor) {
+    public synchronized ScheduledQuery update(long id, ScheduledQueryRequest request, String actor) {
+        requireIdle(id);
         ScheduledQuery existing = require(id);
         ScheduledQuery task = normalize(id, request);
         if (task.connectionId() != existing.connectionId()) {
@@ -101,47 +120,210 @@ public class ScheduledQueryService {
         return require(id);
     }
 
-    public void delete(long id, String actor) {
+    public synchronized void delete(long id, String actor) {
         ScheduledQuery task = require(id);
+        requireIdle(id);
+        Path directory = taskDirectory(id);
+        if (Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+            try (Stream<Path> files = Files.list(directory)) {
+                for (Path file : files.toList()) Files.deleteIfExists(file);
+                Files.deleteIfExists(directory);
+            } catch (Exception error) { throw new IllegalStateException("删除导出文件失败，请检查目录权限后重试。", error); }
+        }
         repository.delete(id);
         audit.onConnection(actor, "SCHEDULED_QUERY_DELETE", task.connectionId(), "name=" + task.name());
     }
 
-    /**
-     * 跑一次并把结果写成文件。
-     *
-     * <p>失败不抛给调度线程：一条任务写不出去不该让这一轮的其他任务跟着停，结果记在任务上，
-     * 界面看得见。手动触发时同样走这条路 —— 两条路给出的结果必须是同一个样子。</p>
-     */
-    public ScheduledQuery run(long id, String actor) {
-        ScheduledQuery task = require(id);
-        Instant startedAt = Instant.now();
-        try {
-            DbConnection connection = connections.require(task.connectionId());
-            String confirmation = "prod".equalsIgnoreCase(connection.environment()) && task.productionConfirmed()
-                    ? connection.name() : null;
-            Path directory = Path.of(properties.getScheduledQuery().getDirectory());
-            Files.createDirectories(directory);
-            Path file = directory.resolve(fileName(task, startedAt));
-            ExportService.PreparedExport prepared = exports.prepare(
-                    task.connectionId(), task.sql(), task.exportFormat(), actor, confirmation, null);
-            try (OutputStream output = Files.newOutputStream(file)) {
-                prepared.writeTo(output);
+    @PostConstruct
+    public void recover() {
+        for (ScheduledQueryRun run : repository.activeRuns(null)) {
+            Path directory = taskDirectory(run.taskId());
+            Path file = run.filePath() == null ? null : Path.of(run.filePath()).toAbsolutePath().normalize();
+            // 发布前先登记产物；进程在 rename 和完成记录之间退出时，可由完整文件恢复结果。
+            if (file != null && directory.equals(file.getParent()) && !Files.isSymbolicLink(directory)
+                    && Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+                repository.completeRun(run.id(), run.taskId(), run.startedAt(), "SUCCESS", run.message(),
+                        run.fileName(), run.filePath(), run.fileSize());
             }
-            pruneOldFiles(directory, task);
-            String message = prepared.truncated()
-                    ? "导出完成，但已达到行数上限，文件是截断的。" : "导出完成。";
-            repository.recordRun(id, startedAt, "SUCCESS", message, file.toString());
-            audit.onConnection(actor, ACTION_RUN, task.connectionId(),
-                    "name=" + task.name() + " status=SUCCESS file=" + file.getFileName());
-        } catch (Exception error) {
-            String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
-            repository.recordRun(id, startedAt, "FAILED", message, null);
-            audit.onConnection(actor, ACTION_RUN, task.connectionId(),
-                    "name=" + task.name() + " status=FAILED");
-            log.warn("定时导出任务 {} 执行失败：{}", id, message);
+        }
+        repository.recoverInterruptedRuns();
+        for (ScheduledQuery task : repository.findAll()) {
+            Path directory = taskDirectory(task.id());
+            if (!Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) continue;
+            try (Stream<Path> files = Files.list(directory)) {
+                for (Path file : files.filter(path -> path.getFileName().toString().endsWith(".part")).toList()) {
+                    Files.deleteIfExists(file);
+                }
+            } catch (Exception error) { log.warn("清理中断导出临时文件失败 task={}", task.id(), error); }
+        }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        running.values().forEach(RunControl::cancel);
+        executor.shutdown(); // 已排队的 worker 也要走 finally，记录取消并释放连接名额。
+        try { executor.awaitTermination(10, TimeUnit.SECONDS); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+    }
+
+    public ScheduledQuery submit(long id, String actor) {
+        RunControl control = admit(id);
+        try { executor.execute(() -> execute(control, actor)); }
+        catch (RejectedExecutionException full) {
+            try { finish(control, "FAILED", "后台导出队列已满，请稍后重试。", null, 0); }
+            finally { release(control); }
+            throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "EXPORT_QUEUE_FULL", "后台导出队列已满，请稍后重试。");
         }
         return require(id);
+    }
+
+    /** 同步入口用于集成验证；与手动和定时任务共用准入、产物与完成逻辑。 */
+    public ScheduledQuery run(long id, String actor) {
+        RunControl control = admit(id);
+        execute(control, actor);
+        return require(id);
+    }
+
+    private synchronized RunControl admit(long id) {
+        ScheduledQuery task = require(id);
+        if (running.containsKey(id)) throw new ApiProblemException(HttpStatus.CONFLICT,
+                "EXPORT_ALREADY_RUNNING", "该导出任务正在运行，请等待结束或先取消。");
+        RunControl control = new RunControl(task);
+        if (!backgroundControl.tryAcquire(task.connectionId(), control.id)) throw new ApiProblemException(HttpStatus.CONFLICT,
+                "EXPORT_CONNECTION_BUSY", "该连接已有后台任务，请等待结束后重试。");
+        try {
+            repository.beginRun(control.id, task, control.startedAt);
+            running.put(id, control);
+        } catch (RuntimeException failure) {
+            backgroundControl.releaseCompleted(task.connectionId(), control.id);
+            throw failure;
+        }
+        return control;
+    }
+
+    public void cancel(long id) {
+        require(id);
+        RunControl control = running.get(id);
+        if (control == null) return;
+        control.cancel();
+        repository.progressRun(control.id, "CANCELLING", "正在取消，等待数据库停止并清理临时文件");
+    }
+
+    public List<ScheduledQueryRun> history(long id, int limit) { require(id); return repository.runs(id, limit); }
+    public List<ScheduledQueryRun> active(Long connectionId) { return repository.activeRuns(connectionId); }
+
+    public ScheduledQueryRun requireRun(long taskId, String runId) {
+        require(taskId);
+        return repository.run(runId).filter(run -> run.taskId() == taskId).orElseThrow(() ->
+                new ApiProblemException(HttpStatus.NOT_FOUND, "EXPORT_RUN_NOT_FOUND", "导出记录不存在。"));
+    }
+
+    public Path download(long taskId, String runId, String actor) throws Exception {
+        ScheduledQueryRun run = requireRun(taskId, runId);
+        if (!run.downloadable()) throw new ApiProblemException(HttpStatus.NOT_FOUND, "EXPORT_FILE_EXPIRED", "文件已按保留策略清理，或本次导出未完成，请重新运行。");
+        Path file = Path.of(run.filePath()).toAbsolutePath().normalize();
+        Path directory = taskDirectory(taskId);
+        if (!file.getParent().equals(directory) || Files.isSymbolicLink(directory)
+                || !Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
+            throw new ApiProblemException(HttpStatus.NOT_FOUND, "EXPORT_FILE_EXPIRED", "导出文件已不存在，请重新运行。");
+        }
+        audit.onConnection(actor, "SQL_EXPORT_DOWNLOAD", run.connectionId(), "scheduled-run=" + runId);
+        return file;
+    }
+
+    private void execute(RunControl control, String actor) {
+        ScheduledQuery task = control.task;
+        Path partial = null;
+        ExportService.PreparedExport prepared = null;
+        control.worker = Thread.currentThread();
+        try {
+            control.check();
+            repository.progressRun(control.id, "RUNNING", "正在查询并生成文件");
+            repository.recordRun(task.id(), control.startedAt, "RUNNING", "正在查询并生成文件", null);
+            DbConnection connection = connections.require(task.connectionId());
+            String confirmation = "prod".equalsIgnoreCase(connection.environment()) && task.productionConfirmed() ? connection.name() : null;
+            Path directory = taskDirectory(task.id());
+            if (Files.isSymbolicLink(directory)) throw new IllegalStateException("导出目录不能是符号链接。");
+            Files.createDirectories(directory);
+            Path file = directory.resolve(control.id + "-" + fileName(task, control.startedAt));
+            partial = directory.resolve(control.id + ".part");
+            prepared = exports.prepareCancellable(task.connectionId(), task.sql(), task.exportFormat(), actor, confirmation,
+                    statement -> { control.statement = statement; control.check(); });
+            control.statement = null;
+            control.check();
+            try (OutputStream output = Files.newOutputStream(partial, java.nio.file.StandardOpenOption.CREATE_NEW)) {
+                prepared.writeTo(output);
+            }
+            String completedMessage = prepared.truncated() ? "导出完成，已达到行数上限，文件包含部分结果。" : "导出完成。";
+            long size = Files.size(partial);
+            repository.prepareRunFile(control.id, completedMessage, file.getFileName().toString(), file.toString(), size);
+            // 取消与正式发布互斥：一旦进入发布，完成状态就是成功，不能再报成已取消。
+            synchronized (control) {
+                control.check();
+                try { Files.move(partial, file, StandardCopyOption.ATOMIC_MOVE); }
+                catch (java.nio.file.AtomicMoveNotSupportedException unsupported) { Files.move(partial, file); }
+                control.published = true;
+            }
+            finish(control, "SUCCESS", completedMessage, file, size);
+            pruneOldFiles(directory, task);
+            auditRun(actor, control, "SUCCESS");
+        } catch (Exception error) {
+            if (control.published) {
+                // 完整文件已发布，不能抹掉文件记录或宣称未生效；重启恢复会补齐完成状态。
+                log.error("导出文件已发布，但完成记录失败，重启后将恢复 run={}", control.id, error);
+                return;
+            }
+            boolean cancelled = control.cancelled || error instanceof CancellationException || Thread.currentThread().isInterrupted();
+            // JDBC 取消可能设置中断位；先清除，确保元数据库的完成记录能够写入。
+            Thread.interrupted();
+            String status = cancelled ? "CANCELLED" : "FAILED";
+            String message = cancelled ? "导出已取消，未发布文件。" : (error.getMessage() == null ? "导出失败，请检查数据库与存储空间。" : error.getMessage());
+            finish(control, status, message, null, 0);
+            auditRun(actor, control, status);
+            if (!cancelled) log.warn("定时导出失败 run={}", control.id, error);
+        } finally {
+            if (prepared != null) prepared.discard();
+            if (partial != null) try { Files.deleteIfExists(partial); } catch (Exception error) { log.warn("清理导出暂存文件失败", error); }
+            release(control);
+        }
+    }
+
+    private void finish(RunControl control, String status, String message, Path file, long size) {
+        repository.completeRun(control.id, control.task.id(), control.startedAt, status, message,
+                file == null ? null : file.getFileName().toString(), file == null ? null : file.toString(), size);
+    }
+
+    private void auditRun(String actor, RunControl control, String status) {
+        try { audit.onConnection(actor, ACTION_RUN, control.task.connectionId(), "run=" + control.id + " status=" + status); }
+        catch (RuntimeException error) { log.error("导出运行审计记录失败 run={}", control.id, error); }
+    }
+
+    private void release(RunControl control) {
+        running.remove(control.task.id(), control);
+        backgroundControl.releaseCompleted(control.task.connectionId(), control.id);
+    }
+
+    Path taskDirectory(long id) {
+        return Path.of(properties.getScheduledQuery().getDirectory()).toAbsolutePath().normalize().resolve("task-" + id);
+    }
+
+    private static final class RunControl {
+        final String id = UUID.randomUUID().toString();
+        final ScheduledQuery task;
+        final Instant startedAt = Instant.now();
+        volatile boolean cancelled;
+        volatile boolean published;
+        volatile Statement statement;
+        volatile Thread worker;
+        RunControl(ScheduledQuery task) { this.task = task; }
+        void check() { if (cancelled || Thread.currentThread().isInterrupted()) throw new CancellationException("导出已取消"); }
+        synchronized void cancel() {
+            if (published) return;
+            cancelled = true;
+            Statement current = statement;
+            if (current != null) try { current.cancel(); } catch (Exception ignored) { /* 超时与 worker 的检查仍会收尾 */ }
+            if (worker != null) worker.interrupt();
+        }
     }
 
     /** 下一次执行时间，给界面用。cron 解析不了时返回 null —— 保存时已经拦过一次了。 */
@@ -192,7 +374,17 @@ public class ScheduledQueryService {
     /** 产物文件名：任务名 + 时间戳。任务名里的路径分隔符要去掉，否则会写到别的目录去。 */
     static String fileName(ScheduledQuery task, Instant at) {
         String safe = task.name().replaceAll("[\\\\/:*?\"<>|\\x00]", "_");
-        if (safe.length() > 80) safe = safe.substring(0, 80);
+        // 文件系统通常按 UTF-8 字节限制文件名，不能只截取 80 个中文字符。
+        StringBuilder bounded = new StringBuilder();
+        int bytes = 0;
+        for (int codePoint : safe.codePoints().toArray()) {
+            String character = new String(Character.toChars(codePoint));
+            int length = character.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+            if (bytes + length > 160) break;
+            bounded.append(character);
+            bytes += length;
+        }
+        safe = bounded.toString();
         String stamp = FILE_STAMP.format(ZonedDateTime.ofInstant(at, task.scheduleZoneId()));
         return safe + "-" + stamp + "." + ("markdown".equals(task.exportFormat()) ? "md" : task.exportFormat());
     }
@@ -205,10 +397,9 @@ public class ScheduledQueryService {
      */
     private void pruneOldFiles(Path directory, ScheduledQuery task) {
         int keep = Math.max(1, properties.getScheduledQuery().getKeepFiles());
-        String prefix = task.name().replaceAll("[\\\\/:*?\"<>|\\x00]", "_");
         try (Stream<Path> files = Files.list(directory)) {
             List<Path> mine = files
-                    .filter(path -> path.getFileName().toString().startsWith(prefix + "-"))
+                    .filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && !path.getFileName().toString().endsWith(".part"))
                     .sorted(Comparator.comparing((Path path) -> {
                         try {
                             return Files.getLastModifiedTime(path).toInstant();
@@ -217,10 +408,18 @@ public class ScheduledQueryService {
                         }
                     }).reversed())
                     .toList();
-            for (int index = keep; index < mine.size(); index++) Files.deleteIfExists(mine.get(index));
+            for (int index = keep; index < mine.size(); index++) {
+                Path old = mine.get(index);
+                Files.deleteIfExists(old);
+                repository.expireFile(old.toString());
+            }
         } catch (Exception error) {
             log.debug("清理定时导出旧文件失败：{}", error.toString());
         }
+    }
+
+    private void requireIdle(long id) {
+        if (running.containsKey(id)) throw new ApiProblemException(HttpStatus.CONFLICT, "EXPORT_ALREADY_RUNNING", "任务正在运行，请先取消或等待结束后再修改。");
     }
 
     private static String require(String value, String message) {

@@ -189,6 +189,12 @@ public class ExportService {
                 schemaName, null, auditDetail);
     }
 
+    public PreparedExport prepareCancellable(long connectionId, String sql, String format, String actor,
+            String confirmation, java.util.function.Consumer<Statement> onStatement) throws Exception {
+        return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, confirmation,
+                null, null, abbreviate(sql), onStatement);
+    }
+
     private PreparedExport prepareInternal(
             long connectionId,
             String sql,
@@ -200,6 +206,13 @@ public class ExportService {
             List<String> targetTableParts,
             String auditDetail
     ) throws Exception {
+        return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation,
+                schemaName, targetTableParts, auditDetail, statement -> {});
+    }
+
+    private PreparedExport prepareInternal(long connectionId, String sql, DataEditService.StatementBinder binder,
+            String format, String actor, String productionConfirmation, String schemaName,
+            List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement) throws Exception {
         String normalizedFormat = normalizeFormat(format);
         List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
@@ -220,6 +233,8 @@ public class ExportService {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(EXPORT_MAX_ROWS + 1);
             if (binder != null) binder.bind((java.sql.PreparedStatement) statement);
+            onStatement.accept(statement);
+            if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("导出已取消");
             boolean truncated;
             try (ResultSet rs = binder == null
                     ? statement.executeQuery(sql)

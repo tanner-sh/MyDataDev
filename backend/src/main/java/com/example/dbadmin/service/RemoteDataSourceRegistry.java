@@ -178,25 +178,42 @@ public class RemoteDataSourceRegistry {
 
     /** 测试连接：配了隧道就连隧道测，否则「测试通过但保存后连不上」会让人无从下手。 */
     public void test(String jdbcUrl, String username, String password, SshTunnelSpec ssh) throws Exception {
+        testDetailed(jdbcUrl, username, password, ssh, false);
+    }
+
+    public java.util.List<com.example.dbadmin.dto.ApiDtos.ConnectionTestStep> testDetailed(String jdbcUrl, String username,
+            String password, SshTunnelSpec ssh, boolean explainFailure) throws Exception {
+        var steps = new java.util.ArrayList<com.example.dbadmin.dto.ApiDtos.ConnectionTestStep>();
         SshTunnel tunnel = null;
+        String stage = ssh == null ? "数据库连接与身份验证" : "SSH 隧道";
+        long started = System.nanoTime();
         try {
             String effectiveUrl = jdbcUrl;
             if (ssh != null) {
                 JdbcEndpoints.Endpoint endpoint = JdbcEndpoints.locate(jdbcUrl);
                 tunnel = SshTunnel.open(ssh, endpoint.host(), endpoint.port(), sshTimeouts);
                 effectiveUrl = JdbcEndpoints.rewrite(jdbcUrl, tunnel.localHost(), tunnel.localPort());
+                steps.add(new com.example.dbadmin.dto.ApiDtos.ConnectionTestStep(stage, (System.nanoTime() - started) / 1_000_000));
+                stage = "数据库连接与身份验证";
+                started = System.nanoTime();
             }
             try (HikariDataSource dataSource = create(effectiveUrl, username, password, false, "connection-test", true);
                  Connection ignored = dataSource.getConnection()) {
-                // Obtaining a connection is the test.
+                steps.add(new com.example.dbadmin.dto.ApiDtos.ConnectionTestStep(stage, (System.nanoTime() - started) / 1_000_000));
             }
-        } catch (RuntimeException error) {
-            // Hikari wraps authentication and database-selection failures in a
-            // pool timeout when initialization is deferred. Return the JDBC
-            // exception so the API can tell the user what actually failed.
-            SQLException jdbcError = findSqlException(error);
-            if (jdbcError != null) throw jdbcError;
-            throw error;
+            return steps;
+        } catch (Exception failure) {
+            SQLException sql = failure instanceof SQLException jdbc ? jdbc : findSqlException(failure);
+            if (!explainFailure) {
+                if (sql != null) throw sql;
+                throw failure;
+            }
+            String advice = stage.equals("SSH 隧道") ? "检查跳板机地址、端口、登录凭据和主机指纹。"
+                    : sql != null && sql.getSQLState() != null && sql.getSQLState().startsWith("28")
+                    ? "检查数据库用户名、密码和账号允许访问的来源地址。" : "检查数据库地址、端口、库名、账号和网络访问规则。";
+            throw new com.example.dbadmin.api.ApiProblemException(org.springframework.http.HttpStatus.BAD_REQUEST,
+                    "CONNECTION_TEST_FAILED", stage + "失败。" + advice,
+                    java.util.Map.of("stage", stage, "steps", steps));
         } finally {
             if (tunnel != null) tunnel.close();
         }

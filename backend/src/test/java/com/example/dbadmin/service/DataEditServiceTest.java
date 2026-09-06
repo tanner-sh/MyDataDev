@@ -31,6 +31,31 @@ import static org.mockito.Mockito.when;
 
 class DataEditServiceTest {
     @Test
+    void conflictReadUsesSignedLocatorAndReturnsCurrentValueOrMissingRow() throws Exception {
+        String url = databaseUrl();
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 'before')");
+        }
+        DataEditService service = service(url);
+        var row = service.table(1L, null, "people", null, 10);
+        var change = new RowChange("UPDATE", null, Map.of("name", "mine"), Map.of("name", "before"), row.rowKeyTokens().get(0));
+        var request = new DataPreviewRequest(1L, null, "people", List.of(change));
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("UPDATE people SET name = 'current' WHERE id = 1");
+            assertThatThrownBy(() -> service.commit(request, "test"))
+                    .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                    .satisfies(error -> assertThat(((com.example.dbadmin.api.ApiProblemException) error).code()).isEqualTo("DATA_EDIT_CONFLICT"));
+            assertThat(service.conflictRow(request, "test")).containsEntry("found", true).containsEntry("values", Map.of("name", "current"));
+            var forged = new RowChange("UPDATE", null, Map.of("name", "mine"), Map.of("name", "before"), "forged-token");
+            assertThatThrownBy(() -> service.conflictRow(new DataPreviewRequest(1L, null, "people", List.of(forged)), "test"))
+                    .isInstanceOf(IllegalArgumentException.class);
+            connection.createStatement().execute("DELETE FROM people WHERE id = 1");
+            assertThat(service.conflictRow(request, "test")).containsEntry("found", false).containsEntry("values", Map.of());
+        }
+    }
+
+    @Test
     void filtersWithBoundTypedValuesAndSortsOnServer() throws Exception {
         String url = databaseUrl();
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
@@ -179,7 +204,8 @@ class DataEditServiceTest {
         );
 
         assertThatThrownBy(() -> service.commit(request, "admin"))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .satisfies(error -> assertThat(((com.example.dbadmin.api.ApiProblemException) error).code()).isEqualTo("DATA_EDIT_CONFLICT"))
                 .hasMessageContaining("回滚");
         try (Connection connection = DriverManager.getConnection(url, "sa", "");
              var resultSet = connection.createStatement().executeQuery("SELECT amount FROM cash_ledger WHERE id = 1")) {

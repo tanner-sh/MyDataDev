@@ -34,8 +34,8 @@ class ScheduledQuerySchedulerTest {
 
         fixture.scheduler.runDueExports();
 
-        verify(fixture.service).run(2, "scheduler");
-        verify(fixture.service, never()).run(1, "scheduler");
+        verify(fixture.service).submit(2, "scheduler");
+        verify(fixture.service, never()).submit(1, "scheduler");
     }
 
     /** 停用的任务连判定都不该进：它现在不跑了。 */
@@ -47,7 +47,7 @@ class ScheduledQuerySchedulerTest {
 
         fixture.scheduler.runDueExports();
 
-        verify(fixture.service, never()).run(3, "scheduler");
+        verify(fixture.service, never()).submit(3, "scheduler");
     }
 
     private static ScheduledQuery task(String cron, String zone, Instant lastRun) {

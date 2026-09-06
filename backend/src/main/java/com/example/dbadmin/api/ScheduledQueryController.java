@@ -32,18 +32,20 @@ import java.util.List;
 public class ScheduledQueryController {
     private final ScheduledQueryService service;
     private final ConnectionAccessService access;
+    private final com.example.dbadmin.service.BackgroundTaskStream stream;
 
-    public ScheduledQueryController(ScheduledQueryService service, ConnectionAccessService access) {
+    public ScheduledQueryController(ScheduledQueryService service, ConnectionAccessService access, com.example.dbadmin.service.BackgroundTaskStream stream) {
         this.service = service;
         this.access = access;
+        this.stream = stream;
     }
 
     @GetMapping
     public List<ScheduledQueryResponse> list(@RequestParam(required = false) Long connectionId) {
-        if (connectionId != null) access.require(connectionId, ConnectionPermission.QUERY);
+        if (connectionId != null) requireExport(connectionId);
         return service.list(connectionId).stream()
                 // 不带连接 id 时逐条过一遍权限：列表不该泄露用户没权限看到的连接上有哪些任务。
-                .filter(task -> connectionId != null || accessible(task.connectionId()))
+                .filter(task -> connectionId != null || exportAccessible(task.connectionId()))
                 .map(this::response)
                 .toList();
     }
@@ -77,22 +79,56 @@ public class ScheduledQueryController {
     public ScheduledQueryResponse run(@PathVariable long id,
                                       @RequestHeader(value = "X-User", required = false) String actor) {
         requireExport(service.require(id).connectionId());
-        return response(service.run(id, actor));
+        return response(service.submit(id, actor));
+    }
+
+    @GetMapping("/active")
+    public List<com.example.dbadmin.model.ScheduledQueryRun> active(@RequestParam(required = false) Long connectionId) {
+        if (connectionId != null) requireExport(connectionId);
+        return service.active(connectionId).stream().filter(run -> exportAccessible(run.connectionId())).toList();
+    }
+
+    @GetMapping(value = "/stream", produces = org.springframework.http.MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter stream(@RequestParam long connectionId) {
+        requireExport(connectionId);
+        return stream.subscribeExports(connectionId);
+    }
+
+    @GetMapping("/{id}/runs")
+    public List<com.example.dbadmin.model.ScheduledQueryRun> history(@PathVariable long id, @RequestParam(defaultValue = "50") int limit) {
+        requireExport(service.require(id).connectionId());
+        return service.history(id, limit);
+    }
+
+    @PostMapping("/{id}/cancel")
+    public void cancel(@PathVariable long id) {
+        requireExport(service.require(id).connectionId());
+        service.cancel(id);
+    }
+
+    @GetMapping("/{id}/runs/{runId}/download")
+    public org.springframework.http.ResponseEntity<org.springframework.core.io.Resource> download(@PathVariable long id,
+            @PathVariable String runId, @RequestHeader(value = "X-User", required = false) String actor) throws Exception {
+        requireExport(service.require(id).connectionId());
+        java.nio.file.Path file = service.download(id, runId, actor);
+        return org.springframework.http.ResponseEntity.ok()
+                .header("Cache-Control", "no-store")
+                .header("Content-Disposition", org.springframework.http.ContentDisposition.attachment()
+                        .filename(file.getFileName().toString(), java.nio.charset.StandardCharsets.UTF_8).build().toString())
+                .contentType(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM)
+                .contentLength(java.nio.file.Files.size(file))
+                .body(new org.springframework.core.io.FileSystemResource(file));
+    }
+
+    private boolean exportAccessible(long connectionId) {
+        try { requireExport(connectionId); return true; }
+        catch (RuntimeException denied) { return false; }
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable long id, @RequestHeader(value = "X-User", required = false) String actor) {
         requireExport(service.require(id).connectionId());
         service.delete(id, actor);
-    }
-
-    private boolean accessible(long connectionId) {
-        try {
-            access.require(connectionId, ConnectionPermission.QUERY);
-            return true;
-        } catch (RuntimeException ignored) {
-            return false;
-        }
     }
 
     private void requireExport(long connectionId) {

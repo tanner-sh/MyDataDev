@@ -1,13 +1,16 @@
-import { Alert, Button, Checkbox, Collapse, Form, Input, InputNumber, Select, Space, Tooltip, Typography } from 'antd';
+import { Alert, Button, Checkbox, Collapse, Form, Input, InputNumber, Select, Segmented, Space, Tooltip, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { DB_TYPE_OPTIONS, ENVIRONMENT_OPTIONS, SSH_AUTH_MODE_OPTIONS } from '../constants';
 import type { ConnectionForm, ConnectionSshAuthMode, ConnectionSshForm } from '../types';
 import { normalizeEnvironment } from '../utils';
 
+import { addressProblem, buildConnectionAddress, parseConnectionAddress, supportsBasicAddress, type ConnectionAddress } from '../connectionAddress';
+
 const { Text } = Typography;
 
-export function ConnectionFormPanel({ form, editing, loading, onChange, onDbTypeChange, onCancel, onTest, onSave }: {
+export function ConnectionFormPanel({ form, editing, loading, onChange, onDbTypeChange, onCancel, onTest, onSave, testResult }: {
+  testResult?: { ok: boolean; message: string; steps?: Array<{ stage: string; elapsedMs: number }> };
   form: ConnectionForm;
   editing: boolean;
   loading: boolean;
@@ -17,6 +20,20 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
   onTest: () => void;
   onSave: () => void;
 }) {
+  const [addressMode, setAddressMode] = useState<'basic' | 'advanced'>(() => parseConnectionAddress(form.dbType, form.jdbcUrl) ? 'basic' : 'advanced');
+  const parsedAddress = parseConnectionAddress(form.dbType, form.jdbcUrl);
+  const [address, setAddress] = useState<ConnectionAddress | undefined>(parsedAddress);
+  useEffect(() => {
+    const parsed = parseConnectionAddress(form.dbType, form.jdbcUrl);
+    setAddress(parsed);
+    setAddressMode(parsed ? 'basic' : 'advanced');
+  }, [form.dbType]);
+  const updateAddress = (patch: Partial<ConnectionAddress>) => {
+    if (!address) return;
+    const next = { ...address, ...patch };
+    setAddress(next);
+    onChange({ ...form, jdbcUrl: buildConnectionAddress(form.dbType, next) });
+  };
   const [touched, setTouched] = useState({ name: false, jdbcUrl: false });
   const nameInvalid = form.name.trim().length === 0;
   const jdbcUrlInvalid = form.jdbcUrl.trim().length === 0 || !form.jdbcUrl.trim().startsWith('jdbc:');
@@ -26,7 +43,7 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
       || ssh.username.trim().length === 0
       || (!ssh.skipHostKeyCheck && ssh.serverFingerprint.trim().length === 0)
       || (ssh.authMode === 'PRIVATE_KEY' && ssh.privateKey.trim().length === 0));
-  const canSubmit = !nameInvalid && !jdbcUrlInvalid && !sshInvalid && !loading;
+  const canSubmit = !(addressMode === 'basic' && address && addressProblem(address)) && !nameInvalid && !jdbcUrlInvalid && !sshInvalid && !loading;
 
   const updateSsh = (patch: Partial<ConnectionSshForm>) => onChange({ ...form, ssh: { ...ssh, ...patch } });
 
@@ -39,9 +56,20 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
         <Form.Item label="数据库类型">
           <Select value={form.dbType} options={DB_TYPE_OPTIONS.map(({ value, label }) => ({ value, label }))} onChange={onDbTypeChange} />
         </Form.Item>
+        {supportsBasicAddress(form.dbType) && <Form.Item label="连接方式">
+          <Segmented value={addressMode} options={[{ label: '主机与端口', value: 'basic', disabled: addressMode === 'advanced' && !parsedAddress }, { label: '高级 JDBC', value: 'advanced' }]} onChange={value => { if (value === 'basic') setAddress(parsedAddress); setAddressMode(value as 'basic' | 'advanced'); }} />
+        </Form.Item>}
+        {addressMode === 'basic' && address ? <>
+          <Form.Item label="主机" required><Input value={address.host} placeholder="localhost 或数据库服务器地址" onChange={event => updateAddress({ host: event.target.value })} /></Form.Item>
+          <Form.Item label="端口" required><InputNumber style={{ width: '100%' }} min={1} max={65535} value={address.port} onChange={value => updateAddress({ port: value ?? 0 })} /></Form.Item>
+          <Form.Item label="数据库名"><Input value={address.database} onChange={event => updateAddress({ database: event.target.value })} /></Form.Item>
+          {addressProblem(address) && <Alert type="error" showIcon title={addressProblem(address)} />}
+          {address.suffix && <Text type="secondary">已保留原 JDBC 连接参数，可在高级模式中查看和修改。</Text>}
+        </> : <>
         <Form.Item label="数据库地址" required validateStatus={touched.jdbcUrl && jdbcUrlInvalid ? 'error' : undefined} help={touched.jdbcUrl && jdbcUrlInvalid ? '请输入以 jdbc: 开头的数据库地址' : undefined}>
           <Input value={form.jdbcUrl} placeholder="jdbc:数据库类型://主机:端口/数据库" onBlur={() => setTouched((current) => ({ ...current, jdbcUrl: true }))} onChange={(event) => onChange({ ...form, jdbcUrl: event.target.value })} />
         </Form.Item>
+        </>}
         <Form.Item label="用户名">
           <Input value={form.username} onChange={(event) => onChange({ ...form, username: event.target.value })} />
         </Form.Item>
@@ -189,9 +217,12 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
           </Text>
         )}
         {editing && <Text type="secondary" className="form-hint-text">编辑已有连接时，****** 表示沿用原密码；清空后保存会删除已保存密码。</Text>}
+        {loading && <Alert type="info" showIcon title={form.ssh.enabled ? '正在建立 SSH 隧道并验证数据库登录…' : '正在连接数据库并验证登录…'} />}
+        {testResult && <Alert type={testResult.ok ? 'success' : 'error'} showIcon title={testResult.ok ? '连接测试通过' : '连接测试失败'}
+          description={<><div style={{ overflowWrap: 'anywhere' }}>{testResult.message}</div>{testResult.steps?.map(step => <div key={step.stage}>{step.stage} · {step.elapsedMs} ms</div>)}</>} />}
         <Space className="form-actions" size={8}>
           <Button block onClick={onCancel} disabled={loading}>取消</Button>
-          <Button block onClick={onTest} loading={loading} disabled={jdbcUrlInvalid}>测试连接</Button>
+          <Button block onClick={onTest} loading={loading} disabled={jdbcUrlInvalid || sshInvalid || Boolean(addressMode === 'basic' && address && addressProblem(address))}>测试连接</Button>
           <Button block type="primary" icon={<SaveOutlined />} onClick={onSave} loading={loading} disabled={!canSubmit}>{editing ? '保存修改' : '保存连接'}</Button>
         </Space>
       </Form>

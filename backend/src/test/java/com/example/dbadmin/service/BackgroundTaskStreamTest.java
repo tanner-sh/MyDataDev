@@ -105,7 +105,7 @@ class BackgroundTaskStreamTest {
             active(List.of());
             // 任务模型里有 Instant：不注册 JSR-310 模块的话序列化会直接失败，那测的就不是推送逻辑了。
             ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
-            stream = new BackgroundTaskStream(restores, histories, sqlFiles, mapper, new AppProperties());
+            stream = new BackgroundTaskStream(restores, histories, sqlFiles, mapper, new AppProperties(), mock(com.example.dbadmin.repo.ScheduledQueryRepository.class));
         }
 
         private void active(List<BackupHistory> backups) {

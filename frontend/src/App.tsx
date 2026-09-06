@@ -1,10 +1,15 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
+import { resourceDocumentKey, type ResourceDocument } from './resourceWorkspaces';
+import { useEditableRows } from './hooks/useEditableRows';
+import { cellValidation, rebaseConflictRow } from './tableEditing';
+import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
-import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
+import { PERSIST_WORK_EVENT, isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
@@ -27,7 +32,7 @@ import type {
 } from './sqlEditorTypes';
 import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
-import { readSqlSession, writeSqlSession } from './sqlSessionStorage';
+import { readSqlSession, writeSqlSession, rememberClosedSqlTab, restoreClosedSqlTab } from './sqlSessionStorage';
 import { readFavoriteConnectionIds, readRecentCommandIds, writeFavoriteConnectionIds, writeRecentCommandIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import {
@@ -144,7 +149,9 @@ const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((mo
 const ErDiagram = lazy(() => import('./components/ErDiagram').then((module) => ({ default: module.ErDiagram })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
-export default function App() {
+export default function App({ workspaceOwner = 'local', workspaceLocked = false }: { workspaceOwner?: string; workspaceLocked?: boolean }) {
+  const [draftSaveState, setDraftSaveState] = useState('草稿保存中…');
+  const wasWorkspaceLocked = useRef(workspaceLocked);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [favoriteConnectionIds, setFavoriteConnectionIds] = useState<number[]>(() => readFavoriteConnectionIds());
   const [selected, setSelected] = useState<Connection | null>(null);
@@ -152,10 +159,11 @@ export default function App() {
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
   const [structureLoadingKey, setStructureLoadingKey] = useState<string | null>(null);
-  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>([{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }]);
-  const [activeSqlTabId, setActiveSqlTabId] = useState('query-1');
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(() => readSqlSession(null, undefined, workspaceOwner)?.tabs || [{ id: 'query-1', title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }]);
+  const [activeSqlTabId, setActiveSqlTabId] = useState(() => readSqlSession(null, undefined, workspaceOwner)?.activeTabId || 'query-1');
   const [sqlSessionRevision, setSqlSessionRevision] = useState(0);
   const [workspaceStatus, setWorkspaceStatus] = useState<WorkspaceStatus>({ kind: 'idle', text: '就绪' });
+  const [connectionTestResult, setConnectionTestResult] = useState<{ ok: boolean; message: string; steps?: Array<{ stage: string; elapsedMs: number }> }>();
   const [connectionActionLoading, setConnectionActionLoading] = useState(false);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [metadataBlockingLoading, setMetadataBlockingLoading] = useState(false);
@@ -180,7 +188,10 @@ export default function App() {
   const [activeObjectTarget, setActiveObjectTarget] = useState<DbObject | null>(null);
   const [activeObjectDetail, setActiveObjectDetail] = useState<ObjectDetail | null>(null);
   const [tableData, setTableData] = useState<TableData | null>(null);
-  const [tableRows, setTableRows] = useState<TableRow[]>([]);
+  const resources = useResourceWorkspaces();
+  const tableEdits = useEditableRows();
+  const tableRows = tableEdits.rows;
+  const setTableRows = tableEdits.setRows;
   const [tablePage, setTablePage] = useState(0);
   const [tableCursorStack, setTableCursorStack] = useState<Array<string | null>>([null]);
   const [tableQuery, setTableQuery] = useState<TableQuery>(EMPTY_TABLE_QUERY);
@@ -238,6 +249,8 @@ export default function App() {
   const sqlTabsRef = useRef(sqlTabs);
   const activeSqlTabIdRef = useRef(activeSqlTabId);
   const sqlSessionConnectionIdRef = useRef<number | null>(null);
+  const tableDocumentKey = selected && activeTable ? resourceDocumentKey(selected.id, 'table', activeTable.schemaName, activeTable.tableName) : '';
+  const objectDocumentKey = selected && activeObjectTarget ? resourceDocumentKey(selected.id, 'object', activeObjectTarget.schemaName, activeObjectTarget.name) : '';
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   // 生产确认的一组状态搬进了 hooks/useProductionConfirmation：它是「一组状态 + 一条异步流程」，
   // 正是 CLAUDE.md 里说的该抽成自定义 hook 的形状。
@@ -245,6 +258,16 @@ export default function App() {
   const [modalApi, modalContextHolder] = Modal.useModal();
   const layoutPreferences = useLayoutPreferences();
   // 管理员在抽屉里改完 AI 设置后要立刻反映到工作台，所以抽屉一关就重取一次。
+  useEffect(() => {
+    if (!tableDocumentKey || !activeTable) return;
+    const old = resources.snapshots.current.get(tableDocumentKey);
+    resources.snapshots.current.set(tableDocumentKey, { table: activeTable, data: tableData, edits: tableEdits.history,
+      query: tableQuery, page: tablePage, pageSize: layoutPreferences.tablePageSize, cursors: tableCursorStack,
+      preview: previewSql, rowCount: tableRowCount, relations: activeTableRelations, scrollTop: old?.scrollTop || 0 });
+    resources.markDirty(tableDocumentKey, buildChanges(tableRows, tableData?.keyColumns || []).length > 0);
+  }, [tableDocumentKey, activeTable, tableData, tableEdits.history, tableQuery, tablePage, layoutPreferences.tablePageSize,
+    tableCursorStack, previewSql, tableRowCount, activeTableRelations, resources.markDirty]);
+
   const { status: aiStatus, reload: reloadAiStatus } = useAiStatus();
   const updateObjectDesignDirty = useCallback((dirty: boolean) => {
     objectDesignDirtyRef.current = dirty;
@@ -289,6 +312,11 @@ export default function App() {
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
+
+  useEffect(() => {
+    if (wasWorkspaceLocked.current && !workspaceLocked) void refreshConnections();
+    wasWorkspaceLocked.current = workspaceLocked;
+  }, [workspaceLocked]);
 
   // 首屏空闲时只预取工作台外壳；编辑器等真正进入 SQL 工作台后再加载。
   useEffect(() => prefetchWhenIdle(loadSqlWorkspace, window), []);
@@ -342,7 +370,8 @@ export default function App() {
   useEffect(() => {
     const connectionId = selected?.id ?? null;
     const timer = window.setTimeout(() => {
-      writeSqlSession(connectionId, sqlTabs, activeSqlTabId);
+      const saved = writeSqlSession(connectionId, sqlTabs, activeSqlTabId, undefined, workspaceOwner);
+      setDraftSaveState(saved ? '草稿已保存到本机' : '草稿保存失败，请下载 SQL 文件留存');
     }, 300);
     return () => window.clearTimeout(timer);
   }, [activeSqlTabId, selected?.id, sqlTabs]);
@@ -350,7 +379,8 @@ export default function App() {
   useEffect(() => {
     const persist = () => persistCurrentSqlSession(sqlSessionConnectionIdRef.current);
     window.addEventListener('pagehide', persist);
-    return () => window.removeEventListener('pagehide', persist);
+    window.addEventListener(PERSIST_WORK_EVENT, persist);
+    return () => { window.removeEventListener('pagehide', persist); window.removeEventListener(PERSIST_WORK_EVENT, persist); };
   }, []);
 
   // The listener is registered once and dispatches through a ref, so every
@@ -366,7 +396,7 @@ export default function App() {
 
   // 未结束的手动事务也要拦：它活在后端，关掉页面不会结束它 —— 连接池里的那条连接和
   // 数据库上的锁会一直被占着，直到空闲超时（默认 10 分钟）才自动回滚。
-  const hasUnsavedWork = pendingChanges.length > 0 || objectDesignDirty || isTransactionActive(transactionState);
+  const hasUnsavedWork = resources.documents.some(document => document.dirty) || pendingChanges.length > 0 || objectDesignDirty || isTransactionActive(transactionState) || draftSaveState.includes('失败');
   useEffect(() => {
     if (!hasUnsavedWork) return;
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -408,7 +438,10 @@ export default function App() {
 
   const { summary: backgroundTasks, reset: resetBackgroundTasks } = useBackgroundTasks({
     connectionId: selected?.id,
-    watchingTasks: activeDrawer === 'backups',
+    watchingTasks: activeDrawer === 'backups' || activeDrawer === 'scheduled-exports',
+    backupAllowed: hasConnectionPermission(selected, 'BACKUP_RESTORE'),
+    exportAllowed: hasConnectionPermission(selected, 'EXPORT') && hasConnectionPermission(selected, 'QUERY'),
+    locked: workspaceLocked,
     onCompletion: (message) => toastApi.info(message),
     onOperations: (active) => {
       if (activeDrawer !== 'backups') return;
@@ -542,7 +575,7 @@ export default function App() {
         return;
       } catch (e) {
         if (attempt === delays.length - 1) {
-          setConnectionsError(`连接后端失败，请确认服务已启动：${localizeMessage((e as Error).message)}`);
+          setConnectionsError(`连接后端失败，请确认服务已启动：${localizeError(e)}`);
           setConnectionsReady(true);
           setConnectionsLoading(false);
           return;
@@ -617,7 +650,7 @@ export default function App() {
       showSuccess(editor.mode === 'edit' ? `已更新连接：${saved.name}` : `已创建连接：${saved.name}`);
       await refreshConnections({ preferredConnectionId: updatesActiveConnection ? saved.id : undefined });
     } catch (e) {
-      showError(localizeMessage((e as Error).message));
+      showError(localizeError(e));
     } finally {
       setConnectionActionLoading(false);
     }
@@ -650,16 +683,19 @@ export default function App() {
     const editor = connectionEditor;
     if (editor.mode === 'closed') return;
     const target = editor.form;
+    setConnectionTestResult(undefined);
     setConnectionActionLoading(true);
     try {
       const request = buildConnectionTestRequest(editor);
-      await api<{ ok: boolean; message: string }>(request.path, {
+      const tested = await api<{ ok: boolean; message: string; steps?: Array<{ stage: string; elapsedMs: number }> }>(request.path, {
         method: 'POST',
         body: JSON.stringify(request.body)
       });
+      setConnectionTestResult({ ...tested, message: '数据库连接与身份验证成功。' });
       showSuccess(`连接测试成功：${target.name || target.jdbcUrl}`);
     } catch (e) {
-      showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
+      setConnectionTestResult({ ok: false, message: localizeError(e), steps: e instanceof ApiError && Array.isArray(e.details.steps) ? e.details.steps as Array<{ stage: string; elapsedMs: number }> : undefined });
+      showError(`连接测试失败：${localizeError(e)}`);
     } finally {
       setConnectionActionLoading(false);
     }
@@ -671,7 +707,7 @@ export default function App() {
       await api<{ ok: boolean; message: string }>(`/connections/${connection.id}/test`, { method: 'POST' });
       showSuccess(`连接测试成功：${connection.name}`);
     } catch (e) {
-      showError(`连接测试失败：${localizeMessage((e as Error).message)}`);
+      showError(`连接测试失败：${localizeError(e)}`);
     } finally {
       setTestingConnectionId(null);
     }
@@ -698,6 +734,7 @@ export default function App() {
         writeFavoriteConnectionIds(next);
         return next;
       });
+      resources.documents.filter(item => item.connectionId === connection.id).forEach(item => resources.close(item.key));
       const remaining = connections.filter((row) => row.id !== connection.id);
       setConnections(remaining);
       if (selected?.id === connection.id) {
@@ -787,25 +824,24 @@ export default function App() {
         : '请等待当前操作完成后再切换连接');
       return;
     }
-    confirmDiscardObjectDesign(() => {
-      confirmDiscardTableChanges(() => {
-        applyConnectionSelection(connection);
-        onSelected?.();
-      }, `切换到连接“${connection.name}”`);
-    }, `切换到连接“${connection.name}”`);
+    applyConnectionSelection(connection);
+    onSelected?.();
   }
 
   function editConnection(connection: Connection) {
+    setConnectionTestResult(undefined);
     setConnectionEditor(createEditConnectionEditor(connection));
     setActiveDrawer('connections');
   }
 
   function duplicateConnection(connection: Connection) {
+    setConnectionTestResult(undefined);
     setConnectionEditor(createDuplicateConnectionEditor(connection));
     setActiveDrawer('connections');
   }
 
   function openNewConnectionEditor() {
+    setConnectionTestResult(undefined);
     setConnectionEditor(createBlankConnectionEditor());
     setActiveDrawer('connections');
   }
@@ -968,7 +1004,7 @@ export default function App() {
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       if (requestId === metadataRequestSeqRef.current && selectedIdRef.current === conn.id) {
-        showError(localizeMessage((e as Error).message));
+        showError(localizeError(e));
       }
     } finally {
       if (requestId === metadataRequestSeqRef.current) {
@@ -1168,7 +1204,7 @@ export default function App() {
       const structure = await loadCachedObjectStructure(connectionId, object);
       return selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation ? structure : null;
     } catch (e) {
-      if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) showError(localizeMessage((e as Error).message));
+      if (selectedIdRef.current === connectionId && structureRequestSeqRef.current === generation) showError(localizeError(e));
       return null;
     } finally {
       setStructureLoadingKey((current) => current === loadingKey ? null : current);
@@ -1406,7 +1442,7 @@ export default function App() {
           statusKind: 'success'
         }), tabId));
     } catch (e) {
-      const errorMessage = localizeMessage((e as Error).message);
+      const errorMessage = localizeError(e);
       showError(errorMessage);
     } finally {
       if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
@@ -1464,7 +1500,7 @@ export default function App() {
         updateActiveSqlTab({ sql: nextSql, message: '当前语句格式化完成', statusKind: 'success' });
       }
     } catch (e) {
-      const errorMessage = `格式化失败：${localizeMessage((e as Error).message)}`;
+      const errorMessage = `格式化失败：${localizeError(e)}`;
       updateSqlTab(targetTabId, { message: errorMessage, statusKind: 'error' });
       toastApi.error(errorMessage);
     } finally {
@@ -1704,7 +1740,7 @@ export default function App() {
     const tabs = sqlTabsRef.current.map((tab) => tab.id === activeSqlTabIdRef.current && liveSql !== undefined && liveSql !== tab.sql
       ? { ...tab, sql: liveSql, dirty: true }
       : tab);
-    writeSqlSession(connectionId, tabs, activeSqlTabIdRef.current);
+    writeSqlSession(connectionId, tabs, activeSqlTabIdRef.current, undefined, workspaceOwner);
   }
 
   function activateSqlSession(nextConnectionId: number | null, captureLiveEditor: boolean) {
@@ -1713,9 +1749,9 @@ export default function App() {
     if (captureLiveEditor) {
       persistCurrentSqlSession(previousConnectionId);
     } else {
-      writeSqlSession(previousConnectionId, sqlTabsRef.current, activeSqlTabIdRef.current);
+      writeSqlSession(previousConnectionId, sqlTabsRef.current, activeSqlTabIdRef.current, undefined, workspaceOwner);
     }
-    const restored = readSqlSession(nextConnectionId);
+    const restored = readSqlSession(nextConnectionId, undefined, workspaceOwner);
     const nextTabs = restored?.tabs || [{ id: `query-${Date.now()}-1`, title: '查询 1', sql: 'select 1 as val', dirty: false, results: [], message: '' }];
     const nextActiveTabId = restored?.activeTabId || nextTabs[0].id;
     sqlSessionConnectionIdRef.current = nextConnectionId;
@@ -1754,7 +1790,7 @@ export default function App() {
     }
     modalApi.confirm({
       title: `关闭“${target.title}”？`,
-      content: '该标签包含修改过的 SQL，关闭后当前会话内的草稿将被删除。',
+      content: '该标签包含修改过的 SQL，关闭后可通过“找回关闭的 SQL”恢复最近的草稿。',
       okText: '关闭标签',
       cancelText: '继续编辑',
       okButtonProps: { danger: true },
@@ -1763,6 +1799,11 @@ export default function App() {
   }
 
   function removeSqlTab(targetId: string) {
+    const closing = sqlTabsRef.current.find(tab => tab.id === targetId);
+    if (closing && !rememberClosedSqlTab(selected?.id ?? null, closing, workspaceOwner)) {
+      showError('保存最近关闭的草稿失败，请先下载 SQL 文件。');
+      return;
+    }
     setSqlTabs((tabs) => {
       if (tabs.length === 1) {
         return tabs;
@@ -1775,6 +1816,15 @@ export default function App() {
       }
       return nextTabs;
     });
+  }
+
+  function reopenSqlTab() {
+    if (sqlTabs.length >= MAX_SQL_TABS) { showInfo('请先关闭一个 SQL 标签页'); return; }
+    const tab = restoreClosedSqlTab(selected?.id ?? null, workspaceOwner);
+    if (!tab) { showInfo('没有可找回的 SQL 草稿'); return; }
+    const restored = { ...tab, id: createUuid() };
+    setSqlTabs(tabs => [...tabs, restored]);
+    setActiveSqlTabId(restored.id);
   }
 
   function renameSqlTab(targetId: string) {
@@ -2113,15 +2163,26 @@ export default function App() {
       showInfo('当前数据库类型暂不支持表数据浏览');
       return;
     }
-    const targetName = `${object.schemaName ? `${object.schemaName}.` : ''}${object.name}`;
-    confirmDiscardObjectDesign(() => {
-      confirmDiscardTableChanges(() => {
-        void applyOpenTable(object);
-      }, `打开数据表“${targetName}”`);
-    }, `打开数据表“${targetName}”`);
+    if (tableLoading || objectDetailLoading) { showInfo('请等待当前加载完成'); return; }
+    void applyOpenTable(object);
   }
 
   async function applyOpenTable(object: DbObject) {
+    if (!selected) return;
+    const key = resourceDocumentKey(selected.id, 'table', object.schemaName, object.name);
+    const cached = resources.snapshots.current.get(key);
+    if (!resources.ensure({ key, connectionId: selected.id, kind: 'table', object, dirty: Boolean(cached && buildChanges(cached.edits.present, cached.data?.keyColumns || []).length) })) {
+      showInfo('最多打开 20 个表或对象标签，请先关闭不需要的标签。'); return;
+    }
+    if (cached) {
+      tableRequestSeqRef.current++;
+      tableAbortRef.current?.abort();
+      setActiveTable(cached.table); setTableData(cached.data); tableEdits.restore(cached.edits);
+      setTablePage(cached.page); setTableCursorStack(cached.cursors); setTableQuery(cached.query);
+      layoutPreferences.setTablePageSize(cached.pageSize); setPreviewSql(cached.preview);
+      setTableRowCount(cached.rowCount); setActiveTableRelations(cached.relations); setMode('table');
+      return;
+    }
     const next = { schemaName: object.schemaName, tableName: object.name };
     resetTableRowCount();
     // Never leave rows from the previous table visible under a new table name
@@ -2137,11 +2198,16 @@ export default function App() {
     setActiveTableRelations(null);
     // 外键关系用于数据网格里的跳转；拿不到就只是没有跳转按钮，不影响浏览。
     if (selected) {
+      const relationRequest = tableRequestSeqRef.current + 1;
       const params = new URLSearchParams({ objectName: object.name });
       if (object.schemaName) params.set('schemaName', object.schemaName);
       api<ObjectRelations>(`/metadata/${selected.id}/objects/relations?${params.toString()}`)
         .then((relations) => {
-          if (selectedIdRef.current === selected.id) setActiveTableRelations(relations);
+          if (selectedIdRef.current === selected.id && resources.snapshots.current.has(key)) {
+            const snapshot = resources.snapshots.current.get(key)!;
+            resources.snapshots.current.set(key, { ...snapshot, relations });
+            if (tableRequestSeqRef.current === relationRequest) setActiveTableRelations(relations);
+          }
         })
         .catch(() => undefined);
     }
@@ -2149,11 +2215,8 @@ export default function App() {
   }
 
   function openObjectDetail(object: DbObject) {
-    confirmDiscardObjectDesign(() => {
-      confirmDiscardTableChanges(() => {
-        void loadObjectDetail(object);
-      }, `查看对象“${object.name}”`);
-    }, `查看对象“${object.name}”`);
+    if (tableLoading || objectDetailLoading) { showInfo('请等待当前加载完成'); return; }
+    void loadObjectDetail(object);
   }
 
   function openCreateTable() {
@@ -2204,6 +2267,9 @@ export default function App() {
     if (!selected) return;
     const activeTableMatched = Boolean(source && activeTable && sameTable(activeTable, source));
     const activeObjectMatched = Boolean(source && activeObjectTarget && sameTable(activeObjectTarget, source));
+    if (source && operation !== 'CREATE') {
+      resources.documents.filter(item => item.connectionId === selected.id && sameTable(item.object, source)).forEach(item => resources.close(item.key));
+    }
     if (operation === 'DROP' && activeTableMatched) {
       discardTableChanges();
       setMode('sql');
@@ -2231,6 +2297,16 @@ export default function App() {
   async function loadObjectDetail(object: DbObject, options: { refresh?: boolean } = {}) {
     if (!selected) return;
     const connectionId = selected.id;
+    const documentKey = resourceDocumentKey(connectionId, 'object', object.schemaName, object.name);
+    const existing = resources.documents.find(item => item.key === documentKey);
+    if (existing && !options.refresh) {
+      setActiveObjectTarget(existing.object); setActiveObjectDetail(existing.detail || null);
+      updateObjectDesignDirty(existing.dirty); setMode('object');
+      if (existing.detail) return;
+    }
+    if (!resources.ensure({ key: documentKey, connectionId, kind: 'object', object, detail: existing?.detail, dirty: existing?.dirty || false })) {
+      showInfo('最多打开 20 个表或对象标签，请先关闭不需要的标签。'); return;
+    }
     const requestId = ++objectDetailRequestSeqRef.current;
     const cached = options.refresh ? undefined : objectDetailCacheRef.current.get(objectCacheKey(connectionId, object));
     const retainedDetail = options.refresh && activeObjectDetail && sameTable(activeObjectDetail, object)
@@ -2244,12 +2320,13 @@ export default function App() {
     try {
       const detail = await objectDetailRequest(connectionId, object, options.refresh);
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
+      resources.ensure({ key: documentKey, connectionId, kind: 'object', object, detail, dirty: false });
       setActiveObjectDetail(detail);
       setActiveObjectTarget(detail);
       updateObjectDesignDirty(false);
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {
-      if (requestId === objectDetailRequestSeqRef.current) showError(localizeMessage((e as Error).message));
+      if (requestId === objectDetailRequestSeqRef.current) showError(localizeError(e));
     } finally {
       if (requestId === objectDetailRequestSeqRef.current) setObjectDetailLoading(false);
     }
@@ -2288,6 +2365,9 @@ export default function App() {
         })
       });
       if (requestId !== tableRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
+      const key = resourceDocumentKey(connectionId, 'table', table.schemaName, table.tableName);
+      const snapshot = resources.snapshots.current.get(key);
+      if (snapshot) resources.snapshots.current.set(key, { ...snapshot, scrollTop: 0 });
       setTableData(data);
       setTablePage(requestedPage);
       setTableCursorStack((current) => {
@@ -2300,7 +2380,7 @@ export default function App() {
       setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${requestedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}${data.navigationMode === 'OFFSET' ? requestedQuery.sorts.length ? '；自定义排序采用偏移分页' : '；当前表无稳定行键，深页浏览受限' : ''}` });
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
-      if (requestId === tableRequestSeqRef.current) showError(localizeMessage((e as Error).message));
+      if (requestId === tableRequestSeqRef.current) showError(localizeError(e));
     } finally {
       if (requestId === tableRequestSeqRef.current) setTableLoading(false);
       if (tableAbortRef.current === controller) tableAbortRef.current = null;
@@ -2308,7 +2388,7 @@ export default function App() {
   }
 
   const editCell = useCallback((rowId: string, column: string, value: unknown) => {
-    setTableRows((rows) => rows.map((row) => {
+    tableEdits.editRows((rows) => rows.map((row) => {
       if (row.id !== rowId) return row;
       if (row.inserted) {
         const values = { ...row.values };
@@ -2328,6 +2408,7 @@ export default function App() {
   }, []);
 
   function changeDbType(dbType: string) {
+    setConnectionTestResult(undefined);
     const preset = DB_TYPE_OPTIONS.find((option) => option.value === dbType);
     setConnectionEditor((current) => current.mode === 'closed'
       ? current
@@ -2344,7 +2425,7 @@ export default function App() {
       showInfo(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更，请先提交当前修改。`);
       return;
     }
-    setTableRows((rows) => [{ id: `new-${createUuid()}`, values: {}, touchedColumns: [], inserted: true }, ...rows]);
+    tableEdits.editRows((rows) => [{ id: `new-${createUuid()}`, values: {}, touchedColumns: [], inserted: true }, ...rows]);
     setPreviewSql([]);
   }
 
@@ -2442,18 +2523,18 @@ export default function App() {
         touchedColumns: Object.keys(values),
         inserted: true
       }));
-      setTableRows((rows) => [...importedRows, ...rows]);
+      tableEdits.editRows((rows) => [...importedRows, ...rows]);
       setPreviewSql([]);
       showSuccess(result.message);
     } catch (e) {
-      showError(`导入失败：${localizeMessage((e as Error).message)}`);
+      showError(`导入失败：${localizeError(e)}`);
     } finally {
       setTableLoading(false);
     }
   }
 
   const deleteRow = useCallback((rowId: string) => {
-    setTableRows((rows) => rows.flatMap((row) => {
+    tableEdits.editRows((rows) => rows.flatMap((row) => {
       if (row.id !== rowId) return [row];
       return row.inserted ? [] : [{ ...row, deleted: !row.deleted }];
     }));
@@ -2472,7 +2553,7 @@ export default function App() {
       setPreviewSql(data.sql);
       showSuccess(`已生成 ${data.sql.length} 条变更语句`);
     } catch (e) {
-      showError(localizeMessage((e as Error).message));
+      showError(localizeError(e));
     } finally {
       setTableLoading(false);
     }
@@ -2483,6 +2564,13 @@ export default function App() {
     if (!pendingChanges.length) {
       showInfo('没有待提交的变更');
       return;
+    }
+    for (const row of tableRows.filter(row => !row.deleted)) {
+      for (const column of tableData?.columns || []) {
+        if (row.original && String(row.values[column.name]) === String(row.original[column.name])) continue;
+        const problem = cellValidation(column, row.values[column.name]);
+        if (problem) { showError(problem); return; }
+      }
     }
     const productionConfirmation = await requestProductionConfirmation('提交表数据变更');
     if (selected.environment === 'prod' && !productionConfirmation) return;
@@ -2498,10 +2586,42 @@ export default function App() {
       resetTableRowCount();
       await loadTable(activeTable, { page: tablePage });
     } catch (e) {
-      showError(localizeMessage((e as Error).message));
+      if (e instanceof ApiError && e.code === 'DATA_EDIT_CONFLICT') await resolveTableConflict(e);
+      else showError(localizeError(e));
     } finally {
       setTableLoading(false);
     }
+  }
+
+  async function resolveTableConflict(error: ApiError) {
+    const change = pendingChanges[Number(error.details.changeIndex)];
+    if (!change?.keyToken || !selected || !activeTable) { showError(error.message); return; }
+    const row = tableRows.find(item => item.keyToken === change.keyToken);
+    if (!row) { showError(error.message); return; }
+    try {
+      const current = await api<{ found: boolean; values: Record<string, unknown>; truncated: boolean }>('/data/conflict-row', {
+        method: 'POST', body: JSON.stringify({ ...dataChangePayload(), changes: [change] })
+      });
+      const apply = (keepMine: boolean) => {
+        tableEdits.editRows(rows => rows.flatMap(item => item.id !== row.id ? [item] : current.found ? [rebaseConflictRow(item, current.values, keepMine)] : []));
+        setPreviewSql([]);
+        showInfo('冲突已处理，其他修改已保留。请核对后重新提交。');
+      };
+      const dialog = modalApi.confirm({
+        title: `处理冲突 · 第 ${tableRows.indexOf(row) + 1} 行`,
+        width: 700,
+        content: <>
+          <p>本次提交已全部回滚，其他行的修改仍保留。</p>
+          {current.found ? <table className="conflict-values"><thead><tr><th>字段</th><th>原值</th><th>数据库当前值</th><th>我的修改</th></tr></thead><tbody>
+            {Object.keys(current.values).map(column => <tr key={column}><td>{column}</td><td>{String(row.original?.[column] ?? 'NULL')}</td><td>{String(current.values[column] ?? 'NULL')}</td><td>{String(row.values[column] ?? 'NULL')}</td></tr>)}
+          </tbody></table> : <p>数据库中的这一行已被删除。可以移除这条待提交修改后继续处理其他行。</p>}
+          {current.truncated && <p>当前值过长，无法安全合并，请关闭对话框并刷新后编辑。</p>}
+          {current.found && <Button disabled={current.truncated} onClick={() => { apply(false); dialog.destroy(); }}>采用数据库当前值</Button>}
+        </>,
+        okText: current.found ? '保留我的修改，更新校验基线' : '移除这条修改', cancelText: '暂不处理',
+        okButtonProps: { disabled: current.truncated }, onOk: () => apply(true)
+      });
+    } catch (failure) { showError(localizeError(failure)); }
   }
 
   function dataChangePayload() {
@@ -2558,7 +2678,7 @@ export default function App() {
       showSuccess(id ? `已更新备份任务：${task.name}` : `已创建备份任务：${task.name}`);
       await refreshBackups(selected, id ? backupTaskPage : 0);
     } catch (e) {
-      showError(`${id ? '更新' : '创建'}备份任务失败：${localizeMessage((e as Error).message)}`);
+      showError(`${id ? '更新' : '创建'}备份任务失败：${localizeError(e)}`);
       throw e;
     } finally {
       setBackupLoading(false);
@@ -2572,7 +2692,7 @@ export default function App() {
       showSuccess(`${task.name} 已${task.enabled ? '启用' : '停用'}`);
       await refreshBackups(selected, backupTaskPage);
     } catch (e) {
-      showError(`更新备份任务状态失败：${localizeMessage((e as Error).message)}`);
+      showError(`更新备份任务状态失败：${localizeError(e)}`);
     } finally {
       setBackupLoading(false);
     }
@@ -2585,7 +2705,7 @@ export default function App() {
       showSuccess(deleteFile ? '已删除备份任务和所有历史备份文件' : '已删除备份任务');
       await refreshBackups(selected, backups.length === 1 && backupTaskPage > 0 ? backupTaskPage - 1 : backupTaskPage);
     } catch (e) {
-      showError(`删除备份任务失败：${localizeMessage((e as Error).message)}`);
+      showError(`删除备份任务失败：${localizeError(e)}`);
       throw e;
     } finally {
       setBackupLoading(false);
@@ -2599,7 +2719,7 @@ export default function App() {
       showSuccess(localizeMessage(result.execution.message || '备份任务已进入后台队列'));
       setBackups((current) => current.map((task) => task.id === id ? result.task : task));
     } catch (e) {
-      showError(`备份执行失败：${localizeMessage((e as Error).message)}`);
+      showError(`备份执行失败：${localizeError(e)}`);
       await refreshBackups(selected);
     } finally {
       setBackupLoading(false);
@@ -2615,7 +2735,7 @@ export default function App() {
     try {
       return await api<BackupHistoryPage>(`/backups/${id}/history?page=${pageNumber}&pageSize=${pageSize}`);
     } catch (e) {
-      showError(`加载备份历史失败：${localizeMessage((e as Error).message)}`);
+      showError(`加载备份历史失败：${localizeError(e)}`);
       throw e;
     }
   }
@@ -2627,7 +2747,7 @@ export default function App() {
       showSuccess(deleteFile ? '已删除备份历史和对应文件' : '已删除备份历史');
       await refreshBackups(selected);
     } catch (e) {
-      showError(`删除备份历史失败：${localizeMessage((e as Error).message)}`);
+      showError(`删除备份历史失败：${localizeError(e)}`);
       throw e;
     } finally {
       setBackupLoading(false);
@@ -2640,7 +2760,7 @@ export default function App() {
       showSuccess('已发送取消备份请求');
       await refreshBackups(selected);
     } catch (e) {
-      showError(`取消备份失败：${localizeMessage((e as Error).message)}`);
+      showError(`取消备份失败：${localizeError(e)}`);
       throw e;
     }
   }
@@ -2929,7 +3049,7 @@ export default function App() {
   const probeObjectDefinitionEvent = useStableEvent((offset: number | null) => probeObjectDefinition(offset));
   const activateObjectDefinitionEvent = useStableEvent((offset: number) => activateObjectDefinition(offset));
   const returnFromDiagramEvent = useStableEvent(() => setMode('sql'));
-  const returnFromTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => setMode('sql'), '返回 SQL 查询工作台'));
+  const returnFromTableEvent = useStableEvent(() => setMode('sql'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
   const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
   const exportTableEvent = useStableEvent((format: ExportFormat) => { void exportTable(format); });
@@ -2949,7 +3069,7 @@ export default function App() {
   const discardTableChangesEvent = useStableEvent(() => discardTableChanges());
   const commitTableChangesEvent = useStableEvent(() => commitChanges());
   const countTableRowsEvent = useStableEvent(() => void countTableRows());
-  const returnFromObjectEvent = useStableEvent(() => confirmDiscardObjectDesign(() => setMode('sql'), '返回 SQL 查询工作台'));
+  const returnFromObjectEvent = useStableEvent(() => setMode('sql'));
   const reloadObjectDetailEvent = useStableEvent(() => {
     if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
   });
@@ -3026,6 +3146,16 @@ export default function App() {
     void tableLifecycleCompleted(operation, source, newTableName);
   });
 
+  function closeResourceDocument(document: ResourceDocument) {
+    const close = () => {
+      resources.close(document.key);
+      if (document.key === tableDocumentKey) { clearTableWorkspace(); if (mode === 'table') setMode('sql'); }
+      if (document.key === objectDocumentKey) { setActiveObjectTarget(null); setActiveObjectDetail(null); updateObjectDesignDirty(false); if (mode === 'object') setMode('sql'); }
+    };
+    if (document.dirty) modalApi.confirm({ title: `关闭 ${document.object.name} 并放弃未提交修改？`, okText: '放弃修改并关闭', cancelText: '继续编辑', okButtonProps: { danger: true }, onOk: close });
+    else close();
+  }
+
   const explorerPanel = (
     <ResourceExplorer
       compactLayout={compactLayout}
@@ -3066,6 +3196,7 @@ export default function App() {
       locale={zhCN}
       theme={antThemeConfig}
     >
+      <ErrorCenter />
       {toastContextHolder}
       {modalContextHolder}
       <Suspense fallback={null}>
@@ -3113,7 +3244,7 @@ export default function App() {
           onSelectConnection={selectConnectionFromHeader}
           onRefreshConnections={refreshConnectionsFromHeader}
           onOpenManagement={openManagementFromHeader}
-          onOpenBackups={openBackupsFromHeader}
+          onOpenBackups={() => backgroundTasks.exports ? setActiveDrawer('scheduled-exports') : openBackupsFromHeader()}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -3136,6 +3267,16 @@ export default function App() {
           )}
 
           <main className="app-content">
+            {selected && <nav className="resource-document-tabs" aria-label="工作区标签">
+              <Button size="small" type={mode === 'sql' ? 'primary' : 'text'} onClick={() => setMode('sql')}>SQL 工作台</Button>
+              {resources.documents.filter(document => document.connectionId === selected.id).map(document => <span key={document.key} className="resource-document-tab">
+                <Button size="small" type={(mode === document.kind && (document.kind === 'table' ? tableDocumentKey : objectDocumentKey) === document.key) ? 'primary' : 'text'} disabled={tableLoading || objectDetailLoading} onClick={() => document.kind === 'table' ? void applyOpenTable(document.object) : void loadObjectDetail(document.object)}>
+                  {document.dirty ? '● ' : ''}{document.object.schemaName ? `${document.object.schemaName}.` : ''}{document.object.name} · {document.kind === 'table' ? '数据' : '结构'}
+                </Button>
+                <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
+              </span>)}
+              <Text type="secondary" className="resource-document-context">{selected.name} · {selected.environment} · {metadataQuery.schema || '默认 Schema'}</Text>
+            </nav>}
             <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
             {mode === 'sql' && !selected ? (
               <div className="empty-state empty-state-fill">
@@ -3147,6 +3288,8 @@ export default function App() {
               </div>
             ) : mode === 'sql' ? (
               <SqlWorkspace
+                draftSaveState={draftSaveState}
+                onRestoreClosedTab={reopenSqlTab}
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
                 aiSampleAllowed={isAiSampleAllowedForConnection(aiStatus, selected?.id)}
@@ -3199,6 +3342,11 @@ export default function App() {
               />
             ) : mode === 'table' ? (
               <TableWorkspace
+                key={tableDocumentKey}
+                initialScrollTop={resources.snapshots.current.get(tableDocumentKey)?.scrollTop || 0}
+                onViewScroll={top => { const snapshot = resources.snapshots.current.get(tableDocumentKey); if (snapshot) resources.snapshots.current.set(tableDocumentKey, { ...snapshot, scrollTop: top }); }}
+                onUndo={() => { tableEdits.undo(); setPreviewSql([]); }} onRedo={() => { tableEdits.redo(); setPreviewSql([]); }}
+                canUndo={tableEdits.history.past.length > 0} canRedo={tableEdits.history.future.length > 0}
                 activeTable={activeTable}
                 tableData={tableData}
                 tableRows={tableRows}
@@ -3241,30 +3389,34 @@ export default function App() {
                   ? <ErDiagram connectionId={selected.id} schemaName={activeSqlSchema} />
                   : <PanelEmpty title="未选择连接" description="选择一个数据库连接后才能绘制 ER 图。" />}
               </div>
-            ) : (
+            ) : null}
+            {resources.documents.filter(document => document.kind === 'object').map(document => {
+              const connection = connections.find(item => item.id === document.connectionId);
+              return <div key={document.key} className="resource-document-panel" hidden={mode !== 'object' || document.key !== objectDocumentKey || selected?.id !== document.connectionId}>
               <ObjectDetailWorkspace
-                connectionId={selected?.id}
-                readonlyConnection={selected?.readonly}
-                capabilities={selected?.capabilities ? {
-                  ...selected.capabilities,
-                  tableBrowse: selected.capabilities.tableBrowse && hasConnectionPermission(selected, 'QUERY'),
-                  tableDesign: selected.capabilities.tableDesign && hasConnectionPermission(selected, 'DDL')
+                connectionId={document.connectionId}
+                readonlyConnection={connection?.readonly}
+                capabilities={connection?.capabilities ? {
+                  ...connection.capabilities,
+                  tableBrowse: connection.capabilities.tableBrowse && hasConnectionPermission(connection, 'QUERY'),
+                  tableDesign: connection.capabilities.tableDesign && hasConnectionPermission(connection, 'DDL')
                 } : undefined}
-                productionConfirmationText={selected?.environment === 'prod' ? selected.name : undefined}
-                target={activeObjectTarget}
-                detail={activeObjectDetail}
+                productionConfirmationText={connection?.environment === 'prod' ? connection.name : undefined}
+                target={document.object}
+                detail={document.detail || null}
                 status={objectStatus}
-                loading={objectDetailLoading}
+                loading={document.key === objectDocumentKey && objectDetailLoading}
                 onBackToSql={returnFromObjectEvent}
                 onOpenTable={openExplorerTable}
                 onReloadDetail={reloadObjectDetailEvent}
-                onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
-                onRenameTable={selected && hasConnectionPermission(selected, 'DDL') ? renameTableEvent : undefined}
-                onDropTable={selected && hasConnectionPermission(selected, 'DDL') ? dropTableEvent : undefined}
-                onDesignDirtyChange={updateObjectDesignDirty}
+                onBackupTable={connection && hasConnectionPermission(connection, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
+                onRenameTable={connection && hasConnectionPermission(connection, 'DDL') ? renameTableEvent : undefined}
+                onDropTable={connection && hasConnectionPermission(connection, 'DDL') ? dropTableEvent : undefined}
+                onDesignDirtyChange={(dirty) => { resources.markDirty(document.key, dirty); if (document.key === objectDocumentKey) updateObjectDesignDirty(dirty); }}
                 onOpenRelation={openRelationEvent}
               />
-            )}
+              </div>;
+            })}
             </Suspense>
           </main>
         </div>
@@ -3492,10 +3644,11 @@ export default function App() {
         {connectionEditor.mode !== 'closed' && (
           <Suspense fallback={<PanelLoading text="正在加载连接表单…" />}>
             <ConnectionFormPanel
+                      testResult={connectionTestResult}
               form={connectionEditor.form}
               editing={connectionEditor.mode === 'edit'}
               loading={connectionActionLoading}
-              onChange={(form) => setConnectionEditor((current) => updateConnectionEditorForm(current, form))}
+              onChange={(form) => { setConnectionTestResult(undefined); setConnectionEditor((current) => updateConnectionEditorForm(current, form)); }}
               onDbTypeChange={changeDbType}
               onCancel={closeConnectionEditor}
               onTest={testConnection}

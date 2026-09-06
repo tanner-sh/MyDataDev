@@ -111,16 +111,19 @@ function createTray() {
 }
 
 async function hasActiveOperations() {
-  try {
-    const response = await fetch(`http://127.0.0.1:${backendPort}/api/restores/operations/active`, {
-      headers: { 'X-User': 'desktop' }
-    });
-    if (!response.ok) return false;
-    const payload = await response.json() as { backups?: unknown[]; restores?: unknown[]; sqlFiles?: unknown[] };
-    return Boolean(payload.backups?.length || payload.restores?.length || payload.sqlFiles?.length);
-  } catch {
-    return false;
-  }
+  const results = await Promise.allSettled([
+    fetch(`http://127.0.0.1:${backendPort}/api/restores/operations/active`, {
+      headers: { 'X-User': 'desktop' }, signal: AbortSignal.timeout(5000)
+    }).then(async response => {
+      if (!response.ok) return false;
+      const payload = await response.json() as { backups?: unknown[]; restores?: unknown[]; sqlFiles?: unknown[] };
+      return Boolean(payload.backups?.length || payload.restores?.length || payload.sqlFiles?.length);
+    }),
+    fetch(`http://127.0.0.1:${backendPort}/api/scheduled-queries/active`, {
+      headers: { 'X-User': 'desktop' }, signal: AbortSignal.timeout(5000)
+    }).then(async response => response.ok && (await response.json() as unknown[]).length > 0)
+  ]);
+  return results.some(result => result.status === 'fulfilled' && result.value);
 }
 
 async function stopBackend() {
@@ -135,7 +138,7 @@ async function requestQuit(confirmActive: boolean) {
     const answer = await dialog.showMessageBox({
       type: 'warning',
       title: '仍有任务正在运行',
-      message: '备份、恢复或 SQL 文件/CSV 导入任务仍在运行，退出可能中断任务。',
+      message: '备份、恢复、定时导出或 SQL 文件/CSV 导入任务仍在运行，退出可能中断任务。',
       detail: '是否仍然退出 MyDataDev？',
       buttons: ['继续使用', '退出'],
       defaultId: 0,

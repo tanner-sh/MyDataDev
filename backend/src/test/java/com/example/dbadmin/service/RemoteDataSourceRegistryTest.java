@@ -15,6 +15,21 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RemoteDataSourceRegistryTest {
     @Test
+    void diagnosticsReportCompletedStagesWithoutLeakingDriverCredentials() throws Exception {
+        RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();
+        try {
+            var steps = registry.testDetailed("jdbc:h2:mem:" + UUID.randomUUID(), "sa", "", null, true);
+            assertThat(steps).singleElement().satisfies(step -> {
+                assertThat(step.stage()).isEqualTo("数据库连接与身份验证");
+                assertThat(step.elapsedMs()).isGreaterThanOrEqualTo(0);
+            });
+            assertThatThrownBy(() -> registry.testDetailed("jdbc:unsupported:test?password=private-value", "sa", "private-value", null, true))
+                    .isInstanceOf(ApiProblemException.class).hasMessageContaining("数据库连接与身份验证失败")
+                    .hasMessageNotContaining("private-value");
+        } finally { registry.close(); }
+    }
+
+    @Test
     void reusesAndEvictsSmallPerConnectionPools() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();

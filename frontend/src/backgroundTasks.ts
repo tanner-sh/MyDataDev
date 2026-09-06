@@ -12,6 +12,7 @@ export type BackgroundTaskSummary = {
   backups: number;
   restores: number;
   sqlFiles: number;
+  exports?: number;
   total: number;
 };
 
@@ -19,6 +20,7 @@ export const EMPTY_BACKGROUND_TASK_SUMMARY: BackgroundTaskSummary = {
   backups: 0,
   restores: 0,
   sqlFiles: 0,
+  exports: 0,
   total: 0
 };
 
@@ -26,13 +28,15 @@ export function summarizeBackgroundTasks(operations: Partial<ActiveOperations> |
   const backups = operations?.backups?.length || 0;
   const restores = operations?.restores?.length || 0;
   const sqlFiles = operations?.sqlFiles?.length || 0;
-  return { backups, restores, sqlFiles, total: backups + restores + sqlFiles };
+  const exports = operations?.exports?.length || 0;
+  return { backups, restores, sqlFiles, exports, total: backups + restores + sqlFiles + exports };
 }
 
 export function sameBackgroundTaskSummary(left: BackgroundTaskSummary, right: BackgroundTaskSummary) {
   return left.backups === right.backups
     && left.restores === right.restores
-    && left.sqlFiles === right.sqlFiles;
+    && left.sqlFiles === right.sqlFiles
+    && (left.exports || 0) === (right.exports || 0);
 }
 
 // Each kind carries its finished phrase rather than a bare noun, so Chinese
@@ -40,14 +44,15 @@ export function sameBackgroundTaskSummary(left: BackgroundTaskSummary, right: Ba
 const KIND_PHRASES = [
   { key: 'backups', phrase: (count: number) => `${count} 个备份任务` },
   { key: 'restores', phrase: (count: number) => `${count} 个恢复任务` },
+  { key: 'exports', phrase: (count: number) => `${count} 个导出任务` },
   { key: 'sqlFiles', phrase: (count: number) => `${count} 个 SQL 文件任务` }
 ] as const;
 
 /** Tooltip text for the header indicator, e.g. "2 个备份任务、1 个 SQL 文件任务进行中". */
 export function backgroundTaskLabel(summary: BackgroundTaskSummary) {
   const parts = KIND_PHRASES
-    .filter((kind) => summary[kind.key] > 0)
-    .map((kind) => kind.phrase(summary[kind.key]));
+    .filter((kind) => (summary[kind.key] || 0) > 0)
+    .map((kind) => kind.phrase(summary[kind.key] || 0));
   return parts.length === 0 ? '没有进行中的后台任务' : `${parts.join('、')}进行中`;
 }
 
@@ -63,11 +68,11 @@ export function backgroundTaskCompletionMessage(
   next: BackgroundTaskSummary
 ): string | undefined {
   const finished = KIND_PHRASES
-    .map((kind) => ({ phrase: kind.phrase, count: previous[kind.key] - next[kind.key] }))
+    .map((kind) => ({ phrase: kind.phrase, count: (previous[kind.key] || 0) - (next[kind.key] || 0) }))
     .filter((kind) => kind.count > 0);
   if (finished.length === 0) return undefined;
   const detail = finished.map((kind) => kind.phrase(kind.count)).join('、');
   return next.total === 0
-    ? `${detail}已结束，可在备份与恢复中查看结果。`
+    ? `${detail}已结束，可在管理中的备份与恢复或定时导出中查看结果。`
     : `${detail}已结束。`;
 }

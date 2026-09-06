@@ -49,7 +49,8 @@ public class ScheduledQueryScheduler {
             }
             lastTriggered.put(task.id(), now);
             // run 自己吞掉异常并把结果记在任务上，所以这里不必再包一层 try。
-            service.run(task.id(), "scheduler");
+            try { service.submit(task.id(), "scheduler"); }
+            catch (RuntimeException busy) { log.info("定时导出未启动 task={} reason={}", task.id(), busy.getMessage()); }
         }
     }
 

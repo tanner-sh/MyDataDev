@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { cellValidation } from '../tableEditing';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { isNumericColumnType, suggestedResultColumnWidth } from '../resultGridData';
 import type { MouseEvent as ReactMouseEvent } from 'react';
-import { Button, Input, Table, Tooltip, Typography } from 'antd';
+import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
@@ -17,6 +18,7 @@ import {
 } from '../editableTableRows';
 
 type EditableTableProps = {
+  initialScrollTop?: number; onViewScroll?: (top: number) => void;
   data: TableData | null;
   rows: TableRow[];
   readonly?: boolean;
@@ -28,9 +30,11 @@ type EditableTableProps = {
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 };
 
-export const EditableTable = memo(function EditableTable({ data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
+export const EditableTable = memo(function EditableTable({ initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
   const tableRef = useRef<TableRef>(null);
   const lastScrolledDataRef = useRef<TableData | null>(null);
+  const [largeEditor, setLargeEditor] = useState<{ rowId: string; column: TableColumn; value: string }>();
+  const [largeError, setLargeError] = useState('');
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(data) });
@@ -142,6 +146,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
               onActivate={() => setActiveCell(cellKey)}
               onDeactivate={() => setActiveCell((current) => current === cellKey ? null : current)}
               onCommit={onEdit}
+              onExpand={value => { setLargeError(''); setLargeEditor({ rowId: row.id, column, value }); }}
             />
           );
         }
@@ -155,7 +160,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
   useLayoutEffect(() => {
     if (!data || scrollY === undefined || !tableRef.current) return;
     if (lastScrolledDataRef.current === data) return;
-    tableRef.current.scrollTo({ top: 0 });
+    tableRef.current.scrollTo({ top: initialScrollTop });
     lastScrolledDataRef.current = data;
   }, [data, scrollY]);
 
@@ -164,6 +169,20 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
   const scrollX = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160), 58);
   return (
     <div ref={viewportRef} className="editable-table-viewport">
+      <Modal title={`编辑 ${largeEditor?.column.name || ''}`} open={Boolean(largeEditor)} onCancel={() => setLargeEditor(undefined)} width={720} okText="应用到待提交修改" cancelText="取消" onOk={() => {
+        if (!largeEditor) return;
+        const problem = cellValidation(largeEditor.column, largeEditor.value);
+        if (problem) { setLargeError(problem); return; }
+        onEdit(largeEditor.rowId, largeEditor.column.name, largeEditor.value);
+        setLargeEditor(undefined);
+      }}>
+        <Input.TextArea rows={14} aria-label="长文本或 JSON 内容" value={largeEditor?.value || ''} onChange={event => setLargeEditor(editor => editor ? { ...editor, value: event.target.value } : undefined)} />
+        <Typography.Text type="danger" role="alert">{largeError}</Typography.Text>
+        {/json/i.test(largeEditor?.column.typeName || '') && <Button onClick={() => {
+          try { setLargeEditor(editor => editor ? { ...editor, value: JSON.stringify(JSON.parse(editor.value), null, 2) } : undefined); setLargeError(''); }
+          catch { setLargeError('JSON 格式不正确，请检查引号、逗号与括号'); }
+        }}>格式化 JSON</Button>}
+      </Modal>
       {scrollY === undefined ? (
         <PanelLoading compact text="正在准备表格…" />
       ) : (
@@ -175,6 +194,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
           dataSource={displayRows}
           loading={loading}
           rowKey="id"
+          onScroll={event => onViewScroll?.(event.currentTarget.scrollTop)}
           pagination={false}
           virtual
           rowClassName={rowClassName}
@@ -185,7 +205,7 @@ export const EditableTable = memo(function EditableTable({ data, rows, readonly 
   );
 });
 
-const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, value, inserted, touched, disabled, editing, relation, onActivate, onDeactivate, onCommit, onFollowRelation }: {
+const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, value, inserted, touched, disabled, editing, relation, onActivate, onDeactivate, onCommit, onExpand, onFollowRelation }: {
   rowId: string;
   rowNumber: number;
   column: TableColumn;
@@ -197,6 +217,7 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
   relation?: RelationTarget;
   onActivate: () => void;
   onDeactivate: () => void;
+  onExpand: (value: string) => void;
   onCommit: (rowId: string, column: string, value: unknown) => void;
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 }) {
@@ -263,6 +284,7 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
 
   return (
     <div className="editable-cell-control">
+      <Button size="small" onMouseDown={event => event.preventDefault()} onClick={() => onExpand(draft)} aria-label={`展开编辑 ${column.name}`}>展开</Button>
       <Input
         ref={inputRef}
         size="small"

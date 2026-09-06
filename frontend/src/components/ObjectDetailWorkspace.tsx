@@ -5,6 +5,7 @@ import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { useStableEvent } from '../hooks/useStableEvent';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import type { DatabaseCapabilities, DbObject, ObjectDdl, ObjectDetail, ObjectRelation, ObjectRelations, ObjectRowCount, TableDesignRequest, TableDesignResponse, WorkspaceStatus } from '../types';
 import { localizeMessage, objectTypeLabel } from '../utils';
@@ -104,10 +105,10 @@ export function ObjectDetailWorkspace({
     onDesignDirtyChange?.(false);
   }, [detailKey]);
 
-  const handleDesignDirtyChange = useCallback((dirty: boolean) => {
+  const handleDesignDirtyChange = useStableEvent((dirty: boolean) => {
     setDesignerDirty(dirty);
     onDesignDirtyChange?.(dirty);
-  }, [onDesignDirtyChange]);
+  });
 
   return (
     <div className="workspace object-workspace">

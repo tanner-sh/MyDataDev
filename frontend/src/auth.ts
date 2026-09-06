@@ -1,5 +1,7 @@
 import { API } from './constants';
 
+export const AUTH_LOGOUT_EVENT = 'mydatadev:logout';
+export const PERSIST_WORK_EVENT = 'mydatadev:persist-work';
 export const AUTH_REQUIRED_EVENT = 'mydatadev:auth-required';
 
 export type AuthStatus = {
@@ -15,11 +17,20 @@ export type AuthStatus = {
   csrfHeaderName?: string | null;
 };
 
+let authRequestGeneration = 0;
 let currentStatus: AuthStatus = { enabled: false, authenticated: true };
 
 export function setAuthStatus(status: AuthStatus) {
   currentStatus = status;
 }
+
+export function workspaceIdentity() {
+  return currentStatus.enabled ? `user:${currentStatus.provider || 'local'}:${currentStatus.username || 'anonymous'}` : 'local';
+}
+
+export function markSessionExpired() { currentStatus = { ...currentStatus, authenticated: false }; }
+
+export function isSessionAuthenticated() { return !currentStatus.enabled || currentStatus.authenticated; }
 
 export function isAuthenticationEnabled() {
   return currentStatus.enabled;
@@ -54,12 +65,14 @@ async function parse<T>(response: Response): Promise<T> {
 }
 
 export async function loadAuthStatus(): Promise<AuthStatus> {
-  const status = await parse<AuthStatus>(await fetch(`${API}/auth/status`, { credentials: 'include' }));
-  setAuthStatus(status);
+  const generation = ++authRequestGeneration;
+  const status = await parse<AuthStatus>(await fetch(`${API}/auth/status`, { credentials: 'include', signal: AbortSignal.timeout(30_000) }));
+  if (generation === authRequestGeneration) setAuthStatus(status);
   return status;
 }
 
 export async function login(username: string, password: string): Promise<AuthStatus> {
+  const generation = ++authRequestGeneration;
   const response = await fetch(`${API}/auth/login`, {
     method: 'POST',
     credentials: 'include',
@@ -67,7 +80,7 @@ export async function login(username: string, password: string): Promise<AuthSta
     body: JSON.stringify({ username, password })
   });
   const status = await parse<AuthStatus>(response);
-  setAuthStatus(status);
+  if (generation === authRequestGeneration) setAuthStatus(status);
   return status;
 }
 
@@ -77,6 +90,8 @@ export async function logout(): Promise<void> {
     credentials: 'include',
     headers: authHeaders('POST')
   });
+  window.dispatchEvent(new Event(PERSIST_WORK_EVENT));
   currentStatus = { ...currentStatus, authenticated: false, username: null };
+  window.dispatchEvent(new Event(AUTH_LOGOUT_EVENT));
   window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT));
 }

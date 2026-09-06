@@ -178,6 +178,9 @@ public final class ApiDtos {
         }
     }
 
+    public record ConnectionTestStep(String stage, long elapsedMs) {}
+    public record ConnectionTestResponse(boolean ok, String message, List<ConnectionTestStep> steps) {}
+
     public record MessageResponse(boolean ok, String message) {
     }
 
@@ -1080,8 +1083,13 @@ public final class ApiDtos {
     public record ActiveOperations(
             List<com.example.dbadmin.model.BackupHistory> backups,
             List<com.example.dbadmin.model.RestoreJob> restores,
-            List<com.example.dbadmin.model.SqlFileExecution> sqlFiles
+            List<com.example.dbadmin.model.SqlFileExecution> sqlFiles,
+            List<com.example.dbadmin.model.ScheduledQueryRun> exports
     ) {
+        public ActiveOperations(List<com.example.dbadmin.model.BackupHistory> backups,
+                List<com.example.dbadmin.model.RestoreJob> restores, List<com.example.dbadmin.model.SqlFileExecution> sqlFiles) {
+            this(backups, restores, sqlFiles, List.of());
+        }
     }
 
     public record NativeToolStatus(

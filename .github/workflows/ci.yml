@@ -19,6 +19,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  database-compatibility:
+    name: MySQL 与 PostgreSQL 真实数据库回归
+    runs-on: ubuntu-24.04
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci-test-password
+          MYSQL_DATABASE: mydatadev_test
+          MYSQL_USER: mydatadev
+          MYSQL_PASSWORD: ci-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: mydatadev_test
+          POSTGRES_USER: mydatadev
+          POSTGRES_PASSWORD: ci-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mydatadev -d mydatadev_test"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: 验证元数据、游标分页、并发冲突、提交与导出
+        working-directory: backend
+        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest
+        env:
+          TEST_MYSQL_URL: jdbc:mysql://127.0.0.1:3306/mydatadev_test?useSSL=false&allowPublicKeyRetrieval=true
+          TEST_MYSQL_USER: mydatadev
+          TEST_MYSQL_PASSWORD: ci-test-password
+          TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/mydatadev_test
+          TEST_POSTGRES_USER: mydatadev
+          TEST_POSTGRES_PASSWORD: ci-test-password
+
+  ui-smoke:
+    name: Web 发行包浏览器回归
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+      - name: 构建完整 Web 发行包
+        run: node scripts/build-web-bundle.mjs
+      - name: 真实浏览器操作与数据库结果核对
+        run: CHROME_PATH="$(command -v google-chrome)" node scripts/ui-smoke.mjs --serve --auth --work "$RUNNER_TEMP/mydatadev-smoke" --shots ./ui-shots
+      - name: 保存浏览器验收截图与服务日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-smoke
+          path: |
+            ui-shots/
+            ${{ runner.temp }}/mydatadev-smoke/server.log
+
   backend:
     name: 后端测试
     runs-on: ubuntu-24.04

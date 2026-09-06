@@ -15,8 +15,8 @@
  *      cd frontend && npm run dev
  *      node scripts/ui-smoke.mjs [--url http://localhost:5173] [--shots ./ui-shots]
  *
- * --serve 启动的实例带 --app.auth.mode=DISABLED：这里检查的是界面结构，不是登录流程
- * （登录、CSRF、H2 控制台关闭那几条由 release.yml 的 Web 发行包烟测在 HTTP 层覆盖）。
+ * --serve 默认关闭认证；加 --auth 会初始化独立测试管理员，走真实登录表单，
+ * 并验证会话过期后重新登录保留编辑现场。CI 使用 --serve --auth。
  * 数据写进 --work 指定的目录（默认 .ui-smoke-run），每次跑完不清 —— 出问题时那份日志是唯一线索。
  *
  * --serve 模式下还会经 API 播一条 H2 连接和一张 240 行的表，然后走一遍真正每天都在走的路：
@@ -27,7 +27,7 @@
  * 剩下的检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
  * 视觉细节靠人看截图 —— 脚本不该假装自己能判断好不好看。
  */
-import { existsSync, mkdirSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -39,13 +39,54 @@ const option = (name, fallback) => {
   return index >= 0 && args[index + 1] ? args[index + 1] : fallback;
 };
 const SERVE = args.includes('--serve');
+const AUTH = args.includes('--auth');
+const TEST_PASSWORD = 'ui-smoke-password-at-least-12';
+const apiCookies = new Map();
+let apiCsrf;
 const SERVE_PORT = Number(option('--serve-port', '8099'));
 const WORK_DIR = option('--work', '.ui-smoke-run');
 const APP_URL = SERVE ? `http://127.0.0.1:${SERVE_PORT}` : option('--url', 'http://localhost:5173');
 const SHOT_DIR = option('--shots', '');
-const PORT = 9333;
+const PORT = Number(option('--debug-port', String(19000 + process.pid % 20000)));
+const CHROME_PROFILE = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'mydatadev-ui-'));
 const SEED_CONNECTION_NAME = 'UI 冒烟库';
 const SEED_TABLE = 'smoke_orders';
+
+// Node 的播种会话与浏览器会话独立；只给本脚本创建的 API 会话附加测试 Cookie。
+async function fetch(input, init = {}) {
+  const apiRequest = AUTH && String(input).startsWith(APP_URL + '/api/');
+  const response = await globalThis.fetch(input, { ...init, signal: init.signal || AbortSignal.timeout(30_000), headers: {
+    ...init.headers,
+    ...(apiRequest ? { Cookie: [...apiCookies].map(([key, value]) => key + '=' + value).join('; '), ...(apiCsrf ? { [apiCsrf.name]: apiCsrf.token } : {}) } : {})
+  }});
+  if (apiRequest) for (const cookie of response.headers.getSetCookie()) {
+    const [pair] = cookie.split(';'); const index = pair.indexOf('=');
+    apiCookies.set(pair.slice(0, index), pair.slice(index + 1));
+  }
+  return response;
+}
+
+async function authenticateSeed() {
+  const status = await (await fetch(APP_URL + '/api/auth/status')).json();
+  apiCsrf = { name: status.csrfHeaderName, token: status.csrfToken };
+  const response = await fetch(APP_URL + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: TEST_PASSWORD }) });
+  if (!response.ok) throw new Error('播种测试会话登录失败：' + response.status);
+  const loggedIn = await response.json();
+  apiCsrf = { name: loggedIn.csrfHeaderName, token: loggedIn.csrfToken };
+}
+
+async function loginInBrowser(page) {
+  await page.evaluate(`(() => { const input = document.querySelector('.auth-page input[autocomplete="username"]'); input?.focus(); input?.select(); })()`);
+  await page.send('Input.insertText', { text: 'admin' });
+  await page.evaluate(`(() => { const input = document.querySelector('.auth-page input[autocomplete="current-password"]'); input?.focus(); input?.select(); })()`);
+  await page.send('Input.insertText', { text: TEST_PASSWORD });
+  await page.evaluate(`document.querySelector('.auth-page button[type="submit"]')?.click()`);
+  await page.sleep(2500);
+  if (!await page.evaluate(`Boolean(document.querySelector('.app-shell')) && !document.querySelector('.auth-page')`)) {
+    await page.shot('login-failure');
+    throw new Error('浏览器登录未成功，请查看登录失败截图');
+  }
+}
 
 const failures = [];
 const check = (name, ok, detail = '') => {
@@ -83,12 +124,15 @@ async function session(url) {
     const entry = pending.get(message.id);
     if (!entry) return;
     pending.delete(message.id);
+    clearTimeout(entry.timer);
     message.error ? entry.reject(new Error(JSON.stringify(message.error))) : entry.resolve(message.result);
   };
   const send = (method, params = {}) => new Promise((resolve, reject) => {
     id += 1;
-    pending.set(id, { resolve, reject });
-    socket.send(JSON.stringify({ id, method, params }));
+    const requestId = id;
+    const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('浏览器操作超时：' + method)); }, 15_000);
+    pending.set(requestId, { resolve, reject, timer });
+    socket.send(JSON.stringify({ id: requestId, method, params }));
   });
   await send('Page.enable');
   await send('Runtime.enable');
@@ -146,8 +190,8 @@ async function startServer() {
     '-jar', jar,
     '--spring.profiles.active=web',
     `--server.port=${SERVE_PORT}`,
-    '--app.auth.mode=DISABLED'
-  ], { cwd: WORK_DIR, stdio: ['ignore', log, log] });
+    `--app.auth.mode=${AUTH ? 'LOCAL' : 'DISABLED'}`
+  ], { cwd: WORK_DIR, env: { ...process.env, ...(AUTH ? { DB_ADMIN_WEB_PASSWORD: TEST_PASSWORD } : {}) }, stdio: ['ignore', log, log] });
 
   let exited = false;
   server.on('exit', () => { exited = true; });
@@ -196,6 +240,9 @@ async function seedSmokeData() {
     readonly: false
   });
   const run = (sql) => post('/sql/execute', { connectionId: connection.id, sql });
+  await run('DROP TABLE IF EXISTS smoke_other');
+  await run("CREATE TABLE smoke_other(id INT PRIMARY KEY, note VARCHAR(80))");
+  await run("INSERT INTO smoke_other VALUES (1, '第二个标签')");
   await run(`DROP TABLE IF EXISTS ${SEED_TABLE}`);
   await run(`CREATE TABLE ${SEED_TABLE}(id INT PRIMARY KEY, customer VARCHAR(60) NOT NULL, amount INT NOT NULL)`);
   // 240 行：默认每页 100 行，翻页才是真的翻页而不是一页装得下。
@@ -214,14 +261,16 @@ async function readSeedCustomer(connectionId, id) {
 }
 
 const server = SERVE ? await startServer() : null;
+process.once('exit', () => server?.kill());
 // 播种放在打开浏览器之前：有了连接，「备份与恢复」「活动会话」这些要先选连接才可用的分区
 // 才会被真的检查到，而不是每次都打印一行「已跳过」。
+if (AUTH && SERVE) await authenticateSeed();
 const seedConnectionId = SERVE ? await seedSmokeData() : null;
 
 const chrome = spawn(CHROME, [
   '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
   '--hide-scrollbars', '--force-device-scale-factor=1',
-  `--remote-debugging-port=${PORT}`, `--user-data-dir=${process.env.TMPDIR || '/tmp'}/mydatadev-ui-smoke`,
+  `--remote-debugging-port=${PORT}`, `--user-data-dir=${CHROME_PROFILE}`,
   'about:blank'
 ], { stdio: 'ignore' });
 
@@ -234,6 +283,11 @@ try {
   console.log(`打开 ${APP_URL}`);
   await page.send('Page.navigate', { url: APP_URL });
   await page.sleep(5000);
+
+  if (AUTH) {
+    check('先登录才能进入工作台', await page.evaluate(`Boolean(document.querySelector('.auth-page input[type=\"password\"]')) && !document.querySelector('.app-shell')`));
+    await loginInBrowser(page);
+  }
 
   check('应用外壳渲染', await page.evaluate(`Boolean(document.querySelector('.app-shell'))`));
   check('头部渲染', await page.evaluate(`Boolean(document.querySelector('.app-header'))`));
@@ -319,7 +373,7 @@ try {
     check('连接表单弹出', await page.evaluate(`
       (() => {
         const modal = document.querySelector('.ant-modal-container');
-        return Boolean(modal) && modal.textContent.includes('连接名称') && modal.textContent.includes('数据库地址');
+        return Boolean(modal) && modal.textContent.includes('连接名称') && (modal.textContent.includes('数据库地址') || modal.textContent.includes('主机'));
       })()
     `));
     await page.shot('03-连接表单');
@@ -397,6 +451,7 @@ try {
       })()
     `);
     check('表数据加载出来了', firstPage.rows > 0, `实际 ${firstPage.rows} 行`);
+    check('表数据页脚完整可见', await page.evaluate(`(() => { const r = document.querySelector('.table-pagination-actions')?.getBoundingClientRect(); return r?.height > 0 && r.bottom <= innerHeight; })()`));
     await page.shot('05-表数据');
 
     const turned = await page.evaluate(`
@@ -466,6 +521,50 @@ try {
       })()
     `);
     await page.sleep(1200);
+    const clickText = async (scope, label) => page.evaluate(`(() => {
+      const button = [...document.querySelectorAll(${JSON.stringify(scope)})].find(node => (node.textContent || '').replace(/\\s/g, '') === ${JSON.stringify(label.replace(/\s/g, ''))});
+      if (!button || button.disabled) return false;
+      button.click(); return true;
+    })()`);
+    const undo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button', '撤销一步');
+    await page.sleep(500);
+    check('撤销恢复单元格原值', undo && await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('客户1') && !document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户')`));
+    const redo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button', '重做');
+    await page.sleep(500);
+    check('重做恢复待提交修改', redo && await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户')`));
+    await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('button[aria-label]')].find(node => /^打开 .*的表数据$/.test(node.getAttribute('aria-label') || '') && /smoke_other/i.test(node.getAttribute('aria-label')));
+      button?.click();
+    })()`);
+    await page.sleep(1800);
+    check('第二张表有独立标签', await page.evaluate(`document.querySelectorAll('.resource-document-tab').length === 2 && document.querySelector('.table-grid-pane').textContent.includes('第二个标签')`));
+    await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.resource-document-tab button')].find(node => /smoke_orders/i.test(node.textContent) && node.textContent.includes('数据'));
+      button?.click();
+    })()`);
+    await page.sleep(1200);
+    check('切回表标签保留未提交修改', await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户') && document.querySelector('.resource-document-tabs').textContent.includes('●')`));
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.sleep(500);
+    await page.evaluate(`document.querySelector('button[aria-label="关闭 SMOKE_OTHER 数据标签"]')?.click()`);
+    await page.sleep(500);
+    check('关闭后台表标签保持当前工作区', await page.evaluate(`Boolean(document.querySelector('.sql-workspace')) && !document.querySelector('.table-grid-pane')`));
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tab button')].find(node => /smoke_orders/i.test(node.textContent) && node.textContent.includes('数据'))?.click(); })()`);
+    await page.sleep(600);
+
+    await page.shot('06a-多标签与待提交修改');
+    if (AUTH) {
+      await page.send('Network.clearBrowserCookies');
+      await page.evaluate(`document.querySelector('button[aria-label="刷新连接"]')?.click()`);
+      await page.sleep(1500);
+      check('会话过期显示登录页并遮住工作区', await page.evaluate(`document.body.dataset.sessionLocked === 'true' && Boolean(document.querySelector('.auth-page')) && Boolean(document.querySelector('[hidden] .app-shell'))`));
+      await page.shot('06b-会话过期');
+      await loginInBrowser(page);
+      check('重新登录保留表格待提交修改', await page.evaluate(`document.body.dataset.sessionLocked === 'false' && document.querySelector('.table-grid-pane')?.textContent.includes('冒烟改过的客户')`));
+    }
+
+    // 用第二条数据库会话制造乐观并发冲突，检查回滚提示和人工合并入口。
+    await fetch(APP_URL + '/api/sql/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ connectionId, sql: "UPDATE smoke_orders SET customer='其他会话改过的客户' WHERE id=1" }) });
     const submitted = await page.evaluate(`
       (() => {
         const buttons = [...document.querySelectorAll('.table-primary-actions button')]
@@ -478,7 +577,13 @@ try {
         return { ok: true, buttons, status: status.slice(0, 120) };
       })()
     `);
-    await page.sleep(5000);
+    await page.sleep(1800);
+    check('并发冲突展示原值、当前值与我的修改', await page.evaluate(`document.querySelector('.conflict-values')?.textContent.includes('其他会话改过的客户') && document.querySelector('.conflict-values')?.textContent.includes('冒烟改过的客户')`));
+    await page.shot('06c-并发冲突处理');
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal-confirm button')].find(node => node.textContent.includes('保留我的修改'))?.click(); })()`);
+    await page.sleep(500);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.table-primary-actions button')].find(node => node.textContent.trim().startsWith('提交'))?.click(); })()`);
+    await page.sleep(2500);
     const stored = submitted.ok ? await readSeedCustomer(connectionId, 1) : '';
     // 读库而不是读界面：界面上显示改过了，不代表这一次真的写进去了。
     check('单元格编辑能提交到库里', stored === '冒烟改过的客户',
@@ -536,13 +641,84 @@ try {
   check('命令面板可以用快捷键打开', palette.open === true);
   check('命令面板列出了命令', (palette.commands || 0) > 0 && palette.hasManagement === true);
   if (palette.open) await page.shot('04-命令面板');
+  if (SERVE) {
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+    await page.sleep(800);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.sleep(1800);
+    const draft = 'select 1 as draft_survives_reload;';
+    await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+    const modifier = process.platform === 'darwin' ? 4 : 2;
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.insertText', { text: draft });
+    await page.sleep(1000);
+    check('SQL 草稿实际写入编辑器', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
+    await page.send('Page.reload');
+    await page.sleep(5000);
+    check('刷新后恢复 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
+    check('显示草稿保存状态', await page.evaluate(`document.body.textContent.includes('草稿已保存')`));
+    await page.shot('07-SQL草稿恢复');
+    await page.evaluate(`document.querySelector('.sql-tabs .ant-tabs-nav-add')?.click()`);
+    await page.sleep(500);
+    await page.evaluate(`document.querySelector('.sql-tabs .ant-tabs-tab .ant-tabs-tab-remove')?.click()`);
+    await page.sleep(500);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal-confirm button')].find(node => node.textContent.replace(/\\s/g, '') === '关闭标签')?.click(); })()`);
+    await page.sleep(500);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.sql-tabs button')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
+    await page.sleep(800);
+    check('可以找回关闭的 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
+
+
+    // 使用发行包公开接口验证队列、持久化历史与下载，UI 管理入口已经在前面打开检查。
+    const post = async (route, body) => {
+      const response = await fetch(APP_URL + '/api' + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(route + ' ' + response.status + ' ' + await response.text());
+      const text = await response.text(); return text ? JSON.parse(text) : undefined;
+    };
+    const created = await post('/scheduled-queries', { connectionId: seedConnectionId, name: '冒烟后台导出', sql: 'select * from smoke_orders order by id', exportFormat: 'csv', cron: '0 0 8 * * *', scheduleZone: 'UTC', enabled: false });
+    const taskId = created.task.id;
+    await post('/scheduled-queries/' + taskId + '/run', {});
+    let run;
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const history = await (await fetch(APP_URL + '/api/scheduled-queries/' + taskId + '/runs')).json();
+      run = history[0];
+      if (run?.finishedAt) break;
+      await page.sleep(200);
+    }
+    check('后台导出记录完整结果', run?.status === 'SUCCESS' && run?.downloadable === true, JSON.stringify(run));
+    if (run?.downloadable) {
+      const response = await fetch(APP_URL + '/api/scheduled-queries/' + taskId + '/runs/' + run.id + '/download');
+      check('导出历史支持下载实际文件', response.ok && (await response.text()).includes('冒烟改过的客户'));
+    }
+    await page.evaluate(`(() => { [...document.querySelectorAll('.object-tree-object-trigger')].find(node => /smoke_orders/i.test(node.textContent))?.click(); })()`);
+    await page.sleep(1800);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-panel:not([hidden]) .ant-tabs-tab')].find(node => node.textContent.trim() === '设计')?.click(); })()`);
+    await page.sleep(800);
+    await page.evaluate(`(() => { const input = document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]'); input?.focus(); input?.select(); })()`);
+    await page.send('Input.insertText', { text: 'DRAFT_IDENTIFIER' });
+    await page.sleep(800);
+    check('表设计修改标记为未保存', await page.evaluate(`document.querySelector('.resource-document-tabs').textContent.includes('●') && document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER'`));
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.sleep(600);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tab button')].find(node => /smoke_orders/i.test(node.textContent) && node.textContent.includes('结构'))?.click(); })()`);
+    await page.sleep(800);
+    check('切回对象标签保留设计稿与当前分区', await page.evaluate(`document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER' && document.querySelector('.resource-document-tabs').textContent.includes('●')`));
+    check('设计表格在可见区域内且有可用高度', await page.evaluate(`(() => { const panel = document.querySelector('.resource-document-panel:not([hidden]) .table-designer'); const input = panel?.querySelector('input[aria-label="字段名"]'); const r = panel?.getBoundingClientRect(); const i = input?.getBoundingClientRect(); return r?.height > 200 && i?.height > 0 && i.top >= r.top && i.bottom <= r.bottom; })()`));
+    await page.shot('08-对象设计草稿保留');
+
+  }
+
 
 } catch (error) {
   failures.push(String(error.message || error));
   console.log(`  ✗ ${error.message || error}`);
 } finally {
   page?.close();
-  chrome.kill();
+  chrome.kill('SIGKILL'); // 测试故意保留草稿，不能让 beforeunload 阻止关闭独立测试浏览器。
+  await new Promise(resolve => chrome.exitCode != null ? resolve() : chrome.once('exit', resolve));
+  rmSync(CHROME_PROFILE, { recursive: true, force: true });
   server?.kill();
 }
 

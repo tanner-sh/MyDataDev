@@ -91,11 +91,11 @@ class ScheduledQueryServiceTest {
 
         ScheduledQuery result = fixture.service.run(7, "admin");
 
-        assertThat(Files.list(directory)).hasSize(1);
-        assertThat(Files.list(directory).findFirst().orElseThrow().getFileName().toString())
-                .startsWith("每日订单-").endsWith(".csv");
-        verify(fixture.repository).recordRun(org.mockito.ArgumentMatchers.eq(7L), any(),
-                org.mockito.ArgumentMatchers.eq("SUCCESS"), anyString(), anyString());
+        assertThat(Files.list(directory.resolve("task-7"))).hasSize(1);
+        assertThat(Files.list(directory.resolve("task-7")).findFirst().orElseThrow().getFileName().toString())
+                .contains("每日订单-").endsWith(".csv");
+        verify(fixture.repository).completeRun(anyString(), org.mockito.ArgumentMatchers.eq(7L), any(),
+                org.mockito.ArgumentMatchers.eq("SUCCESS"), anyString(), anyString(), anyString(), anyLong());
         assertThat(result).isNotNull();
     }
 
@@ -109,8 +109,8 @@ class ScheduledQueryServiceTest {
 
         fixture.service.run(7, "admin");
 
-        verify(fixture.repository).recordRun(org.mockito.ArgumentMatchers.eq(7L), any(),
-                org.mockito.ArgumentMatchers.eq("FAILED"), anyString(), nullable(String.class));
+        verify(fixture.repository).completeRun(anyString(), org.mockito.ArgumentMatchers.eq(7L), any(),
+                org.mockito.ArgumentMatchers.eq("FAILED"), anyString(), nullable(String.class), nullable(String.class), org.mockito.ArgumentMatchers.eq(0L));
     }
 
     /** 任务名里的路径分隔符必须去掉，否则产物会写到别的目录去。 */
@@ -185,7 +185,7 @@ class ScheduledQueryServiceTest {
                     mock(com.example.dbadmin.repo.SqlHistoryRepository.class),
                     new ExecutionGuard());
             when(repository.insert(any())).thenReturn(1L);
-            service = new ScheduledQueryService(repository, connections, exports, mock(AuditRepository.class), properties);
+            service = new ScheduledQueryService(repository, connections, exports, mock(AuditRepository.class), properties, new BackgroundTaskControl(properties));
             stubTask(new ScheduledQuery(1, 1, "任务", "select * from orders", "csv", "0 0 * * * *",
                     null, true, false, null, null, null, null, null, null));
         }

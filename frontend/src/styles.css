@@ -2219,6 +2219,8 @@ body.is-resizing-column * {
 }
 
 .app-content {
+  display: flex;
+  flex-direction: column;
   width: auto;
   height: auto;
   min-width: 0;
@@ -5092,3 +5094,22 @@ body.is-resizing-column * {
   align-items: center;
   gap: 12px;
 }
+
+.error-center-trigger { position: fixed; right: var(--space-3); bottom: calc(56px + var(--space-2)); z-index: 900; }
+.app-error-fallback { padding: var(--space-5); max-width: 600px; background: var(--surface); border-radius: var(--radius-md); }
+
+.conflict-values { width: 100%; border-collapse: collapse; margin-bottom: var(--space-3); table-layout: fixed; }
+.conflict-values th, .conflict-values td { padding: var(--space-2); border: 1px solid var(--border); text-align: left; overflow-wrap: anywhere; max-height: 200px; }
+
+.resource-document-tabs { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2); flex-shrink: 0; overflow-x: auto; border-bottom: 1px solid var(--border); }
+.resource-document-tab { display: inline-flex; align-items: center; flex-shrink: 0; }
+.resource-document-context { margin-left: auto; white-space: nowrap; font-size: var(--text-xs); padding: 0 var(--space-2); }
+.resource-document-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.resource-document-panel[hidden] { display: none; }
+.app-content > .workspace,
+.app-content > .er-diagram-workspace,
+.resource-document-panel > .workspace { flex: 1 1 0; height: auto; min-height: 0; }
+
+body[data-session-locked="true"] .ant-modal-root,
+body[data-session-locked="true"] .ant-drawer,
+body[data-session-locked="true"] .ant-dropdown { display: none; }

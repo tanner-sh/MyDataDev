@@ -41,16 +41,18 @@ public class BackgroundTaskStream {
     private final BackupHistoryRepository histories;
     private final SqlFileExecutionRepository sqlFiles;
     private final ObjectMapper mapper;
+    private final com.example.dbadmin.repo.ScheduledQueryRepository scheduled;
     private final long streamTimeoutMs;
     private final List<Subscriber> subscribers = new CopyOnWriteArrayList<>();
 
     public BackgroundTaskStream(RestoreService restores, BackupHistoryRepository histories,
                                 SqlFileExecutionRepository sqlFiles, ObjectMapper mapper,
-                                com.example.dbadmin.config.AppProperties properties) {
+                                com.example.dbadmin.config.AppProperties properties, com.example.dbadmin.repo.ScheduledQueryRepository scheduled) {
         this.restores = restores;
         this.histories = histories;
         this.sqlFiles = sqlFiles;
         this.mapper = mapper;
+        this.scheduled = scheduled;
         this.streamTimeoutMs = Math.max(60_000L, properties.getBackgroundTasks().getStreamTimeoutMinutes() * 60_000L);
     }
 
@@ -58,9 +60,17 @@ public class BackgroundTaskStream {
         return register(connectionId, new SseEmitter(streamTimeoutMs));
     }
 
+    public SseEmitter subscribeExports(long connectionId) {
+        return register(connectionId, new SseEmitter(streamTimeoutMs), true);
+    }
+
     /** 注册一个已经建好的通道。测试从这里塞入自己的 emitter，免得起一个真的 HTTP 长连接。 */
     SseEmitter register(Long connectionId, SseEmitter emitter) {
-        Subscriber subscriber = new Subscriber(connectionId, emitter);
+        return register(connectionId, emitter, false);
+    }
+
+    private SseEmitter register(Long connectionId, SseEmitter emitter, boolean exportsOnly) {
+        Subscriber subscriber = new Subscriber(connectionId, emitter, exportsOnly);
         subscribers.add(subscriber);
         // 三个回调都只是摘链接：超时是正常寿命结束（浏览器会重连），错误多半是对端已经走了。
         emitter.onCompletion(() -> subscribers.remove(subscriber));
@@ -70,7 +80,7 @@ public class BackgroundTaskStream {
         });
         emitter.onError(error -> subscribers.remove(subscriber));
         // 先推一份当前快照，界面不必等到下一次变化才有内容。
-        publishTo(subscriber, snapshotJson(connectionId));
+        publishTo(subscriber, snapshotJson(connectionId, exportsOnly));
         return emitter;
     }
 
@@ -82,13 +92,13 @@ public class BackgroundTaskStream {
     public void publish() {
         if (subscribers.isEmpty()) return;
         // 同一条连接的订阅者共用一次查询：一个用户开三个标签页不该让后端查三遍。
-        Map<Long, String> snapshots = new HashMap<>();
+        Map<String, String> snapshots = new HashMap<>();
         List<Subscriber> broken = new ArrayList<>();
         for (Subscriber subscriber : subscribers) {
-            long key = subscriber.key();
+            String key = subscriber.key();
             // 用 containsKey 而不是 computeIfAbsent：快照读失败时返回 null，
             // computeIfAbsent 不会记住这个 null，同一轮里会为每个订阅者重查一次。
-            if (!snapshots.containsKey(key)) snapshots.put(key, snapshotJson(subscriber.connectionId));
+            if (!snapshots.containsKey(key)) snapshots.put(key, snapshotJson(subscriber.connectionId, subscriber.exportsOnly));
             String payload = snapshots.get(key);
             if (!publishTo(subscriber, payload)) broken.add(subscriber);
         }
@@ -120,9 +130,9 @@ public class BackgroundTaskStream {
         }
     }
 
-    private String snapshotJson(Long connectionId) {
+    private String snapshotJson(Long connectionId, boolean exportsOnly) {
         try {
-            ActiveOperations operations = restores.active(
+            ActiveOperations operations = exportsOnly ? new ActiveOperations(List.of(), List.of(), List.of(), scheduled.activeRuns(connectionId)) : restores.active(
                     connectionId, histories.findActive(connectionId), sqlFiles.findActive(connectionId));
             return mapper.writeValueAsString(operations);
         } catch (Exception error) {
@@ -133,18 +143,20 @@ public class BackgroundTaskStream {
 
     private static final class Subscriber {
         private final Long connectionId;
+        private final boolean exportsOnly;
         private final SseEmitter emitter;
         private volatile String lastPayload;
         private volatile long lastSentNanos = System.nanoTime();
 
-        private Subscriber(Long connectionId, SseEmitter emitter) {
+        private Subscriber(Long connectionId, SseEmitter emitter, boolean exportsOnly) {
             this.connectionId = connectionId;
+            this.exportsOnly = exportsOnly;
             this.emitter = emitter;
         }
 
         /** 分组键：连接 id 可以为空（全局视图），Map 的键不能。 */
-        private long key() {
-            return connectionId == null ? -1L : connectionId;
+        private String key() {
+            return connectionId + ":" + exportsOnly;
         }
     }
 }

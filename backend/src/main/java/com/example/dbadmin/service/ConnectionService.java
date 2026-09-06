@@ -159,6 +159,18 @@ public class ConnectionService {
         );
     }
 
+    public java.util.List<com.example.dbadmin.dto.ApiDtos.ConnectionTestStep> diagnose(TestConnectionRequest request) throws Exception {
+        return dataSources.testDetailed(request.jdbcUrl().trim(), request.username(), request.password(), specOf(request.ssh(), null), true);
+    }
+
+    public java.util.List<com.example.dbadmin.dto.ApiDtos.ConnectionTestStep> diagnoseExisting(long id, ConnectionRequest request) throws Exception {
+        DbConnection old = require(id);
+        if (request == null) return dataSources.testDetailed(old.jdbcUrl(), old.username(), crypto.decrypt(old.encryptedPassword()),
+                SshTunnelProfile.toSpec(old.sshTunnel(), crypto::decrypt), true);
+        String password = reusesStoredPassword(request.password()) ? crypto.decrypt(old.encryptedPassword()) : request.password();
+        return dataSources.testDetailed(request.jdbcUrl().trim(), request.username(), password, specOf(request.ssh(), old.sshTunnel()), true);
+    }
+
     public void test(TestConnectionRequest request) throws Exception {
         // 新连接还没有存过密钥，掩码在这里没有可沿用的旧值，等价于「没填」。
         dataSources.test(request.jdbcUrl().trim(), request.username(), request.password(), specOf(request.ssh(), null));

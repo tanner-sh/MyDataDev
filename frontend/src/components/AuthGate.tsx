@@ -1,38 +1,56 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, ConfigProvider, Form, Input, Spin, Typography } from 'antd';
 import { DatabaseOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
-import App from '../App';
-import { AUTH_REQUIRED_EVENT, loadAuthStatus, login, type AuthStatus } from '../auth';
+const App = lazy(() => import('../App'));
+import { AUTH_REQUIRED_EVENT, AUTH_LOGOUT_EVENT, PERSIST_WORK_EVENT, workspaceIdentity, loadAuthStatus, login, type AuthStatus } from '../auth';
 
 type LoginFields = { username: string; password: string };
 
 export function AuthGate() {
+  const refreshGeneration = useRef(0);
   const [status, setStatus] = useState<AuthStatus>();
   const [error, setError] = useState('');
+  const [owner, setOwner] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     const refresh = () => {
+      const generation = ++refreshGeneration.current;
       setError('');
       void loadAuthStatus()
-        .then((next) => { if (mounted) setStatus(next); })
-        .catch((cause) => { if (mounted) setError(cause instanceof Error ? cause.message : '无法连接服务器'); });
+        .then((next) => { if (mounted && generation === refreshGeneration.current) {
+          window.dispatchEvent(new Event(PERSIST_WORK_EVENT));
+          if (!next.enabled || next.authenticated) setOwner(workspaceIdentity());
+          setStatus(next);
+        } })
+        .catch((cause) => { if (mounted && generation === refreshGeneration.current) setError(cause instanceof Error ? cause.message : '无法连接服务器'); });
     };
     refresh();
-    window.addEventListener(AUTH_REQUIRED_EVENT, refresh);
+    const clearOwner = () => setOwner(undefined);
+    window.addEventListener(AUTH_LOGOUT_EVENT, clearOwner);
+    const expire = () => { setStatus(previous => previous ? { ...previous, authenticated: false } : previous); refresh(); };
+    window.addEventListener(AUTH_REQUIRED_EVENT, expire);
     return () => {
       mounted = false;
-      window.removeEventListener(AUTH_REQUIRED_EVENT, refresh);
+      window.removeEventListener(AUTH_LOGOUT_EVENT, clearOwner);
+      window.removeEventListener(AUTH_REQUIRED_EVENT, expire);
     };
   }, []);
 
+  useEffect(() => {
+    document.body.dataset.sessionLocked = String(Boolean(status?.enabled && !status.authenticated));
+    return () => { delete document.body.dataset.sessionLocked; };
+  }, [status?.enabled, status?.authenticated]);
+
   async function submit(values: LoginFields) {
+    refreshGeneration.current++;
     setSubmitting(true);
     setError('');
     try {
       setStatus(await login(values.username, values.password));
+      setOwner(workspaceIdentity());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '登录失败');
     } finally {
@@ -55,11 +73,12 @@ export function AuthGate() {
       </ConfigProvider>
     );
   }
-  if (status && (!status.enabled || status.authenticated)) return <App />;
+  const unlocked = !status.enabled || status.authenticated;
 
   return (
     <ConfigProvider locale={zhCN}>
-      <main className="auth-page">
+      {owner && <div hidden={!unlocked} style={{ height: '100%' }}><Suspense fallback={<div className="auth-loading"><Spin tip="正在恢复工作台…" /></div>}><App key={owner} workspaceOwner={owner} workspaceLocked={!unlocked} /></Suspense></div>}
+      {!unlocked && <main className="auth-page">
         <Card className="auth-card" variant="borderless">
           <div className="auth-brand"><DatabaseOutlined /></div>
           <Typography.Title level={3}>登录 MyDataDev</Typography.Title>
@@ -77,7 +96,7 @@ export function AuthGate() {
             <Button block type="primary" htmlType="submit" loading={submitting}>登录</Button>
           </Form>}
         </Card>
-      </main>
+      </main>}
     </ConfigProvider>
   );
 }
