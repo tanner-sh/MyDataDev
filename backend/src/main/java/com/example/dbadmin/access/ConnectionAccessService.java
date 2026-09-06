@@ -150,13 +150,6 @@ public class ConnectionAccessService {
         );
     }
 
-    public void requireSqlFile(long jobId, ConnectionPermission permission) {
-        long connectionId = sqlFiles.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("SQL 文件任务不存在"))
-                .connectionId();
-        require(connectionId, permission);
-    }
-
     public void requireSqlFileExecution(long jobId) {
         var job = sqlFiles.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("SQL 文件任务不存在"));

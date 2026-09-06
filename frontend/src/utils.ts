@@ -73,10 +73,6 @@ export function sameCellValue(left: unknown, right: unknown) {
   return Object.is(left, right) || String(left) === String(right);
 }
 
-export function removeEmptyValues(values: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== ''));
-}
-
 export function normalizeBackupScope(scope: LegacyBackupScope | string) {
   return scope === 'TABLE' ? 'TABLES' : scope;
 }

@@ -7,7 +7,6 @@
 
 /** 与后端 ConfigArchiveCrypto.FORMAT 一致；改动要两边同步。 */
 export const ARCHIVE_FORMAT = 'mydatadev-config-archive';
-export const ARCHIVE_VERSION = 1;
 export const ARCHIVE_FILE_PREFIX = 'mydatadev-connections';
 /** 与后端 MIN_PASSPHRASE_LENGTH 一致。 */
 export const MIN_ARCHIVE_PASSPHRASE_LENGTH = 12;

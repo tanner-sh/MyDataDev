@@ -169,10 +169,6 @@ public class BackupHistoryRepository {
         jdbc.update("UPDATE backup_history SET cancel_requested = TRUE WHERE id = ? AND status IN ('QUEUED','RUNNING')", id);
     }
 
-    public List<BackupHistory> findSuccessfulByTaskId(long taskId) {
-        return jdbc.query("SELECT * FROM backup_history WHERE task_id = ? AND status = 'SUCCESS' ORDER BY finished_at DESC, id DESC", mapper, taskId);
-    }
-
     public List<BackupHistory> findRetentionCandidates(long taskId, Integer keepCount, Instant cutoff, int limit) {
         int normalizedKeepCount = keepCount == null ? Integer.MAX_VALUE : Math.max(keepCount, 0);
         Timestamp normalizedCutoff = cutoff == null ? null : Timestamp.from(cutoff);
@@ -197,11 +193,6 @@ public class BackupHistoryRepository {
         return connectionId == null
                 ? jdbc.query("SELECT * FROM backup_history WHERE status IN ('QUEUED','RUNNING') ORDER BY id", mapper)
                 : jdbc.query("SELECT * FROM backup_history WHERE connection_id = ? AND status IN ('QUEUED','RUNNING') ORDER BY id", mapper, connectionId);
-    }
-
-    public Optional<BackupHistory> findActiveByTaskId(long taskId) {
-        List<BackupHistory> rows = jdbc.query("SELECT * FROM backup_history WHERE task_id = ? AND status IN ('QUEUED','RUNNING') ORDER BY id DESC LIMIT 1", mapper, taskId);
-        return rows.stream().findFirst();
     }
 
     private Instant toInstant(Timestamp ts) {

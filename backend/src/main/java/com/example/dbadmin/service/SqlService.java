@@ -4,13 +4,9 @@ import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
-import com.example.dbadmin.dto.ApiDtos.DbObject;
-import com.example.dbadmin.dto.ApiDtos.MetadataResponse;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.ResultEditInfo;
 import com.example.dbadmin.dto.ApiDtos.ResultSourceTable;
-import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
-import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlPageInfo;
 import com.example.dbadmin.dto.ApiDtos.SqlResultFilter;
@@ -35,9 +31,7 @@ import java.io.InputStream;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -567,23 +561,6 @@ public class SqlService {
         return history.findRecent(connectionId, keyword, limit == null ? 50 : limit, actorUserId);
     }
 
-    public List<SqlCompletionItem> completions(SqlCompletionRequest request) {
-        List<SqlCompletionItem> items = new ArrayList<>();
-        for (String keyword : sqlKeywords()) items.add(new SqlCompletionItem(keyword, "KEYWORD", keyword, "SQL 关键字"));
-        try {
-            MetadataResponse response = metadata.inspect(request.connectionId(), null, null, 0, 100, false);
-            Set<String> schemas = new LinkedHashSet<>(response.schemas());
-            for (String schema : schemas) items.add(new SqlCompletionItem(schema, "SCHEMA", schema, "数据库 Schema"));
-            for (DbObject object : response.objects()) {
-                String tableLabel = object.schemaName() == null || object.schemaName().isBlank() ? object.name() : object.schemaName() + "." + object.name();
-                items.add(new SqlCompletionItem(tableLabel, "TABLE", tableLabel, "数据库" + objectTypeLabel(object.type())));
-            }
-        } catch (Exception ignored) {
-            // Keyword completion remains available when metadata is unavailable.
-        }
-        return items.stream().limit(200).toList();
-    }
-
     private static final SqlFormatter FORMATTER = new SqlFormatter();
 
     public String format(String sql) {
@@ -910,18 +887,6 @@ public class SqlService {
     private String abbreviate(String value) {
         if (value == null) return "";
         return value.length() <= 2_000 ? value : value.substring(0, 2_000);
-    }
-
-    private List<String> sqlKeywords() {
-        return List.of(
-                "SELECT", "FROM", "WHERE", "JOIN", "LEFT JOIN", "RIGHT JOIN", "INNER JOIN", "GROUP BY", "ORDER BY", "HAVING",
-                "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "ALTER", "DROP", "TABLE",
-                "VIEW", "INDEX", "PRIMARY KEY", "AND", "OR", "NOT", "NULL", "IS", "IN", "BETWEEN", "LIKE", "COUNT", "SUM", "AVG", "MIN", "MAX"
-        );
-    }
-
-    private String objectTypeLabel(String type) {
-        return type != null && type.toUpperCase(Locale.ROOT).contains("VIEW") ? "视图" : "表";
     }
 
 }

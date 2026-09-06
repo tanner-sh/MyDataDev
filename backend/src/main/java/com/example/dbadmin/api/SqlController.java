@@ -5,8 +5,6 @@ import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.ExportRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatRequest;
 import com.example.dbadmin.dto.ApiDtos.FormatResponse;
-import com.example.dbadmin.dto.ApiDtos.SqlCompletionItem;
-import com.example.dbadmin.dto.ApiDtos.SqlCompletionRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlTransactionResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlRequest;
@@ -199,12 +197,6 @@ public class SqlController {
             );
         }
         return sqlService.historyStats(connectionId, days, identity != null && !allUsers ? identity.userId() : null);
-    }
-
-    @PostMapping("/completions")
-    public java.util.List<SqlCompletionItem> completions(@Valid @RequestBody SqlCompletionRequest request) {
-        access.require(request.connectionId(), ConnectionPermission.VIEW_METADATA);
-        return sqlService.completions(request);
     }
 
     @PostMapping("/export")

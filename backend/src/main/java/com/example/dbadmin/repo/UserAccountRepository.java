@@ -53,11 +53,6 @@ public class UserAccountRepository {
                 .stream().findFirst();
     }
 
-    public Optional<UserAccount> findByUsername(String username) {
-        return jdbc.query("SELECT " + COLUMNS + " FROM app_user WHERE username = ?", UserAccountRepository::map, username)
-                .stream().findFirst();
-    }
-
     public Optional<UserAccount> findByProviderSubject(String provider, String subject) {
         return jdbc.query("SELECT " + COLUMNS + " FROM app_user WHERE provider = ? AND subject = ?",
                 UserAccountRepository::map, provider, subject).stream().findFirst();

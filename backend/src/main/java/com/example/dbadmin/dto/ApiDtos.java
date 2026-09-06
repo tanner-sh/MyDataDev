@@ -675,12 +675,6 @@ public final class ApiDtos {
     public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {
     }
 
-    public record SqlCompletionRequest(@NotNull Long connectionId, @Size(max = 2_000_000) String sql, Integer cursorPosition) {
-    }
-
-    public record SqlCompletionItem(String label, String kind, String insertText, String detail) {
-    }
-
     public record FormatRequest(@NotBlank @Size(max = 2_000_000) String sql) {
     }
 

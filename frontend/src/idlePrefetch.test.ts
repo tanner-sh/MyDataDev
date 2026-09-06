@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   PREFETCH_FALLBACK_DELAY_MS,
   PREFETCH_IDLE_TIMEOUT_MS,
-  prefetchAllWhenIdle,
   prefetchWhenIdle,
   type IdlePrefetchHost
 } from './idlePrefetch';
@@ -101,46 +100,16 @@ describe('prefetchWhenIdle', () => {
     await expect(Promise.resolve()).resolves.toBeUndefined();
     expect(load).toHaveBeenCalledTimes(1);
   });
-});
-
-describe('prefetchAllWhenIdle', () => {
-  it('schedules every loader and cancels them together', () => {
-    const first = vi.fn().mockResolvedValue(undefined);
-    const second = vi.fn().mockResolvedValue(undefined);
-    const { host, cancelledIdle, runIdle } = idleHost();
-
-    const cancel = prefetchAllWhenIdle([first, second], host);
-    cancel();
-    runIdle();
-
-    expect(cancelledIdle).toEqual([1]);
-    expect(first).not.toHaveBeenCalled();
-    expect(second).not.toHaveBeenCalled();
-  });
-
-  it('runs loaders one at a time across separate idle periods', async () => {
-    const first = vi.fn().mockResolvedValue(undefined);
-    const second = vi.fn().mockResolvedValue(undefined);
-    const { host, runIdle } = idleHost();
-
-    prefetchAllWhenIdle([first, second], host);
-    runIdle();
-
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveBeenCalled();
-    await Promise.resolve();
-    runIdle();
-    expect(second).toHaveBeenCalledTimes(1);
-  });
 
   it('skips prefetch on data-saving or slow connections', () => {
     const load = vi.fn().mockResolvedValue(undefined);
     const { host, runIdle } = idleHost();
     host.navigator = { connection: { saveData: true, effectiveType: '2g' } };
 
-    prefetchAllWhenIdle([load], host);
+    prefetchWhenIdle(load, host);
     runIdle();
 
     expect(load).not.toHaveBeenCalled();
   });
 });
+
