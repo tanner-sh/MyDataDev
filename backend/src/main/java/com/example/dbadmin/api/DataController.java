@@ -3,12 +3,15 @@ package com.example.dbadmin.api;
 import com.example.dbadmin.access.ConnectionAccessService;
 import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.DataCommitResponse;
+import com.example.dbadmin.dto.ApiDtos.DataTransferRequest;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewRequest;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataRequest;
 import com.example.dbadmin.dto.ApiDtos.TableExportRequest;
+import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
 import com.example.dbadmin.service.DataEditService;
+import com.example.dbadmin.service.DataTransferService;
 import com.example.dbadmin.service.ExportService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
@@ -22,13 +25,16 @@ import org.springframework.web.bind.annotation.*;
 public class DataController {
     private final DataEditService service;
     private final ExportService exportService;
+    private final DataTransferService transferService;
     private final ConnectionAccessService access;
     private final AuditRepository audit;
 
     public DataController(DataEditService service, ExportService exportService,
+                          DataTransferService transferService,
                           ConnectionAccessService access, AuditRepository audit) {
         this.service = service;
         this.exportService = exportService;
+        this.transferService = transferService;
         this.access = access;
         this.audit = audit;
     }
@@ -95,6 +101,27 @@ public class DataController {
     private static String exportFileName(TableExportRequest request, String format) {
         String table = request.query().tableName().replaceAll("[\\\\/:*?\"<>|\\x00]", "_");
         return table + "." + ExportFormats.extension(format);
+    }
+
+    /**
+     * 把一张表或一段查询结果传输到另一条连接的表里。
+     *
+     * <p>返回的是一个待执行的 SQL 文件任务：用户先看清楚要写多少行、有没有危险语句，再走
+     * 既有的 start 接口真正写库。目标端的生产确认在那一步，这里的请求头确认的是源端。</p>
+     *
+     * <p>源端要 EXPORT 权限而不只是 QUERY —— 传输和导出一样是把数据带出这条连接。</p>
+     */
+    @PostMapping("/transfer")
+    public ResponseEntity<SqlFileExecutionResponse> transfer(
+            @Valid @RequestBody DataTransferRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        access.require(request.sourceConnectionId(), ConnectionPermission.QUERY);
+        access.require(request.sourceConnectionId(), ConnectionPermission.EXPORT);
+        access.require(request.targetConnectionId(), ConnectionPermission.DATA_WRITE);
+        return ResponseEntity.accepted().body(
+                transferService.prepare(request, actor, productionConfirmation));
     }
 
     @PostMapping("/preview")

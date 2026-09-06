@@ -46,6 +46,8 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_FILE_SUCCESS: { label: 'SQL 文件执行成功', category: 'file' },
   SQL_FILE_FAILED: { label: 'SQL 文件执行失败', category: 'file', dangerous: true },
   DATA_IMPORT_UPLOAD: { label: '上传 CSV 导入任务', category: 'data' },
+  DATA_TRANSFER_READ: { label: '跨连接传输读取源数据', category: 'data' },
+  DATA_TRANSFER_PREPARE: { label: '准备跨连接传输任务', category: 'data' },
   SQL_TRANSACTION_BEGIN: { label: '开启手动事务', category: 'sql' },
   SQL_TRANSACTION_COMMIT: { label: '提交手动事务', category: 'sql', dangerous: true },
   SQL_TRANSACTION_ROLLBACK: { label: '回滚手动事务', category: 'sql' },

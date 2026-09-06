@@ -125,6 +125,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPanel').then((module) => ({ default: module.ScheduledExportPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
+const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
 const ConnectionPoolPanel = lazy(() => import('./components/ConnectionPoolPanel').then((module) => ({ default: module.ConnectionPoolPanel })));
@@ -208,6 +209,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
+  const [sqlFileFocus, setSqlFileFocus] = useState<{ requestId: number; connectionId: number }>();
   // 管理类面板全部收进一个带左侧导航的抽屉。之前是 6 个头部入口通向 5 个互斥的抽屉，
   // 从「备份」跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
   const [archivePanelOpen, setArchivePanelOpen] = useState(false);
@@ -1913,7 +1915,11 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     setSqlFileTasksOpen(true);
   }
 
-  function openSqlFileTasks() {
+  function openSqlFileTasks(connectionId?: number) {
+    // 传输生成的任务挂在目标连接下，而那条连接未必是当前选中的。
+    if (connectionId != null) {
+      setSqlFileFocus({ requestId: ++sqlFileRequestSeqRef.current, connectionId });
+    }
     setSqlFileFeatureLoaded(true);
     setSqlFileTasksOpen(true);
   }
@@ -3584,6 +3590,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               </div>
             )}
 
+            {activeDrawer === 'data-transfer' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>跨连接数据传输</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载数据传输…" />}>
+                  <DataTransferPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    onRequestConfirmation={productionConfirmation.requestConfirmation}
+                    onOpenTasks={openSqlFileTasks}
+                  />
+                </Suspense>
+              </div>
+            )}
+
             {activeDrawer === 'mcp' && (
               <div className="management-section">
                 <header className="management-section-header"><Text strong>MCP Server 设置</Text></header>
@@ -3708,6 +3728,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           <SqlFileExecutionDrawer
             open={sqlFileTasksOpen}
             candidate={sqlFileCandidate}
+            focus={sqlFileFocus}
             connections={connections}
             selected={selected}
             onClose={closeSqlFileTasksEvent}

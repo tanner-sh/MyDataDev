@@ -787,6 +787,27 @@ public final class ApiDtos {
     ) {
     }
 
+    /**
+     * 一次跨连接数据传输。
+     *
+     * <p>源端二选一：给 {@code sourceSql} 就按这条查询取数（列名对不上目标表时在里面写 AS
+     * 改名），给 {@code sourceTable} 则按元数据解析出的规范名生成一条全表查询。</p>
+     *
+     * <p>生产确认分两处，因为它们确认的是两件事：源端的确认走请求头（数据要离开这条连接），
+     * 目标端的确认在后续 start 那一步（数据要写进那条连接）。</p>
+     */
+    public record DataTransferRequest(
+            long sourceConnectionId,
+            @Size(max = 200) String sourceSchema,
+            @Size(max = 200) String sourceTable,
+            String sourceSql,
+            long targetConnectionId,
+            @Size(max = 200) String targetSchema,
+            @NotBlank @Size(max = 200) String targetTable,
+            @Size(max = 20) String conflictMode
+    ) {
+    }
+
     public record TableFilterRule(
             @NotBlank @Size(max = 240) String column,
             @NotBlank @Size(max = 24) String operator,

@@ -15,9 +15,17 @@ const ACTIVE = new Set(['ANALYZING', 'QUEUED', 'RUNNING']);
 const CANCELLABLE = new Set(['ANALYZING', 'READY', 'QUEUED', 'RUNNING']);
 const TERMINAL = new Set(['SUCCESS', 'FAILED', 'CANCELLED', 'EXPIRED']);
 
-export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ open, candidate, connections, selected, onClose, onMetadataChanged }: {
+export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ open, candidate, focus, connections, selected, onClose, onMetadataChanged }: {
   open: boolean;
   candidate?: SqlFileCandidate;
+  /**
+   * 打开时要落在哪条连接上。
+   *
+   * <p>跨连接传输生成的任务挂在目标连接下，而那条连接未必是当前选中的 —— 不带这个的话
+   * 抽屉打开后停在源连接上，用户看到的是一个空列表。用递增的 requestId 而不是裸的连接 ID：
+   * 同一条连接连着传两次，第二次也要重新落位。</p>
+   */
+  focus?: { requestId: number; connectionId: number };
   connections: Connection[];
   selected: Connection | null;
   onClose: () => void;
@@ -33,6 +41,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   const [confirmation, setConfirmation] = useState('');
   const uploadAbortRef = useRef<AbortController | undefined>(undefined);
   const handledCandidateRef = useRef(0);
+  const handledFocusRef = useRef(0);
   const notifiedMetadataRef = useRef(new Set<number>());
   const focused = jobs.find((job) => job.id === focusedId) || jobs[0];
   const focusedTarget = connections.find((connection) => connection.id === focused?.connectionId);
@@ -40,8 +49,16 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
 
   useEffect(() => {
     if (!open || candidate || !selected) return;
+    // 还没落位的 focus 请求优先：否则这里会先把连接切回当前选中的那条，用户看到一次空列表再跳走。
+    if (focus && handledFocusRef.current !== focus.requestId) return;
     setConnectionId(selected.id);
-  }, [open, candidate?.requestId, selected?.id]);
+  }, [open, candidate?.requestId, focus?.requestId, selected?.id]);
+
+  useEffect(() => {
+    if (!open || !focus || handledFocusRef.current === focus.requestId) return;
+    handledFocusRef.current = focus.requestId;
+    setConnectionId(focus.connectionId);
+  }, [focus?.requestId, open]);
 
   useEffect(() => {
     if (!open || !connectionId) return;

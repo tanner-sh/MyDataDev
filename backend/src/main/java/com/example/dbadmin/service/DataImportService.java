@@ -243,7 +243,7 @@ public class DataImportService {
             writer.write("  (");
             for (int index = 0; index < row.size(); index++) {
                 if (index > 0) writer.write(", ");
-                writer.write(literal(dialect, row.get(index)));
+                writer.write(literal(dialect, row.get(index), source.distinguishesNull()));
             }
             writer.write(")");
             rows++;
@@ -292,7 +292,17 @@ public class DataImportService {
      * 设置（MySQL 的 NO_BACKSLASH_ESCAPES 会改变反斜杠的含义）。</p>
      */
     static String literal(DatabaseDialect dialect, String value) {
-        if (value == null || value.isEmpty()) return "NULL";
+        return literal(dialect, value, false);
+    }
+
+    /**
+     * @param distinguishesNull 来源能否区分空字符串与 NULL；见
+     *                          {@link ImportRowSource#distinguishesNull()}。为 false 时空串按 NULL 处理
+     *                          （文件导入的既有语义），为 true 时只有 {@code null} 才是 NULL。
+     */
+    static String literal(DatabaseDialect dialect, String value, boolean distinguishesNull) {
+        if (value == null) return "NULL";
+        if (!distinguishesNull && value.isEmpty()) return "NULL";
         return dialect.scriptLiteral(value);
     }
 
