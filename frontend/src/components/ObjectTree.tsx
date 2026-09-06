@@ -17,11 +17,12 @@ import {
 } from '@ant-design/icons';
 import { Button, Dropdown, Empty, Spin, Tooltip } from 'antd';
 import type { MenuProps } from 'antd';
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Key, ReactNode, UIEvent } from 'react';
 import {
   collapseObjectBranch,
   clampObjectTreeScrollTop,
+  nextObjectTreeViewportHeight,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -141,7 +142,8 @@ export const ObjectTree = memo(function ObjectTree({
   onRenameTable,
   onDropTable
 }: ObjectTreeProps) {
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const viewportObserverRef = useRef<ResizeObserver | null>(null);
   const groups = useMemo(() => groupDatabaseObjects(objects), [objects]);
   const groupKeys = useMemo(() => groups.map((group) => treeNodeKey('object-type', group.objects[0]?.schemaName || '', group.key)), [groups]);
   const [expandedKeys, setExpandedKeys] = useState<Key[]>(groupKeys);
@@ -182,14 +184,34 @@ export const ObjectTree = memo(function ObjectTree({
     setExpandedKeys((current) => [...new Set([...groupKeys, ...current])]);
   }, [groupKeys.join('|')]);
 
-  useEffect(() => {
-    const viewport = viewportRef.current;
-    if (!viewport) return;
-    const update = () => setViewportHeight(Math.max(ROW_HEIGHT, viewport.clientHeight));
-    update();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
-    observer?.observe(viewport);
-    return () => observer?.disconnect();
+  /**
+   * 视口的 ref 与尺寸观察绑在一起。
+   *
+   * <p>不能用「挂载时观察一次」那种写法：objects 为空时这个组件渲染的是空状态，视口那个 div
+   * 会被整个卸掉；切回「全部」时挂上来的是一个新的 div，而观察者还盯着那个已经脱离文档的旧
+   * 节点，于是视口高度再也不会更新。虚拟列表渲染多少行正是由它决定的 —— 那次故障的表现是
+   * 列表只剩十来行、后面全是空白，滚动条却仍按全部行数撑开。</p>
+   *
+   * <p>用回调 ref 让观察者跟着真实节点走，量到的值再过一道 {@link nextObjectTreeViewportHeight}：
+   * ResizeObserver 在被观察元素卸载时会补一次 0×0 的回调，那不是「视口变矮了」。</p>
+   */
+  const attachViewport = useCallback((node: HTMLDivElement | null) => {
+    viewportRef.current = node;
+    viewportObserverRef.current?.disconnect();
+    viewportObserverRef.current = null;
+    if (!node) return;
+    setViewportHeight((current) => nextObjectTreeViewportHeight(current, node, ROW_HEIGHT));
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      setViewportHeight((current) => nextObjectTreeViewportHeight(current, node, ROW_HEIGHT));
+    });
+    observer.observe(node);
+    viewportObserverRef.current = observer;
+  }, []);
+
+  useEffect(() => () => {
+    viewportObserverRef.current?.disconnect();
+    viewportObserverRef.current = null;
   }, []);
 
   useEffect(() => () => {
@@ -365,7 +387,7 @@ export const ObjectTree = memo(function ObjectTree({
   }
 
   return (
-    <div ref={viewportRef} className="object-tree-viewport object-tree object-tree-virtual" role="tree" aria-label="数据库对象" onScroll={handleScroll}>
+    <div ref={attachViewport} className="object-tree-viewport object-tree object-tree-virtual" role="tree" aria-label="数据库对象" onScroll={handleScroll}>
       <div className="object-tree-virtual-spacer" style={{ height: rows.length * ROW_HEIGHT + (loadingMore ? ROW_HEIGHT : 0) }}>
         {visibleRows.map((row, visibleIndex) => {
           const index = start + visibleIndex;

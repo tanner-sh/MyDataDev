@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   collapseObjectBranch,
   clampObjectTreeScrollTop,
+  nextObjectTreeViewportHeight,
   databaseObjectNodeKey,
   findMatchingDatabaseObject,
   groupDatabaseObjects,
@@ -69,4 +70,29 @@ describe('object tree model', () => {
     expect(clampObjectTreeScrollTop(100, 10, 300, 30, true)).toBe(30);
   });
 
+});
+
+describe('nextObjectTreeViewportHeight', () => {
+  const node = (clientHeight: number, isConnected = true) => ({ clientHeight, isConnected });
+
+  it('挂着的元素按实际高度量，但不低于一行', () => {
+    expect(nextObjectTreeViewportHeight(30, node(560), 30)).toBe(560);
+    expect(nextObjectTreeViewportHeight(560, node(0), 30)).toBe(30);
+  });
+
+  /**
+   * 这条是「切一下收藏页签，回来只剩十来行」那个故障的根因。
+   *
+   * ResizeObserver 在被观察元素卸载时会补一次 0×0 的回调。照单全收的话视口高度会被记成一行，
+   * 而虚拟列表渲染多少行正是由它决定的 —— 回到「全部」时列表只剩 11 行，后面全是空白，
+   * 滚动条却仍按 200 行撑开，看起来就像数据丢了。
+   */
+  it('元素已经被移出文档时保留上一次量到的高度', () => {
+    expect(nextObjectTreeViewportHeight(560, node(0, false), 30)).toBe(560);
+    expect(nextObjectTreeViewportHeight(560, node(560, false), 30)).toBe(560);
+  });
+
+  it('元素还没挂上时同样保留上一次的高度', () => {
+    expect(nextObjectTreeViewportHeight(560, null, 30)).toBe(560);
+  });
 });

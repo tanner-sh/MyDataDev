@@ -93,3 +93,22 @@ export function clampObjectTreeScrollTop(
   const safeRequested = Number.isFinite(requestedScrollTop) ? Math.max(0, requestedScrollTop) : 0;
   return Math.min(safeRequested, maxScrollTop);
 }
+
+/**
+ * 量到的视口高度该不该采信。
+ *
+ * <p>虚拟列表渲染多少行由视口高度决定，所以这个值一旦被记成一行的高度，列表就只剩十来行，
+ * 后面全是空白 —— 而滚动条又是按真实行数撑开的，看起来就像"数据丢了"。</p>
+ *
+ * <p>两种量不准的情况要挡掉：元素还没挂上（{@code node} 为 null），以及元素**已经被移出文档**
+ * ——ResizeObserver 在被观察元素卸载时会补一次 0×0 的回调，那不是"视口变矮了"，是它不在了。
+ * 两种情况都保留上一次量到的高度，因为它是这个视口最后一次真实的样子。</p>
+ */
+export function nextObjectTreeViewportHeight(
+  previous: number,
+  node: { clientHeight: number; isConnected: boolean } | null,
+  minHeight: number
+): number {
+  if (!node || !node.isConnected) return previous;
+  return Math.max(minHeight, node.clientHeight);
+}

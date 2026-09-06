@@ -216,8 +216,10 @@ async function startServer() {
  * 打开表 → 翻页 → 改一格 → 提交 → 导出」这条真正每天都在走的路 —— 此前冒烟只看得到空壳，
  * 而空壳恰恰是最不容易坏的部分。</p>
  */
+const FILLER_TABLE_COUNT = 16;
+
 async function seedSmokeData() {
-  console.log('播种一条 H2 连接与 240 行数据…');
+  console.log('播种一条 H2 连接、240 行数据与若干张填充表…');
   const post = async (path, body) => {
     const response = await fetch(`${APP_URL}/api${path}`, {
       method: 'POST',
@@ -247,6 +249,13 @@ async function seedSmokeData() {
   await run(`CREATE TABLE ${SEED_TABLE}(id INT PRIMARY KEY, customer VARCHAR(60) NOT NULL, amount INT NOT NULL)`);
   // 240 行：默认每页 100 行，翻页才是真的翻页而不是一页装得下。
   await run(`INSERT INTO ${SEED_TABLE} SELECT X, '客户' || X, X * 3 FROM SYSTEM_RANGE(1, 240)`);
+  // 再播十六张空表：资源树是虚拟列表，只有两张表时渲染窗口多大都装得下，
+  // 「切一下页签列表就变短」这类窗口计算的故障根本显不出来。
+  for (let index = 1; index <= FILLER_TABLE_COUNT; index++) {
+    const name = `smoke_fill_${String(index).padStart(2, '0')}`;
+    await run(`DROP TABLE IF EXISTS ${name}`);
+    await run(`CREATE TABLE ${name}(id INT PRIMARY KEY)`);
+  }
   return connection.id;
 }
 
@@ -442,6 +451,36 @@ try {
     `);
     check('资源树里能找到播种的表', openedTable);
     await page.sleep(6000);
+
+    // 资源树是虚拟列表，渲染多少行取决于量到的视口高度。切到「收藏」时列表整个卸掉，
+    // ResizeObserver 会补一次 0×0 的回调 —— 照单全收就会把视口高度记成一行，切回「全部」
+    // 后列表只剩十来行、后面全是空白，滚动条却仍按全部行数撑开。断言往返前后行数一致，
+    // 而不是断言某个具体数字：渲染窗口的大小本来就跟视口高度和 overscan 走。
+    const countTreeRows = () => page.evaluate(
+      `document.querySelectorAll('.object-tree-virtual .object-tree-virtual-row').length`);
+    const rowsBeforeScopeSwitch = await countTreeRows();
+    const switchedScope = await page.evaluate(`
+      (() => {
+        const labels = [...document.querySelectorAll('.object-view-filter .ant-segmented-item-label')];
+        const favorites = labels.find((node) => (node.textContent || '').includes('收藏'));
+        if (!favorites) return false;
+        favorites.click();
+        return true;
+      })()
+    `);
+    check('可以切到「收藏」页签', switchedScope);
+    await page.sleep(1200);
+    await page.evaluate(`
+      (() => {
+        const labels = [...document.querySelectorAll('.object-view-filter .ant-segmented-item-label')];
+        labels.find((node) => (node.textContent || '').includes('全部'))?.click();
+      })()
+    `);
+    await page.sleep(1200);
+    const rowsAfterScopeSwitch = await countTreeRows();
+    check('切回「全部」后资源树渲染的行数没有变少',
+      rowsBeforeScopeSwitch > 0 && rowsAfterScopeSwitch === rowsBeforeScopeSwitch,
+      `切换前 ${rowsBeforeScopeSwitch} 行，切换后 ${rowsAfterScopeSwitch} 行`);
 
     const firstPage = await page.evaluate(`
       (() => {
