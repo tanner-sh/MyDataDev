@@ -2,7 +2,8 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cellValidation } from '../tableEditing';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { fillerColumnWidth, isNumericColumnType, suggestedColumnWidth as sharedColumnWidth } from '../resultGridData';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+import { startColumnResizeInteraction } from '../columnResize';
 import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
@@ -37,6 +38,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   const [largeError, setLargeError] = useState('');
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(data) });
 
   useEffect(() => {
@@ -58,18 +60,43 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   const setColumnWidth = useCallback((columnName: string, width: number) => {
     setColumnWidths((current) => ({ ...current, [columnName]: Math.max(88, Math.min(520, width)) }));
   }, []);
-  const beginResize = useCallback((event: ReactMouseEvent, columnName: string, initialWidth: number) => {
+  const stopResize = useCallback(() => {
+    resizeCleanupRef.current?.();
+    resizeCleanupRef.current = null;
+  }, []);
+
+  useEffect(() => stopResize, [stopResize]);
+
+  /*
+    与查询结果表共用 startColumnResizeInteraction：此前这里是自己写的一套 mousemove/mouseup，
+    只在 mouseup 时解绑 —— 拖着鼠标离开浏览器窗口再松手，监听器就留在 document 上，
+    鼠标回到页面时列宽还跟着走。那条共用实现把 pointercancel、窗口失焦和组件卸载
+    都收在同一个幂等清理里，顺带吞掉拖动后合成的那次 click。
+  */
+  const beginResize = useCallback((event: ReactPointerEvent<HTMLSpanElement>, columnName: string, initialWidth: number) => {
     event.preventDefault();
     event.stopPropagation();
+    stopResize();
+    const handle = event.currentTarget;
     const startX = event.clientX;
-    const move = (moveEvent: MouseEvent) => setColumnWidth(columnName, initialWidth + moveEvent.clientX - startX);
-    const stop = () => {
-      document.removeEventListener('mousemove', move);
-      document.removeEventListener('mouseup', stop);
-    };
-    document.addEventListener('mousemove', move);
-    document.addEventListener('mouseup', stop);
-  }, [setColumnWidth]);
+    if (typeof handle.setPointerCapture === 'function') handle.setPointerCapture(event.pointerId);
+    let cleanup: () => void = () => undefined;
+    cleanup = startColumnResizeInteraction({
+      target: window,
+      pointerId: event.pointerId,
+      startX,
+      onMove: (deltaX) => setColumnWidth(columnName, initialWidth + deltaX),
+      onFinish: () => {
+        if (typeof handle.hasPointerCapture === 'function' && handle.hasPointerCapture(event.pointerId)) {
+          handle.releasePointerCapture(event.pointerId);
+        }
+        if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
+        document.body.classList.remove('is-resizing-column');
+      }
+    });
+    resizeCleanupRef.current = cleanup;
+    document.body.classList.add('is-resizing-column');
+  }, [setColumnWidth, stopResize]);
 
   const columns = useMemo<ColumnsType<EditableDisplayRow>>(() => {
     if (!data) return [];
@@ -107,7 +134,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
               aria-orientation="vertical"
               aria-label={`调整 ${column.name} 列宽`}
               tabIndex={0}
-              onMouseDown={(event) => beginResize(event, column.name, columnWidths[column.name] || suggestedWidths.get(column.name) || 156)}
+              onPointerDown={(event) => beginResize(event, column.name, columnWidths[column.name] || suggestedWidths.get(column.name) || 156)}
               onDoubleClick={() => setColumnWidths((current) => {
                 const next = { ...current };
                 delete next[column.name];

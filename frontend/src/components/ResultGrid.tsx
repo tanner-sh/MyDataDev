@@ -895,6 +895,9 @@ const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, column
   onRow: NonNullable<TableProps<ResultRow>['onRow']>;
   onChange: NonNullable<TableProps<ResultRow>['onChange']>;
 }) {
+  // showSorterTooltip 关掉：表头已经有自己的提示（列名 · 类型），antd 再挂一个「点击升序」，
+  // 同一次悬停就弹出两个气泡；而且它固定往上弹，正好压住上面那条工具栏。
+  // 这一列能不能排序，看表头右侧的箭头就够了。
   return (
     <Table<ResultRow>
       ref={tableRef}
@@ -905,6 +908,7 @@ const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, column
       pagination={false}
       loading={pagingLoading}
       virtual
+      showSorterTooltip={false}
       scroll={{ x: scrollX, y: scrollY }}
       rowClassName={rowClassName}
       onRow={onRow}

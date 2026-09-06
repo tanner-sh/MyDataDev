@@ -40,4 +40,31 @@ describe('列宽拖动生命周期', () => {
 
     expect(onFinish).toHaveBeenCalledOnce();
   });
+
+  it('吞掉拖动后合成的那次 click，但不影响下一轮的点击', () => {
+    vi.useFakeTimers();
+    try {
+      const target = new EventTarget();
+      const cleanup = startColumnResizeInteraction({
+        target, pointerId: 1, startX: 0, onMove: vi.fn(), onFinish: vi.fn()
+      });
+      target.dispatchEvent(pointerEvent('pointerup', 1));
+
+      // 松开鼠标之后浏览器补的这次 click 落在表头上就等于点了排序，必须拦下。
+      const synthesized = new Event('click', { bubbles: true, cancelable: true });
+      const stopped = vi.spyOn(synthesized, 'stopPropagation');
+      target.dispatchEvent(synthesized);
+      expect(stopped).toHaveBeenCalledOnce();
+
+      // 一个宏任务之后就撤掉：再点表头是用户真的想排序。
+      vi.runAllTimers();
+      const later = new Event('click', { bubbles: true, cancelable: true });
+      const stoppedLater = vi.spyOn(later, 'stopPropagation');
+      target.dispatchEvent(later);
+      expect(stoppedLater).not.toHaveBeenCalled();
+      cleanup();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -748,6 +748,75 @@ try {
     check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
     await page.shot('09-查询结果');
 
+    /*
+      拖列宽不该惊动服务端。拖动手柄长在表头里，而结果表的表头整格是「点一下排序」——
+      松手时浏览器补的那次 click 落在表头上就等于点了排序：offset 归零、重新查一次。
+      这条只有盯着网络面板才看得见，所以在页面里数请求，而不是靠肉眼。
+    */
+    await page.evaluate(`
+      (() => {
+        window.__queryPageCalls = 0;
+        const original = window.fetch;
+        window.fetch = (...args) => {
+          const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
+          if (url.includes('/sql/query-page')) window.__queryPageCalls += 1;
+          return original.apply(window, args);
+        };
+      })()
+    `);
+    const handle = await page.evaluate(`
+      (() => {
+        const node = document.querySelector('.result-grid .column-resize-handle');
+        if (!node) return null;
+        const rect = node.getBoundingClientRect();
+        const header = node.closest('th');
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: header?.getBoundingClientRect().width || 0 };
+      })()
+    `);
+    if (handle) {
+      const drag = (type, x) => page.send('Input.dispatchMouseEvent', {
+        type, x, y: handle.y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, pointerType: 'mouse'
+      });
+      await drag('mousePressed', handle.x);
+      await drag('mouseMoved', handle.x + 70);
+      await drag('mouseReleased', handle.x + 70);
+      await page.sleep(2500);
+      const afterDrag = await page.evaluate(`
+        (() => {
+          const node = document.querySelector('.result-grid .column-resize-handle');
+          return {
+            calls: window.__queryPageCalls,
+            width: node?.closest('th')?.getBoundingClientRect().width || 0,
+            sorted: Boolean(document.querySelector('.result-grid th.ant-table-column-sort'))
+          };
+        })()
+      `);
+      check('拖列宽真的改了宽度', afterDrag.width > handle.width + 20,
+        `${Math.round(handle.width)} → ${Math.round(afterDrag.width)}`);
+      check('拖列宽不发请求、不触发排序', afterDrag.calls === 0 && afterDrag.sorted === false, JSON.stringify(afterDrag));
+    } else {
+      check('结果表有列宽拖动手柄', false);
+    }
+
+    // 表头同一次悬停只弹一个气泡：antd 的「点击升序」被关掉了，留下我们自己那条「列名 · 类型」。
+    const headerBox = await page.evaluate(`
+      (() => {
+        const th = [...document.querySelectorAll('.result-grid .ant-table-thead th')]
+          .find(node => node.textContent.trim().startsWith('CUSTOMER'));
+        if (!th) return null;
+        const rect = th.getBoundingClientRect();
+        return { x: rect.left + 20, y: rect.top + rect.height / 2 };
+      })()
+    `);
+    if (headerBox) {
+      await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: headerBox.x, y: headerBox.y, pointerType: 'mouse' });
+      await page.sleep(2000);
+      const tooltips = await page.evaluate(
+        `[...document.querySelectorAll('.ant-tooltip:not(.ant-tooltip-hidden)')].map(n => n.textContent.trim())`);
+      check('悬停表头不再弹出「点击升序」气泡', !tooltips.some(text => text.includes('点击升序')),
+        JSON.stringify(tooltips));
+    }
+
     // 使用发行包公开接口验证队列、持久化历史与下载，UI 管理入口已经在前面打开检查。
     const post = async (route, body) => {
       const response = await fetch(APP_URL + '/api' + route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
