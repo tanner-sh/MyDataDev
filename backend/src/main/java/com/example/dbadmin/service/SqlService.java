@@ -2,6 +2,7 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.core.CellSerializer;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
@@ -21,20 +22,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 
 import java.sql.Blob;
-import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.sql.Types;
 import java.io.InputStream;
-import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 
 @Service
 public class SqlService {
@@ -42,8 +39,9 @@ public class SqlService {
     private static final int MAX_SCRIPT_RESULT_ROWS = 10_000;
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final long MAX_RESULT_TEXT_CHARS = 20_000_000;
-    private static final long MAX_BINARY_LENGTH_PROBE_BYTES = 1L << 20;
     private static final int MAX_CELL_TEXT_CHARS = 100_000;
+    /** CLOB 先读回多少字符用于判断截断。查询结果一屏放不下太长的文本，取一个比单元格上限小得多的窗口。 */
+    private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
     private final ConnectionService connections;
     private final AppProperties properties;
     private final AuditRepository audit;
@@ -796,40 +794,14 @@ public class SqlService {
     }
 
     private Object serializableValue(Object value, int maxTextChars) throws Exception {
-        if (value == null) return null;
-        if (value instanceof Clob clob) {
-            long length = clob.length();
-            int visible = (int) Math.min(length, Math.min(10_000, Math.max(maxTextChars, 0)));
-            String text = visible == 0 ? "" : clob.getSubString(1, visible);
-            return length > visible ? truncateText(text, "… <CLOB 已截断，共 " + length + " 字符>", maxTextChars) : text;
-        }
-        if (value instanceof Blob blob) return truncateText("<BLOB " + blob.length() + " bytes>", "", maxTextChars);
-        if (value instanceof byte[] bytes) return truncateText("<BINARY " + bytes.length + " bytes>", "", maxTextChars);
-        // JSON numbers are parsed as IEEE-754 doubles by the browser. Preserve
-        // BIGINT identity and DECIMAL scale by transferring them as strings.
-        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) {
-            return truncateText(value.toString(), "", maxTextChars);
-        }
-        if (value instanceof CharSequence text) {
-            String string = text.toString();
-            return string.length() > maxTextChars
-                    ? truncateText(string, "… <文本已截断，共 " + string.length() + " 字符>", maxTextChars)
-                    : string;
-        }
-        if (value instanceof Float number && !Float.isFinite(number)) return number.toString();
-        if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
-        if (value instanceof Number || value instanceof Boolean) return value;
-        if (value instanceof java.util.Date || value instanceof java.time.temporal.TemporalAccessor || value instanceof UUID) {
-            return truncateText(CellValues.text(value), "", maxTextChars);
-        }
-        return truncateText(CellValues.text(value), "", maxTextChars);
+        return CellSerializer.serialize(value, maxTextChars, MAX_CLOB_WINDOW_CHARS);
     }
 
     private Object serializableValue(ResultSet rs, ResultSetMetaData metadata, int index, int maxTextChars) throws Exception {
         int jdbcType = metadata.getColumnType(index);
         if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
             String description = binaryDescription(rs, index);
-            return description == null ? null : truncateText(description, "", maxTextChars);
+            return description == null ? null : CellSerializer.truncate(description, "", maxTextChars);
         }
         return serializableValue(rs.getObject(index), maxTextChars);
     }
@@ -844,26 +816,8 @@ public class SqlService {
         }
         try (InputStream input = rs.getBinaryStream(index)) {
             if (input == null) return null;
-            return describeBinaryStream(input);
+            return CellSerializer.describeBinaryStream(input);
         }
-    }
-
-    static String describeBinaryStream(InputStream input) throws Exception {
-        byte[] buffer = new byte[16 * 1024];
-        long total = 0;
-        int read;
-        while (total <= MAX_BINARY_LENGTH_PROBE_BYTES && (read = input.read(buffer)) >= 0) total += read;
-        return total > MAX_BINARY_LENGTH_PROBE_BYTES
-                ? "<BINARY > 1 MB>"
-                : "<BINARY " + total + " bytes>";
-    }
-
-    private String truncateText(String prefixSource, String marker, int maxChars) {
-        if (maxChars <= 0) return "";
-        if (prefixSource.length() <= maxChars && marker.isEmpty()) return prefixSource;
-        if (marker.length() >= maxChars) return prefixSource.substring(0, Math.min(prefixSource.length(), maxChars));
-        int prefixLength = Math.min(prefixSource.length(), maxChars - marker.length());
-        return prefixSource.substring(0, prefixLength) + marker;
     }
 
     private long textChars(SqlResult result) {

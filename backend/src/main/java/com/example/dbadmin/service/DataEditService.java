@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.core.CellSerializer;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.DataCommitResponse;
@@ -21,7 +22,6 @@ import com.example.dbadmin.service.RowLocatorCodec.RowLocatorValue;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Blob;
@@ -57,6 +57,14 @@ public class DataEditService {
     private static final int MAX_TABLE_RESULT_CELLS = 50_000;
     private static final long MAX_TABLE_TEXT_CHARS = 5_000_000;
     private static final int MAX_TABLE_CELL_TEXT_CHARS = 100_000;
+    /**
+     * CLOB 先读回多少字符用于判断截断。
+     *
+     * <p>比查询结果那条路更窄：表格单元格本来就只显示一行，读回 10 万字符再截掉是白读。
+     * {@code serializedValueWouldTruncate} 必须用同一个窗口 —— 「会不会截断」和「实际截断」
+     * 用不同阈值，就会出现标了截断却没截、或截了却没标的行。</p>
+     */
+    private static final int MAX_CLOB_WINDOW_CHARS = 4_096;
     private static final int MAX_PREVIEW_PARAMETER_CHARS = 2_000;
     private static final int MAX_PREVIEW_SQL_CHARS = 10_000;
     private final MetadataService metadata;
@@ -965,28 +973,7 @@ public class DataEditService {
     }
 
     private Object serializableValue(Object value, int maxTextChars) throws Exception {
-        if (value == null) return null;
-        if (value instanceof Clob clob) {
-            long length = clob.length();
-            int visible = (int) Math.min(length, Math.min(4_096, Math.max(maxTextChars, 0)));
-            String text = visible == 0 ? "" : clob.getSubString(1, visible);
-            return length > visible ? truncateText(text, "… <CLOB 已截断，共 " + length + " 字符>", maxTextChars) : text;
-        }
-        if (value instanceof Blob blob) return truncateText("<BLOB " + blob.length() + " bytes>", "", maxTextChars);
-        if (value instanceof byte[] bytes) return truncateText("<BINARY " + bytes.length + " bytes>", "", maxTextChars);
-        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) {
-            return truncateText(value.toString(), "", maxTextChars);
-        }
-        if (value instanceof CharSequence text) {
-            String string = text.toString();
-            return string.length() > maxTextChars
-                    ? truncateText(string, "… <文本已截断，共 " + string.length() + " 字符>", maxTextChars)
-                    : string;
-        }
-        if (value instanceof Float number && !Float.isFinite(number)) return number.toString();
-        if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
-        if (value instanceof Number || value instanceof Boolean) return value;
-        return truncateText(CellValues.text(value), "", maxTextChars);
+        return CellSerializer.serialize(value, maxTextChars, MAX_CLOB_WINDOW_CHARS);
     }
 
     private Object readDisplayValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {
@@ -1001,14 +988,7 @@ public class DataEditService {
             }
             try (java.io.InputStream input = rs.getBinaryStream(index)) {
                 if (input == null) return null;
-                byte[] buffer = new byte[16 * 1024];
-                long length = 0;
-                int read;
-                long maxProbe = 1L << 20; // 1 MB
-                while (length <= maxProbe && (read = input.read(buffer)) >= 0) {
-                    length += read;
-                }
-                return length > maxProbe ? "<BINARY > 1 MB>" : "<BINARY " + length + " bytes>";
+                return CellSerializer.describeBinaryStream(input);
             }
         }
         return rs.getObject(index);
@@ -1016,7 +996,7 @@ public class DataEditService {
 
     private boolean serializedValueWouldTruncate(Object value, int maxTextChars) throws Exception {
         if (value == null || value instanceof Blob || value instanceof byte[]) return false;
-        if (value instanceof Clob clob) return clob.length() > Math.min(4_096, Math.max(maxTextChars, 0));
+        if (value instanceof Clob clob) return clob.length() > Math.min(MAX_CLOB_WINDOW_CHARS, Math.max(maxTextChars, 0));
         if (value instanceof Byte || value instanceof Short || value instanceof Integer
                 || value instanceof Float floatValue && Float.isFinite(floatValue)
                 || value instanceof Double doubleValue && Double.isFinite(doubleValue)
@@ -1024,14 +1004,6 @@ public class DataEditService {
             return false;
         }
         return value.toString().length() > Math.max(maxTextChars, 0);
-    }
-
-    private String truncateText(String prefixSource, String marker, int maxChars) {
-        if (maxChars <= 0) return "";
-        if (prefixSource.length() <= maxChars && marker.isEmpty()) return prefixSource;
-        if (marker.length() >= maxChars) return prefixSource.substring(0, Math.min(prefixSource.length(), maxChars));
-        int prefixLength = Math.min(prefixSource.length(), maxChars - marker.length());
-        return prefixSource.substring(0, prefixLength) + marker;
     }
 
     private String normalize(String value) {

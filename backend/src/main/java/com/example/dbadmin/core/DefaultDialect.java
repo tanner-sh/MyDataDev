@@ -11,8 +11,6 @@ import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 
 import java.sql.Connection;
-import java.sql.Blob;
-import java.sql.Clob;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
@@ -25,8 +23,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
-import java.math.BigDecimal;
-import java.math.BigInteger;
 
 public class DefaultDialect implements DatabaseDialect {
     private static final int MAX_EXPLAIN_RESULT_CELLS = 50_000;
@@ -403,36 +399,7 @@ public class DefaultDialect implements DatabaseDialect {
     }
 
     private Object explainValue(Object value, int maxTextChars) throws Exception {
-        if (value == null) return null;
-        if (value instanceof Clob clob) {
-            long length = clob.length();
-            int visible = (int) Math.min(length, Math.min(MAX_EXPLAIN_CELL_TEXT_CHARS, Math.max(maxTextChars, 0)));
-            String text = visible == 0 ? "" : clob.getSubString(1, visible);
-            return length > visible ? truncateText(text, "… <CLOB 已截断，共 " + length + " 字符>", maxTextChars) : text;
-        }
-        if (value instanceof Blob blob) return truncateText("<BLOB " + blob.length() + " bytes>", "", maxTextChars);
-        if (value instanceof byte[] bytes) return truncateText("<BINARY " + bytes.length + " bytes>", "", maxTextChars);
-        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) {
-            return truncateText(value.toString(), "", maxTextChars);
-        }
-        if (value instanceof CharSequence text) {
-            String string = text.toString();
-            return string.length() > maxTextChars
-                    ? truncateText(string, "… <文本已截断，共 " + string.length() + " 字符>", maxTextChars)
-                    : string;
-        }
-        if (value instanceof Float number && !Float.isFinite(number)) return number.toString();
-        if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
-        if (value instanceof Number || value instanceof Boolean) return value;
-        return truncateText(value.toString(), "", maxTextChars);
-    }
-
-    private String truncateText(String prefixSource, String marker, int maxChars) {
-        if (maxChars <= 0) return "";
-        if (prefixSource.length() <= maxChars && marker.isEmpty()) return prefixSource;
-        if (marker.length() >= maxChars) return prefixSource.substring(0, Math.min(prefixSource.length(), maxChars));
-        int prefixLength = Math.min(prefixSource.length(), maxChars - marker.length());
-        return prefixSource.substring(0, prefixLength) + marker;
+        return CellSerializer.serialize(value, maxTextChars, MAX_EXPLAIN_CELL_TEXT_CHARS);
     }
 
     private record OriginalIndex(String name, List<String> columns, boolean unique) {

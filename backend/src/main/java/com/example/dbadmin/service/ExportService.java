@@ -2,6 +2,7 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.core.CellSerializer;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
@@ -44,6 +45,8 @@ public class ExportService {
     public static final int EXPORT_MAX_ROWS = 10_000;
     public static final long EXPORT_MAX_BYTES = 256L * 1024 * 1024;
     private static final int EXPORT_MAX_CELL_TEXT_CHARS = 100_000;
+    /** CLOB 读取窗口，与 SQL 工作台那条路取同一个值：导出的是屏幕上那批结果。 */
+    private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
     private static final int SQL_EXPORT_MAX_CELL_BYTES = 64 * 1024 * 1024;
     private static final int SQL_EXPORT_MAX_CELL_CHARS = 64 * 1024 * 1024;
     private final ConnectionService connections;
@@ -482,27 +485,14 @@ public class ExportService {
         return result;
     }
 
+    /**
+     * CSV / Excel / JSON 导出的单元格取值。
+     *
+     * <p>走的是与屏幕上完全同一套规则：导出本来就该和用户看到的一致，两边各写一份的结果是
+     * 时间列在文件里多出一个 {@code .0} 而界面上没有。</p>
+     */
     private Object exportValue(Object value) throws Exception {
-        if (value == null) return null;
-        if (value instanceof Clob clob) {
-            long length = clob.length();
-            int visible = (int) Math.min(length, 10_000);
-            String text = clob.getSubString(1, visible);
-            return length > visible ? text + "… <CLOB 已截断，共 " + length + " 字符>" : text;
-        }
-        if (value instanceof Blob blob) return "<BLOB " + blob.length() + " bytes>";
-        if (value instanceof byte[] bytes) return "<BINARY " + bytes.length + " bytes>";
-        if (value instanceof Long || value instanceof BigInteger || value instanceof BigDecimal) return value.toString();
-        if (value instanceof CharSequence text) {
-            String string = text.toString();
-            return string.length() > EXPORT_MAX_CELL_TEXT_CHARS
-                    ? truncateText(string, "… <文本已截断，共 " + string.length() + " 字符>", EXPORT_MAX_CELL_TEXT_CHARS)
-                    : string;
-        }
-        if (value instanceof Float number && !Float.isFinite(number)) return number.toString();
-        if (value instanceof Double number && !Double.isFinite(number)) return number.toString();
-        if (value instanceof Number || value instanceof Boolean) return value;
-        return truncateText(value.toString(), "", EXPORT_MAX_CELL_TEXT_CHARS);
+        return CellSerializer.serialize(value, EXPORT_MAX_CELL_TEXT_CHARS, MAX_CLOB_WINDOW_CHARS);
     }
 
     private Object sqlExportValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {
@@ -598,14 +588,6 @@ public class ExportService {
     private String abbreviate(String value) {
         if (value == null) return "";
         return value.length() <= 2_000 ? value : value.substring(0, 2_000);
-    }
-
-    private String truncateText(String prefixSource, String marker, int maxChars) {
-        if (maxChars <= 0) return "";
-        if (prefixSource.length() <= maxChars && marker.isEmpty()) return prefixSource;
-        if (marker.length() >= maxChars) return prefixSource.substring(0, Math.min(prefixSource.length(), maxChars));
-        int prefixLength = Math.min(prefixSource.length(), maxChars - marker.length());
-        return prefixSource.substring(0, prefixLength) + marker;
     }
 
     private static final class SizeLimitedOutputStream extends OutputStream {
