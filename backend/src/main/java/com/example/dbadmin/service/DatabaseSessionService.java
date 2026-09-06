@@ -5,6 +5,7 @@ import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.DatabaseSession;
 import com.example.dbadmin.dto.ApiDtos.DatabaseSessionPage;
+import com.example.dbadmin.dto.ApiDtos.SessionBlock;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import org.springframework.http.HttpStatus;
@@ -33,6 +34,8 @@ public class DatabaseSessionService {
     private static final int MAX_SESSIONS = 500;
     private static final int MAX_SQL_CHARS = 4_000;
     private static final int QUERY_TIMEOUT_SECONDS = 15;
+    /** 阻塞边的条数上限。一个库同时有几百条锁等待时，需要的是「谁在根上」，不是完整的边列表。 */
+    private static final int MAX_BLOCKS = 500;
 
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
@@ -59,7 +62,10 @@ public class DatabaseSessionService {
             return new DatabaseSessionPage(false, false, List.of(), "当前数据库类型暂不支持查看活动会话。");
         }
         boolean canKill = dialect.supportsKillSession();
+        String blockingSql = dialect.blockingSessionsSql();
         List<DatabaseSession> sessions = new ArrayList<>();
+        List<SessionBlock> blocks = new ArrayList<>();
+        String blockingMessage = blockingSql == null ? "当前数据库类型暂不支持阻塞关系分析。" : null;
         try (Connection connection = connections.open(connectionId);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
              Statement statement = connection.createStatement()) {
@@ -80,12 +86,54 @@ public class DatabaseSessionService {
                     ));
                 }
             }
+            if (blockingSql != null) {
+                try {
+                    blocks.addAll(readBlocks(connection, dialect, blockingSql));
+                } catch (Exception error) {
+                    // 会话读得到、阻塞关系读不到是很常见的组合（缺 PROCESS/SELECT 权限，或
+                    // 这个版本没有那张系统视图）。它不该把整个会话面板变成一条错误。
+                    blockingMessage = "读取阻塞关系失败（通常是账号权限不足，或数据库版本没有对应的系统视图）："
+                            + error.getMessage();
+                }
+            }
         } catch (Exception error) {
             // 权限不足读不到系统视图是很常见的，说明原因比抛一个 SQL 错误有用。
             return new DatabaseSessionPage(true, canKill, List.of(),
                     "读取活动会话失败（通常是账号缺少查看系统视图的权限）：" + error.getMessage());
         }
-        return new DatabaseSessionPage(true, canKill, List.copyOf(sessions), null);
+        return new DatabaseSessionPage(true, canKill, List.copyOf(sessions), null,
+                blockingSql != null, List.copyOf(blocks), blockingMessage);
+    }
+
+    /**
+     * 读阻塞关系。
+     *
+     * <p>只取直接阻塞者（谁在等谁），不在这里拼等待链 —— 成链是纯粹的图运算，放在前端的
+     * `databaseSessions.ts` 里能被单测覆盖，而这里每多一层结构都得再过一遍 JDBC。</p>
+     */
+    private List<SessionBlock> readBlocks(Connection connection, DatabaseDialect dialect, String sql) throws Exception {
+        List<SessionBlock> blocks = new ArrayList<>();
+        try (Statement statement = connection.createStatement()) {
+            dialect.configureReadStatement(connection, statement, 200, QUERY_TIMEOUT_SECONDS);
+            statement.setMaxRows(MAX_BLOCKS);
+            try (ResultSet rs = statement.executeQuery(sql)) {
+                Set<String> columns = columnLabels(rs.getMetaData());
+                while (rs.next() && blocks.size() < MAX_BLOCKS) {
+                    String blocked = text(rs, columns, "blocked_session_id");
+                    String blocking = text(rs, columns, "blocking_session_id");
+                    // 两端缺一不可：少了任何一头这条边都拼不进树，留着只会变成一个孤立节点。
+                    if (blocked == null || blocking == null || blocked.equals(blocking)) continue;
+                    blocks.add(new SessionBlock(
+                            blocked,
+                            blocking,
+                            text(rs, columns, "wait_object"),
+                            number(rs, columns, "wait_seconds"),
+                            abbreviate(text(rs, columns, "blocked_sql"))
+                    ));
+                }
+            }
+        }
+        return blocks;
     }
 
     public void kill(long connectionId, String sessionId, String actor, String productionConfirmation) throws Exception {

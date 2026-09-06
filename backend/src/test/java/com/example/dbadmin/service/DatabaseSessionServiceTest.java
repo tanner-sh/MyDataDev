@@ -1,5 +1,7 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DefaultDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.core.MySqlDialect;
 import com.example.dbadmin.core.OracleDialect;
@@ -15,6 +17,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -26,6 +29,101 @@ class DatabaseSessionServiceTest {
         when(connections.require(anyLong())).thenReturn(model);
         when(connections.open(anyLong())).thenAnswer(_i -> DriverManager.getConnection(url, "sa", ""));
         return new DatabaseSessionService(connections, new DialectRegistry(), new ExecutionGuard(), mock(AuditRepository.class));
+    }
+
+    /**
+     * 用一条跑得起来的假方言在 H2 上验证读取逻辑。
+     *
+     * <p>真正的阻塞只在 MySQL/PostgreSQL/Oracle 上造得出来，但服务端这一侧要验的是「按列标签
+     * 取值、丢掉拼不成边的行、一侧失败不牵连另一侧」—— 这些与具体数据库无关。</p>
+     */
+    private DatabaseSessionService serviceWith(DatabaseDialect dialect, String url) throws Exception {
+        DbConnection model = new DbConnection(1L, "c", "stub", url, "sa", "", "dev", false, Instant.now(), Instant.now());
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.require(anyLong())).thenReturn(model);
+        when(connections.open(anyLong())).thenAnswer(_i -> DriverManager.getConnection(url, "sa", ""));
+        DialectRegistry registry = mock(DialectRegistry.class);
+        when(registry.dialectFor(org.mockito.ArgumentMatchers.any())).thenReturn(dialect);
+        return new DatabaseSessionService(connections, registry, new ExecutionGuard(), mock(AuditRepository.class));
+    }
+
+    private static DatabaseDialect probeDialect(String blockingSql) {
+        return new DefaultDialect() {
+            @Override
+            public String activeSessionsSql() {
+                return "SELECT id AS session_id, name AS \"session_user\" FROM sessions_probe";
+            }
+
+            @Override
+            public String blockingSessionsSql() {
+                return blockingSql;
+            }
+        };
+    }
+
+    private static String probeDatabase() throws Exception {
+        String url = "jdbc:h2:mem:sess-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (var connection = DriverManager.getConnection(url, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE sessions_probe(id VARCHAR(10), name VARCHAR(20))");
+            statement.execute("INSERT INTO sessions_probe VALUES ('7','app'), ('9','batch'), ('11','report')");
+            statement.execute("CREATE TABLE blocks_probe(blocked VARCHAR(10), blocking VARCHAR(10), obj VARCHAR(40), secs INT, sql_text VARCHAR(200))");
+            statement.execute("INSERT INTO blocks_probe VALUES ('9','7','shop.orders',30,'UPDATE orders SET ...'),"
+                    + " ('11','9','shop.orders',12,'DELETE FROM orders ...'), ('7','7','self',1,'x'), (NULL,'7','missing',1,'x')");
+        }
+        return url;
+    }
+
+    private static final String BLOCKS_SQL =
+            "SELECT blocked AS blocked_session_id, blocking AS blocking_session_id,"
+                    + " obj AS wait_object, secs AS wait_seconds, sql_text AS blocked_sql FROM blocks_probe";
+
+    /** 会话列表能让人杀掉一个会话，阻塞关系才说得出该杀哪一个。 */
+    @Test
+    void readsBlockingEdgesAlongsideTheSessionList() throws Exception {
+        DatabaseSessionPage page = serviceWith(probeDialect(BLOCKS_SQL), probeDatabase()).list(1L);
+
+        assertThat(page.blockingSupported()).isTrue();
+        assertThat(page.blockingMessage()).isNull();
+        assertThat(page.blocks()).extracting("blockedSessionId", "blockingSessionId")
+                .containsExactly(tuple("9", "7"), tuple("11", "9"));
+        assertThat(page.blocks().get(0).waitObject()).isEqualTo("shop.orders");
+        assertThat(page.blocks().get(0).waitSeconds()).isEqualTo(30L);
+    }
+
+    /** 自环和缺一头的边都拼不进树，留着只会变成孤立节点。 */
+    @Test
+    void dropsEdgesThatCannotBeJoinedIntoATree() throws Exception {
+        DatabaseSessionPage page = serviceWith(probeDialect(BLOCKS_SQL), probeDatabase()).list(1L);
+
+        assertThat(page.blocks()).hasSize(2);
+        assertThat(page.blocks()).noneMatch(block -> block.blockedSessionId().equals(block.blockingSessionId()));
+    }
+
+    /**
+     * 阻塞关系读不到，不该把整个会话面板变成一条错误。
+     *
+     * <p>「会话读得到、阻塞关系读不到」是很常见的组合：缺 PROCESS 权限，或这个版本压根没有
+     * 那张系统视图。两件事共用一条 message 会让人以为整个面板都坏了。</p>
+     */
+    @Test
+    void aFailedBlockingQueryDoesNotHideTheSessions() throws Exception {
+        DatabaseSessionPage page = serviceWith(
+                probeDialect("SELECT * FROM sys.innodb_lock_waits"), probeDatabase()).list(1L);
+
+        assertThat(page.sessions()).hasSize(3);
+        assertThat(page.message()).isNull();
+        assertThat(page.blockingSupported()).isTrue();
+        assertThat(page.blockingMessage()).contains("权限");
+    }
+
+    @Test
+    void saysSoWhenTheDialectHasNoBlockingQueryAtAll() throws Exception {
+        DatabaseSessionPage page = serviceWith(probeDialect(null), probeDatabase()).list(1L);
+
+        assertThat(page.sessions()).hasSize(3);
+        assertThat(page.blockingSupported()).isFalse();
+        assertThat(page.blockingMessage()).contains("暂不支持");
     }
 
     @Test

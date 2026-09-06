@@ -1381,6 +1381,57 @@ body.is-resizing-column * {
   font-size: var(--text-sm);
 }
 
+/* 锁等待。等待链是排查时第一眼要看的东西，所以它排在会话列表之前，并且自成一块。 */
+.session-blocking {
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+}
+
+.session-blocking-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.session-block-tree {
+  display: grid;
+  gap: 6px;
+  margin-top: var(--space-2);
+}
+
+.session-block-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* 链的根就是「该终止哪一个」的答案，要比下游的等待者更显眼。 */
+.session-block-row.is-root {
+  border-left: 3px solid var(--warning);
+}
+
+/* 缩进表达「谁在等谁」，左侧那条线让层级在多层链上仍然读得出来。 */
+.session-block-children {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding-left: var(--space-3);
+  border-left: 1px dashed var(--border);
+}
+
+.session-block-node > .session-item-sql {
+  margin-top: 6px;
+}
+
 .audit-filters {
   display: flex;
   flex-direction: column;

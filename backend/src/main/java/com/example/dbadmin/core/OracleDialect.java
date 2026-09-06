@@ -168,6 +168,28 @@ public class OracleDialect extends DefaultDialect {
                 """;
     }
 
+    /**
+     * 谁在等谁。
+     *
+     * <p>{@code V$SESSION.BLOCKING_SESSION} 直接给出直接阻塞者，不必自己去 {@code V$LOCK} 里
+     * 配对。{@code BLOCKING_SESSION_STATUS = 'VALID'} 这个条件不能省：它还有 UNKNOWN 与
+     * NO HOLDER 这些取值，那时 BLOCKING_SESSION 里的数字不是一个真会话号。</p>
+     *
+     * <p>会话号用 SID，与 {@link #activeSessionsSql()} 保持同一套编号。</p>
+     */
+    @Override
+    public String blockingSessionsSql() {
+        return """
+                SELECT s.SID AS blocked_session_id, s.BLOCKING_SESSION AS blocking_session_id,
+                       o.OWNER || '.' || o.OBJECT_NAME AS wait_object,
+                       s.SECONDS_IN_WAIT AS wait_seconds, q.SQL_TEXT AS blocked_sql
+                FROM V$SESSION s
+                LEFT JOIN ALL_OBJECTS o ON o.OBJECT_ID = s.ROW_WAIT_OBJ#
+                LEFT JOIN V$SQL q ON q.SQL_ID = s.SQL_ID
+                WHERE s.BLOCKING_SESSION IS NOT NULL AND s.BLOCKING_SESSION_STATUS = 'VALID'
+                """;
+    }
+
     @Override
     public boolean supportsKillSession() {
         return true;

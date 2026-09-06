@@ -107,6 +107,27 @@ public class PostgreSqlDialect extends DefaultDialect {
                 """;
     }
 
+    /**
+     * 谁在等谁。
+     *
+     * <p>{@code pg_blocking_pids()} 一次就把整条等待链上的直接阻塞者算好了，比自己 join
+     * {@code pg_locks} 可靠得多（同一把锁在不同锁级别下的匹配规则很容易写错）。它对每一行都要
+     * 扫锁表，所以先用 {@code wait_event_type = 'Lock'} 把范围收到真正在等锁的那几条会话上 ——
+     * 这也是 PostgreSQL 文档给的用法。</p>
+     */
+    @Override
+    public String blockingSessionsSql() {
+        return """
+                SELECT blocked.pid AS blocked_session_id, blocking.pid AS blocking_session_id,
+                       blocked.wait_event_type || COALESCE(':' || blocked.wait_event, '') AS wait_object,
+                       EXTRACT(EPOCH FROM (now() - blocked.query_start))::bigint AS wait_seconds,
+                       blocked.query AS blocked_sql
+                FROM pg_stat_activity blocked
+                CROSS JOIN LATERAL unnest(pg_blocking_pids(blocked.pid)) AS blocking(pid)
+                WHERE blocked.wait_event_type = 'Lock'
+                """;
+    }
+
     @Override
     public boolean supportsKillSession() {
         return true;

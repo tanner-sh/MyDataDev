@@ -1,12 +1,16 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty } from './PanelState';
 import { Alert, Button, Modal, Space, Spin, Switch, Tag, Tooltip, Typography } from 'antd';
-import { ReloadOutlined, StopOutlined } from '@ant-design/icons';
+import { LockOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
 import { localizeError } from '../utils';
 import { productionConfirmationHeaders } from '../productionConfirmation';
 import {
+  analyzeBlocking,
+  blockedCountLabel,
+  blockingHighlights,
+  blockingSummary,
   canKillSession,
   filterRunningSessions,
   isIdle,
@@ -16,6 +20,7 @@ import {
   sessionLabel,
   sessionSummary,
   SESSION_POLL_INTERVAL_MS,
+  type BlockingNode,
   type DatabaseSession,
   type DatabaseSessionPage
 } from '../databaseSessions';
@@ -96,6 +101,59 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
   }
 
   const sessions = filterRunningSessions(orderSessions(page?.sessions || []), runningOnly);
+  // 阻塞关系是排查锁等待时唯一真正要看的东西，所以它算在 page 变化上而不是跟着筛选走。
+  const blocking = useMemo(
+    () => analyzeBlocking({ blocks: page?.blocks || [], sessions: page?.sessions || [] }),
+    [page]
+  );
+  const highlights = useMemo(() => blockingHighlights(page?.blocks || []), [page]);
+
+  /**
+   * 等待链。
+   *
+   * <p>自绘嵌套结构而不是引 Tree 组件：这里要展示的是「根在哪、它堵住了几个」，节点内容是
+   * 会话卡片而不是一行文字，套用树组件反而要跟它的渲染约定较劲。</p>
+   */
+  function renderNode(node: BlockingNode, depth: number) {
+    const killable = page && canKillSession(page, { sessionId: node.sessionId });
+    return (
+      <div className="session-block-node" key={`${depth}-${node.sessionId}`}>
+        <div className={`session-block-row${depth === 0 ? ' is-root' : ''}`}>
+          <Space size={6} wrap>
+            {depth === 0 ? <Tag color="red">源头</Tag> : <Tag>等待中</Tag>}
+            <Text strong>#{node.sessionId}</Text>
+            {node.session && <Text type="secondary">{sessionLabel(node.session)}</Text>}
+            {!node.session && (
+              <Tooltip title="这个会话不在上面的列表里：列表有条数上限，账号权限也可能只让人看到自己的会话">
+                <Tag color="default">不在列表中</Tag>
+              </Tooltip>
+            )}
+            {node.waitObject && <Tag color="orange">等 {node.waitObject}</Tag>}
+            {node.waitSeconds != null && <Tag>{sessionDurationLabel({ durationSeconds: node.waitSeconds, sql: 'waiting' })}</Tag>}
+            {blockedCountLabel(node) && <Tag color="volcano">{blockedCountLabel(node)}</Tag>}
+            {blocking.cycleSessionIds.includes(node.sessionId) && <Tag color="red">互相等待</Tag>}
+          </Space>
+          {depth === 0 && killable && (
+            <Tooltip title="终止这个源头会话，它下游等待的会话就能继续">
+              <Button
+                size="small"
+                danger
+                type="text"
+                icon={<StopOutlined />}
+                onClick={() => setPendingKill(node.session || { sessionId: node.sessionId })}
+              >
+                终止
+              </Button>
+            </Tooltip>
+          )}
+        </div>
+        {node.blockedSql && <pre className="session-item-sql">{node.blockedSql}</pre>}
+        {node.children.length > 0 && (
+          <div className="session-block-children">{node.children.map((child) => renderNode(child, depth + 1))}</div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="management-section">
@@ -121,6 +179,23 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
       {page && !page.supported && <Alert className="session-alert" type="info" showIcon title={sessionSummary(page)} />}
       {page?.supported && page.message && <Alert className="session-alert" type="warning" showIcon title={page.message} />}
 
+      {page?.supported && (
+        <section className="session-blocking">
+          <header className="session-blocking-header">
+            <Space size={6}>
+              <LockOutlined />
+              <Text strong>锁等待</Text>
+            </Space>
+            <Text type={blocking.cycleSessionIds.length > 0 ? 'danger' : 'secondary'}>
+              {blockingSummary(page, blocking)}
+            </Text>
+          </header>
+          {blocking.trees.length > 0 && (
+            <div className="session-block-tree">{blocking.trees.map((tree) => renderNode(tree, 0))}</div>
+          )}
+        </section>
+      )}
+
       {!page && loading ? (
         <div className="session-loading"><Spin size="small" /> <Text type="secondary">正在读取活动会话…</Text></div>
       ) : sessions.length === 0 ? (
@@ -143,6 +218,12 @@ export const SessionPanel = memo(function SessionPanel({ open, connectionId, con
                     {session.database && <Tag color="blue">{session.database}</Tag>}
                     {session.state && <Tag color={isIdle(session) ? undefined : 'green'}>{session.state}</Tag>}
                     <Tag color={isLongRunning(session) ? 'warning' : undefined}>{sessionDurationLabel(session)}</Tag>
+                    {session.sessionId && highlights.blocking.has(session.sessionId) && (
+                      <Tooltip title="其他会话正在等它释放锁"><Tag color="volcano">阻塞他人</Tag></Tooltip>
+                    )}
+                    {session.sessionId && highlights.blocked.has(session.sessionId) && (
+                      <Tooltip title="它正在等别的会话释放锁"><Tag color="orange">等待锁</Tag></Tooltip>
+                    )}
                   </Space>
                   {canKillSession(page!, session) && (
                     <Tooltip title="终止该会话">

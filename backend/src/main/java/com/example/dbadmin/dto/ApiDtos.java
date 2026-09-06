@@ -1006,15 +1006,42 @@ public final class ApiDtos {
     ) {
     }
 
-    /** {@code supported} 区分「方言不支持」与「支持但这次读失败」，界面文案不同。 */
+    /**
+     * 一条阻塞关系：{@code blockedSessionId} 在等 {@code blockingSessionId}。
+     *
+     * <p>两个会话号与 {@link DatabaseSession#sessionId()} 是同一套编号，界面据此把等待链拼成树。</p>
+     */
+    public record SessionBlock(
+            String blockedSessionId,
+            String blockingSessionId,
+            String waitObject,
+            Long waitSeconds,
+            String blockedSql
+    ) {
+    }
+
+    /**
+     * {@code supported} 区分「方言不支持」与「支持但这次读失败」，界面文案不同。
+     *
+     * <p>阻塞关系单独一组标记：会话能读到、阻塞关系读不到（权限或版本）是很常见的组合，
+     * 两件事共用一个 message 会让人以为整个面板都坏了。</p>
+     */
     public record DatabaseSessionPage(
             boolean supported,
             boolean canKill,
             List<DatabaseSession> sessions,
-            String message
+            String message,
+            boolean blockingSupported,
+            List<SessionBlock> blocks,
+            String blockingMessage
     ) {
         public DatabaseSessionPage {
             sessions = sessions == null ? List.of() : List.copyOf(sessions);
+            blocks = blocks == null ? List.of() : List.copyOf(blocks);
+        }
+
+        public DatabaseSessionPage(boolean supported, boolean canKill, List<DatabaseSession> sessions, String message) {
+            this(supported, canKill, sessions, message, false, List.of(), null);
         }
     }
 

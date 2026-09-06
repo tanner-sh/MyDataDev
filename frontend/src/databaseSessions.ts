@@ -16,11 +16,25 @@ export type DatabaseSession = {
   sql?: string | null;
 };
 
+/** 一条阻塞关系：blockedSessionId 在等 blockingSessionId。 */
+export type SessionBlock = {
+  blockedSessionId: string;
+  blockingSessionId: string;
+  waitObject?: string | null;
+  waitSeconds?: number | null;
+  blockedSql?: string | null;
+};
+
 export type DatabaseSessionPage = {
   supported: boolean;
   canKill: boolean;
   sessions: DatabaseSession[];
   message?: string | null;
+  /** 这个数据库类型能不能查阻塞关系。 */
+  blockingSupported: boolean;
+  blocks: SessionBlock[];
+  /** 不支持、或这次读失败的原因；与 message 分开，因为「会话读得到、阻塞读不到」很常见。 */
+  blockingMessage?: string | null;
 };
 
 export const SESSION_POLL_INTERVAL_MS = 5_000;
@@ -101,4 +115,153 @@ export function sessionSummary(page: DatabaseSessionPage): string {
 /** 「只看执行中」时留下的会话。 */
 export function filterRunningSessions(sessions: DatabaseSession[], runningOnly: boolean): DatabaseSession[] {
   return runningOnly ? sessions.filter((session) => !isIdle(session)) : sessions;
+}
+
+/**
+ * 等待链上的一个节点。
+ *
+ * <p>{@link BlockingNode.session} 可能是空的：阻塞者有时不在会话列表里（列表有条数上限，
+ * 权限也可能只让人看到自己的会话）。这种情况要如实显示成一个只有会话号的节点，而不是把
+ * 整条链丢掉 —— 链的根正是最该被看到的那一个。</p>
+ */
+export type BlockingNode = {
+  sessionId: string;
+  session?: DatabaseSession;
+  /** 这个会话在等什么（只有被阻塞的节点才有）。 */
+  waitObject?: string | null;
+  waitSeconds?: number | null;
+  blockedSql?: string | null;
+  children: BlockingNode[];
+  /** 这个节点下游一共堵住了多少个会话（含间接）。根节点的这个数就是「杀了它能放开几个」。 */
+  blockedCount: number;
+};
+
+export type BlockingAnalysis = {
+  trees: BlockingNode[];
+  /** 处在互相等待环里的会话号。非空说明这不是一条链，而是一个环 —— 通常就是死锁。 */
+  cycleSessionIds: string[];
+  /** 被阻塞的会话总数。 */
+  blockedSessions: number;
+};
+
+export const EMPTY_BLOCKING_ANALYSIS: BlockingAnalysis = { trees: [], cycleSessionIds: [], blockedSessions: 0 };
+
+/**
+ * 把「谁在等谁」的边拼成等待链。
+ *
+ * <p>会话列表能让人杀掉一个会话，却说不出该杀哪一个。真正要回答的是「链的根在哪」——
+ * 所以每个节点都带上它下游堵了多少个会话，根节点那个数就是终止它能放开的会话数。</p>
+ *
+ * <p>必须挡住环：互相等待时递归下去会无限展开。环上的会话号单独报出来，因为那已经不是
+ * 「谁堵了谁」而是死锁，处理方式完全不同。</p>
+ */
+export function analyzeBlocking(page: Pick<DatabaseSessionPage, 'blocks' | 'sessions'>): BlockingAnalysis {
+  const blocks = page.blocks || [];
+  if (blocks.length === 0) return EMPTY_BLOCKING_ANALYSIS;
+
+  const sessionsById = new Map<string, DatabaseSession>();
+  for (const session of page.sessions || []) {
+    if (session.sessionId) sessionsById.set(session.sessionId, session);
+  }
+  const children = new Map<string, SessionBlock[]>();
+  const blockedIds = new Set<string>();
+  const blockerIds = new Set<string>();
+  for (const block of blocks) {
+    const list = children.get(block.blockingSessionId);
+    if (list) list.push(block);
+    else children.set(block.blockingSessionId, [block]);
+    blockedIds.add(block.blockedSessionId);
+    blockerIds.add(block.blockingSessionId);
+  }
+
+  const cycleSessionIds = findCycleMembers(children);
+  // 根是「堵着别人、自己却没在等谁」的会话。全都在等（互相等待）时一个根都找不到 ——
+  // 那时拿环上的会话当入口，否则整棵树连一个节点都显示不出来。
+  let roots = [...blockerIds].filter((id) => !blockedIds.has(id));
+  if (roots.length === 0) roots = cycleSessionIds.slice(0, 1);
+
+  const trees = roots.map((id) => buildNode(id, undefined, children, sessionsById, new Set()));
+  return { trees, cycleSessionIds, blockedSessions: blockedIds.size };
+}
+
+function buildNode(
+  sessionId: string,
+  edge: SessionBlock | undefined,
+  children: Map<string, SessionBlock[]>,
+  sessionsById: Map<string, DatabaseSession>,
+  path: Set<string>
+): BlockingNode {
+  const node: BlockingNode = {
+    sessionId,
+    session: sessionsById.get(sessionId),
+    waitObject: edge?.waitObject,
+    waitSeconds: edge?.waitSeconds,
+    blockedSql: edge?.blockedSql,
+    children: [],
+    blockedCount: 0
+  };
+  // 已经在当前路径上出现过就停：再展开一层就是无限递归。
+  if (path.has(sessionId)) return node;
+  const nextPath = new Set(path).add(sessionId);
+  for (const child of children.get(sessionId) || []) {
+    const built = buildNode(child.blockedSessionId, child, children, sessionsById, nextPath);
+    node.children.push(built);
+    node.blockedCount += 1 + built.blockedCount;
+  }
+  return node;
+}
+
+/** 环上的会话号。用三色 DFS：走到一个仍在栈上的节点，说明从它开始到当前这一段构成环。 */
+function findCycleMembers(children: Map<string, SessionBlock[]>): string[] {
+  const done = new Set<string>();
+  const onStack: string[] = [];
+  const onStackSet = new Set<string>();
+  const members = new Set<string>();
+
+  function visit(id: string) {
+    if (done.has(id)) return;
+    if (onStackSet.has(id)) {
+      for (let index = onStack.lastIndexOf(id); index >= 0 && index < onStack.length; index++) {
+        members.add(onStack[index]);
+      }
+      return;
+    }
+    onStack.push(id);
+    onStackSet.add(id);
+    for (const edge of children.get(id) || []) visit(edge.blockedSessionId);
+    onStack.pop();
+    onStackSet.delete(id);
+    done.add(id);
+  }
+
+  for (const id of children.keys()) visit(id);
+  return [...members];
+}
+
+/** 会话表里要标出来的两组会话号。 */
+export function blockingHighlights(blocks: SessionBlock[]): { blocked: Set<string>; blocking: Set<string> } {
+  return {
+    blocked: new Set(blocks.map((block) => block.blockedSessionId)),
+    blocking: new Set(blocks.map((block) => block.blockingSessionId))
+  };
+}
+
+/**
+ * 阻塞分析那一栏的结论。
+ *
+ * <p>没有阻塞时明确说「没有」，而不是留一片空白 —— 空白会被读成「这个功能没生效」。</p>
+ */
+export function blockingSummary(page: DatabaseSessionPage, analysis: BlockingAnalysis): string {
+  if (!page.blockingSupported) return page.blockingMessage || '当前数据库类型暂不支持阻塞关系分析';
+  if (page.blockingMessage) return page.blockingMessage;
+  if (analysis.blockedSessions === 0) return '没有会话在等待锁';
+  if (analysis.cycleSessionIds.length > 0) {
+    return `${analysis.blockedSessions} 个会话在等待锁，其中 ${analysis.cycleSessionIds.length} 个互相等待（可能是死锁）`;
+  }
+  return `${analysis.blockedSessions} 个会话在等待锁，源头是 ${analysis.trees.length} 个会话`;
+}
+
+/** 根节点上那句「终止它能放开几个」。只对真正堵着别人的节点有意义。 */
+export function blockedCountLabel(node: BlockingNode): string {
+  return node.blockedCount === 0 ? '' : `堵住 ${node.blockedCount} 个会话`;
 }

@@ -37,6 +37,48 @@ class DatabaseSessionCapabilityTest {
     }
 
     /**
+     * 阻塞关系查询必须返回服务端按标签读取的那五列。
+     *
+     * <p>服务端是按列标签取值的（缺哪一列就当 null），所以一个拼错的别名不会报错，只会让
+     * 那一列在界面上永远空着 —— 「谁在等谁」少了任何一头，整条边就拼不进树。逐个方言各写
+     * 一份 SQL，就会逐个漏，所以按方言清单一起过。</p>
+     */
+    @Test
+    void everyBlockingQueryReturnsTheColumnsTheServiceReads() {
+        for (var dialect : java.util.List.of(
+                new MySqlDialect(), new MariaDbDialect(), new PostgreSqlDialect(), new OracleDialect())) {
+            String sql = dialect.blockingSessionsSql();
+            assertThat(sql).as(dialect.getClass().getSimpleName()).isNotBlank();
+            assertThat(sql).as(dialect.getClass().getSimpleName())
+                    .contains("blocked_session_id")
+                    .contains("blocking_session_id")
+                    .contains("wait_object")
+                    .contains("wait_seconds")
+                    .contains("blocked_sql");
+        }
+    }
+
+    /**
+     * 能查阻塞关系的方言必须也能列会话。
+     *
+     * <p>两个会话号要和会话列表拼到一起才有意义；只有边没有会话，界面上就是一堆连用户名
+     * 都显示不出来的孤立节点。</p>
+     */
+    @Test
+    void everyBlockingDialectAlsoListsSessions() {
+        for (var dialect : java.util.List.of(
+                new MySqlDialect(), new MariaDbDialect(), new PostgreSqlDialect(), new OracleDialect())) {
+            assertThat(dialect.activeSessionsSql()).as(dialect.getClass().getSimpleName()).isNotBlank();
+        }
+    }
+
+    /** 不支持的方言返回 null，由界面说明原因，而不是给一条跑不通的语句让驱动报错。 */
+    @Test
+    void dialectsWithoutBlockingSupportReturnNullRatherThanAGuess() {
+        assertThat(new DefaultDialect().blockingSessionsSql()).isNull();
+    }
+
+    /**
      * 每个能列会话的方言都必须把工具自己那条会话排除掉。
      *
      * <p>会话面板每 5 秒自动刷新，不排除的话「正在执行」里永远挂着本查询自身，把真正在跑

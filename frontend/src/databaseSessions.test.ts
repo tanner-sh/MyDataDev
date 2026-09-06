@@ -7,18 +7,24 @@ import {
   isLongRunning,
   LONG_RUNNING_SECONDS,
   orderSessions,
+  analyzeBlocking,
+  blockedCountLabel,
+  blockingHighlights,
+  blockingSummary,
+  EMPTY_BLOCKING_ANALYSIS,
   sessionDurationLabel,
   sessionLabel,
   sessionSummary,
   type DatabaseSession,
-  type DatabaseSessionPage
+  type DatabaseSessionPage,
+  type SessionBlock
 } from './databaseSessions';
 
 const session = (overrides: Partial<DatabaseSession> = {}): DatabaseSession =>
   ({ sessionId: '1', user: 'app', host: '10.0.0.1', sql: 'select 1', durationSeconds: 3, ...overrides });
 
 const page = (overrides: Partial<DatabaseSessionPage> = {}): DatabaseSessionPage =>
-  ({ supported: true, canKill: true, sessions: [], ...overrides });
+  ({ supported: true, canKill: true, sessions: [], blockingSupported: true, blocks: [], ...overrides });
 
 describe('formatSessionDuration', () => {
   it('scales the unit and copes with missing values', () => {
@@ -118,5 +124,122 @@ describe('sessionSummary', () => {
       .toBe('共 2 个会话：1 个正在执行，1 个空闲（多为各客户端连接池常驻的连接）');
     expect(sessionSummary(page({ sessions: [session(), session()] })))
       .toBe('共 2 个会话，全部正在执行');
+  });
+});
+
+describe('analyzeBlocking', () => {
+  const block = (blocked: string, blocking: string, overrides: Partial<SessionBlock> = {}): SessionBlock =>
+    ({ blockedSessionId: blocked, blockingSessionId: blocking, waitObject: 'shop.orders', waitSeconds: 10, ...overrides });
+
+  it('没有阻塞边时不构造任何树', () => {
+    expect(analyzeBlocking({ blocks: [], sessions: [] })).toEqual(EMPTY_BLOCKING_ANALYSIS);
+  });
+
+  /** 「该杀哪一个」的答案就是链的根，所以根必须能被找出来。 */
+  it('把一条等待链拼成从根到叶的树', () => {
+    const analysis = analyzeBlocking({
+      blocks: [block('9', '7'), block('11', '9')],
+      sessions: [session({ sessionId: '7', user: 'batch' })]
+    });
+
+    expect(analysis.trees).toHaveLength(1);
+    expect(analysis.trees[0].sessionId).toBe('7');
+    expect(analysis.trees[0].session?.user).toBe('batch');
+    expect(analysis.trees[0].children.map((child) => child.sessionId)).toEqual(['9']);
+    expect(analysis.trees[0].children[0].children.map((child) => child.sessionId)).toEqual(['11']);
+    expect(analysis.blockedSessions).toBe(2);
+  });
+
+  /** 根节点上那个数就是「终止它能放开几个会话」，间接的也要算进来。 */
+  it('每个节点带上下游被堵的会话总数（含间接）', () => {
+    const analysis = analyzeBlocking({ blocks: [block('9', '7'), block('11', '9'), block('12', '7')], sessions: [] });
+
+    expect(analysis.trees[0].blockedCount).toBe(3);
+    expect(blockedCountLabel(analysis.trees[0])).toBe('堵住 3 个会话');
+    expect(blockedCountLabel(analysis.trees[0].children[1])).toBe('');
+  });
+
+  /** 阻塞者常常不在会话列表里（列表有条数上限，权限也可能只让人看到自己的会话）。 */
+  it('阻塞者不在会话列表里时保留节点而不是丢掉整条链', () => {
+    const analysis = analyzeBlocking({ blocks: [block('9', '7')], sessions: [session({ sessionId: '9' })] });
+
+    expect(analysis.trees[0].sessionId).toBe('7');
+    expect(analysis.trees[0].session).toBeUndefined();
+    expect(analysis.trees[0].children[0].session?.sessionId).toBe('9');
+  });
+
+  /** 被阻塞节点上挂的是它自己在等什么，不是阻塞者的。 */
+  it('等待对象与等待时长挂在被阻塞的那个节点上', () => {
+    const analysis = analyzeBlocking({
+      blocks: [block('9', '7', { waitObject: 'shop.items', waitSeconds: 42, blockedSql: 'UPDATE items' })],
+      sessions: []
+    });
+
+    expect(analysis.trees[0].waitObject).toBeUndefined();
+    expect(analysis.trees[0].children[0]).toMatchObject({
+      waitObject: 'shop.items', waitSeconds: 42, blockedSql: 'UPDATE items'
+    });
+  });
+
+  /**
+   * 互相等待时一个根都找不到，而递归展开会无限下去。
+   *
+   * <p>这已经不是「谁堵了谁」而是死锁，处理方式完全不同，所以环上的会话要单独报出来。</p>
+   */
+  it('挡住互相等待的环并把环上的会话报出来', () => {
+    const analysis = analyzeBlocking({ blocks: [block('7', '9'), block('9', '7')], sessions: [] });
+
+    expect(analysis.cycleSessionIds.sort()).toEqual(['7', '9']);
+    expect(analysis.trees).toHaveLength(1);
+    // 展开到重复出现的那一层就停，不再往下。
+    expect(analysis.trees[0].children[0].children[0].children).toEqual([]);
+  });
+
+  it('一个会话被多个会话同时阻塞时挂在每个阻塞者下面', () => {
+    const analysis = analyzeBlocking({ blocks: [block('11', '7'), block('11', '9')], sessions: [] });
+
+    expect(analysis.trees.map((tree) => tree.sessionId).sort()).toEqual(['7', '9']);
+    expect(analysis.blockedSessions).toBe(1);
+  });
+});
+
+describe('blockingSummary', () => {
+  it('方言不支持时说明原因', () => {
+    expect(blockingSummary(page({ blockingSupported: false, blockingMessage: '暂不支持' }), EMPTY_BLOCKING_ANALYSIS))
+      .toBe('暂不支持');
+  });
+
+  /** 留一片空白会被读成「这个功能没生效」。 */
+  it('没有阻塞时明确说没有', () => {
+    expect(blockingSummary(page(), EMPTY_BLOCKING_ANALYSIS)).toBe('没有会话在等待锁');
+  });
+
+  it('有阻塞时给出被堵数量和源头数量', () => {
+    const analysis = analyzeBlocking({
+      blocks: [{ blockedSessionId: '9', blockingSessionId: '7' }],
+      sessions: []
+    });
+    expect(blockingSummary(page(), analysis)).toBe('1 个会话在等待锁，源头是 1 个会话');
+  });
+
+  it('检测到环时把死锁这件事说出来', () => {
+    const analysis = analyzeBlocking({
+      blocks: [{ blockedSessionId: '7', blockingSessionId: '9' }, { blockedSessionId: '9', blockingSessionId: '7' }],
+      sessions: []
+    });
+    expect(blockingSummary(page(), analysis)).toContain('可能是死锁');
+  });
+
+  it('读取失败时优先显示失败原因', () => {
+    expect(blockingSummary(page({ blockingMessage: '读取阻塞关系失败：权限不足' }), EMPTY_BLOCKING_ANALYSIS))
+      .toContain('权限不足');
+  });
+});
+
+describe('blockingHighlights', () => {
+  it('分别给出被堵与堵人的会话号，供会话表打标', () => {
+    const highlights = blockingHighlights([{ blockedSessionId: '9', blockingSessionId: '7' }]);
+    expect([...highlights.blocked]).toEqual(['9']);
+    expect([...highlights.blocking]).toEqual(['7']);
   });
 });

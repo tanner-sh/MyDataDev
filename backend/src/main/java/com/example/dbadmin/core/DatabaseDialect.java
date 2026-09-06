@@ -182,6 +182,21 @@ public interface DatabaseDialect {
      * SQL 错误。语句必须返回 sessionId / user / host / database / state / command /
      * durationSeconds / sql 这几列（缺的用 NULL 占位），由 SessionService 统一读取。</p>
      */
+    /**
+     * 会话之间的阻塞关系：谁在等谁。
+     *
+     * <p>会话列表能让人杀掉一个会话，却说不出该杀哪一个 —— 中间这一步才是排查锁等待时真正
+     * 要的东西。返回 {@code null} 表示该方言暂不支持，界面据此说明原因而不是报 SQL 错误。</p>
+     *
+     * <p>语句必须返回 blocked_session_id / blocking_session_id / wait_object / wait_seconds /
+     * blocked_sql 这几列（缺的用 NULL 占位）。<b>两个 session id 必须与
+     * {@link #activeSessionsSql()} 的 session_id 是同一套编号</b>，否则阻塞关系和会话列表拼
+     * 不到一起，界面上会出现一堆连用户名都显示不出来的孤立节点。</p>
+     */
+    default String blockingSessionsSql() {
+        return null;
+    }
+
     default String activeSessionsSql() {
         return null;
     }

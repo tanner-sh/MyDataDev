@@ -225,6 +225,24 @@ public class MySqlDialect extends DefaultDialect {
                 """;
     }
 
+    /**
+     * InnoDB 的锁等待。
+     *
+     * <p>用 {@code sys.innodb_lock_waits} 而不是直接拼 {@code performance_schema.data_lock_waits}
+     * 与 {@code information_schema.innodb_trx}：那三张表要join 才拿得到线程号，而 sys 的这个视图
+     * 已经把 waiting_pid / blocking_pid 算好了，两个 pid 正好就是 PROCESSLIST.ID —— 与
+     * {@link #activeSessionsSql()} 的 session_id 同一套编号。</p>
+     */
+    @Override
+    public String blockingSessionsSql() {
+        return """
+                SELECT waiting_pid AS blocked_session_id, blocking_pid AS blocking_session_id,
+                       locked_table AS wait_object, wait_age_secs AS wait_seconds,
+                       waiting_query AS blocked_sql
+                FROM sys.innodb_lock_waits
+                """;
+    }
+
     @Override
     public boolean supportsKillSession() {
         return true;
