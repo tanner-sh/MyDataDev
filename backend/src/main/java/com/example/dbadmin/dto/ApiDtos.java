@@ -788,6 +788,63 @@ public final class ApiDtos {
     }
 
     /**
+     * 一次全库数据检索。
+     *
+     * <p>{@code mode} 取 {@code CONTAINS}（默认）或 {@code EQUALS}；比较一律先把列转成文本，
+     * 与结果表格的筛选同一套语义。三个上限都可以调，但都有硬顶：一次全库扫描的边界必须说得清。</p>
+     */
+    public record DataSearchRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 200) String keyword,
+            @Size(max = 20) String mode,
+            Integer maxTables,
+            Integer rowsPerTable,
+            Integer budgetSeconds
+    ) {
+    }
+
+    /** 一张表里命中的一列。{@code rows} 是样本内的命中行数，不是全表的。 */
+    public record DataSearchColumnHit(String column, int rows, String sample) {
+    }
+
+    /**
+     * 一张命中表。
+     *
+     * @param matchedRows 取回的样本行数
+     * @param truncated   样本之外还有更多命中行
+     * @param sql         这次命中所对应的查询，可直接送进 SQL 工作台复现
+     */
+    public record DataSearchTableHit(
+            String schemaName,
+            String tableName,
+            int matchedRows,
+            boolean truncated,
+            List<DataSearchColumnHit> columns,
+            String sql
+    ) {
+    }
+
+    /**
+     * 检索结果。
+     *
+     * <p>{@code complete} 与 {@code stopReason} 是这个响应里最重要的两个字段：把「扫了 40 张表
+     * 就没时间了」报告成「全库只有这些」，会让人放心地得出错误结论。</p>
+     */
+    public record DataSearchResponse(
+            String keyword,
+            String schemaName,
+            int scannedTables,
+            int totalTables,
+            int matchedTables,
+            boolean complete,
+            String stopReason,
+            List<DataSearchTableHit> tables,
+            List<String> warnings
+    ) {
+    }
+
+    /**
      * 一次跨连接数据传输。
      *
      * <p>源端二选一：给 {@code sourceSql} 就按这条查询取数（列名对不上目标表时在里面写 AS

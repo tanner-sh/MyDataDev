@@ -5,12 +5,15 @@ import com.example.dbadmin.access.ConnectionPermission;
 import com.example.dbadmin.dto.ApiDtos.DataCommitResponse;
 import com.example.dbadmin.dto.ApiDtos.DataTransferRequest;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewRequest;
+import com.example.dbadmin.dto.ApiDtos.DataSearchRequest;
+import com.example.dbadmin.dto.ApiDtos.DataSearchResponse;
 import com.example.dbadmin.dto.ApiDtos.DataPreviewResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataRequest;
 import com.example.dbadmin.dto.ApiDtos.TableExportRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
 import com.example.dbadmin.service.DataEditService;
+import com.example.dbadmin.service.DataSearchService;
 import com.example.dbadmin.service.DataTransferService;
 import com.example.dbadmin.service.ExportService;
 import org.springframework.http.HttpHeaders;
@@ -26,15 +29,17 @@ public class DataController {
     private final DataEditService service;
     private final ExportService exportService;
     private final DataTransferService transferService;
+    private final DataSearchService searchService;
     private final ConnectionAccessService access;
     private final AuditRepository audit;
 
     public DataController(DataEditService service, ExportService exportService,
-                          DataTransferService transferService,
+                          DataTransferService transferService, DataSearchService searchService,
                           ConnectionAccessService access, AuditRepository audit) {
         this.service = service;
         this.exportService = exportService;
         this.transferService = transferService;
+        this.searchService = searchService;
         this.access = access;
         this.audit = audit;
     }
@@ -122,6 +127,22 @@ public class DataController {
         access.require(request.targetConnectionId(), ConnectionPermission.DATA_WRITE);
         return ResponseEntity.accepted().body(
                 transferService.prepare(request, actor, productionConfirmation));
+    }
+
+    /**
+     * 在一个 Schema 的所有表里找一个值。
+     *
+     * <p>只读，但要 QUERY 权限而不只是 VIEW_METADATA —— 它读的是业务数据本身。生产连接上还要
+     * 二次确认：几百张表各跑一条整表扫描，和「打开一张表看看」不是一回事。</p>
+     */
+    @PostMapping("/search")
+    public DataSearchResponse search(
+            @Valid @RequestBody DataSearchRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
+        return searchService.search(request, actor, productionConfirmation);
     }
 
     @PostMapping("/preview")

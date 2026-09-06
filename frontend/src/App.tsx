@@ -125,6 +125,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPanel').then((module) => ({ default: module.ScheduledExportPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
+const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
 const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
@@ -3584,6 +3585,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <DataDiffPanel
                     connections={connections}
                     defaultConnectionId={selected?.id}
+                    onOpenInSqlTab={openSchemaDiffScript}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'data-search' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>全库数据检索</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载数据检索…" />}>
+                  <DataSearchPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    defaultSchema={activeSqlSchema}
+                    onRequestConfirmation={productionConfirmation.requestConfirmation}
                     onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>

@@ -6,7 +6,7 @@ import type { ConnectionPermission } from './accessControl';
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'data-diff' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
+export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
 
 export type ManagementSectionMeta = {
   key: ManagementSection;
@@ -27,6 +27,8 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'schema-diff', label: '结构对比' },
   // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
   { key: 'data-diff', label: '数据对比', requiresPermission: 'QUERY' },
+  // 检索读的是业务数据本身，所以要 QUERY 而不是 VIEW_METADATA。
+  { key: 'data-search', label: '数据检索', requiresPermission: 'QUERY' },
   // 传输把数据搬出源连接，与导出同档。两端的真正授权在服务端逐条连接校验（源端 EXPORT +
   // QUERY、目标端 DATA_WRITE）—— 这里只是入口的可见性，因为面板里选的连接未必是当前选中的这条。
   { key: 'data-transfer', label: '数据传输', requiresPermission: 'EXPORT' },

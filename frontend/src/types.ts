@@ -688,6 +688,42 @@ export type SchemaDiffResponse = {
 
 /** 数据对比：差异方向同样以源端为准。 */
 export type DataDiffChange = 'ONLY_IN_SOURCE' | 'ONLY_IN_TARGET' | 'DIFFERENT';
+export type DataSearchRequest = {
+  connectionId: number;
+  schemaName?: string;
+  keyword: string;
+  /** CONTAINS（默认）或 EQUALS。比较一律先把列转成文本，与结果表格的筛选同一套语义。 */
+  mode: 'CONTAINS' | 'EQUALS';
+  maxTables?: number;
+  rowsPerTable?: number;
+  budgetSeconds?: number;
+};
+/** 一列上的命中；rows 是样本内的命中行数，不是全表的。 */
+export type DataSearchColumnHit = { column: string; rows: number; sample: string };
+export type DataSearchTableHit = {
+  schemaName?: string;
+  tableName: string;
+  /** 取回的样本行数。 */
+  matchedRows: number;
+  /** 样本之外还有更多命中行。 */
+  truncated: boolean;
+  columns: DataSearchColumnHit[];
+  /** 这次命中对应的查询，可直接送进 SQL 工作台复现。 */
+  sql: string;
+};
+export type DataSearchResponse = {
+  keyword: string;
+  schemaName?: string;
+  scannedTables: number;
+  totalTables: number;
+  matchedTables: number;
+  /** 扫描是否跑完。为 false 时 stopReason 说明卡在哪一条上限上。 */
+  complete: boolean;
+  stopReason?: string;
+  tables: DataSearchTableHit[];
+  warnings: string[];
+};
+
 export type DataDiffRequest = {
   sourceConnectionId: number;
   sourceSchema?: string;

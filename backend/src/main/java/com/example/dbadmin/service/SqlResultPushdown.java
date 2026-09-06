@@ -82,7 +82,7 @@ public final class SqlResultPushdown {
             String quoted = dialect.quoteIdentifier(requireColumn(filter.column()));
             // 转成文本再比：数字列、时间列、布尔列都能用同一套「包含 / 等于 / 为空」语义，
             // 和用户此前在前端看到的行为一致。COALESCE 让 NULL 与空串同样落进「为空」。
-            String text = "LOWER(COALESCE(" + dialect.castToText(quoted) + ", ''))";
+            String text = textExpression(dialect, quoted);
             if (!where.isEmpty()) where.append(" AND ");
             where.append(condition(filter, text, parameters));
         }
@@ -115,6 +115,19 @@ public final class SqlResultPushdown {
     private static String bind(String fragment, String value, List<Object> parameters) {
         parameters.add(value);
         return fragment;
+    }
+
+    /**
+     * 一列拿来做文本比较时的表达式。
+     *
+     * <p>转成文本再比：数字列、时间列、布尔列都能用同一套「包含 / 等于 / 为空」语义，和用户
+     * 在前端看到的行为一致。{@code COALESCE} 让 NULL 与空串同样落进「为空」。</p>
+     *
+     * <p>全库数据检索用的是同一个表达式 —— 「搜到了」和「筛出来」必须是同一件事，否则用户
+     * 从检索结果点进表里会发现筛不出刚才那一行。</p>
+     */
+    static String textExpression(DatabaseDialect dialect, String quotedColumn) {
+        return "LOWER(COALESCE(" + dialect.castToText(quotedColumn) + ", ''))";
     }
 
     /** 用户输入的 {@code %} 与 {@code _} 是字面量，不是通配符 —— 前端的「包含」一直是这个语义。 */
