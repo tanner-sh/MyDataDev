@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareResultValues, filterResultRows, isNumericColumnType, matchesResultFilter, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, textUnits } from './resultGridData';
+import { compareResultValues, fillerColumnWidth, suggestedColumnWidth, filterResultRows, isNumericColumnType, matchesResultFilter, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, textUnits } from './resultGridData';
 
 describe('result grid sorting', () => {
   it('sorts numbers, booleans, natural text and null values', () => {
@@ -79,5 +79,42 @@ describe('result grid column widths', () => {
     expect(isNumericColumnType('INTERVAL DAY TO SECOND')).toBe(false);
     expect(isNumericColumnType('VARCHAR')).toBe(false);
     expect(isNumericColumnType(undefined)).toBe(false);
+  });
+});
+
+describe('尾部空白列', () => {
+  it('列宽填不满视口时把余量交给尾列，而不是均摊给每一列', () => {
+    // 三列共 400px、视口 1140px：余下的 700 多不该被摊到 ID 列上去。
+    expect(fillerColumnWidth(400, 1140)).toBe(722);
+  });
+
+  it('内容已经撑满或超出时不要这一列', () => {
+    expect(fillerColumnWidth(1200, 1140)).toBe(0);
+    expect(fillerColumnWidth(1140, 1140)).toBe(0);
+  });
+
+  it('只剩一条缝时不值得多出一列', () => {
+    expect(fillerColumnWidth(1120, 1140)).toBe(0);
+  });
+
+  it('视口还没量出来时按没有处理', () => {
+    expect(fillerColumnWidth(400, undefined)).toBe(0);
+    expect(fillerColumnWidth(400, 0)).toBe(0);
+    expect(fillerColumnWidth(400, Number.NaN)).toBe(0);
+  });
+});
+
+describe('表头控件占的宽度', () => {
+  it('结果表的列宽给排序与筛选按钮留出位置，列名不会被自己的按钮挤没', () => {
+    const customer = { key: 'CUSTOMER', label: 'CUSTOMER', typeName: 'VARCHAR' };
+    // 值只有「客户1」这么短，但列名有 8 个字符，加上两个按钮才是这一列真正需要的宽度。
+    expect(suggestedResultColumnWidth(customer, 0, [['客户1']]))
+      .toBeGreaterThan(suggestedColumnWidth('CUSTOMER', 'VARCHAR', ['客户1']));
+  });
+
+  it('值比列名长得多时，按值定宽，不再额外加表头余量', () => {
+    const note = { key: 'N', label: 'N', typeName: 'VARCHAR' };
+    expect(suggestedResultColumnWidth(note, 0, [['x'.repeat(40)]]))
+      .toBe(suggestedColumnWidth('N', 'VARCHAR', ['x'.repeat(40)]));
   });
 });

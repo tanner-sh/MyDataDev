@@ -709,6 +709,44 @@ try {
     await page.sleep(800);
     check('可以找回关闭的 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
 
+    // 真的执行一条查询。此前整轮冒烟都没让结果区渲染过一行数据 —— 而 SQL 工作台的结果表
+    // 是这个应用最常被看着的一块界面，它坏了会一路坏到导出、图表和结果内编辑。
+    await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.insertText', { text: 'select ID, CUSTOMER, AMOUNT from SMOKE_ORDERS order by ID' });
+    await page.sleep(600);
+    await page.evaluate(`document.querySelector('.sql-execute-button')?.click()`);
+    await page.sleep(2500);
+    const resultGrid = await page.evaluate(`
+      (() => {
+        const grid = document.querySelector('.result-grid .data-grid, .data-grid');
+        if (!grid) return { rendered: false };
+        const headers = [...grid.querySelectorAll('.ant-table-thead th')];
+        const column = headers.find(node => node.textContent.trim() === 'ID');
+        // 列名被自己的排序/筛选按钮挤成「CUSTOM…」是真出现过的：省略发生在标题元素内部，
+        // 只看列宽看不出来，得比 scrollWidth 和 clientWidth。
+        const title = headers
+          .map(node => node.querySelector('.ant-table-column-title'))
+          .find(node => node?.textContent.trim() === 'CUSTOMER');
+        return {
+          rendered: true,
+          // 虚拟表格的行不是 <tr>，是带 ant-table-row 的 div。
+          rows: grid.querySelectorAll('.ant-table-row').length,
+          hasCustomer: grid.textContent.includes('客户1'),
+          // 列宽之和填不满视口时，多余的宽度必须落在尾部空白列上，而不是被均摊进每一列。
+          filler: Boolean(grid.querySelector('.grid-filler-column')),
+          idWidth: column ? Math.round(column.getBoundingClientRect().width) : 0,
+          titleClipped: title ? title.scrollWidth > title.clientWidth + 1 : null
+        };
+      })()
+    `);
+    check('查询结果渲染出数据行', resultGrid.rendered === true && resultGrid.rows > 0 && resultGrid.hasCustomer === true,
+      JSON.stringify(resultGrid));
+    check('结果列宽按内容，多余宽度落在尾部空白列', resultGrid.filler === true && resultGrid.idWidth > 0 && resultGrid.idWidth < 200,
+      JSON.stringify(resultGrid));
+    check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
+    await page.shot('09-查询结果');
 
     // 使用发行包公开接口验证队列、持久化历史与下载，UI 管理入口已经在前面打开检查。
     const post = async (route, body) => {

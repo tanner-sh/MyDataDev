@@ -20,11 +20,16 @@ export function useTableViewportHeight({
 }: TableViewportHeightOptions = {}) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const [scrollY, setScrollY] = useState<number>();
+  // 宽度和高度是同一次测量的产物：列宽之和填不满视口时，多出来的宽度要交给一个空白的
+  // 尾列，否则浏览器会把它均摊给每一列 —— 两位数的 ID 列被拉到 300px，值和值之间隔着
+  // 一大片空白，正是这么来的。
+  const [viewportWidth, setViewportWidth] = useState<number>();
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
     if (!enabled) {
       setScrollY(undefined);
+      setViewportWidth(undefined);
       return;
     }
     if (!viewport || !active) return;
@@ -56,6 +61,7 @@ export function useTableViewportHeight({
         ? headerBounds.height
         : fallbackHeaderHeight;
       setScrollY((current) => nextTableScrollHeight(current, viewportBounds.height, headerHeight, reservedHeight));
+      setViewportWidth(Math.floor(viewportBounds.width));
     };
 
     const scheduleMeasure = () => {
@@ -79,7 +85,7 @@ export function useTableViewportHeight({
     };
   }, [active, enabled, fallbackHeaderHeight, reservedHeight]);
 
-  return { viewportRef, scrollY };
+  return { viewportRef, scrollY, viewportWidth };
 }
 
 export function calculateTableScrollHeight(viewportHeight: number, headerHeight: number, reservedHeight = 0) {

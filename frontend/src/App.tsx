@@ -44,9 +44,8 @@ import {
 import { useBackgroundTasks } from './hooks/useBackgroundTasks';
 import { useSqlHistory } from './hooks/useSqlHistory';
 import {
-  MANAGEMENT_SECTIONS,
+  managementNavigation,
   isManagementSectionAvailable,
-  isManagementSectionVisible,
   managementSectionLabel,
   resolveManagementSection,
   type ManagementSection
@@ -2962,20 +2961,22 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       }
     ];
     // 管理抽屉的每个分区都是一条命令：分区自己已经声明了「要不要连接、要什么权限」，
-    // 这里直接复用那份判断，不要再写一遍。
-    for (const section of MANAGEMENT_SECTIONS) {
-      if (!isManagementSectionVisible(section.key, isCurrentUserAdmin(), isAuthenticationEnabled())) continue;
-      const available = isManagementSectionAvailable(
-        section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
-      actions.push({
-        id: `manage.${section.key}`,
-        // 「打开 AI 助手」而不是「打开AI 助手」：中文与拉丁字母之间要留一个空格。
-        title: `打开${/^[A-Za-z]/.test(section.label) ? ' ' : ''}${section.label}`,
-        section: '管理',
-        keywords: section.key,
-        disabledReason: available ? undefined : (selected ? '当前连接缺少该功能权限' : '需要先选择一条连接'),
-        run: () => openManagement(section.key)
-      });
+    // 这里直接复用那份判断，不要再写一遍。分组也复用抽屉导航那一份 —— 十四条命令挤在
+    // 一个「管理」标题下面，和抽屉里平铺一列是同一个问题。
+    for (const group of managementNavigation(isCurrentUserAdmin(), isAuthenticationEnabled())) {
+      for (const section of group.sections) {
+        const available = isManagementSectionAvailable(
+          section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
+        actions.push({
+          id: `manage.${section.key}`,
+          // 「打开 AI 助手」而不是「打开AI 助手」：中文与拉丁字母之间要留一个空格。
+          title: `打开${/^[A-Za-z]/.test(section.label) ? ' ' : ''}${section.label}`,
+          section: `管理 · ${group.label}`,
+          keywords: `${section.key} 管理`,
+          disabledReason: available ? undefined : (selected ? '当前连接缺少该功能权限' : '需要先选择一条连接'),
+          run: () => openManagement(section.key)
+        });
+      }
     }
     for (const connection of connections) {
       if (connection.id === selected?.id) continue;
@@ -3295,7 +3296,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 </Button>
                 <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
               </span>)}
-              <Text type="secondary" className="resource-document-context">{selected.name} · {selected.environment} · {metadataQuery.schema || '默认 Schema'}</Text>
+              {/*
+                SQL 工作台自己的标题栏就在下一行，写的是同一句「连接 · Schema」——
+                同一条信息在 90px 的高度里出现三次（顶栏的连接选择器算一次）。
+                其它工作区的标题写的是对象名，那里这条才是唯一的上下文，所以只在 SQL 模式下收起。
+              */}
+              {mode !== 'sql' && <Text type="secondary" className="resource-document-context">{selected.name} · {selected.environment} · {metadataQuery.schema || '默认 Schema'}</Text>}
             </nav>}
             <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
             {mode === 'sql' && !selected ? (
@@ -3467,22 +3473,27 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       >
         <div className="management-shell">
           <nav className="management-nav" aria-label="管理分区">
-            {MANAGEMENT_SECTIONS.filter((section) => isManagementSectionVisible(section.key, isCurrentUserAdmin(), isAuthenticationEnabled())).map((section) => {
-              const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
-              return (
-                <Tooltip key={section.key} title={available ? undefined : selected ? '当前连接缺少该功能权限' : '请先选择一个数据库连接'}>
-                  <button
-                    type="button"
-                    className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
-                    aria-current={activeDrawer === section.key ? 'page' : undefined}
-                    disabled={!available}
-                    onClick={() => setActiveDrawer(section.key)}
-                  >
-                    {section.label}
-                  </button>
-                </Tooltip>
-              );
-            })}
+            {managementNavigation(isCurrentUserAdmin(), isAuthenticationEnabled()).map((group) => (
+              <div className="management-nav-group" key={group.key} role="group" aria-label={group.label}>
+                <div className="management-nav-group-label">{group.label}</div>
+                {group.sections.map((section) => {
+                  const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
+                  return (
+                    <Tooltip key={section.key} title={available ? undefined : selected ? '当前连接缺少该功能权限' : '请先选择一个数据库连接'}>
+                      <button
+                        type="button"
+                        className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
+                        aria-current={activeDrawer === section.key ? 'page' : undefined}
+                        disabled={!available}
+                        onClick={() => setActiveDrawer(section.key)}
+                      >
+                        {section.label}
+                      </button>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
 
           <div className="management-body">

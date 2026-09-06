@@ -17,7 +17,7 @@ import {
   sortedSqlPage,
   sqlResultRangeLabel
 } from '../sqlResultPaging';
-import { filterResultRows, isNumericColumnType, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
+import { fillerColumnWidth, filterResultRows, isNumericColumnType, MAX_RESULT_COLUMN_WIDTH, MIN_RESULT_COLUMN_WIDTH, sortResultRows, suggestedResultColumnWidth, type ResultColumnFilter, type ResultColumnFilters, type ResultFilterOperator } from '../resultGridData';
 import { explainFindings, explainRowLevels } from '../explainInsights';
 import { downloadBlob } from '../api';
 import {
@@ -93,7 +93,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resultRowCheckboxChangeRef = useRef<(rowKey: string, checked: boolean) => void>(() => undefined);
   const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
-  const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
+  const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const [view, setView] = useState<'table' | 'chart'>('table');
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
@@ -398,13 +398,22 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [beginColumnResize, columnFilters, columnWidths, editableColumns, commitCellEdit, onPageChange, resizeColumn, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, serverSortOrder, sortState, toServerFilters, visibleColumnKeys]);
 
-  const tableScrollWidth = useMemo(() => {
+  const tableContentWidth = useMemo(() => {
     if (!result?.resultSet) return 800;
     const visible = new Set(visibleColumnKeys);
-    return Math.max(800, RESULT_SELECTION_COLUMN_WIDTH + 58 + result.columns.reduce((total, column, index) => (
+    return RESULT_SELECTION_COLUMN_WIDTH + 58 + result.columns.reduce((total, column, index) => (
       visible.has(column.key) ? total + (columnWidths[column.key] || suggestedResultColumnWidth(column, index, result.rows)) : total
-    ), 0));
+    ), 0);
   }, [columnWidths, result?.columns, result?.resultSet, result?.rows, visibleColumnKeys]);
+  // 列宽之和填不满视口时补一列空白，各列才能保住按内容估出的宽度（见 fillerColumnWidth）。
+  const fillerWidth = fillerColumnWidth(tableContentWidth, viewportWidth);
+  const tableScrollWidth = tableContentWidth + fillerWidth;
+  const tableColumns = useMemo(
+    () => fillerWidth > 0
+      ? [...columns, { title: '', key: '__filler', width: fillerWidth, className: 'grid-filler-column', render: () => null }]
+      : columns,
+    [columns, fillerWidth]
+  );
 
   // 编辑态折进记录：列的 shouldCellUpdate 只比较记录身份，不这样折的话改了值也不会重绘。
   const rows = useMemo<ResultRow[]>(() => {
@@ -773,7 +782,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         ) : (
           <MemoizedResultTable
             tableRef={tableRef}
-            columns={columns}
+            columns={tableColumns}
             rows={rows}
             pagingLoading={pagingLoading}
             scrollX={tableScrollWidth}

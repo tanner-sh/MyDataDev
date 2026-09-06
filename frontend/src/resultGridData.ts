@@ -87,21 +87,48 @@ export function textUnits(value: string): number {
  * <p>类型下限只是「整列都是 NULL 时别缩成一条缝」的兜底，真正决定宽度的是内容 ——
  * 一位数的 ID 不该和 12 位的订单号一样宽。</p>
  */
-export function suggestedColumnWidth(label: string, typeName: string, values: unknown[]): number {
+export function suggestedColumnWidth(label: string, typeName: string, values: unknown[], headerControlsWidth = 0): number {
   const type = (typeName || '').toLocaleUpperCase('en-US');
   const typeFloor = /BOOL|BIT/.test(type) ? 80
     : /DATE|TIME/.test(type) ? 140
       : isNumericColumnType(type) ? 92
         : 96;
-  const units = values.slice(0, 30).reduce(
+  const valueUnits = values.slice(0, 30).reduce(
     (longest: number, value) => Math.max(longest, value == null ? 4 : textUnits(String(value))),
-    textUnits(label)
+    0
   );
-  return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeFloor, units * 7 + 26)));
+  // 表头里的排序与筛选按钮占的是列宽，不是额外的地方 —— 不把它们算进去，「CUSTOMER」这种
+  // 长度普通的列名会在一张还空着半屏的表里被截成「CUSTOM…」。
+  const width = Math.max(valueUnits * 7 + 26, textUnits(label) * 7 + 26 + headerControlsWidth);
+  return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeFloor, width)));
 }
 
+/** 结果表头里排序 + 筛选两个按钮连同分隔线占掉的宽度。 */
+const RESULT_HEADER_CONTROLS_WIDTH = 46;
+
 export function suggestedResultColumnWidth(column: ResultColumn, columnIndex: number, rows: unknown[][]): number {
-  return suggestedColumnWidth(column.label, column.typeName, rows.map((row) => row[columnIndex]));
+  return suggestedColumnWidth(column.label, column.typeName, rows.map((row) => row[columnIndex]), RESULT_HEADER_CONTROLS_WIDTH);
+}
+
+/** 竖向滚动条留出的余量：表头没有滚动条，正文有，宽度顶满会让两边差出这么多。 */
+const FILLER_SCROLLBAR_RESERVE = 18;
+/** 比这更窄的尾列不值得存在：多加一列的成本大于收益，剩下这点宽度均摊给各列也看不出来。 */
+const MIN_FILLER_COLUMN_WIDTH = 24;
+
+/**
+ * 列宽之和填不满视口时，尾部那一列空白该有多宽。
+ *
+ * <p>表格用的是 `table-layout: fixed`，表宽被撑到容器宽度，于是多出来的宽度会被浏览器
+ * **均摊给每一列** —— 两位数的 ID 列跟着被拉到 300px，一屏三列的表看上去像张空表，
+ * 值与值之间隔着一大片空白。把多余的宽度显式交给一个空白尾列，各列就能保持按内容估出的
+ * 宽度，剩余空间统一落在右边。</p>
+ *
+ * <p>返回 0 表示不需要这一列（视口还没量出来，或者内容本来就撑满了）。</p>
+ */
+export function fillerColumnWidth(contentWidth: number, viewportWidth?: number): number {
+  if (!viewportWidth || !Number.isFinite(viewportWidth)) return 0;
+  const spare = Math.floor(viewportWidth - contentWidth - FILLER_SCROLLBAR_RESERVE);
+  return spare >= MIN_FILLER_COLUMN_WIDTH ? spare : 0;
 }
 
 function switchFilter(operator: ResultFilterOperator, candidate: string, expected: string): boolean {

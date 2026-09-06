@@ -223,23 +223,31 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
             const connectionId = parseAuditConnectionId(event.target);
             const expanded = expandedId === event.id;
             const detail = fullDetail[event.id] ?? event.detail;
+            const targetLabel = auditTargetLabel(event.target, connectionId ? connectionNames.get(connectionId) : undefined);
             return (
               <article className={`audit-item${isDangerousAuditAction(event.action) ? ' is-dangerous' : ''}`} key={event.id}>
+                {/*
+                  一条记录一行。这里天然要按时间从上往下读，而每条只有「谁、做了什么、对哪个对象」
+                  三件事 —— 拆成两行的时候一屏只剩十条，翻页比读还费劲。目标名可能长，交给它吃掉
+                  剩余宽度并省略（完整值挂在 title 上），时间与「详情」固定在右边对齐成两列。
+                */}
                 <div className="audit-item-heading">
-                  <Space size={6} wrap>
-                    <Tag color={auditActionColor(event.action)}>{auditActionLabel(event.action)}</Tag>
-                    <Text strong>{event.actor}</Text>
-                    <Text type="secondary">{formatHistoryTime(event.createdAt)}</Text>
-                  </Space>
-                  {detail && (
-                    <Button size="small" type="link" onClick={() => void toggleDetail(event)}>
-                      {expanded ? '收起' : '详情'}
-                    </Button>
-                  )}
+                  <Tag color={auditActionColor(event.action)}>{auditActionLabel(event.action)}</Tag>
+                  <Text strong className="audit-item-actor">{event.actor}</Text>
+                  <Text type="secondary" className="audit-item-target" title={targetLabel}>{targetLabel}</Text>
+                  <Text type="secondary" className="audit-item-time">{formatHistoryTime(event.createdAt)}</Text>
+                  <Button
+                    size="small"
+                    type="link"
+                    className={detail ? 'audit-item-detail-toggle' : 'audit-item-detail-toggle is-hidden'}
+                    disabled={!detail}
+                    aria-hidden={!detail}
+                    tabIndex={detail ? undefined : -1}
+                    onClick={() => void toggleDetail(event)}
+                  >
+                    {expanded ? '收起' : '详情'}
+                  </Button>
                 </div>
-                <Text type="secondary" className="audit-item-target">
-                  {auditTargetLabel(event.target, connectionId ? connectionNames.get(connectionId) : undefined)}
-                </Text>
                 {expanded && detail && (
                   <>
                     <pre className="audit-item-detail">

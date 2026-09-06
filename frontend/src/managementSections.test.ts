@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   isManagementSectionAvailable,
+  MANAGEMENT_GROUPS,
   MANAGEMENT_SECTIONS,
   isManagementSectionVisible,
+  managementNavigation,
   managementSectionLabel,
   resolveManagementSection
 } from './managementSections';
@@ -43,5 +45,25 @@ describe('management sections', () => {
     expect(isManagementSectionVisible('audit', false, false)).toBe(true);
     expect(isManagementSectionVisible('users', false, false)).toBe(false);
     expect(isManagementSectionVisible('access', false, false)).toBe(false);
+  });
+
+  it('导航按组给出分区，同组的分区在清单里必须连着写', () => {
+    const groups = managementNavigation();
+    expect(groups.map((group) => group.label)).toEqual(['连接与运维', '数据与结构', '智能与集成', '安全与治理']);
+    // 渲染不做重排，所以清单里同一组的分区必须是连续的一段，否则组标题会插在中间。
+    expect(groups.flatMap((group) => group.sections.map((section) => section.key)))
+      .toEqual(MANAGEMENT_SECTIONS.map((section) => section.key));
+    // 每个分区都归了组，没有漏网的。
+    for (const section of MANAGEMENT_SECTIONS) {
+      expect(MANAGEMENT_GROUPS.some((group) => group.key === section.group)).toBe(true);
+    }
+  });
+
+  it('一个分区都不可见的组不留下空标题', () => {
+    // 桌面模式（认证关闭）下「安全与治理」只剩审计，而非管理员在 Web 模式下整组都没有。
+    expect(managementNavigation(true, false).find((group) => group.key === 'governance')?.sections.map((s) => s.key))
+      .toEqual(['audit']);
+    expect(managementNavigation(false, true).map((group) => group.key)).not.toContain('governance');
+    expect(managementNavigation(false, true).map((group) => group.key)).not.toContain('integrations');
   });
 });

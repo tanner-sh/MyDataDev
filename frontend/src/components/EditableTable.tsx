@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cellValidation } from '../tableEditing';
 import { PanelEmpty, PanelLoading } from './PanelState';
-import { isNumericColumnType, suggestedResultColumnWidth } from '../resultGridData';
+import { fillerColumnWidth, isNumericColumnType, suggestedColumnWidth as sharedColumnWidth } from '../resultGridData';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
@@ -37,7 +37,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   const [largeError, setLargeError] = useState('');
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
-  const { viewportRef, scrollY } = useTableViewportHeight({ enabled: Boolean(data) });
+  const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(data) });
 
   useEffect(() => {
     setActiveCell(null);
@@ -166,7 +166,13 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
 
   if (!data) return <PanelEmpty title="点击左侧对象树中的表来浏览数据" fill />;
 
-  const scrollX = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160), 58);
+  const contentWidth = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160), 58);
+  // 列宽之和填不满视口时补一列空白，让各列保住按内容估出的宽度（见 fillerColumnWidth）。
+  const filler = fillerColumnWidth(contentWidth, viewportWidth);
+  const scrollX = contentWidth + filler;
+  const gridColumns = filler > 0
+    ? [...columns, { title: '', key: '__filler', width: filler, className: 'grid-filler-column', render: () => null }]
+    : columns;
   return (
     <div ref={viewportRef} className="editable-table-viewport">
       <Modal title={`编辑 ${largeEditor?.column.name || ''}`} open={Boolean(largeEditor)} onCancel={() => setLargeEditor(undefined)} width={720} okText="应用到待提交修改" cancelText="取消" onOk={() => {
@@ -190,7 +196,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
           ref={tableRef}
           size="small"
           className="data-grid data-grid-fill editable-grid"
-          columns={columns}
+          columns={gridColumns}
           dataSource={displayRows}
           loading={loading}
           rowKey="id"
@@ -198,7 +204,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
           pagination={false}
           virtual
           rowClassName={rowClassName}
-          scroll={{ x: Math.max(800, scrollX), y: scrollY }}
+          scroll={{ x: scrollX, y: scrollY }}
         />
       )}
     </div>
@@ -316,12 +322,13 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
   );
 });
 
-/** 与查询结果表共用同一套估宽规则，两张表的列宽不该有两种算法。 */
+/**
+ * 与查询结果表共用同一套估宽规则，两张表的列宽不该有两种算法。
+ *
+ * 唯一的差别是表头余量：结果表的表头里有排序和筛选两个按钮要占位置，这张表的表头只有
+ * 一条列宽拖动线（压在内边距上，不额外占宽），所以余量传 0。
+ */
 function suggestedColumnWidth(column: TableColumn, rows: Record<string, unknown>[]) {
-  return suggestedResultColumnWidth(
-    { key: column.name, label: column.name, typeName: column.typeName },
-    0,
-    rows.map((row) => [row[column.name]])
-  );
+  return sharedColumnWidth(column.name, column.typeName, rows.map((row) => row[column.name]));
 }
 

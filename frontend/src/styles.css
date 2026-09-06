@@ -409,6 +409,17 @@ body {
   background: var(--surface);
 }
 
+/*
+  尾部的空白列。列宽之和填不满视口时，多余的宽度全部落在这里 —— 没有它，浏览器会把这些
+  宽度均摊给每一列，于是两位数的 ID 列被拉到 300px，一张三列的表看上去像空的。
+  它不承载任何内容，所以也不该接收点击、显示分隔线或参与列宽拖动。
+*/
+.data-grid .ant-table-cell.grid-filler-column {
+  padding: 0;
+  border-inline-start: 0;
+  pointer-events: none;
+}
+
 .data-grid-fill {
   height: 100%;
 }
@@ -1459,18 +1470,31 @@ body.is-resizing-column * {
   padding: 24px 0;
 }
 
+/*
+  审计是一条时间线，要的是从上往下扫。此前每条记录是一张两行的卡片，一屏只装得下十条 ——
+  而每条真正的内容只有「谁、做了什么、对哪个对象、什么时候」。改成一行一条，密度翻倍，
+  卡片间的空隙也随之收掉：分隔靠细线，不靠留白。
+*/
 .audit-list {
   display: grid;
-  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
 }
 
 .audit-item {
   min-width: 0;
-  padding: 9px 11px;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: var(--radius-md);
+  padding: 3px 10px 3px 8px;
+  border-left: 3px solid transparent;
   background: var(--surface);
+}
+
+.audit-item + .audit-item {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.audit-item:hover {
+  background: var(--surface-hover);
 }
 
 /* 破坏性操作在时间线上要一眼能挑出来。 */
@@ -1480,20 +1504,49 @@ body.is-resizing-column * {
 
 .audit-item-heading {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
+  min-height: 30px;
 }
 
+.audit-item-actor {
+  flex: 0 0 auto;
+  max-width: 22ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 目标名吃掉剩余宽度：它是这一行里唯一长度不可预期的部分，也是最该完整显示的部分。 */
 .audit-item-target {
-  display: block;
-  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   font-size: var(--text-sm);
+}
+
+/* 时间等宽对齐成一列，扫的时候不用逐行找它在哪儿。 */
+.audit-item-time {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+}
+
+.audit-item-detail-toggle {
+  flex: 0 0 auto;
+  padding-inline: 0;
+}
+
+/* 没有详情的记录仍然占住这一格，否则右侧两列会逐行错开。 */
+.audit-item-detail-toggle.is-hidden {
+  visibility: hidden;
 }
 
 .audit-item-detail {
   max-height: 220px;
-  margin: 8px 0 0;
+  margin: 2px 0 8px;
   padding: 8px 10px;
   overflow: auto;
   white-space: pre-wrap;
@@ -1508,7 +1561,7 @@ body.is-resizing-column * {
 .audit-request-context {
   display: grid;
   gap: 2px;
-  margin-top: 7px;
+  margin: 0 0 8px;
   overflow-wrap: anywhere;
   font-size: var(--text-sm);
 }
@@ -3250,7 +3303,13 @@ body.is-resizing-column * {
   padding-inline: 8px;
 }
 
-.sql-workspace-title {
+/*
+  SQL 工作台的标题是横排的（标题 + 连接/Schema），与其它工作区上下两行的排法不同。
+  两个类都写在同一个元素上，所以这里必须带上 .toolbar-title 一起选 —— 只写
+  .sql-workspace-title 的话，后面那条 .toolbar-title{gap:2px} 会在层叠里赢，
+  标题和副标题就贴到一起变成「SQL 工作台连接名」。
+*/
+.toolbar-title.sql-workspace-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -4829,9 +4888,27 @@ body.is-resizing-column * {
 .management-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);
   padding-inline-end: var(--space-3);
+  overflow-y: auto;
   border-inline-end: 1px solid var(--border-subtle);
+}
+
+/*
+  分区长到 14 个之后，平铺一列已经扫不动了。分组标题不是装饰：它把「我要找的东西属于
+  哪一类」这一步从记忆变成阅读。
+*/
+.management-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.management-nav-group-label {
+  padding: 0 var(--space-3) 3px;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
 }
 
 .management-nav-item {
@@ -4923,11 +5000,22 @@ body.is-resizing-column * {
 
   .management-nav {
     flex-direction: row;
+    gap: var(--space-2);
     overflow-x: auto;
     padding-inline-end: 0;
     padding-block-end: var(--space-2);
     border-inline-end: 0;
     border-block-end: 1px solid var(--border-subtle);
+  }
+
+  /* 横成一条时组标题会把行撑乱，退回平铺 —— 一行里的顺序本来就还带着分组。 */
+  .management-nav-group {
+    flex-direction: row;
+    gap: 2px;
+  }
+
+  .management-nav-group-label {
+    display: none;
   }
 
   .management-nav-item {
