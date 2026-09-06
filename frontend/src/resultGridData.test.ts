@@ -118,3 +118,14 @@ describe('表头控件占的宽度', () => {
       .toBe(suggestedColumnWidth('N', 'VARCHAR', ['x'.repeat(40)]));
   });
 });
+
+describe('列名宽度', () => {
+  it('列名按更宽的系数算，大写英文列名不会差出最后一两个字符', () => {
+    // 值只有 7 个字符，列名有 11 个 —— 决定宽度的是列名，而它得按大写字母的宽度算。
+    expect(suggestedColumnWidth('CUSTOMER_NO', 'VARCHAR', ['C000001'])).toBe(11 * 8 + 26);
+  });
+
+  it('值比列名长时仍按值定宽，不跟着放大', () => {
+    expect(suggestedColumnWidth('N', 'VARCHAR', ['x'.repeat(20)])).toBe(20 * 7 + 26);
+  });
+});

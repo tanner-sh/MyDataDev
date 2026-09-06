@@ -82,6 +82,17 @@ export function textUnits(value: string): number {
 }
 
 /**
+ * 每个宽度单位按多少像素算。
+ *
+ * <p>列名比值给得宽一格：库里的列名基本都是大写英文（`CUSTOMER_NO`、`ORDER_NO`），
+ * 而大写字母比数字宽，按同一个系数算就会差出最后一两个字符 —— 于是在一张右边还空着
+ * 半屏的表里，列名被截成「CUSTOMER…」。列名截断比值截断更糟：它是读懂整列的钥匙，
+ * 而且列名很短，给宽一点的代价有上限。值仍按窄的算，长文本本来就该省略。</p>
+ */
+const VALUE_UNIT_WIDTH = 7;
+const LABEL_UNIT_WIDTH = 8;
+
+/**
  * 按内容估一个列宽。
  *
  * <p>类型下限只是「整列都是 NULL 时别缩成一条缝」的兜底，真正决定宽度的是内容 ——
@@ -99,7 +110,10 @@ export function suggestedColumnWidth(label: string, typeName: string, values: un
   );
   // 表头里的排序与筛选按钮占的是列宽，不是额外的地方 —— 不把它们算进去，「CUSTOMER」这种
   // 长度普通的列名会在一张还空着半屏的表里被截成「CUSTOM…」。
-  const width = Math.max(valueUnits * 7 + 26, textUnits(label) * 7 + 26 + headerControlsWidth);
+  const width = Math.max(
+    valueUnits * VALUE_UNIT_WIDTH + 26,
+    textUnits(label) * LABEL_UNIT_WIDTH + 26 + headerControlsWidth
+  );
   return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeFloor, width)));
 }
 

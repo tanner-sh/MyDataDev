@@ -1,27 +1,43 @@
 <div align="center">
-  <img src="desktop/assets/icon.png" width="112" alt="MyDataDev Logo" />
+  <img src="desktop/assets/icon.png" width="96" alt="MyDataDev Logo" />
+
   <h1>MyDataDev</h1>
+
   <p>
-    面向本机与私有网络的现代数据库工作台<br />
-    在一套界面中完成数据库浏览、SQL 开发、数据维护、对象管理、备份恢复与 AI 查询接入
+    <b>面向本机与私有网络的现代数据库工作台</b><br />
+    浏览、SQL 开发、数据维护、对象管理、备份恢复与 AI 查询接入，都在一套界面里
   </p>
 
   <p>
-    <img src="https://img.shields.io/badge/Java-17-ED8B00?logo=openjdk&logoColor=white" alt="Java 17" />
-    <img src="https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.5" />
-    <img src="https://img.shields.io/badge/React-TypeScript-3178C6?logo=react&logoColor=white" alt="React and TypeScript" />
-    <img src="https://img.shields.io/badge/Desktop-Electron-47848F?logo=electron&logoColor=white" alt="Electron Desktop" />
-    <img src="https://img.shields.io/badge/MCP-Streamable_HTTP-6F42C1" alt="MCP Server" />
-    <img src="https://img.shields.io/badge/release-v0.6.0-0A7C42" alt="当前版本 0.6.0" />
-    <img src="https://img.shields.io/badge/license-Apache_2.0-D22128" alt="Apache License 2.0" />
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><img src="https://img.shields.io/badge/release-v0.6.0-0A7C42?style=flat-square" alt="当前版本 0.6.0" /></a>
+    <img src="https://img.shields.io/badge/license-Apache_2.0-D22128?style=flat-square" alt="Apache License 2.0" />
+    <img src="https://img.shields.io/badge/platform-macOS_%C2%B7_Windows_%C2%B7_Linux_%C2%B7_Web-555?style=flat-square" alt="支持的平台" />
   </p>
 
   <p>
-    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><strong>下载发行包</strong></a>
-    · <a href="#快速开始">快速开始</a>
-    · <a href="#核心能力">核心能力</a>
-    · <a href="#文档">文档</a>
+    <img src="https://img.shields.io/badge/Java-17-ED8B00?style=flat-square&logo=openjdk&logoColor=white" alt="Java 17" />
+    <img src="https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?style=flat-square&logo=springboot&logoColor=white" alt="Spring Boot 3.5" />
+    <img src="https://img.shields.io/badge/React-TypeScript-3178C6?style=flat-square&logo=react&logoColor=white" alt="React and TypeScript" />
+    <img src="https://img.shields.io/badge/Electron-%E6%A1%8C%E9%9D%A2%E7%89%88-47848F?style=flat-square&logo=electron&logoColor=white" alt="Electron Desktop" />
+    <img src="https://img.shields.io/badge/MCP-Streamable_HTTP-6F42C1?style=flat-square" alt="MCP Server" />
   </p>
+
+  <p>
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><b>下载发行包</b></a>
+    ·
+    <a href="#快速开始">快速开始</a>
+    ·
+    <a href="#核心能力">核心能力</a>
+    ·
+    <a href="#界面一览">界面一览</a>
+    ·
+    <a href="#文档">文档</a>
+  </p>
+
+  <br />
+
+  <img src="docs/images/sql-workspace.png" alt="SQL 工作台：语法高亮、按库元数据补全、服务端分页结果" />
+
 </div>
 
 ---
@@ -32,16 +48,31 @@ MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理
 
 项目适合个人开发环境、内部研发网络和受控运维场景。它不是面向公网的托管数据库服务；Web 模式应部署在可信网络中，并配合反向代理和组织现有的身份认证体系使用。
 
+几条贯穿全局的取舍：
+
+- **危险操作要过闸门。** 只读连接在后端拒绝一切写入；生产连接上的自由 SQL 与写操作要求回传连接名确认；不含顶层 `WHERE` 的 `UPDATE`/`DELETE` 需要单独确认。应用层保护不替代数据库权限，但它挡住的是手滑。
+- **AI 拿得到什么由你逐条授权。** 连接默认「不参与 AI」，「仅结构」档不发任何行数据，AI 也没有执行权限 —— 它的产出只落到编辑器标签页。
+- **一套后端，两种形态。** 桌面版与 Web 版跑的是同一个 Spring Boot 服务；桌面版不需要另外装 Java，Web 版是一个自带前端的可执行 JAR。
+- **目标数据永远在远端。** 本地 H2 只存连接配置、SQL 历史、审计与任务状态。
+
 ## 界面一览
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/sql-workspace.png" alt="SQL 工作台：语法高亮、元数据补全与分页结果" /></td>
+    <td width="50%"><img src="docs/images/table-data.png" alt="表数据：服务端筛选排序、游标分页与逐格编辑" /></td>
     <td width="50%"><img src="docs/images/er-diagram.png" alt="ER 图：按外键自动分层绘制的实体关系图" /></td>
   </tr>
   <tr>
-    <td align="center"><sub>SQL 工作台 —— 语法高亮、按库元数据补全、分页结果与图表</sub></td>
-    <td align="center"><sub>ER 图 —— 按外键自动分层，被引用的表在左</sub></td>
+    <td align="center"><sub><b>表数据</b> —— 服务端筛选与排序、游标分页，改动先进待提交区，提交前可预览 SQL</sub></td>
+    <td align="center"><sub><b>ER 图</b> —— 按外键自动分层，被引用的字典表在左；自绘 SVG，不引图表库</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/data-search.png" alt="全库数据检索：在一个 Schema 的所有表里找一个值" /></td>
+    <td width="50%"><img src="docs/images/command-palette.png" alt="命令面板：搜索应用能做的事，并充当快捷键说明书" /></td>
+  </tr>
+  <tr>
+    <td align="center"><sub><b>全库数据检索</b> —— 「这个手机号还留在哪张表」；扫描触到上限会明说，不会把半程结果报告成全部</sub></td>
+    <td align="center"><sub><b>命令面板</b> —— <kbd>Ctrl/Cmd</kbd>+<kbd>K</kbd> 搜索应用能做的事，同时充当快捷键说明书</sub></td>
   </tr>
 </table>
 
@@ -112,9 +143,23 @@ MyDataDev 是一款接近桌面数据库 IDE 使用体验的 Web 数据库管理
 
 MyDataDev 内置以下数据库类型及对应 JDBC 驱动：
 
-`H2` · `MySQL` · `MariaDB` · `PostgreSQL` · `SQL Server` · `SQLite` · `ClickHouse` · `Oracle` · `达梦` · `OceanBase MySQL 模式` · `OceanBase Oracle 模式`
+<p>
+  <img src="https://img.shields.io/badge/MySQL-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL" />
+  <img src="https://img.shields.io/badge/MariaDB-003545?style=flat-square&logo=mariadb&logoColor=white" alt="MariaDB" />
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
+  <img src="https://img.shields.io/badge/SQL_Server-CC2927?style=flat-square&logo=microsoftsqlserver&logoColor=white" alt="SQL Server" />
+  <img src="https://img.shields.io/badge/Oracle-F80000?style=flat-square&logo=oracle&logoColor=white" alt="Oracle" />
+  <img src="https://img.shields.io/badge/SQLite-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite" />
+  <img src="https://img.shields.io/badge/ClickHouse-FFCC01?style=flat-square&logo=clickhouse&logoColor=black" alt="ClickHouse" />
+  <img src="https://img.shields.io/badge/H2-1021FF?style=flat-square" alt="H2" />
+  <img src="https://img.shields.io/badge/%E8%BE%BE%E6%A2%A6_DM-1F6FB2?style=flat-square" alt="达梦" />
+  <img src="https://img.shields.io/badge/OceanBase-MySQL_%E6%A8%A1%E5%BC%8F-2E6BE6?style=flat-square" alt="OceanBase MySQL 模式" />
+  <img src="https://img.shields.io/badge/OceanBase-Oracle_%E6%A8%A1%E5%BC%8F-2E6BE6?style=flat-square" alt="OceanBase Oracle 模式" />
+</p>
 
 基础 SQL 执行和元数据浏览由 JDBC 提供；表编辑、执行计划、对象管理、备份与恢复等高级能力会根据数据库方言和驱动能力自动启用。原生备份或恢复还要求相应工具安装在运行后端的机器上。
+
+---
 
 ## 快速开始
 
@@ -143,7 +188,10 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 
 首次启动会自动生成 `./secrets/mydatadev-master.key`，以后启动自动复用；请限制文件权限并把它与 `data` 一同安全备份。Web 模式默认启用内置多用户认证；仅当用户表为空时，使用 `DB_ADMIN_WEB_USERNAME` 和至少 12 位的 `DB_ADMIN_WEB_PASSWORD` 创建第一个管理员。后续账号在“管理 → 用户与权限”中维护，用户组和连接授权在“管理 → 访问控制”中维护，初始化完成后可从运行环境移除初始密码。旧版本升级需要先按[主密钥接管步骤](docs/web-deploy.md#从环境变量密钥升级)录入原密钥。
 
-### Web 开发模式
+<details>
+<summary><b>Web 开发模式</b> —— 从源码启动前后端</summary>
+
+<br />
 
 开发环境需要 Java 17、Maven 3.9+ 和 Node.js 22。
 
@@ -165,7 +213,11 @@ npm run dev
 
 打开 <http://localhost:5173>。Vite 会将 `/api` 和 `/mcp` 代理到默认的后端地址 `http://localhost:8080`。
 
+</details>
+
 Web 与桌面模式默认使用彼此独立的元数据库和文件目录，不会自动共享连接、密码、SQL 历史、MCP Agent、备份任务或备份文件。
+
+---
 
 ## 使用概览
 
@@ -177,6 +229,8 @@ Web 与桌面模式默认使用彼此独立的元数据库和文件目录，不�
 6. 按需创建备份任务、执行恢复，或在 MCP 设置中为 AI Agent 逐条连接授予访问档位（默认只读）。
 
 生产连接上的 SQL、数据编辑、对象变更和恢复操作需要额外确认；标记为只读的连接会在后端拒绝写入与结构变更。应用层保护不能替代数据库权限，生产环境仍应使用最小权限数据库账号。
+
+---
 
 ## 架构
 
@@ -196,7 +250,10 @@ flowchart LR
 - **桌面端**：Electron 负责窗口、托盘、后端生命周期和操作系统安全存储，并随应用分发精简 Java Runtime。
 - **本地状态**：H2 保存连接配置、SQL 历史、审计记录、MCP 授权和任务状态；目标业务数据始终保留在远程数据库中。
 
-## 项目结构
+<details>
+<summary><b>项目结构</b></summary>
+
+<br />
 
 ```text
 MyDataDev/
@@ -209,7 +266,12 @@ MyDataDev/
 └── .github/        多平台桌面安装包、Web 发行包与 Release 工作流
 ```
 
-## 构建与验证
+</details>
+
+<details>
+<summary><b>构建与验证</b> —— 测试、桌面安装包与 Web 发行包</summary>
+
+<br />
 
 后端：
 
@@ -251,6 +313,10 @@ npm run make
 node scripts/build-web-bundle.mjs
 ```
 
+</details>
+
+---
+
 ## 配置与安全
 
 主要配置位于 `backend/src/main/resources/application.yml`：
@@ -271,7 +337,10 @@ node scripts/build-web-bundle.mjs
 
 请勿将真实数据库密码、Agent API Key 或主密钥文件提交到 Git。`secrets` 必须限制为服务账号可读，并与元数据库分开保存一份安全备份。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
 
-### 备份文件服务
+<details>
+<summary><b>备份文件服务</b> —— SMB / NFS / FTP / SFTP 的支持范围与限制</summary>
+
+<br />
 
 在“备份与恢复 → 文件服务”中可以维护可复用的 SMB、NFS、FTP/FTPS 和 SFTP 配置，备份任务可逐个选择本地目录或文件服务。凭据和私钥使用系统托管主密钥加密后保存在 MyDataDev 元数据库中；丢失或替换该密钥会导致已有密文无法解密。
 
@@ -282,17 +351,23 @@ node scripts/build-web-bundle.mjs
 
 远端备份会先在 `app.backup.directory` 生成本地文件，再以临时文件名上传并原子改名。上传成功后删除本地暂存；上传失败时保留暂存文件供手动重试，默认 7 天后清理（`app.backup.failed-upload-retention-days`）。从远端历史恢复时会下载到受控缓存，恢复完成或超过 `app.restore.remote-cache-ttl-hours` 后清理。
 
+</details>
+
+---
+
 ## 文档
 
-- [Web 发行包部署、反向代理与升级说明](docs/web-deploy.md)
-- [工作台功能打磨、升级行为与验收说明](docs/product-polish.md)
-- [桌面版开发、数据目录与发行说明](docs/desktop.md)
-- [MCP Server 配置、客户端接入与安全边界](docs/mcp-server.md)
-- [AI 助手接入方案：架构、隐私边界与推进记录](docs/ai-assistant.md)
-- [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md)
-- [仓库结构、编码与提交规范](AGENTS.md)
-- [CHANGELOG.md](CHANGELOG.md) — 每个发行版本的新增、变更、修复与升级注意
-- [NOTICE](NOTICE) — 随发行包分发的第三方 JDBC 驱动及其许可条款
+| 文档 | 内容 |
+| --- | --- |
+| [Web 发行包部署说明](docs/web-deploy.md) | 反向代理、认证模式、主密钥接管与升级步骤 |
+| [桌面版开发与发行说明](docs/desktop.md) | 数据目录、打包、签名与 GitHub Actions 发行 |
+| [MCP Server 说明](docs/mcp-server.md) | Agent 配置、客户端接入与安全边界 |
+| [AI 助手接入方案](docs/ai-assistant.md) | 架构、隐私边界与推进记录 |
+| [工作台功能打磨说明](docs/product-polish.md) | 升级行为与验收要点 |
+| [macOS 未公证版本安装提示](docs/macos-unsigned-release-notes.md) | 首次打开被 Gatekeeper 拦下时怎么办 |
+| [AGENTS.md](AGENTS.md) | 仓库结构、编码与提交规范 |
+| [CHANGELOG.md](CHANGELOG.md) | 每个发行版本的新增、变更、修复与升级注意 |
+| [NOTICE](NOTICE) | 随发行包分发的第三方 JDBC 驱动及其许可条款 |
 
 ## 许可证
 
@@ -303,3 +378,15 @@ node scripts/build-web-bundle.mjs
 ## 当前状态
 
 MyDataDev 当前版本为 `0.6.0`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。
+
+---
+
+<div align="center">
+  <sub>
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest">下载发行包</a>
+    ·
+    <a href="https://github.com/tanner-sh/MyDataDev/issues">反馈问题</a>
+    ·
+    <a href="CHANGELOG.md">更新日志</a>
+  </sub>
+</div>
