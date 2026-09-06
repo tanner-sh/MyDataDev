@@ -18,6 +18,7 @@ import com.example.dbadmin.dto.ApiDtos.SchemaObjectCapability;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectDependency;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleRequest;
+import com.example.dbadmin.dto.ApiDtos.CompilationError;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectLifecycleResponse;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectPage;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectParameter;
@@ -38,6 +39,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.LocalDate;
@@ -55,6 +57,10 @@ import java.util.regex.Pattern;
 
 @Service
 public class SchemaObjectService {
+    /** 编译错误条数上限：一条语法错误往往会级联出几十行，前几条才指得出真正的位置。 */
+    private static final int MAX_COMPILATION_ERRORS = 100;
+    /** 例程消息条数上限：一个循环里的 PUT_LINE 能刷出几十万行。 */
+    private static final int MAX_ROUTINE_MESSAGES = 500;
     private static final int MAX_RESULT_ROWS = 500;
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final int MAX_CELL_TEXT = 100_000;
@@ -182,9 +188,20 @@ public class SchemaObjectService {
                 statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
                 statement.execute(plan.sql());
             }
-            audit.onConnection(actor, "OBJECT_" + plan.operation().name(), connectionId, "object:" + plan.confirmationTarget(), plan.sql());
-            history.insert(connectionId, plan.sql(), "OBJECT_" + plan.operation().name(), "SUCCESS", elapsed(started), null, actor);
-            return new SchemaObjectLifecycleResponse(List.of(plan.sql()), operationMessage(plan.operation(), plan.kind()));
+            // 语句没抛异常不等于对象是好的：Oracle 会「带编译错误创建成功」。
+            List<CompilationError> compilationErrors =
+                    readCompilationErrors(connection, dialectRegistry.dialectFor(configured), plan);
+            audit.onConnection(actor, "OBJECT_" + plan.operation().name(), connectionId, "object:" + plan.confirmationTarget(),
+                    compilationErrors.isEmpty() ? plan.sql() : "编译错误 " + compilationErrors.size() + " 条; " + plan.sql());
+            history.insert(connectionId, plan.sql(), "OBJECT_" + plan.operation().name(),
+                    compilationErrors.isEmpty() ? "SUCCESS" : "FAILED", elapsed(started),
+                    compilationErrors.isEmpty() ? null : firstCompilationError(compilationErrors), actor);
+            return new SchemaObjectLifecycleResponse(
+                    List.of(plan.sql()),
+                    compilationErrors.isEmpty()
+                            ? operationMessage(plan.operation(), plan.kind())
+                            : "对象已创建，但编译未通过，当前处于不可用状态。请按下面的错误位置修改后重新提交。",
+                    compilationErrors);
         } catch (Exception exception) {
             String error = error(exception);
             audit.onConnection(actor, "OBJECT_" + plan.operation().name() + "_FAILED", connectionId, "object:" + plan.confirmationTarget(), error);
@@ -234,6 +251,9 @@ public class SchemaObjectService {
             }
             String family = catalog.family(configured);
             historySql = routineSql(dialect, family, reference.kind(), resolved.object(), parameters);
+            // 旧警告会被当成这次调用的输出报出来，池化连接上尤其容易串味。
+            connection.clearWarnings();
+            enableRoutineOutput(connection, dialect);
             RoutineInvokeResponse response = family.equals("postgresql") || family.equals("clickhouse")
                     ? invokePrepared(connection, dialect, reference.kind(), resolved.object(), parameters, inputs, started)
                     : invokeCallable(connection, dialect, reference.kind(), resolved.object(), parameters, inputs, started);
@@ -277,7 +297,7 @@ public class SchemaObjectService {
                 );
                 if (exists) throw new ApiProblemException(HttpStatus.CONFLICT, "SCHEMA_OBJECT_ALREADY_EXISTS", "目标对象已存在：" + qualifiedName(schema, request.objectName()));
             }
-            return new LifecyclePlan(operation, kind, schema, source, qualifiedName(schema, request.objectName()));
+            return new LifecyclePlan(operation, kind, schema, request.objectName(), source, qualifiedName(schema, request.objectName()));
         }
 
         if (request.objectKey() == null || request.objectKey().isBlank()) throw new IllegalArgumentException("对象操作缺少对象标识。");
@@ -295,7 +315,7 @@ public class SchemaObjectService {
                 case REFRESH, ENABLE, DISABLE -> catalog.specialOperationSql(configured, dialect, operation, kind, resolved.catalogObject());
                 default -> throw new IllegalArgumentException("不支持的对象操作。");
             };
-            return new LifecyclePlan(operation, kind, reference.schemaName(), sql, confirmationTarget(live.object()));
+            return new LifecyclePlan(operation, kind, reference.schemaName(), resolved.object().name(), sql, confirmationTarget(live.object()));
         }
     }
 
@@ -422,6 +442,108 @@ public class SchemaObjectService {
         return new SchemaObjectSummary(encodeKey(reference), object.schemaName(), object.name(), displayName, kind.name(), object.subtype(), object.status());
     }
 
+    /**
+     * 建完对象之后去字典表里问一句「它到底编译过了吗」。
+     *
+     * <p>Oracle 的 {@code CREATE OR REPLACE} 语法有问题时不抛异常，只是把对象以 INVALID 状态
+     * 留在库里。少了这一步，界面会给出一句干净的「创建成功」，直到某天有人调用它才发现是坏的
+     * —— 那时报错现场离真正的原因已经隔了很远。</p>
+     *
+     * <p>查不到（没权限读 ALL_ERRORS、驱动不支持）就当没有编译错误：这是一条补充诊断，不该
+     * 让一次已经执行完的 DDL 变成失败。</p>
+     */
+    private List<CompilationError> readCompilationErrors(Connection connection, DatabaseDialect dialect, LifecyclePlan plan) {
+        String sql = dialect.compilationErrorsSql();
+        if (sql == null) return List.of();
+        if (plan.operation() != SchemaObjectOperation.CREATE && plan.operation() != SchemaObjectOperation.REPLACE) {
+            return List.of();
+        }
+        List<CompilationError> errors = new ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
+            statement.setString(1, plan.schemaName().isBlank() ? null : plan.schemaName());
+            statement.setString(2, plan.objectName());
+            // 字典表里的类型是 PROCEDURE / MATERIALIZED VIEW 这样的字面量，下划线要还原成空格。
+            statement.setString(3, plan.kind().name().replace('_', ' '));
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next() && errors.size() < MAX_COMPILATION_ERRORS) {
+                    errors.add(new CompilationError(
+                            intOrNull(rs.getObject("line")), intOrNull(rs.getObject("position")), rs.getString("text")));
+                }
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
+        return List.copyOf(errors);
+    }
+
+    /** 写进 SQL 历史的那一句。取第一条：级联出来的后续错误通常都指向同一个原因。 */
+    private static String firstCompilationError(List<CompilationError> errors) {
+        CompilationError first = errors.get(0);
+        String where = first.line() == null ? "" : "第 " + first.line() + " 行"
+                + (first.position() == null ? "" : "第 " + first.position() + " 列") + "：";
+        return where + (first.text() == null ? "" : first.text().strip());
+    }
+
+    private static Integer intOrNull(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
+    }
+
+    /**
+     * 例程执行期间产生的消息。
+     *
+     * <p>两个来源：JDBC 的 SQLWarning 链（PostgreSQL 的 {@code RAISE NOTICE}、MySQL 的警告都
+     * 走这里），以及 Oracle 的 {@code DBMS_OUTPUT} 缓冲 —— 后者不显式读回就永远看不到，而
+     * PL/SQL 里排查问题基本全靠它。</p>
+     *
+     * <p>整段吞异常：这是调用之外的诊断信息，读不回来不该把一次已经成功的调用改判成失败。</p>
+     */
+    private List<String> routineMessages(Connection connection, DatabaseDialect dialect, Statement statement) {
+        List<String> messages = new ArrayList<>();
+        try {
+            collectWarnings(statement.getWarnings(), messages);
+            collectWarnings(connection.getWarnings(), messages);
+        } catch (Exception ignored) {
+            // 读警告本身失败就算了。
+        }
+        String fetch = dialect.routineOutputFetchCall();
+        if (fetch == null) return List.copyOf(messages);
+        try (CallableStatement output = connection.prepareCall(fetch)) {
+            output.registerOutParameter(1, Types.VARCHAR);
+            output.registerOutParameter(2, Types.INTEGER);
+            while (messages.size() < MAX_ROUTINE_MESSAGES) {
+                output.execute();
+                // 状态码非 0 表示缓冲读完了。这是 DBMS_OUTPUT.GET_LINE 的约定。
+                if (output.getInt(2) != 0) break;
+                String line = output.getString(1);
+                if (line != null) messages.add(line);
+            }
+        } catch (Exception ignored) {
+            // 缓冲没打开、没权限、或这个连接根本不是 Oracle：都不是调用本身的问题。
+        }
+        return List.copyOf(messages);
+    }
+
+    private static void collectWarnings(SQLWarning warning, List<String> messages) {
+        SQLWarning current = warning;
+        while (current != null && messages.size() < MAX_ROUTINE_MESSAGES) {
+            String text = current.getMessage();
+            if (text != null && !text.isBlank()) messages.add(text.strip());
+            current = current.getNextWarning();
+        }
+    }
+
+    /** 打开服务端的输出缓冲。失败无所谓：拿不到 DBMS_OUTPUT 只是少一份诊断信息。 */
+    private void enableRoutineOutput(Connection connection, DatabaseDialect dialect) {
+        String sql = dialect.routineOutputEnableSql();
+        if (sql == null) return;
+        try (Statement statement = connection.createStatement()) {
+            statement.execute(sql);
+        } catch (Exception ignored) {
+            // 见方法注释。
+        }
+    }
+
     private RoutineInvokeResponse invokePrepared(
             Connection connection,
             DatabaseDialect dialect,
@@ -448,7 +570,8 @@ public class SchemaObjectService {
                     && !results.get(0).result().rows().isEmpty() && !results.get(0).result().rows().get(0).isEmpty()
                     ? results.get(0).result().rows().get(0).get(0) : null;
             return new RoutineInvokeResponse("SUCCESS", elapsed(started), returnValue, List.of(), results,
-                    results.stream().anyMatch(item -> item.result() != null && item.result().truncated()));
+                    results.stream().anyMatch(item -> item.result() != null && item.result().truncated()),
+                    routineMessages(connection, dialect, statement));
         }
     }
 
@@ -496,7 +619,8 @@ public class SchemaObjectService {
                 }
             }
             return new RoutineInvokeResponse("SUCCESS", elapsed(started), returnValue, out, results,
-                    results.stream().anyMatch(item -> item.result() != null && item.result().truncated()));
+                    results.stream().anyMatch(item -> item.result() != null && item.result().truncated()),
+                    routineMessages(connection, dialect, statement));
         }
     }
 
@@ -865,7 +989,8 @@ public class SchemaObjectService {
     private record ResolvedObject(ObjectRef reference, SchemaObjectCatalog.CatalogObject catalogObject, SchemaObjectSummary object) {
     }
 
-    private record LifecyclePlan(SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String sql, String confirmationTarget) {
+    /** {@code objectName} 是编译错误那一步要用的：字典表按对象名查，而 confirmationTarget 是带 schema 前缀的显示名。 */
+    private record LifecyclePlan(SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String objectName, String sql, String confirmationTarget) {
     }
 
     private record SchemaObjectPageLoad(

@@ -36,6 +36,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import {
+  compilationErrorSummary,
+  formatCompilationError,
   schemaObjectCapabilities,
   schemaObjectConfirmationTarget,
   schemaObjectDisplayStatus,
@@ -46,6 +48,7 @@ import type {
   Connection,
   DbObject,
   RoutineArgumentInput,
+  CompilationError,
   RoutineInvokeResponse,
   SchemaObjectCapability,
   SchemaObjectDetail,
@@ -306,6 +309,8 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   const [invokeOpen, setInvokeOpen] = useState(false);
   const [invokeInputs, setInvokeInputs] = useState<Record<number, RoutineArgumentInput>>({});
   const [invokeResult, setInvokeResult] = useState<RoutineInvokeResponse>();
+  // 编译错误要一直摆在眼前直到用户改完重提：它说的是「这个对象现在是坏的」。
+  const [compilationErrors, setCompilationErrors] = useState<CompilationError[]>([]);
   const [invoking, setInvoking] = useState(false);
   const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
   const [messageApi, messageContextHolder] = antdMessage.useMessage();
@@ -401,11 +406,15 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         headers: productionConfirmationHeaders(production ? productionConfirmation : undefined),
         body: JSON.stringify({ ...pending.request, confirmation })
       });
-      messageApi.success(response.message);
+      const failedToCompile = response.compilationErrors.length > 0;
+      setCompilationErrors(response.compilationErrors);
+      if (failedToCompile) messageApi.warning(response.message);
+      else messageApi.success(response.message);
       setPending(undefined);
       setConfirmation('');
       setProductionConfirmation('');
-      const close = pending.operation === 'CREATE' || pending.operation === 'DROP';
+      // 编译不过时不关闭编辑器：对象确实建出来了，但它是坏的，用户接下来要做的是改源码重提。
+      const close = !failedToCompile && (pending.operation === 'CREATE' || pending.operation === 'DROP');
       onChanged(kind, close);
       if (!close) await loadDetail(true);
     } catch (error) {
@@ -460,6 +469,22 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     { key: 'source', label: '源码', children: (
       <div className="schema-object-source-panel">
         {!creation && detail && !detail.sourceAvailable && <Alert type="warning" showIcon message="无法读取对象源码" description={detail.sourceUnavailableReason} />}
+        {compilationErrors.length > 0 && (
+          <Alert
+            type="error"
+            showIcon
+            closable
+            onClose={() => setCompilationErrors([])}
+            message={compilationErrorSummary(compilationErrors)}
+            description={
+              <div className="schema-object-compilation-errors">
+                {compilationErrors.map((error, index) => (
+                  <div key={`${error.line}:${error.position}:${index}`}>{formatCompilationError(error)}</div>
+                ))}
+              </div>
+            }
+          />
+        )}
         <Editor
           height="52vh"
           value={source}
@@ -599,7 +624,14 @@ function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
       {response.results.map((item, index) => item.kind === 'RESULT_SET'
         ? <div className="routine-result-set" key={index}><Title level={5}>结果集 {index + 1}</Title><ResultGrid result={item.result || null} pagingEnabled={false} /></div>
         : <Alert key={index} type="info" message={`更新计数：${item.updateCount ?? 0}`} />)}
-      {response.results.length === 0 && response.returnValue === undefined && response.outParameters.length === 0 && <PanelEmpty title="调用没有返回结果" compact />}
+      {response.messages.length > 0 && (
+        <div className="routine-messages">
+          {/* PostgreSQL 的 RAISE NOTICE、Oracle 的 DBMS_OUTPUT —— 不显示出来，PL/SQL 里最常用的那种排查手段等于没有。 */}
+          <Title level={5}>例程输出 {response.messages.length}</Title>
+          <pre>{response.messages.join('\n')}</pre>
+        </div>
+      )}
+      {response.results.length === 0 && response.returnValue === undefined && response.outParameters.length === 0 && response.messages.length === 0 && <PanelEmpty title="调用没有返回结果" compact />}
     </div>
   );
 }

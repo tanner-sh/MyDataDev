@@ -169,6 +169,40 @@ public class OracleDialect extends DefaultDialect {
     }
 
     /**
+     * Oracle 的编译错误。
+     *
+     * <p>这条是 Oracle 独有的必需品：{@code CREATE OR REPLACE PROCEDURE} 语法错了也会返回
+     * 成功，对象以 INVALID 状态留在库里。{@code ALL_ERRORS} 才是真正的结果。</p>
+     *
+     * <p>{@code owner} 传 null 时落回当前 schema —— 建对象时没写 schema 就是建在自己名下。</p>
+     *
+     * <p>名字按大小写不敏感匹配：Oracle 把未加引号的标识符折成大写存进字典表，而用户在表单里
+     * 填的通常是小写。按原样比对的话这条查询永远返回空 —— 于是「带编译错误创建成功」又变回
+     * 一句干净的「已创建」，这个功能等于没做。</p>
+     */
+    @Override
+    public String compilationErrorsSql() {
+        return """
+                SELECT LINE AS line, POSITION AS position, TEXT AS text
+                FROM ALL_ERRORS
+                WHERE UPPER(OWNER) = UPPER(NVL(?, SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA')))
+                  AND UPPER(NAME) = UPPER(?) AND TYPE = ?
+                ORDER BY SEQUENCE
+                """;
+    }
+
+    /** 缓冲不打开，DBMS_OUTPUT.PUT_LINE 写进去的东西就直接丢了。 */
+    @Override
+    public String routineOutputEnableSql() {
+        return "BEGIN DBMS_OUTPUT.ENABLE(1000000); END;";
+    }
+
+    @Override
+    public String routineOutputFetchCall() {
+        return "{call DBMS_OUTPUT.GET_LINE(?, ?)}";
+    }
+
+    /**
      * 谁在等谁。
      *
      * <p>{@code V$SESSION.BLOCKING_SESSION} 直接给出直接阻塞者，不必自己去 {@code V$LOCK} 里

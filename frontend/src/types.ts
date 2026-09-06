@@ -96,12 +96,15 @@ export type SchemaObjectLifecycleRequest = {
   structureVersion?: string;
   confirmation?: string;
 };
-export type SchemaObjectLifecycleResponse = { sql: string[]; message: string };
+/** 一条编译错误。line/position 指向创建语句里的位置。 */
+export type CompilationError = { line?: number | null; position?: number | null; text?: string | null };
+/** compilationErrors 非空表示对象建出来了但编译不过，它以不可用状态留在库里。 */
+export type SchemaObjectLifecycleResponse = { sql: string[]; message: string; compilationErrors: CompilationError[] };
 export type SchemaObjectTemplate = { kind: SchemaObjectKind; schemaName?: string; objectName: string; source: string };
 export type RoutineArgumentInput = { position: number; name?: string; value?: string; nullValue: boolean };
 export type RoutineOutParameter = { name?: string; typeName?: string; value: unknown };
 export type RoutineResultItem = { kind: 'RESULT_SET' | 'UPDATE_COUNT'; result?: SqlResult; updateCount?: number };
-export type RoutineInvokeResponse = { status: string; elapsedMs: number; returnValue?: unknown; outParameters: RoutineOutParameter[]; results: RoutineResultItem[]; truncated: boolean };
+export type RoutineInvokeResponse = { status: string; elapsedMs: number; returnValue?: unknown; outParameters: RoutineOutParameter[]; results: RoutineResultItem[]; truncated: boolean; messages: string[] };
 
 export type DbObject = {
   schemaName?: string;

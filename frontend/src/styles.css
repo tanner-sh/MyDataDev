@@ -2751,6 +2751,30 @@ body.is-resizing-column * {
   font-size: var(--text-xs);
 }
 
+/* 编译错误：一条语法错误常常级联出十几行，所以这块要能滚而不是把整个源码页撑走。 */
+.schema-object-compilation-errors {
+  max-height: 160px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: var(--text-sm);
+}
+
+/* 例程输出（RAISE NOTICE / DBMS_OUTPUT）。按原样保留换行，它本来就是一行一条。 */
+.routine-messages > pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: var(--text-sm);
+}
+
 .routine-result-set {
   min-height: 260px;
   display: grid;

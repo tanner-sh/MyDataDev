@@ -164,6 +164,142 @@ class SchemaObjectServiceTest {
                 .hasMessageContaining("确认文本不匹配");
     }
 
+    /**
+     * 建对象的语句没抛异常，不等于对象是好的。
+     *
+     * <p>Oracle 的 {@code CREATE OR REPLACE PROCEDURE} 语法错了也会返回成功，对象以 INVALID
+     * 状态留在库里。少了这一步，界面给出一句干净的「已创建」，直到某天有人调用它才发现是坏的
+     * —— 那时报错现场离真正的原因已经隔了很远。</p>
+     *
+     * <p>H2 上造不出这种语义，所以用一张模拟字典表 + 一个只覆写查询语句的方言来验证接线：
+     * 三个参数的绑定顺序、只在 CREATE/REPLACE 上查、以及查到之后响应长什么样。</p>
+     */
+    @Test
+    void reportsCompilationErrorsInsteadOfClaimingTheObjectWasCreated() throws Exception {
+        Fixture fixture = compilationFixture("PUBLIC", "RECENT_USERS", "VIEW");
+
+        var create = new SchemaObjectLifecycleRequest(
+                "CREATE", "VIEW", "PUBLIC", "recent_users", null,
+                "CREATE VIEW PUBLIC.recent_users AS SELECT id FROM users", null, "PUBLIC.recent_users"
+        );
+        var response = fixture.service().execute(1L, create, "tester", null);
+
+        assertThat(response.compilationErrors()).hasSize(1);
+        assertThat(response.compilationErrors().get(0).line()).isEqualTo(3);
+        assertThat(response.compilationErrors().get(0).position()).isEqualTo(12);
+        assertThat(response.compilationErrors().get(0).text()).contains("PLS-00103");
+        assertThat(response.message()).contains("编译未通过");
+    }
+
+    /** 三个参数按 owner / 对象名 / 对象类型 的顺序绑定；错位的话查出来的是别人的错误。 */
+    @Test
+    void bindsTheDictionaryLookupToTheObjectThatWasJustCreated() throws Exception {
+        Fixture fixture = compilationFixture("PUBLIC", "SOMETHING_ELSE", "VIEW");
+
+        var create = new SchemaObjectLifecycleRequest(
+                "CREATE", "VIEW", "PUBLIC", "recent_users", null,
+                "CREATE VIEW PUBLIC.recent_users AS SELECT id FROM users", null, "PUBLIC.recent_users"
+        );
+
+        assertThat(fixture.service().execute(1L, create, "tester", null).compilationErrors()).isEmpty();
+    }
+
+    /** 查不到（没权限读字典表、驱动不支持）就当没有：这是补充诊断，不该让一次已执行的 DDL 变成失败。 */
+    @Test
+    void aFailedCompilationLookupDoesNotFailTheDdl() throws Exception {
+        Fixture fixture = fixtureWithDialect(new com.example.dbadmin.core.H2Dialect() {
+            @Override
+            public String compilationErrorsSql() {
+                return "SELECT line, position, text FROM table_that_does_not_exist WHERE a = ? AND b = ? AND c = ?";
+            }
+        });
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+        }
+
+        var create = new SchemaObjectLifecycleRequest(
+                "CREATE", "VIEW", "PUBLIC", "recent_users", null,
+                "CREATE VIEW PUBLIC.recent_users AS SELECT id FROM users", null, "PUBLIC.recent_users"
+        );
+        var response = fixture.service().execute(1L, create, "tester", null);
+
+        assertThat(response.compilationErrors()).isEmpty();
+        assertThat(response.message()).contains("已创建");
+    }
+
+    /** DROP 之后去字典表里查「它编译过了吗」没有意义，也白花一次往返。 */
+    @Test
+    void doesNotLookUpCompilationErrorsForDrops() throws Exception {
+        Fixture fixture = compilationFixture("PUBLIC", "ACTIVE_USERS", "VIEW");
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE VIEW active_users AS SELECT id FROM users");
+        }
+        var views = fixture.service().list(1L, "PUBLIC", "VIEW", "active", 0, 100, true);
+        var detail = fixture.service().detail(1L, views.items().get(0).objectKey(), false);
+
+        var drop = new SchemaObjectLifecycleRequest(
+                "DROP", "VIEW", "PUBLIC", "ACTIVE_USERS", views.items().get(0).objectKey(),
+                null, detail.structureVersion(), "PUBLIC.ACTIVE_USERS"
+        );
+
+        assertThat(fixture.service().execute(1L, drop, "tester", null).compilationErrors()).isEmpty();
+    }
+
+    /** 装一张模拟字典表，并让方言按 owner/name/type 三个参数去查它。 */
+    private Fixture compilationFixture(String owner, String name, String type) throws Exception {
+        Fixture fixture = fixtureWithDialect(new com.example.dbadmin.core.H2Dialect() {
+            @Override
+            public String compilationErrorsSql() {
+                // 与 OracleDialect 同形：名字按大小写不敏感匹配。表单里填的是小写，
+                // 而字典表里存的是折成大写之后的名字。
+                return "SELECT line AS line, \"position\" AS \"position\", text AS text FROM all_errors_probe"
+                        + " WHERE UPPER(owner) = UPPER(COALESCE(?, 'PUBLIC')) AND UPPER(name) = UPPER(?)"
+                        + " AND type = ? ORDER BY line";
+            }
+        });
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
+            connection.createStatement().execute(
+                    "CREATE TABLE all_errors_probe(owner VARCHAR(30), name VARCHAR(60), type VARCHAR(30),"
+                            + " line INT, \"position\" INT, text VARCHAR(200))");
+            try (var statement = connection.prepareStatement("INSERT INTO all_errors_probe VALUES (?,?,?,?,?,?)")) {
+                statement.setString(1, owner);
+                statement.setString(2, name);
+                statement.setString(3, type);
+                statement.setInt(4, 3);
+                statement.setInt(5, 12);
+                statement.setString(6, "PLS-00103: 出现符号 END");
+                statement.execute();
+            }
+        }
+        return fixture;
+    }
+
+    private Fixture fixtureWithDialect(com.example.dbadmin.core.DatabaseDialect dialect) throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection ignored = DriverManager.getConnection(url, "sa", "")) {
+            // Keep the named in-memory database alive for subsequent calls.
+        }
+        DbConnection configured = new DbConnection(1L, "remote", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now());
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.require(1L)).thenReturn(configured);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        DialectRegistry registry = mock(DialectRegistry.class);
+        when(registry.dialectFor(org.mockito.ArgumentMatchers.any())).thenReturn(dialect);
+        SchemaObjectService service = new SchemaObjectService(
+                connections,
+                registry,
+                new SchemaObjectCatalog(new AppProperties()),
+                new MetadataCacheService(),
+                new ExecutionGuard(),
+                mock(AuditRepository.class),
+                mock(SqlHistoryRepository.class),
+                new AppProperties(),
+                new SqlScriptSplitter()
+        );
+        return new Fixture(url, service);
+    }
+
     private Fixture fixture(boolean readonly, String environment) throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection ignored = DriverManager.getConnection(url, "sa", "")) {

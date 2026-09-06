@@ -183,6 +183,42 @@ public interface DatabaseDialect {
      * durationSeconds / sql 这几列（缺的用 NULL 占位），由 SessionService 统一读取。</p>
      */
     /**
+     * 对象创建后的编译错误。
+     *
+     * <p>返回 {@code null} 表示这个数据库不需要这一步：绝大多数数据库的 CREATE 语法有问题时
+     * 直接抛异常。Oracle 是例外 —— {@code CREATE OR REPLACE PROCEDURE} 会「带编译错误创建
+     * 成功」，语句本身不报错，对象留在库里但状态是 INVALID。不查这张字典表的话，用户看到的
+     * 是一句干净的「创建成功」，直到某天有人调用它才发现是坏的。</p>
+     *
+     * <p>语句按顺序接三个参数：owner/schema（可为 null，表示当前 schema）、对象名、对象类型
+     * （PROCEDURE / FUNCTION / TRIGGER / VIEW 这样的字面量）。返回列：line、position、text。</p>
+     */
+    default String compilationErrorsSql() {
+        return null;
+    }
+
+    /**
+     * 调用例程前要执行的一条语句，用来打开服务端的输出缓冲。
+     *
+     * <p>只有 Oracle 需要：{@code DBMS_OUTPUT} 不显式 ENABLE 就什么都收不到，而 PL/SQL 里
+     * 排查问题基本全靠它。其余数据库的 {@code RAISE NOTICE} / 警告走 JDBC 的 SQLWarning，
+     * 不需要这一步。</p>
+     */
+    default String routineOutputEnableSql() {
+        return null;
+    }
+
+    /**
+     * 读回一行例程输出的调用语句：第一个输出参数是文本，第二个是状态码（非 0 表示读完了）。
+     *
+     * <p>这个形状是照 Oracle 的 {@code DBMS_OUTPUT.GET_LINE} 定的，因为只有它用「攒在服务端
+     * 缓冲区、事后一行行取」这种机制。为它抽一层 Provider 比问题本身还重。</p>
+     */
+    default String routineOutputFetchCall() {
+        return null;
+    }
+
+    /**
      * 会话之间的阻塞关系：谁在等谁。
      *
      * <p>会话列表能让人杀掉一个会话，却说不出该杀哪一个 —— 中间这一步才是排查锁等待时真正

@@ -297,7 +297,27 @@ public final class ApiDtos {
     ) {
     }
 
-    public record SchemaObjectLifecycleResponse(List<String> sql, String message) {
+    /**
+     * 一条编译错误。
+     *
+     * <p>{@code line} / {@code position} 指向创建语句里的位置，界面据此把光标落到出错那一行 ——
+     * 一条「PLS-00103: 出现符号 END」不告诉你在第几行，等于让人从头读一遍。</p>
+     */
+    public record CompilationError(Integer line, Integer position, String text) {
+    }
+
+    /**
+     * @param compilationErrors 非空表示对象建出来了但编译不过（Oracle 会这样），此时它以 INVALID
+     *                          状态留在库里，调用会失败。
+     */
+    public record SchemaObjectLifecycleResponse(List<String> sql, String message, List<CompilationError> compilationErrors) {
+        public SchemaObjectLifecycleResponse {
+            compilationErrors = compilationErrors == null ? List.of() : List.copyOf(compilationErrors);
+        }
+
+        public SchemaObjectLifecycleResponse(List<String> sql, String message) {
+            this(sql, message, List.of());
+        }
     }
 
     public record RoutineArgumentInput(@Min(0) int position, @Size(max = 240) String name, @Size(max = 1_000_000) String value, boolean nullValue) {
@@ -316,14 +336,23 @@ public final class ApiDtos {
     public record RoutineResultItem(String kind, SqlResult result, Integer updateCount) {
     }
 
+    /**
+     * @param messages 例程执行期间产生的消息：PostgreSQL 的 RAISE NOTICE、MySQL 的警告走 JDBC
+     *                 的 SQLWarning，Oracle 的 DBMS_OUTPUT 要显式读回。不读的话 PL/SQL 里最常
+     *                 用的那种排查手段等于没有。
+     */
     public record RoutineInvokeResponse(
             String status,
             long elapsedMs,
             Object returnValue,
             List<RoutineOutParameter> outParameters,
             List<RoutineResultItem> results,
-            boolean truncated
+            boolean truncated,
+            List<String> messages
     ) {
+        public RoutineInvokeResponse {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
     }
 
     public record ObjectRelation(String constraintName, String pkSchemaName, String pkTableName, String pkColumnName, String fkSchemaName, String fkTableName, String fkColumnName) {
