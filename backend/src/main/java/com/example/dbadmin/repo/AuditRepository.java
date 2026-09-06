@@ -15,6 +15,7 @@ import com.example.dbadmin.service.AuditAlertService;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -94,10 +95,23 @@ public class AuditRepository {
         String forwardedFor = truncate(context == null ? null : context.forwardedFor(), 500);
         String userAgent = truncate(context == null ? null : context.userAgent(), 1_000);
         String requestId = truncate(context == null ? null : context.requestId(), 120);
-        Timestamp createdAt = Timestamp.from(Instant.now());
+        Timestamp createdAt = auditTimestamp(Instant.now());
         // 审计只写不读，挪出请求线程可以省掉一次同步 H2 写；写失败的处理与之前一致。
         writes.submit(() -> insert(safeActor, safeAction, connectionId, safeTarget, safeDetail,
                 remoteAddress, forwardedFor, userAgent, requestId, createdAt));
+    }
+
+    /**
+     * 审计时间戳只保留到微秒 —— 哈希算的必须是最终会存进去的那个值。
+     *
+     * <p>{@code audit_log.created_at} 是 H2 的 {@code TIMESTAMP}，精度到微秒；而 Linux 上
+     * {@code Instant.now()} 可能给到纳秒。不截断的话，入库时会被四舍五入
+     * （实测 …123456789 存成 …123457000），于是 {@link #verifyChain} 用读回来的值重算，
+     * 每一条都对不上 —— 一台机器上审计链会从第一条起就报「被篡改」，而其实什么都没发生。
+     * 这个差异只在时钟精度高于列精度的机器上出现，所以它在 macOS 上不复现、在部分 Linux 上必现。</p>
+     */
+    static Timestamp auditTimestamp(Instant instant) {
+        return Timestamp.from(instant.truncatedTo(ChronoUnit.MICROS));
     }
 
     private synchronized void insert(String actor, String action, Long connectionId, String target, String detail,

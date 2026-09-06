@@ -83,6 +83,22 @@ class AuditRepositoryQueryTest {
         assertThat(verified.get().complete()).isTrue();
     }
 
+    /**
+     * 时钟比列精度细时，哈希用的值必须先降到列能存下的精度。
+     *
+     * <p>audit_log.created_at 是 TIMESTAMP（微秒），而 Linux 上 Instant.now() 可能到纳秒 ——
+     * H2 入库时会四舍五入（…123456789 → …123457000）。用截断前的值算哈希，校验时用读回来的值
+     * 重算，链就会从第一条起被报成断的。这条断言守的就是「哈希什么就存什么」。</p>
+     */
+    @Test
+    void hashesTimestampsAtThePrecisionTheColumnCanHold() {
+        java.sql.Timestamp truncated = AuditRepository.auditTimestamp(
+                java.time.Instant.ofEpochSecond(1_700_000_000L, 123_456_789));
+
+        assertThat(truncated.getNanos()).isEqualTo(123_456_000);
+        assertThat(truncated).isEqualTo(java.sql.Timestamp.from(truncated.toInstant()));
+    }
+
     @Test
     void verificationCanBeResumedFromAnEarlierPoint() {
         for (int i = 0; i < 5; i++) repository.onConnection("admin", "SQL_EXECUTE", 1L, "select " + i);
