@@ -848,27 +848,58 @@ body {
   text-overflow: ellipsis;
 }
 
+/*
+  列宽手柄压在列的右边界上。
+
+  它本来是标题里的一个 flex 项，于是被排在列名之后、排序与筛选图标之前 —— 也就是列宽的
+  中间偏右，离真正的边界差着三四十像素。看上去像是列中间无故多了一条竖线，想拖边界的人
+  又抓不到它。绝对定位到单元格右缘之后，位置与「表格列可以拖」这件事的常识一致。
+*/
+.result-grid .ant-table-thead th,
+.editable-grid .ant-table-thead th {
+  position: relative;
+}
+
+/*
+  antd 给 .ant-table-column-title 加了 position: relative，它只包住列名（不含排序与筛选图标），
+  于是绝对定位的手柄会锚在标题右缘 —— 正是「差着三四十像素」的那三四十像素。让它退回 static，
+  手柄才锚到单元格本身。
+*/
+.result-grid .ant-table-thead th .ant-table-column-title,
+.editable-grid .ant-table-thead th .ant-table-column-title {
+  position: static;
+}
+
 .column-resize-handle {
-  width: 10px;
-  height: 24px;
-  flex: 0 0 auto;
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 0;
+  z-index: 2;
+  width: 7px;
   cursor: col-resize;
   touch-action: none;
 }
 
 .column-resize-handle::after {
   content: "";
-  display: block;
+  position: absolute;
+  inset-block: 6px;
+  inset-inline-end: 2px;
   width: 2px;
-  height: 16px;
-  margin: 4px auto;
   border-radius: var(--radius-sm);
-  background: var(--border);
+  background: transparent;
 }
 
 .column-resize-handle:hover::after,
 .column-resize-handle:focus-visible::after {
   background: var(--primary);
+}
+
+/*
+  筛选图标让开手柄这几像素，否则点筛选会落在手柄上。排序图标在它左边，不受影响。
+*/
+.result-grid .ant-table-filter-trigger {
+  margin-inline-end: 7px;
 }
 
 body.is-resizing-column,

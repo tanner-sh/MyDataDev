@@ -67,4 +67,36 @@ describe('列宽拖动生命周期', () => {
       vi.useRealTimers();
     }
   });
+
+  it('同一帧里的多次移动只更新一次，收尾时结算最后一次', () => {
+    const frames: FrameRequestCallback[] = [];
+    const originalRequest = globalThis.requestAnimationFrame;
+    const originalCancel = globalThis.cancelAnimationFrame;
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => frames.push(callback)) as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = (() => undefined) as typeof cancelAnimationFrame;
+    try {
+      const target = new EventTarget();
+      const onMove = vi.fn();
+      const cleanup = startColumnResizeInteraction({ target, pointerId: 2, startX: 100, onMove, onFinish: vi.fn() });
+
+      target.dispatchEvent(pointerEvent('pointermove', 2, 110));
+      target.dispatchEvent(pointerEvent('pointermove', 2, 130));
+      target.dispatchEvent(pointerEvent('pointermove', 2, 160));
+      expect(onMove).not.toHaveBeenCalled();
+
+      frames.shift()?.(0);
+      expect(onMove).toHaveBeenCalledOnce();
+      expect(onMove).toHaveBeenCalledWith(60);
+
+      // 又移动了但这一帧还没到，松手时不能把它丢掉。
+      target.dispatchEvent(pointerEvent('pointermove', 2, 180));
+      target.dispatchEvent(pointerEvent('pointerup', 2));
+      expect(onMove).toHaveBeenCalledTimes(2);
+      expect(onMove).toHaveBeenLastCalledWith(80);
+      cleanup();
+    } finally {
+      globalThis.requestAnimationFrame = originalRequest;
+      globalThis.cancelAnimationFrame = originalCancel;
+    }
+  });
 });

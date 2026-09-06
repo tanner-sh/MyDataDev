@@ -197,10 +197,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   }, [sourceSql, columnSignature, result?.resultSet]);
 
   const resizeColumn = useCallback((key: string, width: number) => {
-    setColumnWidths((current) => ({
-      ...current,
-      [key]: Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(MAX_RESULT_COLUMN_WIDTH, Math.round(width)))
-    }));
+    setColumnWidths((current) => {
+      const next = Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(MAX_RESULT_COLUMN_WIDTH, Math.round(width)));
+      // 拖到上下限之后继续拖，宽度不再变化 —— 这时返回原对象，省掉一次整表重渲染。
+      return current[key] === next ? current : { ...current, [key]: next };
+    });
   }, []);
 
   const stopColumnResize = useCallback(() => {

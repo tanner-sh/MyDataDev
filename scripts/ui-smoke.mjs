@@ -770,7 +770,13 @@ try {
         if (!node) return null;
         const rect = node.getBoundingClientRect();
         const header = node.closest('th');
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: header?.getBoundingClientRect().width || 0 };
+        const cell = header.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: cell.width,
+          // 手柄必须压在列的右边界上。它本来是标题里的 flex 项，会被排在列名之后、
+          // 排序与筛选图标之前 —— 离真正的边界差着三四十像素，看着像列中间多了一条竖线。
+          edgeGap: Math.round(cell.right - rect.right)
+        };
       })()
     `);
     if (handle) {
@@ -791,6 +797,7 @@ try {
           };
         })()
       `);
+      check('列宽手柄压在列的右边界上', handle.edgeGap <= 1, `距右缘 ${handle.edgeGap}px`);
       check('拖列宽真的改了宽度', afterDrag.width > handle.width + 20,
         `${Math.round(handle.width)} → ${Math.round(afterDrag.width)}`);
       check('拖列宽不发请求、不触发排序', afterDrag.calls === 0 && afterDrag.sorted === false, JSON.stringify(afterDrag));

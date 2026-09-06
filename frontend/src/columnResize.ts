@@ -27,9 +27,27 @@ export function startColumnResizeInteraction({
   onFinish
 }: ColumnResizeInteraction): () => void {
   let finished = false;
+  /*
+    指针事件按帧合并再更新宽度。
+
+    pointermove 在高刷屏上一秒能来一百多次，而每次更新都要重建整份列定义并让表格重画一遍：
+    40 列的结果集上，30 次移动就产生近千条 DOM 变更、最长一帧掉到 39ms —— 手上的感觉就是
+    「拖不动」。一帧只可能呈现一个宽度，所以同一帧里的多次移动只取最后一次。
+  */
+  let frame = 0;
+  let pendingDelta = 0;
+  const flush = () => {
+    frame = 0;
+    if (!finished) onMove(pendingDelta);
+  };
   const move = (event: Event) => {
     const pointer = event as PointerEvent;
-    if (pointer.pointerId === pointerId) onMove(pointer.clientX - startX);
+    if (pointer.pointerId !== pointerId) return;
+    pendingDelta = pointer.clientX - startX;
+    if (frame) return;
+    // 没有 rAF 的环境（测试、非浏览器）退回直接更新，行为与合并前一致。
+    if (typeof requestAnimationFrame !== 'function') { flush(); return; }
+    frame = requestAnimationFrame(flush);
   };
   const finish = (event?: Event) => {
     if (event?.type !== 'blur' && (event as PointerEvent | undefined)?.pointerId !== pointerId) return;
@@ -42,6 +60,12 @@ export function startColumnResizeInteraction({
   const cleanup = () => {
     if (finished) return;
     finished = true;
+    // 收尾前把最后一次移动结算掉，否则松手时列宽会停在上一帧的位置。
+    if (frame) {
+      if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+      frame = 0;
+      onMove(pendingDelta);
+    }
     target.removeEventListener('pointermove', move);
     target.removeEventListener('pointerup', finish);
     target.removeEventListener('pointercancel', finish);

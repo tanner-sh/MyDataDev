@@ -58,7 +58,11 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   // each render just to decide a class name.
   const rowClassName = useCallback((row: EditableDisplayRow) => row.rowClassName, []);
   const setColumnWidth = useCallback((columnName: string, width: number) => {
-    setColumnWidths((current) => ({ ...current, [columnName]: Math.max(88, Math.min(520, width)) }));
+    setColumnWidths((current) => {
+      const next = Math.max(88, Math.min(520, Math.round(width)));
+      // 与结果表同理：拖到上下限之后宽度不再变，不必为此重渲染整张表。
+      return current[columnName] === next ? current : { ...current, [columnName]: next };
+    });
   }, []);
   const stopResize = useCallback(() => {
     resizeCleanupRef.current?.();
