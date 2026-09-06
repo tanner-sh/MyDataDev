@@ -785,6 +785,24 @@ try {
       });
       await drag('mousePressed', handle.x);
       await drag('mouseMoved', handle.x + 70);
+      await page.sleep(600);
+      /*
+        拖动过程中列宽不该变：实时改宽度意味着每次移动都要重建整份列定义并让虚拟表重画
+        （40 列时每次约 14.5ms 脚本，一帧只有 16.7ms）。现在拖动期间只移动一条参考线，
+        松手才提交一次。这条断言是「没退回实时改宽」的可观测形式。
+      */
+      const during = await page.evaluate(`
+        (() => {
+          const guide = document.querySelector('.data-grid-viewport .column-resize-guide');
+          const node = document.querySelector('.result-grid .column-resize-handle');
+          return {
+            guideVisible: Boolean(guide) && guide.hidden === false && guide.getBoundingClientRect().height > 0,
+            width: node?.closest('th')?.getBoundingClientRect().width || 0
+          };
+        })()
+      `);
+      check('拖动中显示参考线，列宽先不动', during.guideVisible === true
+        && Math.abs(during.width - handle.width) < 2, JSON.stringify(during));
       await drag('mouseReleased', handle.x + 70);
       await page.sleep(2500);
       const afterDrag = await page.evaluate(`

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { startColumnResizeInteraction } from './columnResize';
+import { resizePreview, startColumnResizeInteraction } from './columnResize';
 
 function pointerEvent(type: string, pointerId: number, clientX = 0) {
   return Object.assign(new Event(type), { pointerId, clientX });
@@ -98,5 +98,18 @@ describe('列宽拖动生命周期', () => {
       globalThis.requestAnimationFrame = originalRequest;
       globalThis.cancelAnimationFrame = originalCancel;
     }
+  });
+});
+
+describe('拖动参考线', () => {
+  const base = { initialWidth: 100, columnLeft: 400, viewportLeft: 300, min: 88, max: 520 };
+
+  it('参考线落在这一列松手后的右缘上', () => {
+    expect(resizePreview({ ...base, deltaX: 60 })).toEqual({ width: 160, offset: 260 });
+  });
+
+  it('拖过上下限时参考线停住，不会走到列不会去的位置', () => {
+    expect(resizePreview({ ...base, deltaX: -900 })).toEqual({ width: 88, offset: 188 });
+    expect(resizePreview({ ...base, deltaX: 900 })).toEqual({ width: 520, offset: 620 });
   });
 });

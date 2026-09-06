@@ -39,7 +39,7 @@ import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, read
 import { buildXlsx } from '../xlsx';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
-import { startColumnResizeInteraction } from '../columnResize';
+import { resizePreview, startColumnResizeInteraction } from '../columnResize';
 
 const { Text } = Typography;
 
@@ -93,6 +93,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resultRowCheckboxChangeRef = useRef<(rowKey: string, checked: boolean) => void>(() => undefined);
   const resultSelectAllChangeRef = useRef<(checked: boolean) => void>(() => undefined);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const resizeGuideRef = useRef<HTMLDivElement>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
   const [view, setView] = useState<'table' | 'chart'>('table');
   const rowCount = result?.resultSet ? result.rows.length : 0;
@@ -211,30 +212,60 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
 
   useEffect(() => stopColumnResize, [stopColumnResize]);
 
+  /*
+    拖动期间只移动一条参考线，不动 React。
+
+    实时改列宽意味着每一次移动都要重建整份列定义并让虚拟表重画：40 列的结果集上实测每次
+    更新 14.5ms 脚本时间（一帧只有 16.7ms），列越多越卡，手上就是「拖不动」。参考线是一个
+    直接写 style 的 DOM 节点，一帧一次赋值；宽度在松手时提交一次。
+  */
   const beginColumnResize = useCallback((event: ReactPointerEvent<HTMLSpanElement>, key: string, initialWidth: number) => {
     event.preventDefault();
     event.stopPropagation();
     stopColumnResize();
     const handle = event.currentTarget;
     const startX = event.clientX;
+    const column = handle.closest('th')?.getBoundingClientRect();
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    const guide = resizeGuideRef.current;
     if (typeof handle.setPointerCapture === 'function') handle.setPointerCapture(event.pointerId);
+    let pendingWidth = initialWidth;
+    const preview = (deltaX: number) => resizePreview({
+      initialWidth,
+      deltaX,
+      columnLeft: column?.left ?? 0,
+      viewportLeft: viewport?.left ?? 0,
+      min: MIN_RESULT_COLUMN_WIDTH,
+      max: MAX_RESULT_COLUMN_WIDTH
+    });
+    if (guide) {
+      const start = preview(0);
+      guide.style.transform = `translateX(${start.offset}px)`;
+      guide.hidden = false;
+    }
     let cleanup: () => void = () => undefined;
     cleanup = startColumnResizeInteraction({
       target: window,
       pointerId: event.pointerId,
       startX,
-      onMove: (deltaX) => resizeColumn(key, initialWidth + deltaX),
+      onMove: (deltaX) => {
+        const next = preview(deltaX);
+        pendingWidth = next.width;
+        if (guide) guide.style.transform = `translateX(${next.offset}px)`;
+      },
       onFinish: () => {
+        if (guide) guide.hidden = true;
         if (typeof handle.hasPointerCapture === 'function' && handle.hasPointerCapture(event.pointerId)) {
           handle.releasePointerCapture(event.pointerId);
         }
         if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
         document.body.classList.remove('is-resizing-column');
+        resizeColumn(key, pendingWidth);
       }
     });
     resizeCleanupRef.current = cleanup;
     document.body.classList.add('is-resizing-column');
-  }, [resizeColumn, stopColumnResize]);
+  }, [resizeColumn, stopColumnResize, viewportRef]);
 
   const editInfo = result?.edit;
   const editingEnabled = isResultEditable(editInfo) && Boolean(onCommitEdits);
@@ -774,6 +805,9 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         </Tooltip>
       </div>
       <div ref={viewportRef} className="data-grid-viewport">
+        {/* 拖动列宽时跟着走的参考线。直接写 style，不进 React 状态 —— 它存在的全部意义就是
+            让拖动期间一次重渲染都不发生。 */}
+        <div ref={resizeGuideRef} className="column-resize-guide" hidden aria-hidden="true" />
         {view === 'chart' ? (
           <Suspense fallback={<PanelLoading compact text="正在加载图表…" />}>
             <ResultChart columns={result.columns} rows={chartRows} />

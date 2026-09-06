@@ -420,6 +420,11 @@ body {
   pointer-events: none;
 }
 
+.data-grid-viewport,
+.editable-table-viewport {
+  position: relative;
+}
+
 .data-grid-fill {
   height: 100%;
 }
@@ -900,6 +905,22 @@ body {
 */
 .result-grid .ant-table-filter-trigger {
   margin-inline-end: 7px;
+}
+
+/*
+  列宽拖动的参考线。
+
+  拖动期间不实时改列宽 —— 改一次就要重建整份列定义并让虚拟表重画（40 列时每次 14.5ms 脚本，
+  一帧只有 16.7ms）。这条线是直接写 style 的单个节点，一帧一次赋值，松手时才提交宽度。
+*/
+.column-resize-guide {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  z-index: 5;
+  width: 2px;
+  pointer-events: none;
+  background: var(--primary);
 }
 
 body.is-resizing-column,

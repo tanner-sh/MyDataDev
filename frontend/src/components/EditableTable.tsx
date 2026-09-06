@@ -3,7 +3,11 @@ import { cellValidation } from '../tableEditing';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { fillerColumnWidth, isNumericColumnType, suggestedColumnWidth as sharedColumnWidth } from '../resultGridData';
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import { startColumnResizeInteraction } from '../columnResize';
+import { resizePreview, startColumnResizeInteraction } from '../columnResize';
+
+/** 表数据网格的列宽上下限：参考线与最终提交用同一组，免得线停在一个列到不了的位置。 */
+const MIN_EDITABLE_COLUMN_WIDTH = 88;
+const MAX_EDITABLE_COLUMN_WIDTH = 520;
 import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
@@ -39,6 +43,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   const [activeCell, setActiveCell] = useState<string | null>(null);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const resizeGuideRef = useRef<HTMLDivElement>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(data) });
 
   useEffect(() => {
@@ -59,7 +64,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   const rowClassName = useCallback((row: EditableDisplayRow) => row.rowClassName, []);
   const setColumnWidth = useCallback((columnName: string, width: number) => {
     setColumnWidths((current) => {
-      const next = Math.max(88, Math.min(520, Math.round(width)));
+      const next = Math.max(MIN_EDITABLE_COLUMN_WIDTH, Math.min(MAX_EDITABLE_COLUMN_WIDTH, Math.round(width)));
       // 与结果表同理：拖到上下限之后宽度不再变，不必为此重渲染整张表。
       return current[columnName] === next ? current : { ...current, [columnName]: next };
     });
@@ -77,30 +82,53 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
     鼠标回到页面时列宽还跟着走。那条共用实现把 pointercancel、窗口失焦和组件卸载
     都收在同一个幂等清理里，顺带吞掉拖动后合成的那次 click。
   */
+  // 与查询结果表同一套：拖动期间只移动参考线，松手才提交宽度（原因见 ResultGrid 的注释）。
   const beginResize = useCallback((event: ReactPointerEvent<HTMLSpanElement>, columnName: string, initialWidth: number) => {
     event.preventDefault();
     event.stopPropagation();
     stopResize();
     const handle = event.currentTarget;
     const startX = event.clientX;
+    const column = handle.closest('th')?.getBoundingClientRect();
+    const viewport = viewportRef.current?.getBoundingClientRect();
+    const guide = resizeGuideRef.current;
     if (typeof handle.setPointerCapture === 'function') handle.setPointerCapture(event.pointerId);
+    let pendingWidth = initialWidth;
+    const preview = (deltaX: number) => resizePreview({
+      initialWidth,
+      deltaX,
+      columnLeft: column?.left ?? 0,
+      viewportLeft: viewport?.left ?? 0,
+      min: MIN_EDITABLE_COLUMN_WIDTH,
+      max: MAX_EDITABLE_COLUMN_WIDTH
+    });
+    if (guide) {
+      guide.style.transform = `translateX(${preview(0).offset}px)`;
+      guide.hidden = false;
+    }
     let cleanup: () => void = () => undefined;
     cleanup = startColumnResizeInteraction({
       target: window,
       pointerId: event.pointerId,
       startX,
-      onMove: (deltaX) => setColumnWidth(columnName, initialWidth + deltaX),
+      onMove: (deltaX) => {
+        const next = preview(deltaX);
+        pendingWidth = next.width;
+        if (guide) guide.style.transform = `translateX(${next.offset}px)`;
+      },
       onFinish: () => {
+        if (guide) guide.hidden = true;
         if (typeof handle.hasPointerCapture === 'function' && handle.hasPointerCapture(event.pointerId)) {
           handle.releasePointerCapture(event.pointerId);
         }
         if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
         document.body.classList.remove('is-resizing-column');
+        setColumnWidth(columnName, pendingWidth);
       }
     });
     resizeCleanupRef.current = cleanup;
     document.body.classList.add('is-resizing-column');
-  }, [setColumnWidth, stopResize]);
+  }, [setColumnWidth, stopResize, viewportRef]);
 
   const columns = useMemo<ColumnsType<EditableDisplayRow>>(() => {
     if (!data) return [];
@@ -220,6 +248,8 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
           catch { setLargeError('JSON 格式不正确，请检查引号、逗号与括号'); }
         }}>格式化 JSON</Button>}
       </Modal>
+      {/* 拖动列宽时跟着走的参考线，直接写 style，不进 React 状态。 */}
+      <div ref={resizeGuideRef} className="column-resize-guide" hidden aria-hidden="true" />
       {scrollY === undefined ? (
         <PanelLoading compact text="正在准备表格…" />
       ) : (
