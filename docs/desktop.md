@@ -117,11 +117,11 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 发版前先更新 [CHANGELOG.md](../CHANGELOG.md)：新增一节对应版本，写清新增、变更、修复，以及**升级注意**（尤其是会让不合规配置启动失败的校验）。发布说明从这里取，而不是让读者去翻 git log。
 
-项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.5.0` 时：
+项目的 `backend/pom.xml`、`frontend/package.json` 和 `desktop/package.json` 版本必须一致。推送同版本标签即可创建 GitHub Release，例如当前版本为 `0.6.0` 时：
 
 ```bash
-git tag v0.5.0
-git push origin v0.5.0
+git tag v0.6.0
+git push origin v0.6.0
 ```
 
 标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
