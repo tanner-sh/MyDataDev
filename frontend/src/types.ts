@@ -691,6 +691,50 @@ export type SchemaDiffResponse = {
 
 /** 数据对比：差异方向同样以源端为准。 */
 export type DataDiffChange = 'ONLY_IN_SOURCE' | 'ONLY_IN_TARGET' | 'DIFFERENT';
+/** 时间线上的一条结构快照。capturedAt 到 lastSeenAt 是这个结构存在的区间。 */
+export type SchemaSnapshotSummary = {
+  id: number;
+  connectionId: number;
+  schemaName: string;
+  label?: string | null;
+  tableCount: number;
+  checksum: string;
+  capturedBy?: string | null;
+  capturedAt: string;
+  lastSeenAt: string;
+};
+/** changed 为 false 表示结构与上一份完全一致，这次没有新建快照。 */
+export type SchemaSnapshotCaptureResponse = {
+  snapshot: SchemaSnapshotSummary;
+  changed: boolean;
+  warnings: string[];
+};
+export type SchemaDriftTable = { tableName: string; status: SchemaDiffStatus; items: SchemaDiffItem[] };
+/** 本工具在漂移窗口内做过的结构变更。为空只说明「不是从这里改的」。 */
+export type SchemaDriftAudit = { at: string; actor?: string | null; action: string; target?: string | null; detail?: string | null };
+export type SchemaDriftResponse = {
+  baseline: SchemaSnapshotSummary;
+  target?: SchemaSnapshotSummary | null;
+  targetLabel: string;
+  summary: SchemaDiffSummary;
+  tables: SchemaDriftTable[];
+  auditEvents: SchemaDriftAudit[];
+  warnings: string[];
+};
+export type SchemaSnapshotTarget = {
+  id: number;
+  connectionId: number;
+  schemaName: string;
+  cron: string;
+  scheduleZone?: string | null;
+  zoneId: string;
+  enabled: boolean;
+  keepSnapshots: number;
+  lastRunAt?: string | null;
+  lastStatus?: string | null;
+  lastMessage?: string | null;
+};
+
 export type DataSearchRequest = {
   connectionId: number;
   schemaName?: string;

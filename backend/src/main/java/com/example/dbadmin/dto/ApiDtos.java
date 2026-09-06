@@ -817,6 +817,74 @@ public final class ApiDtos {
     }
 
     /**
+     * 时间线上的一条结构快照。
+     *
+     * @param lastSeenAt 最后一次采集到同一个结构的时间。与 {@code capturedAt} 一起读：
+     *                   「这个结构从 capturedAt 一直保持到 lastSeenAt」
+     */
+    public record SchemaSnapshotSummary(
+            long id,
+            long connectionId,
+            String schemaName,
+            String label,
+            int tableCount,
+            String checksum,
+            String capturedBy,
+            String capturedAt,
+            String lastSeenAt
+    ) {
+    }
+
+    /**
+     * 一次采集的结果。
+     *
+     * @param changed false 表示结构与上一份快照完全一致，这次没有新建快照，只推进了 lastSeenAt
+     */
+    public record SchemaSnapshotCaptureResponse(
+            SchemaSnapshotSummary snapshot,
+            boolean changed,
+            List<String> warnings
+    ) {
+    }
+
+    /** 漂移里的一张表：新增、删除，或结构不一致（items 逐条列出差异）。 */
+    public record SchemaDriftTable(String tableName, String status, List<SchemaDiffItem> items) {
+    }
+
+    /**
+     * 两个时间点之间的结构漂移。
+     *
+     * @param baseline    比较的起点（较早的那份快照）
+     * @param target      比较的终点；对着当前结构比时为 null
+     * @param auditEvents 这段时间里本工具在这条连接上做过的结构变更。为空**不代表没人改过** ——
+     *                    审计只记得到经由本工具的操作，而漂移多半来自外面
+     */
+    public record SchemaDriftResponse(
+            SchemaSnapshotSummary baseline,
+            SchemaSnapshotSummary target,
+            String targetLabel,
+            SchemaDiffSummary summary,
+            List<SchemaDriftTable> tables,
+            List<SchemaDriftAudit> auditEvents,
+            List<String> warnings
+    ) {
+    }
+
+    public record SchemaDriftAudit(String at, String actor, String action, String target, String detail) {
+    }
+
+    /** 定期采集的目标。同一个（连接, Schema）只允许一个。 */
+    public record SchemaSnapshotTargetRequest(
+            long connectionId,
+            @Size(max = 200) String schemaName,
+            @NotBlank @Size(max = 120) String cron,
+            @Size(max = 64) String scheduleZone,
+            boolean enabled,
+            Integer keepSnapshots
+    ) {
+    }
+
+    /**
      * 一次全库数据检索。
      *
      * <p>{@code mode} 取 {@code CONTAINS}（默认）或 {@code EQUALS}；比较一律先把列转成文本，

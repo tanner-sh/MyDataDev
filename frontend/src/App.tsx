@@ -125,6 +125,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPanel').then((module) => ({ default: module.ScheduledExportPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
+const SchemaSnapshotPanel = lazy(() => import('./components/SchemaSnapshotPanel').then((module) => ({ default: module.SchemaSnapshotPanel })));
 const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
 const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -3573,6 +3574,19 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     defaultConnectionId={selected?.id}
                     aiStatus={aiStatus}
                     onOpenInSqlTab={openSchemaDiffScript}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'schema-snapshots' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>结构快照与漂移</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载结构快照…" />}>
+                  <SchemaSnapshotPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    defaultSchema={activeSqlSchema}
                   />
                 </Suspense>
               </div>
