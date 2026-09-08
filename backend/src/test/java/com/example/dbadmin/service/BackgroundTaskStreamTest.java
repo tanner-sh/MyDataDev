@@ -86,6 +86,8 @@ class BackgroundTaskStreamTest {
         fixture.stream.publish();
 
         assertThat(fixture.stream.subscriberCount()).isZero();
+        // 只摘掉订阅还不够：异步请求会一直挂到 SSE 超时才释放，而对面早就没人了。
+        verify(emitter).complete();
     }
 
     private static BackupHistory running() {

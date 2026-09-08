@@ -27,7 +27,7 @@
  * 剩下的检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
  * 视觉细节靠人看截图 —— 脚本不该假装自己能判断好不好看。
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
@@ -935,6 +935,13 @@ try {
     check('只读连接下状态栏只占一行', readonlyLayout.status > 0 && readonlyLayout.status <= 40, JSON.stringify(readonlyLayout));
     check('只读连接在工具栏里有提示', readonlyLayout.readonlyHint === true, JSON.stringify(readonlyLayout));
     await page.shot('10-只读连接SQL工作台');
+
+    // 最后回头看一眼服务端日志。整轮冒烟刷新过页面、切过连接，SSE 与在途请求被断了好几次 ——
+    // 这些「对端先走了」此前每次都留下一条带整页栈的 ERROR，用户看到的现象就是应用起着不动、
+    // 日志定期刷错误。跑完一整轮正常操作，服务端不该记下任何 ERROR。
+    const serverLog = readFileSync(path.join(WORK_DIR, 'server.log'), 'utf8');
+    const errorLines = serverLog.split('\n').filter((line) => / ERROR /.test(line));
+    check('服务端日志里没有 ERROR', errorLines.length === 0, errorLines.slice(0, 3).join(' ⏎ '));
   }
 
 

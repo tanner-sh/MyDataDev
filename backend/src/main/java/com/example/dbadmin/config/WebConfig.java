@@ -1,6 +1,10 @@
 package com.example.dbadmin.config;
 
+import com.example.dbadmin.api.ClientDisconnectFilter;
+import jakarta.servlet.DispatcherType;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
+import org.springframework.core.Ordered;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.CacheControl;
@@ -34,6 +38,22 @@ public class WebConfig implements WebMvcConfigurer {
         executor.setThreadNamePrefix("dbadmin-stream-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         return executor;
+    }
+
+    /**
+     * 手写注册而不是给过滤器加 {@code @Component}：这一条的意义全在「覆盖哪些 dispatch」上。
+     *
+     * <p>SSE 的写失败是从 ASYNC 与 ERROR 两种 dispatch 上冒出来的，只挂 REQUEST 等于没加。
+     * 显式列出来，也就顺带可以在测试里断言这件事。放在最外层，才收得住内层所有过滤器与
+     * DispatcherServlet 的写失败。</p>
+     */
+    @Bean
+    public FilterRegistrationBean<ClientDisconnectFilter> clientDisconnectFilter() {
+        FilterRegistrationBean<ClientDisconnectFilter> registration = new FilterRegistrationBean<>(new ClientDisconnectFilter());
+        registration.addUrlPatterns("/*");
+        registration.setDispatcherTypes(DispatcherType.REQUEST, DispatcherType.ASYNC, DispatcherType.ERROR);
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        return registration;
     }
 
     @Override

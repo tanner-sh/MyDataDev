@@ -126,6 +126,13 @@ public class BackgroundTaskStream {
         } catch (IOException | IllegalStateException error) {
             // 对端关掉页面就是这个下场，属于正常流程，不该记成错误。
             log.debug("后台任务推送通道已关闭", error);
+            // 只从订阅表里摘掉还不够：异步请求会一直挂到 SSE 超时（默认 30 分钟）才释放，
+            // 而对面早就没人了。这里顺手收尾，complete 本身失败同样只是「已经收过了」。
+            try {
+                subscriber.emitter.complete();
+            } catch (RuntimeException ignored) {
+                log.debug("关闭后台任务推送通道失败", ignored);
+            }
             return false;
         }
     }

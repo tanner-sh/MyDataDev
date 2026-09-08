@@ -14,7 +14,9 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+// 比 ClientDisconnectFilter 靠里一档：那一条要在最外层收住对端断开时的写失败，
+// 而这里只是给这次请求准备审计上下文，谁先谁后不影响它。
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class AuditRequestContextFilter extends OncePerRequestFilter {
     public static final String REQUEST_ID_HEADER = "X-Request-ID";
     private static final Pattern SAFE_REQUEST_ID = Pattern.compile("[A-Za-z0-9._:-]{1,120}");
