@@ -154,7 +154,11 @@ export function objectTypeLabel(type: string) {
  * responses that predate a code.
  */
 const ERROR_CODE_MESSAGES: Record<string, string> = {
-  INTERNAL_ERROR: '服务器内部错误，请稍后重试。',
+  /*
+    这里刻意没有 INTERNAL_ERROR。后端返回的是「服务器内部错误，请稍后重试。如需反馈请提供
+    错误编号 a1b2c3d4。」—— 已经是中文，而且带着能在服务端日志里搜到堆栈的编号。以前这里
+    有一条同样开头但没有编号的映射，把整句盖掉，于是排查一次 500 唯一的线索就没了。
+  */
   TARGET_DATABASE_UNAVAILABLE: '无法连接目标数据库，请检查数据库状态与网络后重试。',
   READONLY_CONNECTION: '当前连接为只读连接，不允许执行写入或结构变更。',
   CONNECTION_HAS_BACKUP_TASKS: '该连接存在关联备份任务，请先切换到“备份任务”删除相关任务后再删除连接。',

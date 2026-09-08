@@ -2975,6 +2975,24 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const openRelationEvent = useStableEvent((relation: ObjectRelation, direction: 'imported' | 'exported') => openRelationTarget(relation, direction));
   const beginTransactionEvent = useStableEvent(() => void beginSqlTransaction());
   const finishTransactionEvent = useStableEvent((commit: boolean) => finishSqlTransaction(commit));
+  /*
+    提交前先换回将要执行的语句。表数据工作区一直有这一步（previewChanges），查询结果这边
+    以前是点一下「提交」就直接写库了 —— 改的是同一批远端数据，没有理由少这一道。
+    预览不带生产确认头：它只生成语句，不动数据。
+  */
+  const previewResultEditsEvent = useStableEvent(async (request: ResultEditCommit) => {
+    if (!selected) throw new Error('请先选择数据库连接');
+    const data = await api<{ sql: string[] }>('/data/preview', {
+      method: 'POST',
+      body: JSON.stringify({
+        connectionId: selected.id,
+        schemaName: request.schemaName || undefined,
+        tableName: request.tableName,
+        changes: request.changes
+      })
+    });
+    return data.sql;
+  });
   const commitResultEditsEvent = useStableEvent(async (request: ResultEditCommit) => {
     if (!selected) throw new Error('请先选择数据库连接');
     const productionConfirmation = await requestProductionConfirmation('提交查询结果修改');
@@ -3311,6 +3329,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onSaveSnippet={saveSnippetEvent}
                 onResultTabChange={changeSqlResultTabEvent}
                 onResultPageChange={changeSqlResultPageEvent}
+                onPreviewResultEdits={previewResultEditsEvent}
                 onCommitResultEdits={commitResultEditsEvent}
                 transactionState={transactionState}
                 onBeginTransaction={beginTransactionEvent}

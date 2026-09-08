@@ -36,7 +36,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
   /** 工作区标签条，由 App 统一渲染后交给各工作区放进工具栏最左边。 */
   documentTabs?: ReactNode;
   draftSaveState?: string;
@@ -89,6 +89,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   onSaveSnippet: (sql: string) => void;
   onResultTabChange: (key: string) => void;
   onResultPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
+  /** 生成将要执行的语句，提交前给用户确认。 */
+  onPreviewResultEdits: (request: ResultEditCommit) => Promise<string[]>;
   onCommitResultEdits: (request: ResultEditCommit) => Promise<void>;
   transactionState: SqlTransactionState;
   onBeginTransaction: () => void;
@@ -314,6 +316,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
           onPaneModeChange={setResultPaneMode}
           onPageChange={handleResultPageChange}
           connectionId={selected?.id}
+          onPreviewEdits={canWrite ? onPreviewResultEdits : undefined}
           onCommitEdits={canWrite ? onCommitResultEdits : undefined}
           onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined}
           onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined}
@@ -321,7 +324,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  }), [activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, onPreviewResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -603,7 +606,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onPreviewEdits={canWrite ? onPreviewResultEdits : undefined} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} />
             </div>
           ) : resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -759,7 +762,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onCommitEdits, onAskAiExplain, onAskAiInterpret, onAskAiReview }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onPreviewEdits, onCommitEdits, onAskAiExplain, onAskAiInterpret, onAskAiReview }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -770,6 +773,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   onPaneModeChange: (mode: ResultPaneMode) => void;
   onPageChange: (result: SqlStatementResult, navigation: SqlPageNavigation) => void;
   connectionId?: number;
+  onPreviewEdits?: (request: ResultEditCommit) => Promise<string[]>;
   onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
   /** 把这条执行计划交给 AI 解读；AI 不可用时不传。 */
   onAskAiExplain?: (result: SqlStatementResult, findings: ExplainFinding[]) => void;
@@ -827,7 +831,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
               />
             )}
           </div>
-          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onCommitEdits={onCommitEdits} />
+          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onPreviewEdits={onPreviewEdits} onCommitEdits={onCommitEdits} />
         </div>
       )}
     </div>

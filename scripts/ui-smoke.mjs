@@ -812,7 +812,9 @@ try {
         const r = node.getBoundingClientRect(); return r.top > bounds.top + 30 && r.bottom < bounds.bottom - 10;
       });
       const top = viewport.scrollTop;
-      cell?.click();
+      // 双击才进编辑（单击只选中这一行）。.click() 不会派发 dblclick，React 的
+      // onDoubleClick 收不到，这里必须自己发。
+      cell?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
       return cell ? top : 0;
     })()`);
     await page.sleep(300);
@@ -824,7 +826,94 @@ try {
     await page.sleep(300);
     check('修改结果值后保留滚动和待提交状态', await page.evaluate(`Boolean(document.querySelector('.result-edit-actions')?.textContent.includes('待提交'))
       && Math.abs(document.querySelector('.result-grid .ant-table-tbody-virtual-holder').scrollTop - ${scrollBeforeEdit}) < 5`));
-    await page.evaluate(`(() => { [...document.querySelectorAll('.result-edit-actions button')].find(node => node.textContent.trim() === '撤销')?.click(); })()`);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.result-edit-actions button')].find(node => (node.textContent || '').replace(/\\s/g, '') === '撤销')?.click(); })()`);
+    await page.sleep(200);
+
+    /*
+      两条回归，对应两个真实的洞：
+
+      一、点一下 NULL 单元格曾经就会凭空产生一条「NULL → 空字符串」的待提交修改 —— 输入框把
+          NULL 渲染成空文本，失焦时又把这个空文本当成用户输入交上去。用户一个字都没输入。
+      二、既然清空输入框现在明确表示空字符串，那把值改回 NULL 就必须另有入口，就是右键菜单。
+    */
+    const menuOpened = await page.evaluate(`(() => {
+      const cell = [...document.querySelectorAll('.result-grid .grid-cell-editable:not(.is-locked)')]
+        .find(node => !node.querySelector('.cell-null'));
+      if (!cell) return false;
+      const bounds = cell.getBoundingClientRect();
+      cell.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, clientX: Math.round(bounds.left + 4), clientY: Math.round(bounds.top + 4)
+      }));
+      return true;
+    })()`);
+    await page.sleep(400);
+    await page.shot('09b-结果单元格右键菜单');
+    const setNull = await page.evaluate(`(() => {
+      const item = [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')]
+        .find(node => (node.textContent || '').replace(/\\s/g, '') === '设为NULL');
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`);
+    await page.sleep(400);
+    const afterSetNull = await page.evaluate(`(() => ({
+      nullCells: document.querySelectorAll('.result-grid .cell-null').length,
+      toolbar: (document.querySelector('.result-edit-actions')?.textContent || '').replace(/\\s/g, '')
+    }))()`);
+    check('右键菜单能把单元格设为 NULL',
+      menuOpened && setNull && afterSetNull.nullCells > 0 && afterSetNull.toolbar.includes('待提交'),
+      JSON.stringify(afterSetNull));
+
+    /*
+      提交前要先给用户看一眼将要执行的语句 —— 表数据工作区一直是这么做的，查询结果这边以前
+      点一下「提交」就直接写库了。这里只验证那一步确实拦住了，随后取消，不真的写库。
+    */
+    const previewOpened = await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.result-edit-actions button')]
+        .find(node => (node.textContent || '').replace(/\\s/g, '').startsWith('提交'));
+      if (!button) return false;
+      button.click();
+      return true;
+    })()`);
+    await page.sleep(3000);
+    const previewDialog = await page.evaluate(`(() => {
+      // 不去猜 antd 的内部类名（v6 已经没有 .ant-modal-content 了），直接看弹层里的文字。
+      const wrap = [...document.querySelectorAll('.ant-modal-wrap')]
+        .find(node => node.offsetParent !== null || getComputedStyle(node).display !== 'none');
+      return { open: Boolean(wrap), text: (wrap?.innerText || '').slice(0, 400) };
+    })()`);
+    check('提交前先给出将要执行的语句',
+      previewOpened && previewDialog.open && /UPDATE/i.test(previewDialog.text) && previewDialog.text.includes('提交前确认'),
+      JSON.stringify(previewDialog));
+    await page.shot('09c-提交前预览');
+    await page.evaluate(`(() => {
+      const button = [...document.querySelectorAll('.ant-modal-wrap button')]
+        .find(node => (node.textContent || '').replace(/\\s/g, '') === '取消');
+      button?.click();
+    })()`);
+    await page.sleep(500);
+
+    /*
+      现在网格里确实有一个 NULL 单元格了，可以测那个洞本身：点开它、一个字都不输入、再点走。
+      改之前这一下就会把它变成空字符串 —— 输入框把 NULL 渲染成空文本，失焦时又把这个空文本
+      当成用户输入交上去。断言看的是「它还是不是 NULL」，而不是待提交计数：两种情况下计数都
+      是 1，正是这一点让它一直没被发现。
+    */
+    await page.evaluate(`(() => {
+      const cell = [...document.querySelectorAll('.result-grid .grid-cell-editable')]
+        .find(node => node.querySelector('.cell-null'));
+      cell?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    })()`);
+    await page.sleep(300);
+    await page.evaluate(`document.querySelector('.result-grid input[aria-label^="编辑 "]')?.blur()`);
+    await page.sleep(300);
+    const afterOpeningNull = await page.evaluate(`(() => ({
+      nullCells: document.querySelectorAll('.result-grid .cell-null').length,
+      emptyCells: document.querySelectorAll('.result-grid .cell-empty').length
+    }))()`);
+    check('点开 NULL 单元格但没有输入时它仍然是 NULL，不会变成空字符串',
+      afterOpeningNull.nullCells > 0 && afterOpeningNull.emptyCells === 0, JSON.stringify(afterOpeningNull));
+    await page.evaluate(`(() => { [...document.querySelectorAll('.result-edit-actions button')].find(node => (node.textContent || '').replace(/\\s/g, '') === '撤销')?.click(); })()`);
     await page.sleep(200);
     if (SHOT_DIR) writeFileSync(path.join(SHOT_DIR, 'workbench-timings.json'), JSON.stringify(await page.evaluate(`performance.getEntriesByType('measure')
       .filter(entry => entry.name.startsWith('mydatadev:')).map(entry => ({ name: entry.name, duration: entry.duration }))`), null, 2));

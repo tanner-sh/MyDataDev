@@ -304,6 +304,89 @@ class DataEditServiceTest {
         });
     }
 
+    /*
+      带时区的时间戳原来直接 OffsetDateTime.parse，抛的是 DateTimeParseException —— 它不是
+      IllegalArgumentException 的子类，于是绕过了「非法入参 → 400」那条分支，用户填错一个
+      格式得到的是「服务器内部错误，请稍后重试」。这里盯住两件事：常见写法要能接受，接受不了
+      时抛出来的必须是能变成 400 的那一类，且消息说得出是哪一列。
+    */
+    @Test
+    void acceptsTheTimestampSpellingsThatActuallyComeOutOfTheGrid() throws Exception {
+        String url = timestampDatabaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE events(id INT PRIMARY KEY, happened_at TIMESTAMP WITH TIME ZONE)");
+            connection.createStatement().execute("INSERT INTO events VALUES (1, NULL)");
+        }
+        DataEditService service = service(url);
+        for (String spelling : List.of("2025-09-18T14:30:00+08:00", "2025-09-18 14:30:00+08:00", "2025-09-18 14:30:00 +08:00")) {
+            TableDataResponse row = service.table(1L, null, "events", null, 10);
+            RowChange change = new RowChange("UPDATE", null, new LinkedHashMap<>(Map.of("happened_at", spelling)),
+                    new LinkedHashMap<>(), row.rowKeyTokens().get(0));
+            assertThat(service.preview(new DataPreviewRequest(1L, null, "events", List.of(change))))
+                    .as("应当接受 %s", spelling).isNotNull();
+        }
+    }
+
+    @Test
+    void reportsAnUnparsableTimestampAsBadInputAndNamesTheColumn() throws Exception {
+        String url = timestampDatabaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE events(id INT PRIMARY KEY, happened_at TIMESTAMP WITH TIME ZONE)");
+            connection.createStatement().execute("INSERT INTO events VALUES (1, NULL)");
+        }
+        DataEditService service = service(url);
+        TableDataResponse row = service.table(1L, null, "events", null, 10);
+        RowChange change = new RowChange("UPDATE", null, new LinkedHashMap<>(Map.of("happened_at", "昨天下午")),
+                new LinkedHashMap<>(), row.rowKeyTokens().get(0));
+
+        assertThatThrownBy(() -> service.preview(new DataPreviewRequest(1L, null, "events", List.of(change))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("happened_at")
+                .hasMessageContaining("昨天下午");
+    }
+
+    /*
+      空字符串落到一个时间戳列上，原来是 Timestamp.valueOf("") 抛一句英文；而用户到这一步
+      往往是想「清空」，所以报错要直接把他指向那个真正能清空的动作。
+    */
+    @Test
+    void pointsAtSetNullWhenAnEmptyStringReachesATypedColumn() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, score INT)");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 5)");
+        }
+        DataEditService service = service(url);
+        TableDataResponse row = service.table(1L, null, "people", null, 10);
+        RowChange change = new RowChange("UPDATE", null, new LinkedHashMap<>(Map.of("score", "")),
+                new LinkedHashMap<>(), row.rowKeyTokens().get(0));
+
+        assertThatThrownBy(() -> service.preview(new DataPreviewRequest(1L, null, "people", List.of(change))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("score")
+                .hasMessageContaining("设为 NULL");
+    }
+
+    @Test
+    void stillAcceptsAnEmptyStringOnACharacterColumn() throws Exception {
+        String url = databaseUrl();
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, 'x')");
+        }
+        DataEditService service = service(url);
+        TableDataResponse row = service.table(1L, null, "people", null, 10);
+        RowChange change = new RowChange("UPDATE", null, new LinkedHashMap<>(Map.of("name", "")),
+                new LinkedHashMap<>(), row.rowKeyTokens().get(0));
+
+        assertThat(service.preview(new DataPreviewRequest(1L, null, "people", List.of(change)))).isNotNull();
+    }
+
+    /** H2 的 MySQL 模式不认 TIMESTAMP WITH TIME ZONE，这几条用例单独用一条不带 MODE 的 URL。 */
+    private String timestampDatabaseUrl() {
+        return "jdbc:h2:mem:" + UUID.randomUUID() + ";DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1";
+    }
+
     private DataEditService service(String url) throws Exception {
         return service(url, "mysql");
     }

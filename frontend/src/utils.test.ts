@@ -4,10 +4,18 @@ import type { TableRow } from './types';
 
 describe('error localization', () => {
   it('prefers the backend error code over the raw message', () => {
-    expect(localizeMessage('java.lang.NullPointerException', 'INTERNAL_ERROR'))
-      .toBe('服务器内部错误，请稍后重试。');
     expect(localizeMessage('Communications link failure', 'TARGET_DATABASE_UNAVAILABLE'))
       .toBe('无法连接目标数据库，请检查数据库状态与网络后重试。');
+  });
+
+  /*
+    INTERNAL_ERROR 刻意不在映射表里。后端只有 ApiExceptionHandler.generic() 一处产出这个码，
+    给的是一句中文加上一个错误编号，而那个编号是去服务端日志里搜堆栈唯一的线索 —— 以前被
+    映射表里同样开头但没有编号的那一句整句盖掉了。
+  */
+  it('keeps the trace id the backend attaches to an internal error', () => {
+    expect(localizeMessage('服务器内部错误，请稍后重试。如需反馈请提供错误编号 a1b2c3d4。', 'INTERNAL_ERROR'))
+      .toContain('a1b2c3d4');
   });
 
   it('falls back to legacy substring matching when no code is present', () => {

@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cellValidation } from '../tableEditing';
+import { cellDraftChanged } from '../cellDraft';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { fillerColumnWidth, isNumericColumnType, suggestedColumnWidth as sharedColumnWidth } from '../resultGridData';
 import type { PointerEvent as ReactPointerEvent } from 'react';
@@ -311,7 +312,10 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
   }, [editing]);
 
   const commit = () => {
-    if (draft !== normalizedValue && (mode === 'value' || draft.length > 0)) onCommit(rowId, column.name, draft);
+    // cellDraftChanged 就是原来那句 draft !== normalizedValue，提成共用函数是为了让结果表格
+    // 用上同一条规则 —— 那边缺了它，点开一个 NULL 格子再点走就凭空多出一条修改。
+    // 后半段是这里独有的：新增行还没碰过时是 DEFAULT 态，空输入应当留在 DEFAULT，不要变成空串。
+    if (cellDraftChanged(draft, normalizedValue) && (mode === 'value' || draft.length > 0)) onCommit(rowId, column.name, draft);
     onDeactivate();
   };
 
@@ -323,8 +327,9 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
         title={displayValue}
         tabIndex={disabled ? undefined : 0}
         role={disabled ? undefined : 'button'}
-        aria-label={`${column.name}，第 ${rowNumber} 行，${displayValue || '空字符串'}${disabled ? '' : '，按回车编辑'}`}
-        onClick={disabled ? undefined : onActivate}
+        aria-label={`${column.name}，第 ${rowNumber} 行，${displayValue || '空字符串'}${disabled ? '' : '，双击或按回车编辑'}`}
+        // 双击才进编辑，与查询结果表格一致：单击到处进编辑，浏览数据时太容易误触。
+        onDoubleClick={disabled ? undefined : onActivate}
         onKeyDown={disabled ? undefined : (event) => {
           if (event.key === 'Enter' || event.key === 'F2') {
             event.preventDefault();

@@ -34,13 +34,17 @@ import {
   type ResultEditCommit,
   type ResultEditState
 } from '../resultEditing';
-import { localizeError, timestamp } from '../utils';
+import { timestamp } from '../utils';
 import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
 import { exportResult } from '../resultExport';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 import { resizePreview, startColumnResizeInteraction } from '../columnResize';
 import { buildResultRows, reconcileResultRowEdits } from '../resultGridRows';
+import { cellDisplayKind, cellDraftChanged, cellDraftText } from '../cellDraft';
+import { cellValueMenuItems, type CellValueMenuAction } from '../cellValueMenu';
+import { describeCommitFailure, type CommitFailure } from '../commitFailure';
+import { SqlPreview } from './SqlPreview';
 import { finishWorkbenchTimingAfterPaint } from '../workbenchPerformance';
 
 const { Text } = Typography;
@@ -52,7 +56,7 @@ const RESULT_SELECTION_COLUMN_WIDTH = 38;
 // A very wide SELECT * would otherwise render hundreds of columns on load.
 const DEFAULT_VISIBLE_COLUMNS = 50;
 
-export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, connectionId, onPageChange, onCommitEdits }: {
+export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, connectionId, onPageChange, onPreviewEdits, onCommitEdits }: {
   result: SqlResult | null;
   fill?: boolean;
   active?: boolean;
@@ -62,6 +66,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   sourceSql?: string;
   connectionId?: number;
   onPageChange?: (navigation: SqlPageNavigation) => void;
+  /** 生成将要执行的语句。提交前先给用户看一眼，与表数据工作区一致。 */
+  onPreviewEdits?: (request: ResultEditCommit) => Promise<string[]>;
   /** 提交结果里的就地修改；由 App 复用表数据的 /data/preview 与 /data/commit。 */
   onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
 }) {
@@ -294,17 +300,83 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     setEditingCell(null);
   }, []);
 
-  const commitEdits = async () => {
-    if (!result?.resultSet || !editInfo?.tableName || !onCommitEdits) return;
+  /*
+    单元格右键菜单。
+
+    整张表只有一个 Dropdown，靠单元格上的 data-cell-row / data-cell-column 认出被点的是哪
+    一格。刻意不给每个单元格各挂一个：那会把每一格变成带状态的重组件，直接毁掉
+    shouldCellUpdate 和 reconcileResultRowEdits 保住的那条重渲染边界（四十列的结果集上，
+    这条边界是能用手感觉出来的）。
+  */
+  const [cellMenu, setCellMenu] = useState<{ rowIndex: number; column: string } | null>(null);
+  const pendingCellRef = useRef<{ rowIndex: number; column: string } | null>(null);
+  /*
+    捕获阶段先认出右键点的是哪一格，认不出就把事件拦下来 —— 表头、空白区、正在编辑的输入框
+    里右键仍然是浏览器原生菜单（输入框里要的正是原生的粘贴）。定位交给 antd：trigger 含
+    contextMenu 时它会按鼠标点对齐，自己造一个零尺寸的锚点是对不齐的（rc-trigger 量不出
+    尺寸，弹层会被甩到视口外面去）。
+  */
+  const captureCellTarget = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const cell = (event.target as Element | null)?.closest?.('[data-cell-row][data-cell-column]');
+    const rowIndex = Number(cell?.getAttribute('data-cell-row'));
+    const column = cell?.getAttribute('data-cell-column');
+    if (!column || !Number.isInteger(rowIndex)) {
+      pendingCellRef.current = null;
+      event.stopPropagation();
+      return;
+    }
+    pendingCellRef.current = { rowIndex, column };
+  }, []);
+
+  /*
+    提交分两步，共用一个弹窗。
+
+    第一步预览：把同一份变更交给 /data/preview 换回将要执行的语句给用户看一眼 —— 表数据工作区
+    一直是这么做的，结果表格这边此前直接就写库了。第二步才是提交。
+
+    失败时同一个弹窗切成错误态：报错原文、错误码、SQLSTATE、错误编号一次列全，还能整段复制。
+    以前这里只有一行 toast，内容还被 localizeError 换成了没有编号的通用文案，等于告诉用户
+    「出错了，但我不打算说是什么」。
+  */
+  const [commitDialog, setCommitDialog] = useState<
+    { phase: 'preview'; sql: string[] } | { phase: 'failed'; failure: CommitFailure } | null
+  >(null);
+
+  const pendingCommit = () => {
+    if (!result?.resultSet || !editInfo?.tableName || !onCommitEdits) return null;
     const changes = buildResultChanges(editState, result.rows, result.columns, editInfo.rowKeyTokens);
-    if (changes.length === 0) return;
+    if (changes.length === 0) return null;
+    return { schemaName: editInfo.schemaName, tableName: editInfo.tableName, changes };
+  };
+
+  const previewEdits = async () => {
+    const request = pendingCommit();
+    if (!request) return;
+    if (!onPreviewEdits) {
+      void commitEdits();
+      return;
+    }
     setCommitting(true);
     try {
-      await onCommitEdits({ schemaName: editInfo.schemaName, tableName: editInfo.tableName, changes });
+      setCommitDialog({ phase: 'preview', sql: await onPreviewEdits(request) });
+    } catch (error) {
+      setCommitDialog({ phase: 'failed', failure: describeCommitFailure(error) });
+    } finally {
+      setCommitting(false);
+    }
+  };
+
+  const commitEdits = async () => {
+    const request = pendingCommit();
+    if (!request || !onCommitEdits) return;
+    setCommitting(true);
+    try {
+      await onCommitEdits(request);
       // 提交成功后由调用方重新执行查询；这里先清空，避免旧下标继续指向已变的行。
       discardEdits();
+      setCommitDialog(null);
     } catch (error) {
-      void messageApi.error(localizeError(error));
+      setCommitDialog({ phase: 'failed', failure: describeCommitFailure(error) });
     } finally {
       setCommitting(false);
     }
@@ -511,6 +583,44 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     () => rows.filter((row) => selectedRowKeySet.has(row.key)),
     [rows, selectedRowKeySet]
   );
+
+  /** 右键菜单当前指向的那一格：列下标、原值、以及算上未提交修改之后的现值。 */
+  const cellMenuTarget = useMemo(() => {
+    if (!cellMenu || !result?.resultSet) return null;
+    const columnIndex = result.columns.findIndex((column) => column.label === cellMenu.column);
+    const row = rows.find((item) => item.rowIndex === cellMenu.rowIndex);
+    if (columnIndex < 0 || !row) return null;
+    const originalValue = row.values[columnIndex];
+    const edited = row.edits ? Object.prototype.hasOwnProperty.call(row.edits, cellMenu.column) : false;
+    return {
+      columnIndex,
+      originalValue,
+      currentValue: edited ? row.edits?.[cellMenu.column] : originalValue,
+      // 右键点在选中的行上才谈得上批量；点在别处只针对这一格。
+      selectedRowCount: selectedRowKeySet.has(row.key) ? selectedRowKeys.length : 0
+    };
+  }, [cellMenu, result?.columns, result?.resultSet, rows, selectedRowKeySet, selectedRowKeys.length]);
+
+  const runCellMenuAction = useCallback((action: CellValueMenuAction) => {
+    if (!cellMenu || !cellMenuTarget) return;
+    setCellMenu(null);
+    if (action === 'copy') {
+      void copyText(cellDraftText(cellMenuTarget.currentValue)).then(
+        () => messageApi.success('已复制单元格值'),
+        () => messageApi.error('复制失败，请手动选择内容')
+      );
+      return;
+    }
+    if (action === 'set-null-in-selection') {
+      // 批量走同一个 applyResultCellEdit，一格一条记录 —— 撤销和提交的语义因此完全不变。
+      setEditState((current) => selectedRows.reduce(
+        (state, row) => applyResultCellEdit(state, row.rowIndex, cellMenu.column, null, row.values[cellMenuTarget.columnIndex]),
+        current
+      ));
+      return;
+    }
+    commitCellEdit(cellMenu.rowIndex, cellMenu.column, action === 'set-null' ? null : '', cellMenuTarget.originalValue);
+  }, [cellMenu, cellMenuTarget, commitCellEdit, messageApi, selectedRows]);
 
   const commitResultRowSelection = useCallback((next: ResultRowSelection) => {
     const current = selectionStateRef.current;
@@ -775,7 +885,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
               {pendingEditCount > 0 && (
                 <>
                   <Button size="small" onClick={discardEdits}>撤销</Button>
-                  <Button size="small" type="primary" loading={committing} onClick={() => void commitEdits()}>
+                  <Button size="small" type="primary" loading={committing} onClick={() => void previewEdits()}>
                     提交 {pendingEditCount}
                   </Button>
                 </>
@@ -822,10 +932,62 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           <Button type="text" size="small" className="result-grid-toolbar-hint" icon={<QuestionCircleOutlined />} aria-label="查看结果区选择与复制快捷键" />
         </Tooltip>
       </div>
-      <div ref={viewportRef} className="data-grid-viewport">
+      <div
+        ref={viewportRef}
+        className="data-grid-viewport"
+        /* 弹层按鼠标点对齐，不跟着表格滚 —— 目标虽然在打开那一刻就定死了，但看上去会像点错了
+           格子。滚动就关掉。 */
+        onScrollCapture={() => setCellMenu((current) => (current ? null : current))}
+      >
         {/* 拖动列宽时跟着走的参考线。直接写 style，不进 React 状态 —— 它存在的全部意义就是
             让拖动期间一次重渲染都不发生。 */}
-        <div ref={resizeGuideRef} className="column-resize-guide" hidden aria-hidden="true" />
+        <Modal
+        open={Boolean(commitDialog)}
+        title={commitDialog?.phase === 'failed' ? commitDialog.failure.title : '提交前确认'}
+        width={720}
+        onCancel={() => setCommitDialog(null)}
+        footer={commitDialog?.phase === 'failed' ? [
+          <Button
+            key="copy"
+            onClick={() => void copyText(commitDialog.failure.copyText).then(
+              () => messageApi.success('诊断信息已复制'),
+              () => messageApi.error('复制失败，可手动选择文本')
+            )}
+          >复制诊断信息</Button>,
+          <Button key="close" type="primary" onClick={() => setCommitDialog(null)}>关闭</Button>
+        ] : [
+          <Button key="cancel" onClick={() => setCommitDialog(null)}>取消</Button>,
+          <Button key="commit" type="primary" danger loading={committing} onClick={() => void commitEdits()}>确认提交</Button>
+        ]}
+      >
+        {commitDialog?.phase === 'preview' ? (
+          <>
+            <Typography.Paragraph type="secondary">
+              以下语句将按顺序执行。确认无误后再提交 —— 提交之后这些改动就落在库里了。
+            </Typography.Paragraph>
+            <SqlPreview sql={commitDialog.sql} />
+          </>
+        ) : commitDialog?.phase === 'failed' ? (
+          <>
+            {/* 原文整段给出，不截断也不换成通用文案：能不能查下去全靠这一块。 */}
+            <pre className="sql-result-error-detail">{commitDialog.failure.message}</pre>
+            <Typography.Text type="secondary">
+              {[
+                `错误码 ${commitDialog.failure.code}`,
+                commitDialog.failure.sqlState ? `SQLSTATE ${commitDialog.failure.sqlState}` : null,
+                `错误编号 ${commitDialog.failure.requestId || '未提供'}`,
+                commitDialog.failure.changeIndex === undefined
+                  ? null
+                  : `失败于第 ${commitDialog.failure.changeIndex + 1} 条变更`
+              ].filter(Boolean).join(' · ')}
+            </Typography.Text>
+            <Typography.Paragraph type="secondary" className="result-commit-failure-hint">
+              待提交的修改都还在，改完可以直接重新提交。
+            </Typography.Paragraph>
+          </>
+        ) : null}
+      </Modal>
+      <div ref={resizeGuideRef} className="column-resize-guide" hidden aria-hidden="true" />
         {view === 'chart' ? (
           <Suspense fallback={<PanelLoading compact text="正在加载图表…" />}>
             <ResultChart columns={result.columns} rows={chartRows} />
@@ -833,6 +995,27 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         ) : scrollY === undefined ? (
           <PanelLoading compact text="正在准备查询结果…" />
         ) : (
+          <Dropdown
+            trigger={['contextMenu']}
+            open={Boolean(cellMenu && cellMenuTarget)}
+            onOpenChange={(next) => setCellMenu(next ? pendingCellRef.current : null)}
+            menu={{
+              items: cellMenuTarget ? cellValueMenuItems({
+                editable: editableColumns.has(cellMenu?.column ?? ''),
+                displayKind: cellDisplayKind(cellMenuTarget.currentValue),
+                dbType,
+                selectedRowCount: cellMenuTarget.selectedRowCount
+              }).map((item) => ({
+                key: item.action,
+                disabled: item.disabled,
+                label: item.hint
+                  ? <Tooltip title={item.hint} placement="right"><span>{item.label}</span></Tooltip>
+                  : item.label
+              })) : [],
+              onClick: ({ key }) => runCellMenuAction(key as CellValueMenuAction)
+            }}
+          >
+          <div className="result-grid-context-area" onContextMenuCapture={captureCellTarget}>
           <MemoizedResultTable
             tableRef={tableRef}
             columns={tableColumns}
@@ -844,6 +1027,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
             onRow={resultOnRow}
             onChange={resultTableChange}
           />
+          </div>
+          </Dropdown>
         )}
       </div>
       <div className="grid-pagination result-grid-pagination">
@@ -1073,19 +1258,56 @@ const ResultCell = memo(function ResultCell({ row, columnIndex, columnLabel, edi
   const edited = row.edits ? Object.prototype.hasOwnProperty.call(row.edits, columnLabel) : false;
   const currentValue = edited ? row.edits?.[columnLabel] : originalValue;
   const editing = row.editingColumn === columnLabel;
-  const [draft, setDraft] = useState(() => String(currentValue ?? ''));
+  const [draft, setDraft] = useState(() => cellDraftText(currentValue));
+  /*
+    进入编辑那一刻的文本。失焦时拿它和 draft 比：没动过就什么都不提交。
+
+    少了这一条，点开一个 NULL 格子再点走就会凭空多出一条「NULL → 空字符串」的待提交修改
+    —— 输入框把 NULL 渲染成空文本，失焦时又把这个空文本当成用户输入交上去。NULL 和空字符串
+    在库里是两个值，`sameCellValue` 也是这么判的，于是界面上就出现了一批用户从没输入过的修改。
+  */
+  const initialDraftRef = useRef(draft);
+  const displayRef = useRef<HTMLSpanElement>(null);
+  const wasEditingRef = useRef(false);
 
   useEffect(() => {
-    if (editing) setDraft(String(currentValue ?? ''));
+    if (!editing) return;
+    const text = cellDraftText(currentValue);
+    setDraft(text);
+    initialDraftRef.current = text;
   }, [currentValue, editing]);
+
+  /*
+    退出编辑后把焦点还给这一格。
+
+    编辑态的 Input 卸载时不触发 blur（所以 Escape 不会误提交，这是对的），但焦点会掉到
+    body 上 —— 结果区的 Ctrl/Cmd+C、Ctrl/Cmd+A、Esc 全挂在外层那个 tabIndex 容器上，焦点
+    一掉，改完一格之后这些快捷键就全部失灵了。
+  */
+  useEffect(() => {
+    if (wasEditingRef.current && !editing) displayRef.current?.focus({ preventScroll: true });
+    wasEditingRef.current = editing;
+  }, [editing]);
 
   if (!editing) {
     return (
       <span
+        ref={displayRef}
         className={`grid-cell-editable${edited ? ' is-edited' : ''}${editable ? '' : ' is-locked'}`}
-        onClick={editable ? () => onBeginEdit(resultEditKey(row.rowIndex, columnLabel)) : undefined}
-        role={editable ? 'button' : undefined}
+        /*
+          右键菜单靠这两个属性认出被点的是哪一格。纯 data 属性，不引入状态，也就不会动到
+          shouldCellUpdate 那条重渲染边界 —— 菜单本身是整张表一个，见 resultContextMenu。
+        */
+        data-cell-row={row.rowIndex}
+        data-cell-column={columnLabel}
+        /*
+          双击才进编辑。以前是单击，浏览数据时到处误触；而且显示态带着 role="button" 会命中
+          isInteractiveTarget，于是「点可编辑列不选中行、点不可编辑列反而选中行」。现在单击
+          一律落到行选中上，两类列的手感终于一致。
+        */
+        onDoubleClick={editable ? () => onBeginEdit(resultEditKey(row.rowIndex, columnLabel)) : undefined}
         tabIndex={editable ? 0 : undefined}
+        aria-label={editable ? `${columnLabel}：双击或按 Enter 编辑` : undefined}
         onKeyDown={editable ? (event) => {
           if (event.key !== 'Enter' && event.key !== 'F2') return;
           event.preventDefault();
@@ -1103,12 +1325,22 @@ const ResultCell = memo(function ResultCell({ row, columnIndex, columnLabel, edi
       size="small"
       value={draft}
       aria-label={`编辑 ${columnLabel}`}
+      // 选中全文，改一个短值不用先手动全选；与表数据工作区的单元格一致。
+      onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => onCommitEdit(row.rowIndex, columnLabel, draft, originalValue)}
+      onBlur={() => {
+        if (cellDraftChanged(draft, initialDraftRef.current)) {
+          onCommitEdit(row.rowIndex, columnLabel, draft, originalValue);
+          return;
+        }
+        onBeginEdit(null);
+      }}
       onPressEnter={(event) => event.currentTarget.blur()}
       onKeyDown={(event) => {
         if (event.key !== 'Escape') return;
         event.preventDefault();
+        // 先把草稿回滚，否则 Escape 之后再进这一格会先闪一帧上次没要的输入。
+        setDraft(initialDraftRef.current);
         onBeginEdit(null);
       }}
     />
@@ -1116,8 +1348,9 @@ const ResultCell = memo(function ResultCell({ row, columnIndex, columnLabel, edi
 });
 
 function renderCellValue(value: unknown) {
-  if (value == null) return <span className="cell-null">NULL</span>;
-  if (value === '') return <span className="cell-empty">空字符串</span>;
+  const kind = cellDisplayKind(value);
+  if (kind === 'null') return <span className="cell-null">NULL</span>;
+  if (kind === 'empty') return <span className="cell-empty">空字符串</span>;
   const text = String(value);
   const title = text.length > 2_000 ? `${text.slice(0, 2_000)}…` : text;
   return <span className="grid-cell-value" title={title}>{text}</span>;

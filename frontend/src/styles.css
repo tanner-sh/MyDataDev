@@ -807,11 +807,35 @@ body {
   white-space: nowrap;
 }
 
+/*
+  NULL 与空字符串必须一眼分得开。以前这两个类的样式一模一样（次要色 + 斜体 + xs 字号），
+  于是「这一格是没有值，还是有一个长度为零的值」在界面上根本读不出来 —— 而这两件事在库里
+  是两个不同的值，改错了要么违反非空约束、要么把业务判空的逻辑带偏。
+
+  NULL 给药丸底色（与表数据工作区的 .editable-cell-state 同一套），空字符串给虚线下划线，
+  只用已有令牌，深浅主题都跟着走。
+*/
 .cell-null,
 .cell-empty {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   font-style: italic;
+}
+
+.cell-null {
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+}
+
+.cell-empty {
+  border-bottom: 1px dashed var(--border);
+}
+
+/* 右键菜单包住表格的那一层，不能吃掉表格的高度。 */
+.result-grid-context-area {
+  height: 100%;
+  min-height: 0;
 }
 
 /*
@@ -980,6 +1004,11 @@ body.is-resizing-column * {
   color: var(--text-secondary);
   font-size: var(--text-xs);
   font-style: italic;
+}
+
+/* 与结果表格的 .cell-empty 同一个记号：两处表格对同一件事要给同一套视觉。 */
+.editable-cell-empty {
+  border-bottom: 1px dashed var(--border);
 }
 
 .editable-cell-state {

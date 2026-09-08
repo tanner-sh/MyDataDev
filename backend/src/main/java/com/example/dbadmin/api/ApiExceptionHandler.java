@@ -9,8 +9,11 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import org.springframework.dao.DataAccessException;
+
 import java.io.IOException;
 import java.sql.SQLException;
+import java.time.DateTimeException;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.UUID;
@@ -67,6 +70,44 @@ public class ApiExceptionHandler {
         body.put("message", databaseMessage(e));
         body.put("sqlState", sqlState);
         return ResponseEntity.status(status).body(body);
+    }
+
+    /**
+     * 「你给的这个值不是一个日期」是调用方的输入问题，不是服务器故障。
+     *
+     * <p>{@code DateTimeParseException} 是 {@link DateTimeException} 的子类，而后者继承的是
+     * {@code RuntimeException} 而不是 {@code IllegalArgumentException} —— 于是它绕过了上面
+     * 那条把非法入参转成 400 的分支，落进最后的兜底，被压成一句「服务器内部错误」外加一条带
+     * 完整栈的 ERROR 日志。用户改一个时间戳字段填错了格式，得到的提示是「请稍后重试」，重试
+     * 多少次都不会好。</p>
+     *
+     * <p>消息原样保留：它说的是哪个值解析不了，正是调用方要看的东西，且不含连接串或路径。</p>
+     */
+    @ExceptionHandler(DateTimeException.class)
+    public ResponseEntity<Map<String, Object>> dateTime(DateTimeException e) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", false);
+        body.put("code", "BAD_REQUEST");
+        body.put("message", safeMessage(e));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
+    /**
+     * Spring 把驱动异常包进 {@link DataAccessException} 之后，上面那条 SQLException 分支就
+     * 不认了 —— 它是 {@code RuntimeException}，一路掉进兜底成为 500，驱动原文（哪一列、哪条
+     * 约束）只留在服务端日志里。
+     *
+     * <p>拆开包装，把里面的 SQLException 交回给已经验证过的那条路：约束冲突、语法错误按 400
+     * 带原文，连不上库（SQLState 08）仍然是服务端的事，照旧走兜底拿 traceId 和 ERROR 日志。</p>
+     */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<Map<String, Object>> dataAccess(DataAccessException e) {
+        for (Throwable cause = e.getCause(); cause != null; cause = cause.getCause()) {
+            if (!(cause instanceof SQLException sqlCause)) continue;
+            if (String.valueOf(sqlCause.getSQLState()).startsWith("08")) break;
+            return sql(sqlCause);
+        }
+        return generic(e);
     }
 
     /**

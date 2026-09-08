@@ -26,6 +26,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.sql.Blob;
 import java.sql.Clob;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.PreparedStatement;
@@ -35,8 +38,10 @@ import java.sql.Statement;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.DateTimeException;
 import java.time.OffsetDateTime;
 import java.time.OffsetTime;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -51,6 +56,7 @@ import java.util.stream.Collectors;
 
 @Service
 public class DataEditService {
+    private static final Logger log = LoggerFactory.getLogger(DataEditService.class);
     private static final int MAX_PAGE_SIZE = 200;
     private static final long MAX_OFFSET = 100_000;
     private static final int MAX_CHANGES = 1_000;
@@ -358,10 +364,18 @@ public class DataEditService {
                 }
                 connection.commit();
             } catch (Exception e) {
-                connection.rollback();
+                /*
+                  收尾动作不许顶掉真正的失败。
+
+                  rollback() 和 finally 里的 setAutoCommit() 任何一个抛出，Java 都会用它替换掉
+                  正在传播的异常 —— 于是用户看到的是一句和现场无关的 SQLException，而真正的原因
+                  （比如 DATA_EDIT_CONFLICT，或者某个字段值不合法）连日志里都不剩。挂到
+                  suppressed 上，两边都留得住。
+                */
+                rollbackQuietly(connection, e);
                 throw e;
             } finally {
-                connection.setAutoCommit(previousAutoCommit);
+                restoreAutoCommitQuietly(connection, previousAutoCommit);
             }
             List<String> previews = operations.stream().map(PreparedOperation::previewSql).toList();
             java.util.List<com.example.dbadmin.dto.ApiDtos.RowChange> submittedChanges = request.changes() == null
@@ -498,7 +512,8 @@ public class DataEditService {
                 throw new IllegalArgumentException("行定位字段与服务端识别的主键/唯一索引不一致");
             }
             ordered.put(descriptor.name(), new BoundValue(
-                    decodeDatabaseValue(value.encodedValue(), descriptor), descriptor.jdbcType(), descriptor.typeName()
+                    decodeDatabaseValue(value.encodedValue(), descriptor), descriptor.jdbcType(),
+                    descriptor.typeName(), descriptor.name()
             ));
         }
         if (supplied.size() != ordered.size()) {
@@ -535,7 +550,7 @@ public class DataEditService {
             } else {
                 predicates.add(dialect.quoteIdentifier(entry.getKey()) + " = ?");
                 ColumnDescriptor descriptor = descriptor(columns, entry.getKey());
-                parameters.add(new BoundValue(entry.getValue(), descriptor.jdbcType(), descriptor.typeName()));
+                parameters.add(new BoundValue(entry.getValue(), descriptor.jdbcType(), descriptor.typeName(), entry.getKey()));
             }
         }
     }
@@ -544,7 +559,7 @@ public class DataEditService {
         return values.entrySet().stream()
                 .map(entry -> {
                     ColumnDescriptor column = descriptor(columns, entry.getKey());
-                    return new BoundValue(entry.getValue(), column.jdbcType(), column.typeName());
+                    return new BoundValue(entry.getValue(), column.jdbcType(), column.typeName(), column.name());
                 })
                 .collect(Collectors.toCollection(ArrayList::new));
     }
@@ -607,14 +622,14 @@ public class DataEditService {
                         default -> "<=";
                     };
                     predicates.add(quoted + " " + sqlOperator + " ?");
-                    parameters.add(new BoundValue(value, column.jdbcType(), column.typeName()));
+                    parameters.add(new BoundValue(value, column.jdbcType(), column.typeName(), column.name()));
                 }
                 case "BETWEEN" -> {
                     String first = requiredFilterValue(rule.value(), column.name(), operator);
                     String second = requiredFilterValue(rule.secondValue(), column.name(), operator);
                     predicates.add(quoted + " BETWEEN ? AND ?");
-                    parameters.add(new BoundValue(first, column.jdbcType(), column.typeName()));
-                    parameters.add(new BoundValue(second, column.jdbcType(), column.typeName()));
+                    parameters.add(new BoundValue(first, column.jdbcType(), column.typeName(), column.name()));
+                    parameters.add(new BoundValue(second, column.jdbcType(), column.typeName(), column.name()));
                 }
                 case "CONTAINS", "NOT_CONTAINS", "STARTS_WITH", "ENDS_WITH" -> {
                     if (!textJdbcType(column.jdbcType())) throw new IllegalArgumentException("字段不支持文本匹配：" + column.name());
@@ -625,7 +640,7 @@ public class DataEditService {
                         default -> "%" + value + "%";
                     };
                     predicates.add(quoted + (operator.equals("NOT_CONTAINS") ? " NOT LIKE ? ESCAPE '!'" : " LIKE ? ESCAPE '!'"));
-                    parameters.add(new BoundValue(pattern, Types.VARCHAR, "VARCHAR"));
+                    parameters.add(new BoundValue(pattern, Types.VARCHAR, "VARCHAR", column.name()));
                 }
                 case "IN" -> {
                     List<String> values = rule.values() == null ? List.of() : rule.values();
@@ -634,7 +649,7 @@ public class DataEditService {
                     predicates.add(quoted + " IN (" + String.join(", ", java.util.Collections.nCopies(values.size(), "?")) + ")");
                     for (String value : values) {
                         appendFingerprint(fingerprint, value);
-                        parameters.add(new BoundValue(value, column.jdbcType(), column.typeName()));
+                        parameters.add(new BoundValue(value, column.jdbcType(), column.typeName(), column.name()));
                     }
                 }
                 case "IS_NULL" -> predicates.add(quoted + " IS NULL");
@@ -700,11 +715,11 @@ public class DataEditService {
                 for (int prior = 0; prior < index; prior++) {
                     parts.add(dialect.quoteIdentifier(keyColumns.get(prior)) + " = ?");
                     ColumnDescriptor column = descriptor(descriptors, keyColumns.get(prior));
-                    parameters.add(new BoundValue(state.keyValues().get(prior), column.jdbcType(), column.typeName()));
+                    parameters.add(new BoundValue(state.keyValues().get(prior), column.jdbcType(), column.typeName(), column.name()));
                 }
                 parts.add(dialect.quoteIdentifier(keyColumns.get(index)) + " > ?");
                 ColumnDescriptor column = descriptor(descriptors, keyColumns.get(index));
-                parameters.add(new BoundValue(state.keyValues().get(index), column.jdbcType(), column.typeName()));
+                parameters.add(new BoundValue(state.keyValues().get(index), column.jdbcType(), column.typeName(), column.name()));
                 alternatives.add("(" + String.join(" AND ", parts) + ")");
             }
             predicates.add("(" + String.join(" OR ", alternatives) + ")");
@@ -799,8 +814,29 @@ public class DataEditService {
         throw new IllegalArgumentException("字段不存在：" + column);
     }
 
+    /**
+     * 空字符串能不能落进这个类型的列。
+     *
+     * <p>字符列上空串是一个合法的值；到了数字、日期、时间戳列上它什么都不是 —— 而
+     * `Integer.valueOf("")`、`Timestamp.valueOf("")` 抛出来的是一句英文驱动文案，用户看了
+     * 不知道该怎么办。这里提前拦住并把话说清楚：想清空就去设 NULL。</p>
+     */
+    private boolean acceptsEmptyString(int jdbcType) {
+        return switch (jdbcType) {
+            case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR,
+                 Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR, Types.OTHER -> true;
+            default -> false;
+        };
+    }
+
     private Object decodeDatabaseValue(String value, ColumnDescriptor column) {
         if (value == null) return null;
+        String columnLabel = column.name() == null || column.name().isBlank()
+                ? "该字段" : "字段 " + column.name();
+        if (value.isEmpty() && !acceptsEmptyString(column.jdbcType())) {
+            throw new IllegalArgumentException(columnLabel + "（" + column.typeName()
+                    + "）不接受空字符串。要清空这个值，请在单元格上点右键选择「设为 NULL」。");
+        }
         return switch (column.jdbcType()) {
             case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Integer.valueOf(value);
             case Types.BIGINT -> new BigDecimal(value);
@@ -809,9 +845,16 @@ public class DataEditService {
             case Types.BOOLEAN, Types.BIT -> parseBoolean(value);
             case Types.DATE -> Date.valueOf(value.substring(0, Math.min(value.length(), 10)));
             case Types.TIME -> Time.valueOf(value.length() >= 8 ? value.substring(0, 8) : value);
-            case Types.TIME_WITH_TIMEZONE -> OffsetTime.parse(value);
+            /*
+              这两支原来直接 parse，抛的是 DateTimeParseException —— 它不是
+              IllegalArgumentException 的子类，于是绕过了 ApiExceptionHandler 那条把非法入参
+              转成 400 的分支，被压成一句「服务器内部错误，请稍后重试」。同一个 switch 里其它
+              分支（Integer.valueOf、Timestamp.valueOf、Base64、UUID.fromString）恰好抛的都是
+              IAE，所以只有带时区的这两个类型坏掉了。
+            */
+            case Types.TIME_WITH_TIMEZONE -> parseOffsetTime(value, columnLabel, column);
             case Types.TIMESTAMP -> Timestamp.valueOf(value.replace('T', ' '));
-            case Types.TIMESTAMP_WITH_TIMEZONE -> OffsetDateTime.parse(value.replace(' ', 'T'));
+            case Types.TIMESTAMP_WITH_TIMEZONE -> parseOffsetDateTime(value, columnLabel, column);
             case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Base64.getDecoder().decode(value.replaceFirst("^base64:", ""));
             case Types.OTHER -> {
                 String typeName = column.typeName() == null ? "" : column.typeName().toLowerCase(Locale.ROOT);
@@ -819,6 +862,67 @@ public class DataEditService {
             }
             default -> value;
         };
+    }
+
+    /**
+     * 带时区的时间戳。
+     *
+     * <p>用户手上的写法比 ISO-8601 杂：表格里读出来的往往是 Oracle 的
+     * `2025-09-18 14:30:00.0 +08:00`，中间是空格；带区域名的 `…+08:00[Asia/Shanghai]` 也常见。
+     * 挨个试完再放弃，报错里给出一个能照抄的例子。</p>
+     *
+     * <p>刻意不在缺时区时替用户补一个：那等于往库里写进一个错误的时刻，而且从界面上看不出来，
+     * 比直接拒绝糟糕得多。</p>
+     */
+    private OffsetDateTime parseOffsetDateTime(String value, String columnLabel, ColumnDescriptor column) {
+        String normalized = value.trim().replaceFirst("^(\\d{4}-\\d{2}-\\d{2})[ T]", "$1T");
+        try {
+            return OffsetDateTime.parse(normalized);
+        } catch (DateTimeException ignored) {
+            // 继续试下一种写法。
+        }
+        try {
+            return ZonedDateTime.parse(normalized).toOffsetDateTime();
+        } catch (DateTimeException ignored) {
+            // 继续试下一种写法。
+        }
+        try {
+            return OffsetDateTime.parse(normalized.replaceAll("\\s+(?=[+-]\\d{2}(:?\\d{2})?$)", ""));
+        } catch (DateTimeException failed) {
+            throw invalidTemporal(value, columnLabel, column, "2025-09-18 14:30:00+08:00", failed);
+        }
+    }
+
+    private OffsetTime parseOffsetTime(String value, String columnLabel, ColumnDescriptor column) {
+        try {
+            return OffsetTime.parse(value.trim().replaceAll("\\s+(?=[+-]\\d{2}(:?\\d{2})?$)", ""));
+        } catch (DateTimeException failed) {
+            throw invalidTemporal(value, columnLabel, column, "14:30:00+08:00", failed);
+        }
+    }
+
+    /** 抛 IAE 而不是 DateTimeException：前者已经有一条走 400 并原样带出消息的分支。 */
+    private IllegalArgumentException invalidTemporal(
+            String value, String columnLabel, ColumnDescriptor column, String example, Throwable cause) {
+        return new IllegalArgumentException(columnLabel + "（" + column.typeName() + "）的值无法识别：「"
+                + value + "」。请使用带时区偏移的写法，例如 " + example + "。", cause);
+    }
+
+    private void rollbackQuietly(Connection connection, Exception primary) {
+        try {
+            connection.rollback();
+        } catch (Exception failure) {
+            log.warn("提交失败后回滚也失败了", failure);
+            primary.addSuppressed(failure);
+        }
+    }
+
+    private void restoreAutoCommitQuietly(Connection connection, boolean previousAutoCommit) {
+        try {
+            connection.setAutoCommit(previousAutoCommit);
+        } catch (Exception failure) {
+            log.warn("恢复 autoCommit 失败，连接将由连接池回收", failure);
+        }
     }
 
     private void bind(PreparedStatement statement, List<BoundValue> values) throws Exception {
@@ -844,7 +948,7 @@ public class DataEditService {
     private Object coerceValue(BoundValue bound) {
         Object value = bound.value();
         if (!(value instanceof String text)) return value;
-        return decodeDatabaseValue(text, new ColumnDescriptor("", bound.jdbcType(), bound.typeName(), true));
+        return decodeDatabaseValue(text, new ColumnDescriptor(bound.column(), bound.jdbcType(), bound.typeName(), true));
     }
 
     private String preview(String sql, List<BoundValue> values, DatabaseDialect dialect) {
@@ -1028,7 +1132,8 @@ public class DataEditService {
     private record ColumnDescriptor(String name, int jdbcType, String typeName, boolean nullable) {
     }
 
-    private record BoundValue(Object value, int jdbcType, String typeName) {
+    /** column 只用于错误文案：预览阶段报错时得说得出是哪一列，否则用户只知道「某个字段」。 */
+    private record BoundValue(Object value, int jdbcType, String typeName, String column) {
     }
 
     private record PreparedOperation(String type, String sql, List<BoundValue> parameters, String previewSql) {
