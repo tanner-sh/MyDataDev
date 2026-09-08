@@ -367,6 +367,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           )}
         </div>
         </div>
+        {/*
+          键盘提示原本写在下面那行常驻文字里。改成聚焦时的浮层：提示紧挨着搜索框，
+          比在下一行更容易看到，而且出现和消失都不会把整棵树往下推。
+        */}
+        <Tooltip title="↑↓ 选择，Enter 查看" placement="right" open={searchFocused && activeKind === 'TABLE'}>
         <Input.Search
           size="small"
           allowClear
@@ -383,6 +388,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           onKeyDown={handleObjectSearchKeyDown}
           onSearch={(keyword) => onSearch(keyword, activeKind)}
         />
+        </Tooltip>
         {activeKind === 'TABLE' && (
           <div className="object-view-filter">
             <Segmented
@@ -400,9 +406,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
                 setKeyboardObjectIndex(-1);
               }}
             />
-            <Text type="secondary">
-              {searchFocused ? '↑↓ 选择，Enter 查看 · ' : ''}当前显示 {visibleTableObjects.length} 个
-            </Text>
+            {/*
+              这里原本还有一行「当前显示 N 个」。visibleTableObjects 就是所选分段的那一份，
+              上面 Segmented 的「全部 18 / 收藏 0 / 最近 2」里必有一个是同一个数，两者永远
+              相等 —— 于是侧栏顶部常年白占一行。键盘提示挪到了搜索框的浮层上。
+            */}
           </div>
         )}
       </div>

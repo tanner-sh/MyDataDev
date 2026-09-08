@@ -579,8 +579,12 @@ try {
       })()
     `);
     await page.sleep(1200);
+    // 按钮文字或 aria-label 命中都算：工具栏挤的时候常用操作会退成只有图标（撤销一步、重做
+    // 就是这样），只比 textContent 的话这里会静默地什么都点不到。
     const clickText = async (scope, label) => page.evaluate(`(() => {
-      const button = [...document.querySelectorAll(${JSON.stringify(scope)})].find(node => (node.textContent || '').replace(/\\s/g, '') === ${JSON.stringify(label.replace(/\s/g, ''))});
+      const wanted = ${JSON.stringify(label.replace(/\s/g, ''))};
+      const names = (node) => [node.textContent || '', node.getAttribute('aria-label') || ''].map(text => text.replace(/\\s/g, ''));
+      const button = [...document.querySelectorAll(${JSON.stringify(scope)})].find(node => names(node).includes(wanted));
       if (!button || button.disabled) return false;
       button.click(); return true;
     })()`);

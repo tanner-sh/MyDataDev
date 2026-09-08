@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { Alert, Button, Dropdown, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
+import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { ArrowLeftOutlined, ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
+import { ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { useStableEvent } from '../hooks/useStableEvent';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
@@ -34,6 +35,8 @@ type ColumnRow = ObjectDetail['columns'][number] & { key: string };
 type IndexRow = { key: string; name: string; columns: string[]; unique: boolean; primary: boolean };
 
 export interface ObjectDetailWorkspaceProps {
+  /** 工作区标签条，渲染在工具栏最左边，兼作这个工作区的标题。 */
+  documentTabs?: ReactNode;
   active?: boolean;
   connectionId?: number;
   readonlyConnection?: boolean;
@@ -43,7 +46,6 @@ export interface ObjectDetailWorkspaceProps {
   detail: ObjectDetail | null;
   status: WorkspaceStatus;
   loading: boolean;
-  onBackToSql: () => void;
   onOpenTable: (object: DbObject) => void;
   onReloadDetail: () => void;
   onBackupTable?: (object: DbObject) => void;
@@ -55,6 +57,7 @@ export interface ObjectDetailWorkspaceProps {
 }
 
 export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
+  documentTabs,
   active = true,
   connectionId,
   readonlyConnection,
@@ -64,7 +67,6 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
   detail,
   status,
   loading,
-  onBackToSql,
   onOpenTable,
   onReloadDetail,
   onBackupTable,
@@ -118,10 +120,10 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
   return (
     <div className="workspace object-workspace">
       <Header className="workspace-toolbar">
+        {/* 对象名由标签条给出（那里还带着「· 结构」和未提交标记），标题里不再写第二遍。 */}
+        {documentTabs}
         <div className="toolbar-title">
           <Space size={8} className="object-title-line">
-            <Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label="返回查询工作台" onClick={onBackToSql} />
-            <Text strong>{objectName}</Text>
             {displayObject && <Tag color="blue">{objectTypeLabel(displayObject.type)}</Tag>}
             {displayObject?.schemaName && <Tag>{displayObject.schemaName}</Tag>}
             {readonlyConnection && <Tag color="orange">只读连接</Tag>}
@@ -212,7 +214,7 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
 });
 
 type ObjectDocumentPanelProps = Pick<ObjectDetailWorkspaceProps,
-  'status' | 'loading' | 'onBackToSql' | 'onOpenTable' | 'onReloadDetail' | 'onBackupTable' | 'onRenameTable' | 'onDropTable' | 'onOpenRelation'> & {
+  'documentTabs' | 'status' | 'loading' | 'onOpenTable' | 'onReloadDetail' | 'onBackupTable' | 'onRenameTable' | 'onDropTable' | 'onOpenRelation'> & {
   document: ResourceDocument;
   connection?: Connection;
   active: boolean;

@@ -1017,6 +1017,39 @@ body.is-resizing-column * {
   display: none;
 }
 
+/*
+  工具栏收起浏览类操作的门槛。以前只有一条 1099px 的媒体查询，而真正决定放不放得下的是
+  工具栏自己有多宽 —— 资源管理器可以拖到 480px，标签条又搬进了这一行，视口宽度早就不是
+  一个准的代理了。改成容器查询，按工具栏实际宽度判断。
+
+  两个门槛：有待提交修改时多出「撤销全部 / 预览 / 提交」三颗按钮，所以要更早收起。
+  收进去的是「更多」那个菜单，导出也在里面（见 secondaryMenu 的注释）。
+*/
+.table-workspace .workspace-toolbar {
+  container-type: inline-size;
+  container-name: table-toolbar;
+}
+
+@container table-toolbar (max-width: 1240px) {
+  .table-toolbar-actions[data-pending="true"] .table-secondary-actions {
+    display: none;
+  }
+
+  .table-toolbar-actions[data-pending="true"] .table-more-actions {
+    display: inline-flex;
+  }
+}
+
+@container table-toolbar (max-width: 1000px) {
+  .table-secondary-actions {
+    display: none;
+  }
+
+  .table-more-actions {
+    display: inline-flex;
+  }
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -3387,9 +3420,16 @@ body.is-resizing-column * {
   font-size: var(--text-lg);
 }
 
+/*
+  副标题一律单行截断。标签条并进工具栏之后这一行更挤了，让它折成两行会把整条工具栏
+  撑高、把按钮挤出可视区，宁可省略号。
+*/
 .toolbar-title > .ant-typography:last-child {
   max-width: min(52vw, 700px);
   font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .empty-state-content {
@@ -5173,7 +5213,6 @@ body.is-resizing-column * {
 .er-diagram-workspace-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
 }
 .ai-chat-context {
@@ -5311,9 +5350,27 @@ body.is-resizing-column * {
 .conflict-values { width: 100%; border-collapse: collapse; margin-bottom: var(--space-3); table-layout: fixed; }
 .conflict-values th, .conflict-values td { padding: var(--space-2); border: 1px solid var(--border); text-align: left; overflow-wrap: anywhere; max-height: 200px; }
 
-.resource-document-tabs { display: flex; align-items: center; gap: var(--space-1); padding: var(--space-2); flex-shrink: 0; overflow-x: auto; border-bottom: 1px solid var(--border); }
+/*
+  标签条现在住在各工作区的工具栏那一行里（以前是它上面单独的一行，两行加起来 86px，
+  而标签和工具栏标题写的是同一个名字）。所以这里不再有自己的边框和外边距 —— 边框是
+  工具栏那一条，标签只负责在最左边排开并在放不下时自己横向滚动。
+*/
+.resource-document-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.resource-document-tabs::-webkit-scrollbar { display: none; }
 .resource-document-tab { display: inline-flex; align-items: center; flex-shrink: 0; }
-.resource-document-context { margin-left: auto; white-space: nowrap; font-size: var(--text-xs); padding: 0 var(--space-2); }
+.resource-document-tabs > .ant-btn { flex-shrink: 0; }
+
+/* ER 图没有对应的标签，标题跟在标签条后面，右边的返回按钮仍然靠边。 */
+.er-diagram-workspace-title { margin-right: auto; }
 .resource-document-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .resource-document-panel[hidden] { display: none; }
 .app-content > .workspace,

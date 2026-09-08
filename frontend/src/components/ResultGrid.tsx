@@ -357,7 +357,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         key: '__index',
         width: 58,
         fixed: 'left',
-        className: 'result-index-column',
+        // 紧挨着的往往就是主键那类数字列（右对齐），序号跟着右对齐两列才对得齐。
+        className: 'result-index-column numeric-column',
         shouldCellUpdate: (record, previous) => record !== previous,
         render: (_value, _row, index) => rowOffset + index + 1
       },

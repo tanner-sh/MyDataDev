@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { DRAWER_WIDTH } from '../constants';
 import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Tooltip, Typography, Upload } from 'antd';
+import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
 import {
-  ArrowLeftOutlined,
   CalculatorOutlined,
   CloudServerOutlined,
   DoubleLeftOutlined,
@@ -12,6 +12,7 @@ import {
   LeftOutlined,
   MoreOutlined,
   PlusOutlined,
+  RedoOutlined,
   ReloadOutlined,
   RightOutlined,
   SaveOutlined,
@@ -33,7 +34,18 @@ const { Header } = Layout;
 const { Text } = Typography;
 const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
 
+/** 导出格式在工具栏下拉和「更多」子菜单里是同一份，写两遍迟早会分叉。 */
+const EXPORT_MENU_ITEMS = [
+  { key: 'csv', label: '导出 CSV' },
+  { key: 'json', label: '导出 JSON' },
+  { key: 'sql', label: '导出 SQL' },
+  { key: 'xml', label: '导出 XML' },
+  { key: 'markdown', label: '导出 Markdown' },
+  { key: 'xlsx', label: '导出 Excel' }
+];
+
 export const TableWorkspace = memo(function TableWorkspace({
+  documentTabs,
   connectionId,
   initialScrollTop, onViewScroll, onUndo, onRedo, canUndo, canRedo,
   activeTable,
@@ -51,7 +63,6 @@ export const TableWorkspace = memo(function TableWorkspace({
   rowCount = IDLE_TABLE_ROW_COUNT,
   tableQuery,
   onCountRows,
-  onBackToSql,
   onBackupTable,
   onExport,
   onReload,
@@ -68,6 +79,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onPageSizeChange,
   onTableQueryChange
 }: {
+  /** 工作区标签条，渲染在工具栏最左边，兼作这个工作区的标题。 */
+  documentTabs?: ReactNode;
   connectionId?: number;
   initialScrollTop?: number; onViewScroll?: (top: number) => void;
   onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
@@ -86,7 +99,6 @@ export const TableWorkspace = memo(function TableWorkspace({
   rowCount?: TableRowCountState;
   tableQuery: TableQuery;
   onCountRows?: () => void;
-  onBackToSql: () => void;
   onBackupTable?: () => void;
   /** 导出当前表（含界面上的筛选与排序）；没有导出权限时不传。 */
   onExport?: (format: ExportFormat) => void;
@@ -106,7 +118,6 @@ export const TableWorkspace = memo(function TableWorkspace({
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
   const metadataSource = useMemo(() => connectionId != null && activeTable
     ? { connectionId, schemaName: activeTable.schemaName, tableName: activeTable.tableName }
@@ -119,11 +130,21 @@ export const TableWorkspace = memo(function TableWorkspace({
   const secondaryMenu: MenuProps = {
     items: [
       { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading || !onBackupTable },
+      // 导出在工具栏上自己是一个下拉，收进「更多」时得跟着进来成为子菜单 ——
+      // 少了它，工具栏一收窄，导出就整个没有入口了。
+      {
+        key: 'export',
+        icon: <DownloadOutlined />,
+        label: '导出',
+        disabled: !tableData || loading || !onExport,
+        children: EXPORT_MENU_ITEMS.map((item) => ({ ...item, key: `export:${item.key}` }))
+      },
       { key: 'reload', icon: <ReloadOutlined />, label: '刷新数据', disabled: !activeTable || loading },
       { key: 'add', icon: <PlusOutlined />, label: '新增行', disabled: !tableData || loading || editingDisabled },
       { key: 'import', icon: <UploadOutlined />, label: '导入数据', disabled: !tableData || loading || editingDisabled }
     ],
     onClick: ({ key }) => {
+      if (key.startsWith('export:')) onExport?.(key.slice('export:'.length) as ExportFormat);
       if (key === 'backup') onBackupTable?.();
       if (key === 'reload') onReload();
       if (key === 'add') onAddRow();
@@ -142,11 +163,9 @@ export const TableWorkspace = memo(function TableWorkspace({
   return (
     <div className="workspace table-workspace">
       <Header className="workspace-toolbar">
+        {/* 表名由标签条给出（那里还带着「· 数据」和未提交标记），标题里不再写第二遍。 */}
+        {documentTabs}
         <div className="toolbar-title">
-          <Space size={8}>
-            <Button type="text" size="small" icon={<ArrowLeftOutlined />} aria-label="返回查询工作台" onClick={onBackToSql} />
-            <Text strong>{tableName}</Text>
-          </Space>
           <Text type="secondary">
             {readonlyConnection
               ? '当前连接为只读连接'
@@ -160,7 +179,12 @@ export const TableWorkspace = memo(function TableWorkspace({
               : ''}
           </Text>
         </div>
-        <div className="table-toolbar-actions">
+        {/*
+          data-pending 给样式用：有待提交修改时这一行会多出「撤销全部 / 预览 / 提交」三颗
+          按钮，收起浏览类操作的门槛要相应抬高。判断放在容器查询里而不是媒体查询里 ——
+          真正的约束是工具栏自己有多宽，而资源管理器的宽度是用户可以拖的。
+        */}
+        <div className="table-toolbar-actions" data-pending={pendingCount > 0 ? 'true' : undefined}>
           <TableQueryBuilder columns={tableData?.columns || []} value={tableQuery} disabled={!tableData || loading} onApply={onTableQueryChange} />
           <Space size={8} className="table-secondary-actions">
             <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading || !onBackupTable} onClick={onBackupTable}>备份此表</Button>
@@ -171,14 +195,7 @@ export const TableWorkspace = memo(function TableWorkspace({
             <Dropdown
               disabled={!tableData || loading || !onExport}
               menu={{
-                items: [
-                  { key: 'csv', label: '导出 CSV' },
-                  { key: 'json', label: '导出 JSON' },
-                  { key: 'sql', label: '导出 SQL' },
-                  { key: 'xml', label: '导出 XML' },
-                  { key: 'markdown', label: '导出 Markdown' },
-                  { key: 'xlsx', label: '导出 Excel' }
-                ],
+                items: EXPORT_MENU_ITEMS,
                 onClick: ({ key }) => onExport?.(key as ExportFormat)
               }}
             >
@@ -203,35 +220,53 @@ export const TableWorkspace = memo(function TableWorkspace({
           <Dropdown menu={secondaryMenu} trigger={['click']}>
             <Button className="table-more-actions" size="small" icon={<MoreOutlined />} aria-label="更多表格操作">更多</Button>
           </Dropdown>
-          <Space size={8} className="table-primary-actions">
-            <Popconfirm
-              title={`撤销全部 ${pendingCount} 项变更？`}
-              description="所有尚未提交的新增、编辑和删除都会恢复。"
-              okText="撤销全部"
-              cancelText="保留变更"
-              onConfirm={onDiscardChanges}
-            >
-              <Button size="small" icon={<UndoOutlined />} disabled={!pendingCount || loading}>撤销全部</Button>
-            </Popconfirm>
-            <Button
-              size="small"
-              icon={<EyeOutlined />}
-              disabled={!pendingCount || loading || editingDisabled}
-              onClick={() => {
-                setPreviewOpen(true);
-                onPreview();
-              }}
-            >
-              预览 {pendingCount || ''}
-            </Button>
-            <Tooltip title={`提交待处理的表数据变更（${SHORTCUT_HINTS.commitTableChanges}）`}>
-              <Button size="small" type="primary" icon={<SaveOutlined />} disabled={!pendingCount || loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount || ''}</Button>
-            </Tooltip>
-          </Space>
-          <Space size={4}>
-            <Button size="small" disabled={!canUndo || loading} onClick={onUndo}>撤销一步</Button>
-            <Button size="small" disabled={!canRedo || loading} onClick={onRedo}>重做</Button>
-          </Space>
+          {/*
+            这五个按钮只在有待提交修改时才有事可做。常驻的话，工具栏右侧四百来像素长年是
+            一排灰按钮 —— 灰按钮教不了任何东西，只是噪音，还把「导出/刷新/新增行/导入」
+            这些随时能用的操作挤到左边去了。没有待提交修改时底部状态栏写着「无待提交变更」，
+            信息不会丢。
+          */}
+          {pendingCount > 0 && (
+            <Space size={8} className="table-primary-actions">
+              <Popconfirm
+                title={`撤销全部 ${pendingCount} 项变更？`}
+                description="所有尚未提交的新增、编辑和删除都会恢复。"
+                okText="撤销全部"
+                cancelText="保留变更"
+                onConfirm={onDiscardChanges}
+              >
+                <Button size="small" icon={<UndoOutlined />} disabled={loading}>撤销全部</Button>
+              </Popconfirm>
+              <Button
+                size="small"
+                icon={<EyeOutlined />}
+                disabled={loading || editingDisabled}
+                onClick={() => {
+                  setPreviewOpen(true);
+                  onPreview();
+                }}
+              >
+                预览 {pendingCount}
+              </Button>
+              <Tooltip title={`提交待处理的表数据变更（${SHORTCUT_HINTS.commitTableChanges}）`}>
+                <Button size="small" type="primary" icon={<SaveOutlined />} disabled={loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount}</Button>
+              </Tooltip>
+            </Space>
+          )}
+          {/*
+            单步撤销/重做只留图标：标签条搬进这一行之后，有待提交修改时工具栏正好放不下
+            最后那颗「提交」按钮 —— 两个常用到不需要标签的操作让出这一百多像素最划算。
+          */}
+          {(canUndo || canRedo) && (
+            <Space size={4}>
+              <Tooltip title="撤销一步">
+                <Button size="small" icon={<UndoOutlined />} aria-label="撤销一步" disabled={!canUndo || loading} onClick={onUndo} />
+              </Tooltip>
+              <Tooltip title="重做">
+                <Button size="small" icon={<RedoOutlined />} aria-label="重做" disabled={!canRedo || loading} onClick={onRedo} />
+              </Tooltip>
+            </Space>
+          )}
           <input
             ref={importInputRef}
             className="visually-hidden"

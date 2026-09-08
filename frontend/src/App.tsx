@@ -3016,7 +3016,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const probeObjectDefinitionEvent = useStableEvent((offset: number | null) => probeObjectDefinition(offset));
   const activateObjectDefinitionEvent = useStableEvent((offset: number) => activateObjectDefinition(offset));
   const returnFromDiagramEvent = useStableEvent(() => setMode('sql'));
-  const returnFromTableEvent = useStableEvent(() => setMode('sql'));
   const backupCurrentTableEvent = useStableEvent(() => openBackupTaskEditor());
   const reloadTableEvent = useStableEvent(() => confirmDiscardTableChanges(() => void loadTable(), '重新加载当前表'));
   const exportTableEvent = useStableEvent((format: ExportFormat) => { void exportTable(format); });
@@ -3036,7 +3035,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const discardTableChangesEvent = useStableEvent(() => discardTableChanges());
   const commitTableChangesEvent = useStableEvent(() => commitChanges());
   const countTableRowsEvent = useStableEvent(() => void countTableRows());
-  const returnFromObjectEvent = useStableEvent(() => setMode('sql'));
   const reloadObjectDetailEvent = useStableEvent(() => {
     if (activeObjectTarget) void loadObjectDetail(activeObjectTarget, { refresh: true });
   });
@@ -3158,6 +3156,26 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     />
   );
 
+  /*
+    工作区标签条。它以前是 app-content 里独立的一行，紧挨着下面各工作区的工具栏 ——
+    两行加起来 86px，而标签写的是「SQL 工作台」，工具栏标题写的还是「SQL 工作台」，
+    同一个名字上下相邻出现两次（表和对象工作区同理，标签和标题都是对象名）。
+    现在把它交给工作区，渲染进工具栏那一行的最左边：标签本身就是标题，右边接副标题
+    和操作按钮，一行装下，省掉 42px。三个工作区的工具栏结构相同，标签的位置不会随
+    模式跳动。
+  */
+  const documentTabs = selected ? (
+    <nav className="resource-document-tabs" aria-label="工作区标签">
+      <Button size="small" type={mode === 'sql' ? 'primary' : 'text'} onClick={() => setMode('sql')}>SQL 工作台</Button>
+      {resources.documents.filter(document => document.connectionId === selected.id).map(document => <span key={document.key} className="resource-document-tab">
+        <Button size="small" type={(mode === document.kind && (document.kind === 'table' ? tableDocumentKey : objectDocumentKey) === document.key) ? 'primary' : 'text'} disabled={tableLoading || objectDetailLoading} onClick={() => document.kind === 'table' ? void applyOpenTable(document.object) : void loadObjectDetail(document.object)}>
+          {document.dirty ? '● ' : ''}{document.object.schemaName ? `${document.object.schemaName}.` : ''}{document.object.name} · {document.kind === 'table' ? '数据' : '结构'}
+        </Button>
+        <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
+      </span>)}
+    </nav>
+  ) : null;
+
   return (
     <ConfigProvider
       locale={zhCN}
@@ -3234,21 +3252,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           )}
 
           <main className="app-content">
-            {selected && <nav className="resource-document-tabs" aria-label="工作区标签">
-              <Button size="small" type={mode === 'sql' ? 'primary' : 'text'} onClick={() => setMode('sql')}>SQL 工作台</Button>
-              {resources.documents.filter(document => document.connectionId === selected.id).map(document => <span key={document.key} className="resource-document-tab">
-                <Button size="small" type={(mode === document.kind && (document.kind === 'table' ? tableDocumentKey : objectDocumentKey) === document.key) ? 'primary' : 'text'} disabled={tableLoading || objectDetailLoading} onClick={() => document.kind === 'table' ? void applyOpenTable(document.object) : void loadObjectDetail(document.object)}>
-                  {document.dirty ? '● ' : ''}{document.object.schemaName ? `${document.object.schemaName}.` : ''}{document.object.name} · {document.kind === 'table' ? '数据' : '结构'}
-                </Button>
-                <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
-              </span>)}
-              {/*
-                SQL 工作台自己的标题栏就在下一行，写的是同一句「连接 · Schema」——
-                同一条信息在 90px 的高度里出现三次（顶栏的连接选择器算一次）。
-                其它工作区的标题写的是对象名，那里这条才是唯一的上下文，所以只在 SQL 模式下收起。
-              */}
-              {mode !== 'sql' && <Text type="secondary" className="resource-document-context">{selected.name} · {selected.environment} · {metadataQuery.schema || '默认 Schema'}</Text>}
-            </nav>}
             <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
             {mode === 'sql' && !selected ? (
               <div className="empty-state empty-state-fill">
@@ -3260,6 +3263,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               </div>
             ) : mode === 'sql' ? (
               <SqlWorkspace
+                documentTabs={documentTabs}
                 draftSaveState={draftSaveState}
                 onRestoreClosedTab={reopenSqlTab}
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
@@ -3314,6 +3318,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               />
             ) : mode === 'table' ? (
               <TableWorkspace
+                documentTabs={documentTabs}
                 connectionId={selected?.id}
                 key={tableDocumentKey}
                 initialScrollTop={resources.snapshots.current.get(tableDocumentKey)?.scrollTop || 0}
@@ -3335,7 +3340,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 loading={tableLoading}
                 readonlyConnection={selected?.readonly}
                 editingSupported={Boolean(selected?.capabilities?.tableEdit && hasConnectionPermission(selected, 'DATA_WRITE'))}
-                onBackToSql={returnFromTableEvent}
                 onBackupTable={selected && hasConnectionPermission(selected, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
                 onExport={selected && hasConnectionPermission(selected, 'EXPORT') ? exportTableEvent : undefined}
                 onReload={reloadTableEvent}
@@ -3355,7 +3359,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             ) : mode === 'diagram' ? (
               <div className="er-diagram-workspace">
                 <header className="er-diagram-workspace-header">
-                  <Text strong>ER 图 · {activeSqlSchema || selected?.name}</Text>
+                  {documentTabs}
+                  <Text strong className="er-diagram-workspace-title">ER 图 · {activeSqlSchema || selected?.name}</Text>
                   <Button size="small" onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
                 </header>
                 {selected
@@ -3368,12 +3373,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               const active = mode === 'object' && document.key === objectDocumentKey && selected?.id === document.connectionId;
               return <ObjectDocumentPanel
                 key={document.key}
+                documentTabs={active ? documentTabs : null}
                 document={document}
                 connection={connection}
                 active={active}
                 status={active ? objectStatus : INACTIVE_OBJECT_STATUS}
                 loading={active && objectDetailLoading}
-                onBackToSql={returnFromObjectEvent}
                 onOpenTable={openExplorerTable}
                 onReloadDetail={reloadObjectDetailEvent}
                 onBackupTable={backupCurrentTableEvent}
