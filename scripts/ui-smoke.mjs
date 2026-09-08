@@ -1139,6 +1139,10 @@ try {
   try {
     // Chrome 子进程可能仍在写入配置目录，给 ENOTEMPTY / EBUSY 留出有限重试。
     rmSync(CHROME_PROFILE, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    if (!['ENOTEMPTY', 'EBUSY'].includes(error.code)) throw error;
+    // 浏览器子进程尚未释放文件时保留临时目录，不用清理结果覆盖功能断言结果。
+    console.warn(`Chrome 临时目录尚未释放，已保留 ${CHROME_PROFILE}：${error.code}`);
   } finally {
     server?.kill();
   }
