@@ -25,6 +25,24 @@ describe('SQL 补全数据通路', () => {
     expect(result?.items.find(item => item.label === 'CODE')).toMatchObject({ remarks: '账户编码', insertText: 'CODE' });
   });
 
+  it('没有正在输入的词时不自动弹出候选', async () => {
+    // 一条语句以分号收尾之后，用户还没开始写下一条。此时摊开一整列关键字是打扰。
+    expect(await provideSqlCompletions(request('select 1 as val;'), deps())).toBeNull();
+    expect(await provideSqlCompletions(request('select ID, ('), deps())).toBeNull();
+    expect(await provideSqlCompletions(request('select ID,'), deps())).toBeNull();
+  });
+
+  it('显式请求（Ctrl/Cmd+Space）照常给出候选', async () => {
+    const result = await provideSqlCompletions({ ...request('select 1 as val;'), explicit: true }, deps());
+    expect(result?.items.map(item => item.label)).toEqual(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
+  });
+
+  it('别名点号与条件关键字后的空格仍然自动触发', async () => {
+    const dependencies = deps();
+    expect(await provideSqlCompletions(request('select * from BD_ACCOUNT a where a.'), dependencies)).not.toBeNull();
+    expect(await provideSqlCompletions(request('select * from BD_ACCOUNT where '), dependencies)).not.toBeNull();
+  });
+
   it('表名携带注释，搜索与插入仍使用标识符', async () => {
     const dependencies = deps();
     const result = await provideSqlCompletions(request('select * from bd_'), dependencies);

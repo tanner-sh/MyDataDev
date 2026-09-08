@@ -734,17 +734,19 @@ try {
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: modifier });
     await page.send('Input.insertText', { text: 'select 1 as val;' });
-    await page.sleep(600);
-    await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: modifier });
-    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: modifier });
+    await page.sleep(800);
+    // 刚敲完分号并不是在写词，这时候不该自己弹出一整列候选。
+    check('没有正在输入的词时不自动弹出候选',
+      (await page.evaluate(`document.querySelectorAll('.cm-tooltip-autocomplete').length`)) === 0);
+    // 换行后开始写下一条语句：`in` 在语句开头只可能是 INSERT，此前这里还会给出 INNER JOIN。
+    await page.send('Input.insertText', { text: '\nin' });
     await page.sleep(1200);
     const statementStartCompletions = await page.evaluate(`
       [...document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel')].map(node => node.textContent.trim())
     `);
-    check('分号后的候选只给能开头的语句关键字',
-      statementStartCompletions.length > 0
-      && statementStartCompletions.includes('SELECT')
-      && !statementStartCompletions.some(label => ['AND', 'FROM', 'GROUP BY', 'HAVING', 'INNER JOIN', 'ON'].includes(label)),
+    check('语句开头的候选只给能开头的关键字',
+      statementStartCompletions.includes('INSERT')
+      && !statementStartCompletions.some(label => ['INNER JOIN', 'AND', 'FROM', 'GROUP BY', 'HAVING', 'ON'].includes(label)),
       JSON.stringify(statementStartCompletions));
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });

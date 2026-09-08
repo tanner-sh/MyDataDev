@@ -15,6 +15,11 @@ export async function provideSqlCompletions(request: SqlCompletionRequest, deps:
   const context = analyzeSqlCompletion(request.text, request.offset);
   if (context.insideCommentOrString || context.mode === 'none') return null;
   if (request.triggerCharacter === ' ' && !shouldTriggerSqlConditionColumnCompletion(context)) return null;
+  // 自动弹出只发生在「正在输入一个词」的时候。刚敲完 ; ( , 这类符号并不是在写词，此时把一整列
+  // 候选摊开纯属打扰 —— 用户报的就是一条语句以分号收尾后照样弹出候选。Ctrl/Cmd+Space 是明确
+  // 要求，照给；`别名.` 和条件关键字后的空格是另外两处有意为之的触发，也照给。
+  if (!request.explicit && !context.replacement.prefix && request.triggerCharacter !== '.'
+    && !shouldTriggerSqlConditionColumnCompletion(context)) return null;
   const current = () => !request.signal.aborted && deps.isCurrent();
   if (!current()) return null;
   const prefix = context.replacement.prefix.toLowerCase();
