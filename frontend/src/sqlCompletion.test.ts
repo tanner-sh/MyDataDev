@@ -144,6 +144,35 @@ describe('SQL completion context', () => {
     expect(isSqlCompletionListIncomplete(context)).toBe(true);
   });
 
+  it('refreshes prefix-filtered columns when typing or backspacing', () => {
+    // cod 的结果只有 CODE；删成 co 后还应出现 COMBINEFORM，不能只过滤旧列表。
+    for (const prefix of ['cod', 'co']) {
+      const sql = `select * from BD_ACCOUNT where ${prefix}`;
+      const context = analyzeSqlCompletion(sql, sql.length);
+      expect(context.mode).toBe('column');
+      expect(isSqlCompletionListIncomplete(context)).toBe(true);
+    }
+    const qualifiedSql = 'select * from BD_ACCOUNT a where a.co';
+    const context = analyzeSqlCompletion(qualifiedSql, qualifiedSql.length);
+    expect(context.mode).toBe('qualified-column');
+    expect(isSqlCompletionListIncomplete(context)).toBe(true);
+  });
+
+  it('reuses the full column list requested without a prefix', () => {
+    for (const sql of ['select * from BD_ACCOUNT where ', 'select * from BD_ACCOUNT a where a.']) {
+      expect(isSqlCompletionListIncomplete(analyzeSqlCompletion(sql, sql.length))).toBe(false);
+    }
+  });
+
+  it('retries columns after metadata loading returned only fallback keywords', () => {
+    for (const sql of ['select * from BD_ACCOUNT where ', 'select * from BD_ACCOUNT a where a.']) {
+      const context = analyzeSqlCompletion(sql, sql.length);
+      expect(isSqlCompletionListIncomplete(context, false)).toBe(true);
+    }
+    const keywordSql = 'sel';
+    expect(isSqlCompletionListIncomplete(analyzeSqlCompletion(keywordSql, keywordSql.length), false)).toBe(false);
+  });
+
   it('does not suggest inside strings or comments', () => {
     const stringSql = "select 'from users'";
     const commentSql = 'select 1 -- from users';

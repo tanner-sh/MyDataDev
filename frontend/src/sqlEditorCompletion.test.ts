@@ -26,13 +26,14 @@ describe('本地过滤规则', () => {
     expect(completionValidFor(true)).toBeUndefined();
   });
 
-  it('引号与限定符算在同一个补全词里', () => {
+  it('引号标识符可以本地过滤，点号必须重新解析字段上下文', () => {
     const pattern = completionValidFor(false)!;
     expect(pattern.test('order')).toBe(true);
     expect(pattern.test('"orders"')).toBe(true);
     expect(pattern.test('`user`')).toBe(true);
     expect(pattern.test('[orders]')).toBe(true);
-    expect(pattern.test('public.orders')).toBe(true);
+    expect(pattern.test('public.orders')).toBe(false);
+    expect(pattern.test('a.')).toBe(false);
     // 逗号意味着已经换到下一个词了，弹窗该关掉重来。
     expect(pattern.test('id,')).toBe(false);
     // 空格同理。带空格的标识符（"order by"）会因此重新查询一次 —— 少一次本地过滤，

@@ -1983,7 +1983,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     return {
       range: { start: context.replacement.start, end: context.replacement.end },
       items,
-      incomplete: isSqlCompletionListIncomplete(context)
+      // 字段元数据暂时加载失败时只剩关键字，不能缓存成完整候选，否则后续输入
+      // 仍只在关键字里过滤，字段请求没有机会重试。
+      incomplete: isSqlCompletionListIncomplete(context, items.some((item) => item.kind === 'column'))
     };
   }
 

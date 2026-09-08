@@ -347,9 +347,11 @@ export function analyzeSqlCompletion(sql: string, cursorPosition: number): SqlCo
   };
 }
 
-/** The editor must ask the provider again as a table prefix grows instead of fuzzy-filtering a capped list. */
-export function isSqlCompletionListIncomplete(context: SqlCompletionContext): boolean {
-  return context.mode === 'table';
+/** 表候选有数量上限；字段候选按当前前缀筛选过，退格后也必须重新获取。 */
+export function isSqlCompletionListIncomplete(context: SqlCompletionContext, columnsAvailable = true): boolean {
+  return context.mode === 'table'
+    || ((context.mode === 'column' || context.mode === 'qualified-column')
+      && (context.replacement.prefix.length > 0 || !columnsAvailable));
 }
 
 /** Returns true for the first space after a condition keyword when table columns are available. */

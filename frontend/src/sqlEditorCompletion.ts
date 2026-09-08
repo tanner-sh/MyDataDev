@@ -48,14 +48,14 @@ export function completionTriggerCharacter(text: string, offset: number, explici
 /**
  * 结果完整时给出的本地过滤规则。
  *
- * <p>返回 undefined 表示「继续输入要重新问一次」。引号与限定符（"orders"、`user`、
- * [orders]、public.orders）算在同一个补全词里，否则用户一敲引号弹窗就关了。</p>
+ * <p>返回 undefined 表示「继续输入要重新问一次」。引号标识符（"orders"、`user`、
+ * [orders]）算在同一个补全词里；点号切换到限定字段，必须重新解析上下文。</p>
  *
  * <p>空格不在其中：正常输入里空格几乎总是意味着换到下一个词。代价是带空格的标识符
  * （"order by"）会多问一次服务端，但让弹窗跨空格存活会误伤得多。</p>
  */
 export function completionValidFor(incomplete: boolean): RegExp | undefined {
-  return incomplete ? undefined : /^[\w$."`[\]]*$/;
+  return incomplete ? undefined : /^[\w$"`[\]]*$/;
 }
 
 export function toEditorCompletion(result: SqlCompletionResult): EditorCompletionResult {
