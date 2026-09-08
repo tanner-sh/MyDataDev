@@ -1,12 +1,11 @@
 package com.example.dbadmin.storage;
 
+import com.example.dbadmin.service.SshClients;
 import org.apache.sshd.client.SshClient;
-import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
-import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
@@ -122,7 +121,7 @@ public class SftpBackupStorage implements BackupStorage {
     }
 
     private <T> T withClient(StorageConnection connection, SftpWork<T> work) throws Exception {
-        SshClient client = newClient();
+        SshClient client = SshClients.newIsolatedClient();
         client.setServerKeyVerifier((session, remoteAddress, serverKey) -> connection.skipServerVerification()
                 || KeyUtils.checkFingerPrint(connection.serverFingerprint(), serverKey).getKey());
         client.start();
@@ -144,17 +143,6 @@ public class SftpBackupStorage implements BackupStorage {
         } finally {
             client.stop();
         }
-    }
-
-    /**
-     * 文件服务的认证材料只能来自当前配置，不能隐式继承运行账户的 ~/.ssh/config 或私钥。
-     * 否则同一份文件服务配置会因部署机器不同而连向不同主机或携带错误身份。
-     */
-    static SshClient newClient() {
-        SshClient client = SshClient.setUpDefaultClient();
-        client.setHostConfigEntryResolver(HostConfigEntryResolver.EMPTY);
-        client.setKeyIdentityProvider(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);
-        return client;
     }
 
     private void mkdirs(SftpClient sftp, String filePath) throws Exception {

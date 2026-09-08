@@ -51,7 +51,7 @@ public final class SshTunnel implements AutoCloseable {
      */
     public static SshTunnel open(SshTunnelSpec spec, String targetHost, int targetPort, Timeouts timeouts) throws Exception {
         validate(spec);
-        SshClient client = SshClient.setUpDefaultClient();
+        SshClient client = SshClients.newIsolatedClient();
         client.setForwardingFilter(AcceptAllForwardingFilter.INSTANCE);
         client.setServerKeyVerifier(spec.skipHostKeyCheck()
                 ? AcceptAllServerKeyVerifier.INSTANCE

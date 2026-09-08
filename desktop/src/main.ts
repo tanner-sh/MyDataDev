@@ -28,7 +28,11 @@ const isDevelopment = Boolean(process.env.MYDATADEV_DESKTOP_DEV_SERVER_URL);
 const backendPort = Number(process.env.MYDATADEV_DESKTOP_BACKEND_PORT || (isDevelopment ? 8080 : UI_PORT));
 const uiUrl = process.env.MYDATADEV_DESKTOP_DEV_SERVER_URL || `http://127.0.0.1:${UI_PORT}`;
 const smokeTest = process.argv.includes('--smoke-test');
-const smokeTimeoutMs = Number(process.env.MYDATADEV_SMOKE_TIMEOUT_MS || 75_000);
+const smokeTimeoutOverride = Number(process.env.MYDATADEV_SMOKE_TIMEOUT_MS);
+// 写坏了就当没写：NaN 传进 setTimeout 会被当成 0，看门狗立刻开火，比没有它更糟。
+const smokeTimeoutMs = Number.isFinite(smokeTimeoutOverride) && smokeTimeoutOverride > 0
+  ? smokeTimeoutOverride
+  : 75_000;
 let smokeTimeout: NodeJS.Timeout | undefined;
 
 // CI 的桌面冒烟不能在 Electron 初始化、系统安全存储或内置后端异常时无限挂起。
@@ -199,9 +203,11 @@ async function runSmokeTest() {
   if (!home.ok || !(await home.text()).includes('MyDataDev')) throw new Error('桌面首页烟测失败。');
   const mcp = await fetch(`http://127.0.0.1:${UI_PORT}/mcp`);
   if (mcp.status !== 401) throw new Error(`MCP 未认证烟测失败，实际状态 ${mcp.status}。`);
-  clearTimeout(smokeTimeout);
   quitting = true;
+  // 关后端也在看门狗的覆盖范围内：卡在这一步同样是「冒烟永远不结束」，
+  // 而且还会给 CI 机器留下一个没人回收的后端进程。所以先关干净，再撤看门狗。
   await stopBackend();
+  clearTimeout(smokeTimeout);
   console.log('桌面冒烟通过。');
   app.exit(0);
 }

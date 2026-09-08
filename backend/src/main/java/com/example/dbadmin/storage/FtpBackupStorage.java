@@ -152,10 +152,15 @@ public class FtpBackupStorage implements BackupStorage {
         return client;
     }
 
+    /**
+     * 目录用 CWD 探测存在与否，因此每探一次都要回到登录目录：后面的路径都是相对它解析的。
+     */
     private void mkdirs(FTPClient client, String filePath) throws Exception {
         String loginDirectory = client.printWorkingDirectory();
         for (String directory : StoragePaths.parentDirectories(filePath)) {
             if (client.changeWorkingDirectory(directory)) {
+                // PWD 读不回来就没法还原当前目录，继续走下去只会把子目录建到错误的位置。
+                if (loginDirectory == null) throw failure(client, "无法确定 FTP 登录目录");
                 if (!client.changeWorkingDirectory(loginDirectory)) {
                     throw failure(client, "恢复 FTP 登录目录失败");
                 }
