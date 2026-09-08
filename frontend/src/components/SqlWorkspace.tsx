@@ -414,7 +414,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, onResto
   };
 
   return (
-    <div className={`workspace sql-workspace${selected?.readonly ? ' is-readonly' : ''}`}>
+    <div className="workspace sql-workspace">
       <Header className="workspace-toolbar">
         <Tooltip title={selected?.jdbcUrl} placement="bottomLeft">
           <div className="toolbar-title sql-workspace-title">

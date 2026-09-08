@@ -3279,17 +3279,12 @@ body.is-resizing-column * {
   background: var(--surface);
 }
 
+/* 四行对应四个子元素：工具栏、标签条、上下分栏、状态栏。曾经有过一个 .is-readonly 变体
+   多给只读连接排一行（那时工具栏下面有一条只读提示 Alert）；提示挪进工具栏副标题后，行数
+   比子元素多了一行，于是只读连接上分栏拿到 36px、状态栏拿到 1fr —— 编辑器塌成一行。
+   改这里时先数一遍 SqlWorkspace 里的子元素个数。 */
 .sql-workspace {
   grid-template-rows: 44px 36px minmax(0, 1fr) 28px;
-}
-
-.sql-workspace.is-readonly {
-  grid-template-rows: 44px auto 36px minmax(0, 1fr) 28px;
-}
-
-.sql-readonly-alert {
-  margin: 6px 10px;
-  padding-block: 3px;
 }
 
 .table-workspace {

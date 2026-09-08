@@ -50,6 +50,9 @@ const SHOT_DIR = option('--shots', '');
 const PORT = Number(option('--debug-port', String(19000 + process.pid % 20000)));
 const CHROME_PROFILE = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'mydatadev-ui-'));
 const SEED_CONNECTION_NAME = 'UI 冒烟库';
+// 第二条连接指向同一个内存库，只是标成只读：只读连接在界面上走的是另一套分支
+// （工具栏副标题、按钮禁用、布局），只测一条开发连接就看不见它们坏没坏。
+const SEED_READONLY_CONNECTION_NAME = '只读冒烟库';
 const SEED_TABLE = 'smoke_orders';
 
 // Node 的播种会话与浏览器会话独立；只给本脚本创建的 API 会话附加测试 Cookie。
@@ -249,6 +252,17 @@ async function seedSmokeData() {
   await run(`CREATE TABLE ${SEED_TABLE}(id INT PRIMARY KEY, customer VARCHAR(60) NOT NULL, amount INT NOT NULL)`);
   // 240 行：默认每页 100 行，翻页才是真的翻页而不是一页装得下。
   await run(`INSERT INTO ${SEED_TABLE} SELECT X, '客户' || X, X * 3 FROM SYSTEM_RANGE(1, 240)`);
+  if (!existing.some((item) => item.name === SEED_READONLY_CONNECTION_NAME)) {
+    await post('/connections', {
+      name: SEED_READONLY_CONNECTION_NAME,
+      dbType: 'h2',
+      jdbcUrl: 'jdbc:h2:mem:ui-smoke;DB_CLOSE_DELAY=-1',
+      username: 'sa',
+      password: '',
+      environment: 'dev',
+      readonly: true
+    });
+  }
   // 再播十六张空表：资源树是虚拟列表，只有两张表时渲染窗口多大都装得下，
   // 「切一下页签列表就变短」这类窗口计算的故障根本显不出来。
   for (let index = 1; index <= FILLER_TABLE_COUNT; index++) {
@@ -397,19 +411,9 @@ try {
     // 关不掉同样是故障：overlayOpen 会一直为真，把全局快捷键锁死。
     check('连接表单可以关闭', (await page.evaluate(`document.querySelectorAll('.ant-modal-container').length`)) === 0);
   }
-  if (SERVE) {
-    const connectionId = seedConnectionId;
-    // 先关掉管理抽屉：它开着的时候会把焦点困在抽屉里，后面的单元格编辑要靠焦点。
-    await page.evaluate(`
-      (() => {
-        const close = document.querySelector('.ant-drawer-open .ant-drawer-close');
-        if (close) close.click();
-      })()
-    `);
-    await page.sleep(1500);
-
-    // 页头的连接下拉：antd 的 Select 听的是 mousedown，直接 click() 打不开。
-    const openedSwitcher = await page.evaluate(`
+  // 页头的连接下拉：antd 的 Select 听的是 mousedown，直接 click() 打不开。
+  const pickConnection = async (name) => {
+    const opened = await page.evaluate(`
       (() => {
         const selector = document.querySelector('.connection-select .ant-select-selector')
           || document.querySelector('.connection-switcher .ant-select-selector')
@@ -423,12 +427,11 @@ try {
         return { ok: true };
       })()
     `);
-    check('页头能打开连接下拉', openedSwitcher.ok === true, openedSwitcher.html || '');
     await page.sleep(1200);
     const picked = await page.evaluate(`
       (() => {
         const option = [...document.querySelectorAll('.ant-select-item-option')]
-          .find((node) => (node.textContent || '').includes(${JSON.stringify(SEED_CONNECTION_NAME)}));
+          .find((node) => (node.textContent || '').includes(${JSON.stringify(name)}));
         if (!option) return false;
         for (const type of ['mousedown', 'mouseup', 'click']) {
           option.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
@@ -436,8 +439,24 @@ try {
         return true;
       })()
     `);
-    check('可以在页头选中连接', picked);
     await page.sleep(6000);
+    return { opened, picked };
+  };
+
+  if (SERVE) {
+    const connectionId = seedConnectionId;
+    // 先关掉管理抽屉：它开着的时候会把焦点困在抽屉里，后面的单元格编辑要靠焦点。
+    await page.evaluate(`
+      (() => {
+        const close = document.querySelector('.ant-drawer-open .ant-drawer-close');
+        if (close) close.click();
+      })()
+    `);
+    await page.sleep(1500);
+
+    const { opened: openedSwitcher, picked } = await pickConnection(SEED_CONNECTION_NAME);
+    check('页头能打开连接下拉', openedSwitcher.ok === true, openedSwitcher.html || '');
+    check('可以在页头选中连接', picked);
 
     const openedTable = await page.evaluate(`
       (() => {
@@ -879,6 +898,43 @@ try {
     check('设计表格在可见区域内且有可用高度', await page.evaluate(`(() => { const panel = document.querySelector('.resource-document-panel:not([hidden]) .table-designer'); const input = panel?.querySelector('input[aria-label="字段名"]'); const r = panel?.getBoundingClientRect(); const i = input?.getBoundingClientRect(); return r?.height > 200 && i?.height > 0 && i.top >= r.top && i.bottom <= r.bottom; })()`));
     await page.shot('08-对象设计草稿保留');
 
+    // 切到只读连接再看一眼 SQL 工作台。只读连接曾经把编辑器压成一行：.sql-workspace 是网格
+    // 布局，那时给只读连接多排了一行（对应工具栏下面那条只读提示 Alert），提示挪进副标题后
+    // 行数比子元素多了一行，于是分栏拿到 36px 那一行、状态栏拿到 minmax(0,1fr)。开发连接上
+    // 一切正常，只有只读连接坏 —— 只测一条连接的话，这种问题只能等用户来报。
+    const readonlyPick = await pickConnection(SEED_READONLY_CONNECTION_NAME);
+    check('可以切到只读连接', readonlyPick.picked === true);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.sleep(1800);
+    // 量的是「露出来多少」而不是元素自己的高度：.editor 有 min-height: 120px，分栏塌掉时
+    // 它的 getBoundingClientRect 照样是 120，只是被 overflow: hidden 的 .sql-split 裁成一行。
+    const readonlyLayout = await page.evaluate(`
+      (() => {
+        const workspace = document.querySelector('.sql-workspace');
+        if (!workspace) return { workspace: false };
+        const box = (selector) => workspace.querySelector(selector)?.getBoundingClientRect();
+        const split = box('.sql-split');
+        const visible = (selector) => {
+          const rect = box(selector);
+          if (!rect || !split) return 0;
+          return Math.round(Math.max(0, Math.min(rect.bottom, split.bottom) - Math.max(rect.top, split.top)));
+        };
+        return {
+          workspace: true,
+          readonlyHint: workspace.textContent.includes('只读连接'),
+          split: Math.round(split?.height || 0),
+          editor: visible('.editor'),
+          results: visible('.sql-results-pane'),
+          status: Math.round(box('.workspace-status')?.height || 0)
+        };
+      })()
+    `);
+    check('只读连接下 SQL 编辑器真的露出来了', readonlyLayout.editor >= 120, JSON.stringify(readonlyLayout));
+    check('只读连接下结果区真的露出来了', readonlyLayout.results >= 200, JSON.stringify(readonlyLayout));
+    check('只读连接下上下分栏拿到主区域高度', readonlyLayout.split >= 360, JSON.stringify(readonlyLayout));
+    check('只读连接下状态栏只占一行', readonlyLayout.status > 0 && readonlyLayout.status <= 40, JSON.stringify(readonlyLayout));
+    check('只读连接在工具栏里有提示', readonlyLayout.readonlyHint === true, JSON.stringify(readonlyLayout));
+    await page.shot('10-只读连接SQL工作台');
   }
 
 
