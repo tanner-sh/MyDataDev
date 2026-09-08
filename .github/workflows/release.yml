@@ -38,9 +38,9 @@ jobs:
       MYDATADEV_RELEASE_ARCH: ${{ matrix.arch }}
       MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -48,7 +48,7 @@ jobs:
             frontend/package-lock.json
             desktop/package-lock.json
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -139,7 +139,7 @@ jobs:
         run: npm run collect:artifacts
         working-directory: desktop
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mydatadev-${{ matrix.platform }}-${{ matrix.arch }}
           path: desktop/release-assets/*
@@ -151,15 +151,15 @@ jobs:
     env:
       MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -209,7 +209,7 @@ jobs:
           # 元数据库控制台在发行包中必须是关闭的。
           test "$(curl -s -b cookies.txt -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/h2-console)" = "404"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: mydatadev-web
           path: release-assets/*
@@ -221,15 +221,15 @@ jobs:
     needs: [build, web]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # 发行说明由 scripts/release-notes.mjs 生成；版本与其他作业保持一致，
       # 不依赖 runner 自带的 Node 版本。
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: mydatadev-*
           path: release-assets
