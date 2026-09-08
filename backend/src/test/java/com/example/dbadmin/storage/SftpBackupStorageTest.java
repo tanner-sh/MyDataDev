@@ -3,8 +3,11 @@ package com.example.dbadmin.storage;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpConstants;
 import org.apache.sshd.sftp.common.SftpException;
+import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
+import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -14,6 +17,14 @@ import static org.mockito.Mockito.when;
 class SftpBackupStorageTest {
     private static final String TEMPORARY = "/backups/task.sql.part-1";
     private static final String TARGET = "/backups/task.sql";
+
+    @Test
+    void doesNotInheritTheRuntimeUsersSshConfigurationOrKeys() {
+        var client = SftpBackupStorage.newClient();
+
+        assertThat(client.getHostConfigEntryResolver()).isSameAs(HostConfigEntryResolver.EMPTY);
+        assertThat(client.getKeyIdentityProvider()).isSameAs(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);
+    }
 
     @Test
     void renamesWithoutCopyOptionsForSftpV3() throws Exception {

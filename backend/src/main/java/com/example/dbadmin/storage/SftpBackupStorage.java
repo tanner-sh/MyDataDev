@@ -1,10 +1,12 @@
 package com.example.dbadmin.storage;
 
 import org.apache.sshd.client.SshClient;
+import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.FilePasswordProvider;
 import org.apache.sshd.common.config.keys.KeyUtils;
+import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
@@ -34,7 +36,7 @@ public class SftpBackupStorage implements BackupStorage {
     @Override
     public void test(StorageConnection connection) throws Exception {
         byte[] marker = ("mydatadev-" + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8);
-        String path = StoragePaths.remotePath(connection, ".mydatadev-test-" + UUID.randomUUID(), "/");
+        String path = StoragePaths.relativeRemotePath(connection, ".mydatadev-test-" + UUID.randomUUID());
         withClient(connection, sftp -> {
             mkdirs(sftp, path);
             try (OutputStream output = sftp.write(path)) { output.write(marker); }
@@ -48,7 +50,7 @@ public class SftpBackupStorage implements BackupStorage {
 
     @Override
     public void upload(StorageConnection connection, Path source, String objectKey, LongConsumer progress) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         String temporary = StoragePaths.temporary(target);
         withClient(connection, sftp -> {
             mkdirs(sftp, target);
@@ -90,7 +92,7 @@ public class SftpBackupStorage implements BackupStorage {
 
     @Override
     public void download(StorageConnection connection, String objectKey, OutputStream output, LongConsumer progress) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         withClient(connection, sftp -> {
             try (InputStream input = sftp.read(target)) {
                 StoragePaths.copy(input, output, progress);
@@ -101,13 +103,13 @@ public class SftpBackupStorage implements BackupStorage {
 
     @Override
     public long size(StorageConnection connection, String objectKey) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         return withClient(connection, sftp -> sftp.stat(target).getSize());
     }
 
     @Override
     public void delete(StorageConnection connection, String objectKey) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         withClient(connection, sftp -> {
             try {
                 sftp.remove(target);
@@ -120,7 +122,7 @@ public class SftpBackupStorage implements BackupStorage {
     }
 
     private <T> T withClient(StorageConnection connection, SftpWork<T> work) throws Exception {
-        SshClient client = SshClient.setUpDefaultClient();
+        SshClient client = newClient();
         client.setServerKeyVerifier((session, remoteAddress, serverKey) -> connection.skipServerVerification()
                 || KeyUtils.checkFingerPrint(connection.serverFingerprint(), serverKey).getKey());
         client.start();
@@ -144,13 +146,23 @@ public class SftpBackupStorage implements BackupStorage {
         }
     }
 
+    /**
+     * 文件服务的认证材料只能来自当前配置，不能隐式继承运行账户的 ~/.ssh/config 或私钥。
+     * 否则同一份文件服务配置会因部署机器不同而连向不同主机或携带错误身份。
+     */
+    static SshClient newClient() {
+        SshClient client = SshClient.setUpDefaultClient();
+        client.setHostConfigEntryResolver(HostConfigEntryResolver.EMPTY);
+        client.setKeyIdentityProvider(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);
+        return client;
+    }
+
     private void mkdirs(SftpClient sftp, String filePath) throws Exception {
         for (String directory : StoragePaths.parentDirectories(filePath)) {
-            String absolute = "/" + directory;
             try {
-                if (!sftp.stat(absolute).isDirectory()) throw new IllegalStateException("远端路径不是目录：" + absolute);
+                if (!sftp.stat(directory).isDirectory()) throw new IllegalStateException("远端路径不是目录：" + directory);
             } catch (java.io.IOException missing) {
-                sftp.mkdir(absolute);
+                sftp.mkdir(directory);
             }
         }
     }

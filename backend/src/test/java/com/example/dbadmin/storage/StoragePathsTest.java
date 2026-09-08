@@ -14,6 +14,8 @@ class StoragePathsTest {
 
         assertThat(StoragePaths.remotePath(connection, "connection-1/task-2/file.sql", "/"))
                 .isEqualTo("/team/backups/connection-1/task-2/file.sql");
+        assertThat(StoragePaths.relativeRemotePath(connection, "connection-1/task-2/file.sql"))
+                .isEqualTo("team/backups/connection-1/task-2/file.sql");
         assertThat(StoragePaths.remotePath(connection, "connection-1/task-2/file.sql", "\\"))
                 .isEqualTo("team\\backups\\connection-1\\task-2\\file.sql");
         assertThat(StoragePaths.parentDirectories("/team/backups/file.sql"))

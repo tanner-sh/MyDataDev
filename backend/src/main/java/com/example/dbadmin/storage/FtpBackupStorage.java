@@ -31,7 +31,7 @@ public class FtpBackupStorage implements BackupStorage {
     @Override
     public void test(StorageConnection connection) throws Exception {
         byte[] marker = ("mydatadev-" + UUID.randomUUID()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        String path = StoragePaths.remotePath(connection, ".mydatadev-test-" + UUID.randomUUID(), "/");
+        String path = StoragePaths.relativeRemotePath(connection, ".mydatadev-test-" + UUID.randomUUID());
         withClient(connection, client -> {
             mkdirs(client, path);
             if (!client.storeFile(path, new ByteArrayInputStream(marker))) throw failure(client, "写入测试文件失败");
@@ -45,7 +45,7 @@ public class FtpBackupStorage implements BackupStorage {
 
     @Override
     public void upload(StorageConnection connection, Path source, String objectKey, LongConsumer progress) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         String temporary = StoragePaths.temporary(target);
         withClient(connection, client -> {
             mkdirs(client, target);
@@ -70,7 +70,7 @@ public class FtpBackupStorage implements BackupStorage {
 
     @Override
     public void download(StorageConnection connection, String objectKey, OutputStream output, LongConsumer progress) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         withClient(connection, client -> {
             try (OutputStream tracked = new ProgressOutputStream(output, progress)) {
                 if (!client.retrieveFile(target, tracked)) throw failure(client, "下载备份文件失败");
@@ -82,7 +82,7 @@ public class FtpBackupStorage implements BackupStorage {
 
     @Override
     public long size(StorageConnection connection, String objectKey) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         return withClient(connection, client -> {
             FTPFile file = client.mlistFile(target);
             if (file == null) {
@@ -96,7 +96,7 @@ public class FtpBackupStorage implements BackupStorage {
 
     @Override
     public void delete(StorageConnection connection, String objectKey) throws Exception {
-        String target = StoragePaths.remotePath(connection, objectKey, "/");
+        String target = StoragePaths.relativeRemotePath(connection, objectKey);
         withClient(connection, client -> {
             FTPFile[] files = client.listFiles(target);
             if (files.length > 0 && !client.deleteFile(target)) throw failure(client, "删除远端备份文件失败");
@@ -130,9 +130,16 @@ public class FtpBackupStorage implements BackupStorage {
         }
     }
 
-    private FTPClient createClient(StorageConnection connection) {
-        if (!"EXPLICIT".equalsIgnoreCase(connection.ftpTlsMode())) return new FTPClient();
+    FTPClient createClient(StorageConnection connection) {
+        if (!"EXPLICIT".equalsIgnoreCase(connection.ftpTlsMode())) {
+            FTPClient client = new FTPClient();
+            // 容器/NAT 环境常在 IPv4 下给出不可路由的 PASV 地址；EPSV 只返回端口，
+            // 客户端会继续使用控制连接的地址。
+            client.setUseEPSVwithIPv4(true);
+            return client;
+        }
         FTPSClient client = new FTPSClient("TLS", false);
+        client.setUseEPSVwithIPv4(true);
         if (connection.skipServerVerification()) {
             client.setTrustManager(trustAll());
             client.setEndpointCheckingEnabled(false);
@@ -146,10 +153,14 @@ public class FtpBackupStorage implements BackupStorage {
     }
 
     private void mkdirs(FTPClient client, String filePath) throws Exception {
+        String loginDirectory = client.printWorkingDirectory();
         for (String directory : StoragePaths.parentDirectories(filePath)) {
-            String absolute = "/" + directory;
-            if (!client.changeWorkingDirectory(absolute) && !client.makeDirectory(absolute)) {
-                throw failure(client, "创建远端目录失败：" + absolute);
+            if (client.changeWorkingDirectory(directory)) {
+                if (!client.changeWorkingDirectory(loginDirectory)) {
+                    throw failure(client, "恢复 FTP 登录目录失败");
+                }
+            } else if (!client.makeDirectory(directory)) {
+                throw failure(client, "创建远端目录失败：" + directory);
             }
         }
     }

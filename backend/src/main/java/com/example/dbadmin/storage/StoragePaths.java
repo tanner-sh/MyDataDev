@@ -17,10 +17,18 @@ final class StoragePaths {
     }
 
     static String remotePath(StorageConnection connection, String objectKey, String separator) {
+        String combined = relativeRemotePath(connection, objectKey);
+        return "/".equals(separator) ? "/" + combined : combined.replace("/", separator);
+    }
+
+    /**
+     * FTP/SFTP 登录后的工作目录就是账户被授予的存储根目录。基础目录在配置保存时也会
+     * 被规范为相对路径，因此不能再人为加上 / 并逃逸到服务器文件系统根目录。
+     */
+    static String relativeRemotePath(StorageConnection connection, String objectKey) {
         String base = normalize(connection.basePath());
         String key = normalize(objectKey);
-        String combined = base.isBlank() ? key : base + "/" + key;
-        return "/".equals(separator) ? "/" + combined : combined.replace("/", separator);
+        return base.isBlank() ? key : base + "/" + key;
     }
 
     static String temporary(String finalPath) {

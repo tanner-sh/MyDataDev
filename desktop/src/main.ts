@@ -28,6 +28,16 @@ const isDevelopment = Boolean(process.env.MYDATADEV_DESKTOP_DEV_SERVER_URL);
 const backendPort = Number(process.env.MYDATADEV_DESKTOP_BACKEND_PORT || (isDevelopment ? 8080 : UI_PORT));
 const uiUrl = process.env.MYDATADEV_DESKTOP_DEV_SERVER_URL || `http://127.0.0.1:${UI_PORT}`;
 const smokeTest = process.argv.includes('--smoke-test');
+const smokeTimeoutMs = Number(process.env.MYDATADEV_SMOKE_TIMEOUT_MS || 75_000);
+let smokeTimeout: NodeJS.Timeout | undefined;
+
+// CI 的桌面冒烟不能在 Electron 初始化、系统安全存储或内置后端异常时无限挂起。
+if (smokeTest) {
+  smokeTimeout = setTimeout(() => {
+    console.error(`桌面冒烟在 ${Math.round(smokeTimeoutMs / 1000)} 秒内未完成。`);
+    app.exit(1);
+  }, smokeTimeoutMs);
+}
 
 let mainWindow: BrowserWindow | undefined;
 let tray: Tray | undefined;
@@ -184,11 +194,16 @@ async function startBackend() {
 }
 
 async function runSmokeTest() {
+  console.log('桌面冒烟：验证首页与 MCP 认证边界…');
   const home = await fetch(uiUrl);
   if (!home.ok || !(await home.text()).includes('MyDataDev')) throw new Error('桌面首页烟测失败。');
   const mcp = await fetch(`http://127.0.0.1:${UI_PORT}/mcp`);
   if (mcp.status !== 401) throw new Error(`MCP 未认证烟测失败，实际状态 ${mcp.status}。`);
-  await requestQuit(false);
+  clearTimeout(smokeTimeout);
+  quitting = true;
+  await stopBackend();
+  console.log('桌面冒烟通过。');
+  app.exit(0);
 }
 
 /**
@@ -257,6 +272,7 @@ if (shouldStart) {
 
   void app.whenReady().then(bootstrap).catch(async (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
+    if (smokeTest) console.error(`桌面冒烟失败：${message}`);
     if (!smokeTest) {
       const response = await dialog.showMessageBox({
         type: 'error',
