@@ -1,7 +1,7 @@
 import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier } from './sqlCompletion';
 import type { SqlCompletionItem, SqlCompletionRequest, SqlCompletionResult } from './sqlEditorTypes';
 import type { CompletionCatalog, ObjectColumns } from './types';
-import { sqlKeywordCompletionItems } from './utils';
+import { sqlKeywordCompletionItems } from './sqlKeywordSuggestions';
 
 export type SqlCompletionDependencies = {
   connectionId: number | null;
@@ -18,7 +18,8 @@ export async function provideSqlCompletions(request: SqlCompletionRequest, deps:
   const current = () => !request.signal.aborted && deps.isCurrent();
   if (!current()) return null;
   const prefix = context.replacement.prefix.toLowerCase();
-  let items: SqlCompletionItem[] = sqlKeywordCompletionItems();
+  // 关键字按光标所在位置给：语句开头只有 SELECT/INSERT/UPDATE/DELETE，WHERE 后面一个都不给。
+  let items: SqlCompletionItem[] = sqlKeywordCompletionItems(context);
   let warning: string | undefined;
   if (deps.connectionId != null) {
     const connectionId = deps.connectionId;

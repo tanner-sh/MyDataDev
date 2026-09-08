@@ -728,6 +728,28 @@ try {
     await page.sleep(800);
     check('可以找回关闭的 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
 
+    // 关键字候选得跟着光标位置走。一条语句以分号收尾、光标落在分号后面时，那儿是下一条语句的
+    // 开头 —— 此前弹出来的却是 AND / FROM / GROUP BY / HAVING / INNER JOIN，一个都用不上。
+    await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.insertText', { text: 'select 1 as val;' });
+    await page.sleep(600);
+    await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: modifier });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, modifiers: modifier });
+    await page.sleep(1200);
+    const statementStartCompletions = await page.evaluate(`
+      [...document.querySelectorAll('.cm-tooltip-autocomplete .cm-completionLabel')].map(node => node.textContent.trim())
+    `);
+    check('分号后的候选只给能开头的语句关键字',
+      statementStartCompletions.length > 0
+      && statementStartCompletions.includes('SELECT')
+      && !statementStartCompletions.some(label => ['AND', 'FROM', 'GROUP BY', 'HAVING', 'INNER JOIN', 'ON'].includes(label)),
+      JSON.stringify(statementStartCompletions));
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+    await page.sleep(400);
+
     // 真的执行一条查询。此前整轮冒烟都没让结果区渲染过一行数据 —— 而 SQL 工作台的结果表
     // 是这个应用最常被看着的一块界面，它坏了会一路坏到导出、图表和结果内编辑。
     await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
