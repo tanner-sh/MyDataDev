@@ -1136,8 +1136,12 @@ try {
   page?.close();
   chrome.kill('SIGKILL'); // 测试故意保留草稿，不能让 beforeunload 阻止关闭独立测试浏览器。
   await new Promise(resolve => chrome.exitCode != null ? resolve() : chrome.once('exit', resolve));
-  rmSync(CHROME_PROFILE, { recursive: true, force: true });
-  server?.kill();
+  try {
+    // Chrome 子进程可能仍在写入配置目录，给 ENOTEMPTY / EBUSY 留出有限重试。
+    rmSync(CHROME_PROFILE, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } finally {
+    server?.kill();
+  }
 }
 
 if (failures.length > 0) {
