@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { Alert, Button, Dropdown, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
 import type { MenuProps } from 'antd';
@@ -23,6 +23,9 @@ import { TypedConfirmationFields } from './TypedConfirmationFields';
 import { productionConfirmationHeaders } from '../productionConfirmation';
 import { compactColumnType } from '../columnTypeLabel';
 import { relationTarget, relationTargetLabel } from '../relationNavigation';
+import { hasConnectionPermission } from '../accessControl';
+import type { Connection } from '../types';
+import type { ResourceDocument } from '../resourceWorkspaces';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -31,6 +34,7 @@ type ColumnRow = ObjectDetail['columns'][number] & { key: string };
 type IndexRow = { key: string; name: string; columns: string[]; unique: boolean; primary: boolean };
 
 export interface ObjectDetailWorkspaceProps {
+  active?: boolean;
   connectionId?: number;
   readonlyConnection?: boolean;
   capabilities?: DatabaseCapabilities;
@@ -50,7 +54,8 @@ export interface ObjectDetailWorkspaceProps {
   onOpenRelation?: (relation: ObjectRelation, direction: 'imported' | 'exported') => void;
 }
 
-export function ObjectDetailWorkspace({
+export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
+  active = true,
   connectionId,
   readonlyConnection,
   capabilities,
@@ -176,10 +181,10 @@ export function ObjectDetailWorkspace({
             activeKey={activeTabKey}
             onChange={setActiveTabKey}
             items={[
-              { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} active={activeTabKey === 'columns'} /> },
-              { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} active={activeTabKey === 'indexes'} /> },
-              { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'relations'} onOpenRelation={onOpenRelation} /> },
-              { key: 'ddl', label: 'DDL', children: <DdlPanel connectionId={connectionId} detail={detail} active={activeTabKey === 'ddl'} /> },
+              { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} active={active && activeTabKey === 'columns'} /> },
+              { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} active={active && activeTabKey === 'indexes'} /> },
+              { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={active && activeTabKey === 'relations'} onOpenRelation={onOpenRelation} /> },
+              { key: 'ddl', label: 'DDL', children: <DdlPanel connectionId={connectionId} detail={detail} active={active && activeTabKey === 'ddl'} /> },
               {
                 key: 'designer',
                 label: designerDirty ? '设计 *' : '设计',
@@ -204,7 +209,40 @@ export function ObjectDetailWorkspace({
       <WorkspaceStatusBar status={status} />
     </div>
   );
-}
+});
+
+type ObjectDocumentPanelProps = Pick<ObjectDetailWorkspaceProps,
+  'status' | 'loading' | 'onBackToSql' | 'onOpenTable' | 'onReloadDetail' | 'onBackupTable' | 'onRenameTable' | 'onDropTable' | 'onOpenRelation'> & {
+  document: ResourceDocument;
+  connection?: Connection;
+  active: boolean;
+  onDocumentDirtyChange: (key: string, dirty: boolean) => void;
+};
+
+/** 隐藏文档保留设计稿，但不随其他工作区的输入、任务状态重复渲染。 */
+export const ObjectDocumentPanel = memo(function ObjectDocumentPanel({ document, connection, active, onDocumentDirtyChange, ...props }: ObjectDocumentPanelProps) {
+  const capabilities = useMemo(() => connection?.capabilities ? {
+    ...connection.capabilities,
+    tableBrowse: connection.capabilities.tableBrowse && hasConnectionPermission(connection, 'QUERY'),
+    tableDesign: connection.capabilities.tableDesign && hasConnectionPermission(connection, 'DDL')
+  } : undefined, [connection]);
+  const dirtyChanged = useCallback((dirty: boolean) => onDocumentDirtyChange(document.key, dirty), [document.key, onDocumentDirtyChange]);
+  return <div className="resource-document-panel" hidden={!active}>
+    <ObjectDetailWorkspace {...props}
+      active={active}
+      connectionId={document.connectionId}
+      readonlyConnection={connection?.readonly}
+      capabilities={capabilities}
+      productionConfirmationText={connection?.environment === 'prod' ? connection.name : undefined}
+      target={document.object}
+      detail={document.detail || null}
+      onDesignDirtyChange={dirtyChanged}
+      onBackupTable={connection && hasConnectionPermission(connection, 'BACKUP_RESTORE') ? props.onBackupTable : undefined}
+      onRenameTable={connection && hasConnectionPermission(connection, 'DDL') ? props.onRenameTable : undefined}
+      onDropTable={connection && hasConnectionPermission(connection, 'DDL') ? props.onDropTable : undefined}
+    />
+  </div>;
+});
 
 function ObjectSummary({ connectionId, detail }: { connectionId?: number; detail: ObjectDetail }) {
   const indexCount = new Set(detail.indexes.map((index) => index.name)).size;
@@ -408,11 +446,12 @@ function RelationsPanel({ connectionId, detail, active, onOpenRelation }: {
   useEffect(() => {
     if (!connectionId || !detail || !active || relations) return;
     let cancelled = false;
+    const controller = new AbortController();
     setRelations(null);
     setError('');
     const params = new URLSearchParams({ objectName: detail.name });
     if (detail.schemaName) params.set('schemaName', detail.schemaName);
-    api<ObjectRelations>(`/metadata/${connectionId}/objects/relations?${params.toString()}`)
+    api<ObjectRelations>(`/metadata/${connectionId}/objects/relations?${params.toString()}`, { signal: controller.signal })
       .then((data) => {
         if (cancelled) return;
         setRelations(data);
@@ -423,6 +462,7 @@ function RelationsPanel({ connectionId, detail, active, onOpenRelation }: {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [active, connectionId, detail, relations]);
 
@@ -497,9 +537,10 @@ function DdlPanel({ connectionId, detail, active }: { connectionId?: number; det
   useEffect(() => {
     if (!active || !connectionId || ddl) return;
     let cancelled = false;
+    const controller = new AbortController();
     const params = new URLSearchParams({ objectName: detail.name });
     if (detail.schemaName) params.set('schemaName', detail.schemaName);
-    api<ObjectDdl>(`/metadata/${connectionId}/objects/ddl?${params.toString()}`)
+    api<ObjectDdl>(`/metadata/${connectionId}/objects/ddl?${params.toString()}`, { signal: controller.signal })
       .then((result) => {
         if (!cancelled) setDdl(result);
       })
@@ -508,6 +549,7 @@ function DdlPanel({ connectionId, detail, active }: { connectionId?: number; det
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [active, connectionId, ddl, detail.name, detail.schemaName]);
 

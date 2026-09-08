@@ -8,7 +8,7 @@ import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
-import type { ExportFormat, ResultCopyFormat, ResultRow, SqlPageNavigation, SqlResult } from '../types';
+import type { ExportFormat, ResultCopyFormat, ResultExportStage, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import {
   filteredSqlPage,
   firstSqlPage,
@@ -31,16 +31,17 @@ import {
   resultEditDisabledReason,
   resultEditKey,
   resultEditSummary,
-  resultRowEdits,
   type ResultEditCommit,
   type ResultEditState
 } from '../resultEditing';
 import { localizeError, timestamp } from '../utils';
-import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from '../queryResultExport';
-import { buildXlsx } from '../xlsx';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
+import { exportResult } from '../resultExport';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
 import { resizePreview, startColumnResizeInteraction } from '../columnResize';
+import { buildResultRows, reconcileResultRowEdits } from '../resultGridRows';
+import { finishWorkbenchTimingAfterPaint } from '../workbenchPerformance';
 
 const { Text } = Typography;
 
@@ -78,11 +79,15 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const [editState, setEditState] = useState<ResultEditState>(EMPTY_RESULT_EDIT_STATE);
   const [editingCell, setEditingCell] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
+  const [exportStage, setExportStage] = useState<ResultExportStage>();
+  const exportAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => exportAbortRef.current?.abort(), []);
   const [messageApi, messageContextHolder] = message.useMessage();
   const tableRef = useRef<TableRef>(null);
   const gridShellRef = useRef<HTMLDivElement>(null);
   const pendingTargetActionRef = useRef<((parts: string[]) => void) | null>(null);
   const lastDisplayedRowsRef = useRef<ResultRow[] | null>(null);
+  const previousEditedRowsRef = useRef<ResultRow[]>([]);
   const selectionStateRef = useRef<{
     selected: string[];
     selectedSet: ReadonlySet<string>;
@@ -96,6 +101,9 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const resizeGuideRef = useRef<HTMLDivElement>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
+  useEffect(() => {
+    if (active && !pagingLoading && result?.resultSet && scrollY !== undefined) return finishWorkbenchTimingAfterPaint('result-ready');
+  }, [active, pagingLoading, result, scrollY]);
   const [view, setView] = useState<'table' | 'chart'>('table');
   const rowCount = result?.resultSet ? result.rows.length : 0;
   const rowOffset = result?.page?.offset || 0;
@@ -450,19 +458,15 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
     [columns, fillerWidth]
   );
 
-  // 编辑态折进记录：列的 shouldCellUpdate 只比较记录身份，不这样折的话改了值也不会重绘。
-  const rows = useMemo<ResultRow[]>(() => {
+  const baseRows = useMemo<ResultRow[]>(() => {
     if (!result?.resultSet) return [];
-    const originalIndexes = new Map(result.rows.map((values, index) => [values, index]));
     // 服务端已经筛过了，本地再筛一遍只会把「大小写折叠」这类细微差异算两次。
     const visibleRows = serverSort ? result.rows : filterResultRows(result.rows, result.columns, columnFilters);
-    return sortResultRows(visibleRows, result.columns, sortState).map((values) => {
-      const rowIndex = originalIndexes.get(values) ?? 0;
-      const edits = resultRowEdits(editState, rowIndex);
-      const editingColumn = editingCell?.startsWith(`${rowIndex}:`) ? editingCell.slice(String(rowIndex).length + 1) : undefined;
-      return { values, key: String(rowOffset + rowIndex), rowIndex, edits, editingColumn };
-    });
-  }, [columnFilters, editState, editingCell, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, sortState]);
+    return buildResultRows(sortResultRows(visibleRows, result.columns, sortState), result.rows, rowOffset);
+  }, [columnFilters, result?.columns, result?.resultSet, result?.rows, rowOffset, serverSort, sortState]);
+  const rows = useMemo(() => reconcileResultRowEdits(baseRows, editState, editingCell, previousEditedRowsRef.current),
+    [baseRows, editState, editingCell]);
+  useLayoutEffect(() => { previousEditedRowsRef.current = rows; }, [rows]);
 
   // 有数值列才提供图表入口；判定用未筛选的原始结果，免得筛掉几行就把入口弄没了。
   const chartable = useMemo(
@@ -472,19 +476,19 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   // 换一次查询就回到表格：图表配置是跟着列走的，留在图表视图上多半看到的是空图。
   useEffect(() => setView('table'), [columnSignature]);
   // 图表要的是裸值数组。不缓存的话每次重渲都换一个数组身份，图表会跟着重建模型。
-  const chartRows = useMemo(() => rows.map((row) => row.values), [rows]);
+  const chartRows = useMemo(() => baseRows.map((row) => row.values), [baseRows]);
 
-  const displayedRowKeys = useMemo(() => rows.map((row) => row.key), [rows]);
+  const displayedRowKeys = useMemo(() => baseRows.map((row) => row.key), [baseRows]);
   const displayedRowIndex = useMemo(() => new Map(displayedRowKeys.map((key, index) => [key, index])), [displayedRowKeys]);
   const displayedRowKeySet = useMemo(() => new Set(displayedRowKeys), [displayedRowKeys]);
   const selectedRowKeySet = useMemo(() => new Set(selectedRowKeys), [selectedRowKeys]);
 
   useLayoutEffect(() => {
     if (!result?.resultSet || scrollY === undefined || !tableRef.current) return;
-    if (lastDisplayedRowsRef.current === rows) return;
+    if (lastDisplayedRowsRef.current === baseRows) return;
     tableRef.current.scrollTo({ top: 0 });
-    lastDisplayedRowsRef.current = rows;
-  }, [result?.resultSet, rows, scrollY]);
+    lastDisplayedRowsRef.current = baseRows;
+  }, [result?.resultSet, baseRows, scrollY]);
 
   selectionStateRef.current = {
     selected: selectedRowKeys,
@@ -647,27 +651,33 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   };
 
   const exportLoadedRows = (format: ExportFormat) => {
-    if (!result?.resultSet) return;
+    if (!result?.resultSet || exportAbortRef.current) return;
     const scopedRows = (selectedRows.length > 0 ? selectedRows : rows).map((row) => row.values);
-    const perform = (targetTableParts?: string[]) => {
+    const perform = async (targetTableParts?: string[]) => {
+      if (exportAbortRef.current) return;
+      const controller = new AbortController();
+      exportAbortRef.current = controller;
       try {
-        // xlsx 是二进制，不能走字符串序列化那条路。
-        const blob = format === 'xlsx'
-          ? buildXlsx(result.columns, scopedRows)
-          : textBlob(serializeQueryResult(format, result.columns, scopedRows, {
+        const blob = await exportResult({ format, columns: result.columns, rows: scopedRows, options: {
             dbType,
             targetTableParts,
             truncated: Boolean(result.truncated),
             maxRows: result.maxRows
-          }), format);
+          } }, { signal: controller.signal, onStage: setExportStage });
+        if (controller.signal.aborted) return;
         downloadBlob(blob, `query-result-${timestamp()}.${exportFileExtension(format)}`);
         void messageApi.success(`已导出当前结果中的 ${scopedRows.length} 行`);
       } catch (error) {
-        void messageApi.error((error as Error).message);
+        if (!controller.signal.aborted) void messageApi.error((error as Error).message);
+      } finally {
+        if (exportAbortRef.current === controller) {
+          exportAbortRef.current = null;
+          setExportStage(undefined);
+        }
       }
     };
-    if (format === 'sql') requireTarget((parts) => perform(parts));
-    else perform();
+    if (format === 'sql') requireTarget((parts) => { void perform(parts); });
+    else void perform();
   };
 
   const copySelectedRows = () => {
@@ -729,10 +739,14 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       <div className="result-grid-toolbar">
         <div className="result-local-actions">
           <Tooltip title={selectedRows.length > 0 ? '仅导出当前批次中已选择的行' : '仅导出当前已加载批次；如需完整数据，请使用 SQL 工作台“重新查询并导出”'}>
-            <Dropdown trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
-              <Button size="small" icon={<DownloadOutlined />} aria-label={selectedRows.length > 0 ? `导出已选择的 ${selectedRows.length} 行` : `导出当前批次 ${rows.length} 行`}>导出{selectedRows.length > 0 ? `已选 ${selectedRows.length} 行` : `本批 ${rows.length} 行`} <DownOutlined /></Button>
+            <Dropdown disabled={Boolean(exportStage)} trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
+              <Button size="small" loading={Boolean(exportStage)} icon={<DownloadOutlined />} aria-label={selectedRows.length > 0 ? `导出已选择的 ${selectedRows.length} 行` : `导出当前批次 ${rows.length} 行`}>导出{selectedRows.length > 0 ? `已选 ${selectedRows.length} 行` : `本批 ${rows.length} 行`} <DownOutlined /></Button>
             </Dropdown>
           </Tooltip>
+          {exportStage && <Space size={4}>
+            <Text role="status">{exportStage === 'preparing' ? '正在准备导出…' : '正在生成文件…'}</Text>
+            <Button size="small" onClick={() => exportAbortRef.current?.abort()}>取消导出</Button>
+          </Space>}
           <Space.Compact size="small">
             <Button size="small" icon={<CopyOutlined />} aria-label={selectedRows.length > 0 ? `复制已选择的 ${selectedRows.length} 行` : '复制已选择的结果行'} onClick={requestCopySelectedRows}>复制{selectedRows.length > 0 ? ` ${selectedRows.length} 行` : ''}</Button>
             <Dropdown trigger={['click']} menu={{
@@ -963,14 +977,6 @@ const LOCAL_EXPORT_ITEMS = [
   { key: 'markdown', label: 'Markdown 表格' },
   { key: 'xlsx', label: 'Excel' }
 ];
-
-function textBlob(content: string, format: ExportFormat): Blob {
-  const mime = format === 'json' ? 'application/json'
-    : format === 'xml' ? 'application/xml'
-    : format === 'markdown' ? 'text/markdown'
-    : 'text/plain';
-  return new Blob([content], { type: `${mime};charset=utf-8` });
-}
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"]'));

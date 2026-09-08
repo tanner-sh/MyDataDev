@@ -545,6 +545,14 @@ export type SqlFileCandidate = {
 };
 export type SqlCompletionItem = { label: string; kind: string; insertText: string; detail: string };
 export type ExportFormat = 'csv' | 'json' | 'sql' | 'xml' | 'markdown' | 'xlsx';
+export type ResultExportRequest = {
+  format: ExportFormat;
+  columns: ResultColumn[];
+  rows: unknown[][];
+  options?: { dbType?: string; targetTableParts?: string[]; truncated?: boolean; maxRows?: number };
+};
+export type ResultExportStage = 'preparing' | 'serializing';
+export type ResultExportMessage = { stage: ResultExportStage } | { blob: Blob } | { error: string };
 export type ResultCopyFormat = 'sql' | 'pipe';
 export type ImportFormat = 'csv' | 'json' | 'sql';
 export type ImportResult = { rows: Record<string, unknown>[]; message: string };

@@ -16,10 +16,14 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // payload budget continues to protect startup performance.
 // 两行补全、共享字段缓存与表头备注增加约 3 KiB；给这次功能增长预留 6 KiB，
 // 首屏与编辑器的独立预算保持原值，继续防止引入大型依赖。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 790 * 1024;
+// 增量行更新、统一缓存预算、可取消导出与阶段计时增加约 3.5 KiB；首屏实测仍为 238.9 KiB。
+// 给完整可选功能链增加 8 KiB 余量，并新增下面独立的可输入工作台预算。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 798 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;
+// 真正进入可输入工作台的静态依赖链，区别于登录页首屏和包含可选面板的完整依赖。
+const MAX_READY_WORKSPACE_GZIP_BYTES = 610 * 1024;
 const distDirectory = resolve(process.cwd(), 'dist');
 const html = readFileSync(resolve(distDirectory, 'index.html'), 'utf8');
 const assetUrls = [...new Set([...html.matchAll(/(?:src|href)="(\/[^"?]+\.(?:js|css))"/g)].map((match) => match[1]))];
@@ -35,6 +39,12 @@ const gzipBytes = assets.reduce((total, asset) => total + asset.gzipBytes, 0);
 const manifest = JSON.parse(readFileSync(resolve(distDirectory, '.vite/manifest.json'), 'utf8'));
 const sqlWorkspaceEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlWorkspace.tsx');
 const sqlEditorEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/components/SqlEditor.tsx');
+const appEntry = Object.entries(manifest).find(([, entry]) => entry.src === 'src/App.tsx');
+const readyFiles = new Set(assetUrls.map((assetUrl) => assetUrl.slice(1)));
+for (const entry of [appEntry, sqlWorkspaceEntry, sqlEditorEntry]) {
+  if (entry) collectManifestFiles(entry[0], readyFiles, new Set(), false);
+}
+const readyGzipBytes = [...readyFiles].reduce((total, file) => total + gzipSync(readFileSync(resolve(distDirectory, file))).byteLength, 0);
 const codeMirrorSetup = readFileSync(resolve(process.cwd(), 'src/codemirrorSetup.ts'), 'utf8');
 let sqlEditorGzipBytes = 0;
 const workspaceFiles = new Set(assetUrls.map((assetUrl) => assetUrl.slice(1)));
@@ -48,9 +58,12 @@ const workspaceAssets = [...workspaceFiles]
 const workspaceGzipBytes = workspaceAssets.reduce((total, asset) => total + asset.gzipBytes, 0);
 const summary = `${assets.length} 个首屏资源，gzip ${formatBytes(gzipBytes)}；SQL 工作台完整依赖 gzip ${formatBytes(workspaceGzipBytes)}`;
 
-console.log(`构建预算：${summary}`);
+console.log(`构建预算：${summary}；可输入工作台静态依赖 gzip ${formatBytes(readyGzipBytes)}`);
 
 const failures = [];
+if (!appEntry || readyGzipBytes > MAX_READY_WORKSPACE_GZIP_BYTES) {
+  failures.push(`可输入工作台静态依赖缺失或超过限制：${formatBytes(readyGzipBytes)} / ${formatBytes(MAX_READY_WORKSPACE_GZIP_BYTES)}`);
+}
 if (assets.length > MAX_INITIAL_ASSETS) {
   failures.push(`首屏资源数 ${assets.length} 超过限制 ${MAX_INITIAL_ASSETS}`);
 }
@@ -98,14 +111,14 @@ function formatBytes(bytes) {
   return `${(bytes / 1024).toFixed(1)} KiB`;
 }
 
-function collectManifestFiles(key, files, visited = new Set()) {
+function collectManifestFiles(key, files, visited = new Set(), includeDynamic = true) {
   if (visited.has(key)) return;
   visited.add(key);
   const entry = manifest[key];
   if (!entry) return;
   if (entry.file) files.add(entry.file);
   for (const file of [...(entry.css || []), ...(entry.assets || [])]) files.add(file);
-  for (const dependency of [...(entry.imports || []), ...(entry.dynamicImports || [])]) {
-    collectManifestFiles(dependency, files, visited);
+  for (const dependency of [...(entry.imports || []), ...(includeDynamic ? entry.dynamicImports || [] : [])]) {
+    collectManifestFiles(dependency, files, visited, includeDynamic);
   }
 }

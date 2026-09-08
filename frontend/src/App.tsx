@@ -1,5 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
+import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
+import { finishWorkbenchTimingAfterPaint, markWorkbenchResponse, startWorkbenchTiming } from './workbenchPerformance';
 import { resourceDocumentKey, type ResourceDocument } from './resourceWorkspaces';
 import { useEditableRows } from './hooks/useEditableRows';
 import { cellValidation, rebaseConflictRow } from './tableEditing';
@@ -140,8 +142,9 @@ const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((modu
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
 const CommandPalette = lazy(() => import('./components/CommandPalette').then((module) => ({ default: module.CommandPalette })));
 const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
-const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDetailWorkspace }));
-const ObjectDetailWorkspace = lazy(loadObjectDetailWorkspace);
+const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDocumentPanel }));
+const ObjectDocumentPanel = lazy(loadObjectDetailWorkspace);
+const INACTIVE_OBJECT_STATUS: WorkspaceStatus = { kind: 'idle', text: '就绪' };
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
 const loadSqlWorkspace = () => import('./components/SqlWorkspace').then((module) => ({ default: module.SqlWorkspace }));
@@ -281,6 +284,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }, [tableDocumentKey, activeTable, tableData, tableEdits.history, tableQuery, tablePage, layoutPreferences.tablePageSize,
     tableCursorStack, previewSql, tableRowCount, activeTableRelations, resources.markDirty]);
 
+  useWorkspaceRetention({ tabs: sqlTabs, setTabs: setSqlTabs, snapshots: resources.snapshots, documents: resources.documents,
+    activeSqlTabId, tableKey: tableDocumentKey, mode, history: tableEdits.history, tableData });
+
   const { status: aiStatus, reload: reloadAiStatus } = useAiStatus();
   const updateObjectDesignDirty = useCallback((dirty: boolean) => {
     objectDesignDirtyRef.current = dirty;
@@ -325,6 +331,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   useEffect(() => {
     refreshConnections({ retry: true });
   }, []);
+
+  useEffect(() => {
+    if (connectionsReady && !connectionsLoading && !connectionsError) return finishWorkbenchTimingAfterPaint('connections-ready');
+  }, [connectionsReady, connectionsLoading, connectionsError]);
 
   useEffect(() => {
     if (wasWorkspaceLocked.current && !workspaceLocked) void refreshConnections();
@@ -555,6 +565,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   async function refreshConnections(options: RefreshConnectionsOptions = {}) {
+    startWorkbenchTiming('connections-ready');
     const delays = options.retry ? [0, 500, 1000, 1500, 2000, 3000] : [0];
     setConnectionsLoading(true);
     setConnectionsError('');
@@ -1260,6 +1271,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       sqlExecutionIdRef.current = executionId;
       setMode('sql');
       setSqlCancellable(path !== '/sql/explain');
+      startWorkbenchTiming('result-ready');
       setSqlLoading(true);
       try {
         if (path === '/sql/explain') {
@@ -1277,6 +1289,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           errorMessage: null,
           result: data
         };
+        markWorkbenchResponse('result-ready');
         const nextMessage = `已生成${target.selected ? '选中 SQL' : '当前 SQL'}的执行计划，用时 ${data.elapsedMs}ms`;
         updateActiveSqlTab({ results: [result], activeResultKey: statementResultKey(result), message: nextMessage, statusKind: 'success', errorDetail: undefined });
         } else {
@@ -1318,6 +1331,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           setSqlCancellable(true);
           data = await executeScript(true);
         }
+        markWorkbenchResponse('result-ready');
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
         const firstResultSet = data.results.find((item) => item.result?.resultSet);
@@ -2126,6 +2140,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       setTablePage(cached.page); setTableCursorStack(cached.cursors); setTableQuery(cached.query);
       layoutPreferences.setTablePageSize(cached.pageSize); setPreviewSql(cached.preview);
       setTableRowCount(cached.rowCount); setActiveTableRelations(cached.relations); setMode('table');
+      if (!cached.data) await loadTable(cached.table, { page: 0, pageSize: cached.pageSize, reset: true, query: cached.query });
       return;
     }
     const next = { schemaName: object.schemaName, tableName: object.name };
@@ -2724,6 +2739,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const objectStatus = useMemo<WorkspaceStatus>(() => objectDetailLoading
     ? { kind: 'loading', text: '正在加载对象详情…' }
     : workspaceStatus, [objectDetailLoading, workspaceStatus]);
+  const changeObjectDocumentDirty = useStableEvent((key: string, dirty: boolean) => {
+    resources.markDirty(key, dirty);
+    if (key === objectDocumentKey) updateObjectDesignDirty(dirty);
+  });
   const explorerActiveObject = useMemo(() => mode === 'object' && activeObjectTarget
     ? { schemaName: activeObjectTarget.schemaName || metadata?.selectedSchema || metadata?.currentSchema, name: activeObjectTarget.name }
     : mode === 'table' && activeTable
@@ -3346,30 +3365,23 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             ) : null}
             {resources.documents.filter(document => document.kind === 'object').map(document => {
               const connection = connections.find(item => item.id === document.connectionId);
-              return <div key={document.key} className="resource-document-panel" hidden={mode !== 'object' || document.key !== objectDocumentKey || selected?.id !== document.connectionId}>
-              <ObjectDetailWorkspace
-                connectionId={document.connectionId}
-                readonlyConnection={connection?.readonly}
-                capabilities={connection?.capabilities ? {
-                  ...connection.capabilities,
-                  tableBrowse: connection.capabilities.tableBrowse && hasConnectionPermission(connection, 'QUERY'),
-                  tableDesign: connection.capabilities.tableDesign && hasConnectionPermission(connection, 'DDL')
-                } : undefined}
-                productionConfirmationText={connection?.environment === 'prod' ? connection.name : undefined}
-                target={document.object}
-                detail={document.detail || null}
-                status={objectStatus}
-                loading={document.key === objectDocumentKey && objectDetailLoading}
+              const active = mode === 'object' && document.key === objectDocumentKey && selected?.id === document.connectionId;
+              return <ObjectDocumentPanel
+                key={document.key}
+                document={document}
+                connection={connection}
+                active={active}
+                status={active ? objectStatus : INACTIVE_OBJECT_STATUS}
+                loading={active && objectDetailLoading}
                 onBackToSql={returnFromObjectEvent}
                 onOpenTable={openExplorerTable}
                 onReloadDetail={reloadObjectDetailEvent}
-                onBackupTable={connection && hasConnectionPermission(connection, 'BACKUP_RESTORE') ? backupCurrentTableEvent : undefined}
-                onRenameTable={connection && hasConnectionPermission(connection, 'DDL') ? renameTableEvent : undefined}
-                onDropTable={connection && hasConnectionPermission(connection, 'DDL') ? dropTableEvent : undefined}
-                onDesignDirtyChange={(dirty) => { resources.markDirty(document.key, dirty); if (document.key === objectDocumentKey) updateObjectDesignDirty(dirty); }}
+                onBackupTable={backupCurrentTableEvent}
+                onRenameTable={renameTableEvent}
+                onDropTable={dropTableEvent}
+                onDocumentDirtyChange={changeObjectDocumentDirty}
                 onOpenRelation={openRelationEvent}
-              />
-              </div>;
+              />;
             })}
             </Suspense>
           </main>

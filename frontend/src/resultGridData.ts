@@ -72,11 +72,12 @@ export function isNumericColumnType(typeName: string | undefined): boolean {
  * 之前按 `length` 估宽，于是「状态」这种两个汉字的列被算成 2 个字符、宽度被类型下限兜住，
  * 而 12 个字符的订单号也拿到差不多的宽度 —— 结果是窄内容和宽内容的列一样宽。
  */
-export function textUnits(value: string): number {
+export function textUnits(value: string, limit = Infinity): number {
   let units = 0;
   for (const character of value) {
     const code = character.codePointAt(0) ?? 0;
     units += code > 0x2e80 && code < 0xff61 || code >= 0xffe0 && code <= 0xffe6 ? 2 : 1;
+    if (units >= limit) break;
   }
   return units;
 }
@@ -105,14 +106,14 @@ export function suggestedColumnWidth(label: string, typeName: string, values: un
       : isNumericColumnType(type) ? 92
         : 96;
   const valueUnits = values.slice(0, 30).reduce(
-    (longest: number, value) => Math.max(longest, value == null ? 4 : textUnits(String(value))),
+    (longest: number, value) => Math.max(longest, value == null ? 4 : textUnits(String(value), Math.ceil((320 - 26) / VALUE_UNIT_WIDTH))),
     0
   );
   // 表头里的排序与筛选按钮占的是列宽，不是额外的地方 —— 不把它们算进去，「CUSTOMER」这种
   // 长度普通的列名会在一张还空着半屏的表里被截成「CUSTOM…」。
   const width = Math.max(
     valueUnits * VALUE_UNIT_WIDTH + 26,
-    textUnits(label) * LABEL_UNIT_WIDTH + 26 + headerControlsWidth
+    textUnits(label, Math.ceil((320 - 26) / LABEL_UNIT_WIDTH)) * LABEL_UNIT_WIDTH + 26 + headerControlsWidth
   );
   return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeFloor, width)));
 }
@@ -121,7 +122,7 @@ export function suggestedColumnWidth(label: string, typeName: string, values: un
 const RESULT_HEADER_CONTROLS_WIDTH = 46;
 
 export function suggestedResultColumnWidth(column: ResultColumn, columnIndex: number, rows: unknown[][]): number {
-  return suggestedColumnWidth(column.label, column.typeName, rows.map((row) => row[columnIndex]), RESULT_HEADER_CONTROLS_WIDTH);
+  return suggestedColumnWidth(column.label, column.typeName, rows.slice(0, 30).map((row) => row[columnIndex]), RESULT_HEADER_CONTROLS_WIDTH);
 }
 
 /** 竖向滚动条留出的余量：表头没有滚动条，正文有，宽度顶满会让两边差出这么多。 */

@@ -791,6 +791,40 @@ try {
     check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
     await page.shot('09-查询结果');
 
+    // 结果编辑曾因重建整批行记录触发 scrollTo(0)。滚到中间再改一格，保留当前位置。
+    const editScroll = await page.evaluate(`(() => {
+      const viewport = document.querySelector('.result-grid .ant-table-tbody-virtual-holder');
+      if (!viewport) return false;
+      viewport.scrollTop = 600;
+      viewport.dispatchEvent(new Event('scroll'));
+      return true;
+    })()`);
+    await page.sleep(300);
+    const scrollBeforeEdit = await page.evaluate(`(() => {
+      const viewport = document.querySelector('.result-grid .ant-table-tbody-virtual-holder');
+      if (!viewport) return 0;
+      const bounds = viewport.getBoundingClientRect();
+      const cell = [...viewport.querySelectorAll('.grid-cell-editable:not(.is-locked)')].find(node => {
+        const r = node.getBoundingClientRect(); return r.top > bounds.top + 30 && r.bottom < bounds.bottom - 10;
+      });
+      const top = viewport.scrollTop;
+      cell?.click();
+      return cell ? top : 0;
+    })()`);
+    await page.sleep(300);
+    check('进入结果单元格编辑不重置滚动', editScroll && scrollBeforeEdit > 100
+      && await page.evaluate(`Math.abs(document.querySelector('.result-grid .ant-table-tbody-virtual-holder').scrollTop - ${scrollBeforeEdit}) < 5`));
+    await page.evaluate(`(() => { const input = document.querySelector('.result-grid input[aria-label="编辑 CUSTOMER"]'); input?.focus(); input?.select(); })()`);
+    await page.send('Input.insertText', { text: '结果编辑滚动回归' });
+    await page.evaluate(`document.querySelector('.result-grid input[aria-label="编辑 CUSTOMER"]')?.blur()`);
+    await page.sleep(300);
+    check('修改结果值后保留滚动和待提交状态', await page.evaluate(`Boolean(document.querySelector('.result-edit-actions')?.textContent.includes('待提交'))
+      && Math.abs(document.querySelector('.result-grid .ant-table-tbody-virtual-holder').scrollTop - ${scrollBeforeEdit}) < 5`));
+    await page.evaluate(`(() => { [...document.querySelectorAll('.result-edit-actions button')].find(node => node.textContent.trim() === '撤销')?.click(); })()`);
+    await page.sleep(200);
+    if (SHOT_DIR) writeFileSync(path.join(SHOT_DIR, 'workbench-timings.json'), JSON.stringify(await page.evaluate(`performance.getEntriesByType('measure')
+      .filter(entry => entry.name.startsWith('mydatadev:')).map(entry => ({ name: entry.name, duration: entry.duration }))`), null, 2));
+
     /*
       拖列宽不该惊动服务端。拖动手柄长在表头里，而结果表的表头整格是「点一下排序」——
       松手时浏览器补的那次 click 落在表头上就等于点了排序：offset 归零、重新查一次。
@@ -921,6 +955,39 @@ try {
     check('切回对象标签保留设计稿与当前分区', await page.evaluate(`document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER' && document.querySelector('.resource-document-tabs').textContent.includes('●')`));
     check('设计表格在可见区域内且有可用高度', await page.evaluate(`(() => { const panel = document.querySelector('.resource-document-panel:not([hidden]) .table-designer'); const input = panel?.querySelector('input[aria-label="字段名"]'); const r = panel?.getBoundingClientRect(); const i = input?.getBoundingClientRect(); return r?.height > 200 && i?.height > 0 && i.top >= r.top && i.bottom <= r.bottom; })()`));
     await page.shot('08-对象设计草稿保留');
+
+    // 使用真实 Worker 导出长文本快照，并捕获下载 Blob 核对，不重新查询数据库。
+    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.sleep(800);
+    await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: modifier });
+    await page.send('Input.insertText', { text: "select X as ID, REPEAT('worker-export-', 200) as NOTE from SYSTEM_RANGE(1, 400)" });
+    await page.sleep(400);
+    await page.evaluate(`document.querySelector('.sql-execute-button')?.click()`);
+    await page.sleep(2000);
+    await page.evaluate(`(() => {
+      window.__exportWorkers = 0; window.__exportWorkerStops = 0; window.__exportBlob = null;
+      const OriginalWorker = window.Worker;
+      window.Worker = class extends OriginalWorker {
+        constructor(...args) { super(...args); window.__exportWorkers++; }
+        terminate() { window.__exportWorkerStops++; return super.terminate(); }
+      };
+      const create = URL.createObjectURL;
+      URL.createObjectURL = blob => { window.__exportBlob = blob; return create.call(URL, blob); };
+      document.querySelector('button[aria-label^="导出当前批次"]')?.click();
+    })()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
+    for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
+    const exported = await page.evaluate(`(async () => {
+      const blob = window.__exportBlob;
+      const text = blob ? new TextDecoder().decode(await blob.arrayBuffer()) : '';
+      return { workers: window.__exportWorkers, stopped: window.__exportWorkerStops, size: blob?.size || 0,
+        xlsx: text.startsWith('PK') && text.includes('worker-export-') && text.includes('r="A401"') };
+    })()`);
+    check('大结果 Excel 导出经过 Worker，文件包含全部 400 行', exported.workers === 1 && exported.stopped === 1 && exported.xlsx, JSON.stringify(exported));
+    await page.shot('11-大结果导出');
 
     // 切到只读连接再看一眼 SQL 工作台。只读连接曾经把编辑器压成一行：.sql-workspace 是网格
     // 布局，那时给只读连接多排了一行（对应工具栏下面那条只读提示 Alert），提示挪进副标题后

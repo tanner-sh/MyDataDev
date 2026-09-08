@@ -48,6 +48,13 @@ describe('result grid filtering', () => {
 });
 
 describe('result grid column widths', () => {
+  it('估宽只读取前 30 行，长文本只扫描到宽度上限', () => {
+    const rows = Array.from({ length: 10_000 }, (_, index) => index < 30 ? ['short'] : new Proxy([], {
+      get() { throw new Error('不应读取取样以外的单元格'); }
+    }));
+    expect(suggestedResultColumnWidth({ key: 'n', label: 'N', typeName: 'VARCHAR' }, 0, rows)).toBe(96);
+    expect(textUnits('中'.repeat(100_000), 42)).toBe(42);
+  });
   it('窄内容的列不再和宽内容的列一样宽', () => {
     const id = { key: 'c1', label: 'ID', typeName: 'INTEGER' };
     const orderNo = { key: 'c2', label: '订单号', typeName: 'VARCHAR' };

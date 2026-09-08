@@ -6,6 +6,7 @@ import { startCompletion } from '@codemirror/autocomplete';
 import type { SqlEditorHandle, SqlEditorProps, SqlRange } from '../sqlEditorTypes';
 import { isConditionKeywordCompletion, type EditorCompletionOption } from '../sqlEditorCompletion';
 import { createSqlEditorCompletionSource, type CompletionLoadStatus } from '../sqlEditorCompletionSource';
+import { finishWorkbenchTimingAfterPaint } from '../workbenchPerformance';
 
 /** 定义跳转高亮：上层只回答「这段是不是对象引用」，画线和清线在这里。 */
 const setDefinitionMark = StateEffect.define<SqlRange | null>();
@@ -219,6 +220,7 @@ export default function SqlEditor({
       state: createEditorState(value)
     });
     viewRef.current = view;
+    const cancelReadyTiming = finishWorkbenchTimingAfterPaint('sql-editor-ready');
     // 打开一个已经有内容的标签页时也扫一遍，否则提示要等到用户先改一个字才出现。
     scheduleUnknownObjectScan(view);
 
@@ -275,6 +277,7 @@ export default function SqlEditor({
       clearDefinitionProbe(view, true);
       if (typeof disposeMount === 'function') disposeMount();
       view.destroy();
+      cancelReadyTiming();
       if (viewRef.current === view) viewRef.current = null;
       if (stateFactoryRef.current === createEditorState) stateFactoryRef.current = null;
     };

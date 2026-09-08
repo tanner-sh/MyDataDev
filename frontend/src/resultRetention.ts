@@ -29,7 +29,7 @@ export function createResultUnitCounter(
   };
 }
 
-const resultUnits = createResultUnitCounter();
+export const retainedResultUnits = createResultUnitCounter();
 
 export function enforceResultBudget(
   tabs: SqlTab[],
@@ -43,7 +43,7 @@ export function enforceResultBudget(
     ...tabs.filter((tab) => tab.id !== protectedTabId).reverse()
   ];
   for (const tab of candidates) {
-    const units = resultUnits(tab.results);
+    const units = retainedResultUnits(tab.results);
     if (tab.id === protectedTabId || retained + units <= maxRetainedUnits) {
       keep.add(tab.id);
       retained += units;

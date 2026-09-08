@@ -3,6 +3,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentType, KeyboardEvent } from 'react';
 import { resolveSqlEditorShortcut, shouldLoadSqlEditor, toggleSqlLineComment } from '../sqlEditorSurfaceModel';
 import { prefetchWhenIdle } from '../idlePrefetch';
+import { startWorkbenchTiming } from '../workbenchPerformance';
 import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 
 type SqlEditorComponent = ComponentType<SqlEditorProps>;
@@ -53,6 +54,7 @@ export const SqlEditorSurface = memo(function SqlEditorSurface({
 
   const loadEditor = useCallback(async () => {
     if (loadingRef.current || componentRef.current) return;
+    startWorkbenchTiming('sql-editor-ready');
     loadingRef.current = true;
     setLoading(true);
     setLoadError(false);
