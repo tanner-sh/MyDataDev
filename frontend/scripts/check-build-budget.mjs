@@ -14,7 +14,9 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // intentionally includes optional feature chunks in this complete-dependency
 // ceiling. Keep a small allowance for that split while the stricter initial
 // payload budget continues to protect startup performance.
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 784 * 1024;
+// 两行补全、共享字段缓存与表头备注增加约 3 KiB；给这次功能增长预留 6 KiB，
+// 首屏与编辑器的独立预算保持原值，继续防止引入大型依赖。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 790 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;

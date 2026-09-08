@@ -34,6 +34,7 @@ const { Text } = Typography;
 const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
 
 export const TableWorkspace = memo(function TableWorkspace({
+  connectionId,
   initialScrollTop, onViewScroll, onUndo, onRedo, canUndo, canRedo,
   activeTable,
   tableData,
@@ -67,6 +68,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onPageSizeChange,
   onTableQueryChange
 }: {
+  connectionId?: number;
   initialScrollTop?: number; onViewScroll?: (top: number) => void;
   onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
   activeTable: ActiveTable | null;
@@ -106,6 +108,9 @@ export const TableWorkspace = memo(function TableWorkspace({
   const importInputRef = useRef<HTMLInputElement>(null);
   const tableName = activeTable ? `${activeTable.schemaName ? `${activeTable.schemaName}.` : ''}${activeTable.tableName}` : '未选择表';
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
+  const metadataSource = useMemo(() => connectionId != null && activeTable
+    ? { connectionId, schemaName: activeTable.schemaName, tableName: activeTable.tableName }
+    : undefined, [connectionId, activeTable?.schemaName, activeTable?.tableName]);
   const editingDisabled = readonlyConnection || !editingSupported;
   const pendingCount = pendingChanges.length;
   // App already ran buildChanges over every row to produce this list; recomputing
@@ -242,7 +247,7 @@ export const TableWorkspace = memo(function TableWorkspace({
         </div>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
+        <EditableTable metadataSource={metadataSource} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
       </div>
       <div className="grid-pagination table-pagination">
         <Space size={8} className="grid-pagination-summary">

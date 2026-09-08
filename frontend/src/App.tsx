@@ -14,16 +14,17 @@ import { hasConnectionPermission, type ConnectionPermission } from './accessCont
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, sqlKeywordCompletionItems, timestamp } from './utils';
+import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
+import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
+import { provideSqlCompletions } from './sqlCompletionProvider';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
-import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier, type SqlTableReference } from './sqlCompletion';
+import { findSqlObjectReferenceAtOffset, type SqlTableReference } from './sqlCompletion';
 import { findUnknownObjects } from './sqlUnknownObjects';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
 import { getSqlFormatTarget } from './sqlFormatTarget';
 import type {
-  SqlCompletionItem,
   SqlCompletionRequest,
   SqlCompletionResult,
   SqlEditorHandle,
@@ -1185,6 +1186,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   function clearObjectStructureCache() {
+    clearColumnMetadataCache();
     objectStructureCacheRef.current.clear();
     setStructureCacheRevision((current) => current + 1);
   }
@@ -1963,96 +1965,19 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     });
   }
 
-  function loadCompletionStructure(connectionId: number, object: DbObject) {
-    return loadCachedObjectStructure(connectionId, object);
-  }
-
-  /**
-   * 一次补全请求的结果。
-   *
-   * <p>全部按字符偏移量工作：analyzeSqlCompletion 本来就是这么算的，以前还要把它换算成
-   * 编辑器的行列坐标再换回来，现在这层中间商没了。</p>
-   */
-  async function sqlCompletionResult(request: SqlCompletionRequest): Promise<SqlCompletionResult | null> {
-    const context = analyzeSqlCompletion(request.text, request.offset);
-    if (context.insideCommentOrString || context.mode === 'none') return null;
-    // 空格触发时只有「条件里该补列名」这一种情况值得弹窗，否则每敲一个空格都会打断输入。
-    if (request.triggerCharacter === ' ' && !shouldTriggerSqlConditionColumnCompletion(context)) return null;
-    const items = await sqlCompletionItems(request, context);
-    if (items.length === 0) return null;
-    return {
-      range: { start: context.replacement.start, end: context.replacement.end },
-      items,
-      // 字段元数据暂时加载失败时只剩关键字，不能缓存成完整候选，否则后续输入
-      // 仍只在关键字里过滤，字段请求没有机会重试。
-      incomplete: isSqlCompletionListIncomplete(context, items.some((item) => item.kind === 'column'))
-    };
-  }
-
-  async function sqlCompletionItems(
-    request: SqlCompletionRequest,
-    context: ReturnType<typeof analyzeSqlCompletion>
-  ): Promise<SqlCompletionItem[]> {
-    const keywords = sqlKeywordCompletionItems();
+  function sqlCompletionResult(request: SqlCompletionRequest): Promise<SqlCompletionResult | null> {
     const connectionId = selectedIdRef.current;
-    if (!connectionId) return keywords;
-    await sleep(80);
-    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
     const schemaName = metadataRef.current?.selectedSchema || '';
-    const prefix = context.replacement.prefix.toLowerCase();
-    let catalog: CompletionCatalog;
-    try {
-      catalog = await loadCompletionCatalog(connectionId, schemaName, context.mode === 'table' ? prefix : '');
-    } catch {
-      catalog = { selectedSchema: schemaName, objects: metadataRef.current?.objects || [] };
-    }
-    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
-    const matchingObjects = catalog.objects.filter((object) => !prefix || object.name.toLowerCase().startsWith(prefix));
-    const tableItems: SqlCompletionItem[] = matchingObjects.map((object) => ({
-      label: object.name,
-      kind: 'table',
-      insertText: quoteSqlIdentifier(object.name, context.replacement.quoteStyle),
-      detail: `${object.schemaName || catalog.selectedSchema || schemaName} · ${object.type.toUpperCase().includes('VIEW') ? '视图' : '表'}`,
-      sortText: `1-${object.name.toLowerCase()}`
-    }));
-    if (context.mode === 'table') return tableItems;
-
-    const referenced = context.mode === 'qualified-column'
-      ? [resolveSqlTableReference(context, context.qualifierParts)].filter((table): table is NonNullable<typeof table> => Boolean(table))
-      : context.tables;
-    if (referenced.length === 0) return [...tableItems, ...keywords];
-
-    const structures = await Promise.all(referenced.map(async (table) => {
-      const object = findCompletionObject(catalog.objects, table.schemaName, table.name) || {
-        schemaName: table.schemaName || schemaName,
-        name: table.name,
-        type: 'TABLE',
-        columns: [],
-        indexes: []
-      };
-      try {
-        return { table, object: await loadCompletionStructure(connectionId, object) };
-      } catch {
-        return { table, object };
-      }
-    }));
-    if (request.signal.aborted || selectedIdRef.current !== connectionId) return [];
-
-    const qualify = context.mode === 'column' && context.qualifyColumns;
-    const columnItems: SqlCompletionItem[] = structures.flatMap(({ table, object }) => object.columns
-      .filter((column) => !prefix || column.name.toLowerCase().startsWith(prefix))
-      .map((column) => {
-        const columnName = quoteSqlIdentifier(column.name, context.replacement.quoteStyle);
-        const insertText = qualify ? `${sqlTableQualifier(table)}.${columnName}` : columnName;
-        return {
-          label: qualify ? `${sqlTableQualifier(table)}.${column.name}` : column.name,
-          kind: 'column' as const,
-          insertText,
-          detail: `${object.name} 字段 · ${column.type}`,
-          sortText: `0-${column.name.toLowerCase()}`
-        };
-      }));
-    return columnItems.length > 0 ? [...columnItems, ...keywords] : [...tableItems, ...keywords];
+    const tabId = activeSqlTabIdRef.current;
+    return provideSqlCompletions(request, {
+      connectionId,
+      schemaName,
+      isCurrent: () => selectedIdRef.current === connectionId
+        && (metadataRef.current?.selectedSchema || '') === schemaName
+        && activeSqlTabIdRef.current === tabId,
+      loadCatalog: loadCompletionCatalog,
+      loadColumns: loadObjectColumns
+    });
   }
 
   objectDefinitionNavigationRef.current = (reference) => {
@@ -3370,6 +3295,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               />
             ) : mode === 'table' ? (
               <TableWorkspace
+                connectionId={selected?.id}
                 key={tableDocumentKey}
                 initialScrollTop={resources.snapshots.current.get(tableDocumentKey)?.scrollTop || 0}
                 onViewScroll={top => { const snapshot = resources.snapshots.current.get(tableDocumentKey); if (snapshot) resources.snapshots.current.set(tableDocumentKey, { ...snapshot, scrollTop: top }); }}

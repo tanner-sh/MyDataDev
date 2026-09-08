@@ -34,6 +34,53 @@ import static org.mockito.ArgumentMatchers.eq;
 
 class MetadataServiceTest {
     @Test
+    void returnsTableAndColumnRemarksWithoutRequiringIndexesAndRefreshesColumns() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE ANNOTATED(CODE VARCHAR(20))");
+            connection.createStatement().execute("COMMENT ON TABLE ANNOTATED IS '交易账户'");
+            connection.createStatement().execute("COMMENT ON COLUMN ANNOTATED.CODE IS '账户编码'");
+        }
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        var first = service.objectColumns(1, "PUBLIC", "ANNOTATED", false);
+        assertThat(first.remarks()).isEqualTo("交易账户");
+        assertThat(first.columns().get(0).remarks()).isEqualTo("账户编码");
+        assertThat(service.objectColumns(1, "PUBLIC", "ANNOTATED", false)).isSameAs(first);
+        verify(connections, times(1)).open(1L);
+        assertThat(service.completionCatalog(1, "PUBLIC", "ann", 100, false).objects().get(0).remarks()).isEqualTo("交易账户");
+        assertThat(service.structure(1, "PUBLIC", "ANNOTATED").remarks()).isEqualTo("交易账户");
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("COMMENT ON COLUMN ANNOTATED.CODE IS '新的备注'");
+        }
+        assertThat(service.objectColumns(1, "PUBLIC", "ANNOTATED", true).columns().get(0).remarks()).isEqualTo("新的备注");
+    }
+
+    @Test
+    void oracleReadsNativeCommentsWhenJdbcRemarksAreEmpty() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";MODE=Oracle;DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE SIM_STOCKTRADE(CODE VARCHAR2(20), DEF15 VARCHAR2(30))");
+            connection.createStatement().execute("CREATE TABLE ALL_OBJECTS(OWNER VARCHAR2(128), OBJECT_NAME VARCHAR2(128), OBJECT_TYPE VARCHAR2(30))");
+            connection.createStatement().execute("INSERT INTO ALL_OBJECTS VALUES ('PUBLIC', 'SIM_STOCKTRADE', 'TABLE')");
+            connection.createStatement().execute("CREATE TABLE ALL_TAB_COMMENTS(OWNER VARCHAR2(128), TABLE_NAME VARCHAR2(128), COMMENTS VARCHAR2(1000))");
+            connection.createStatement().execute("INSERT INTO ALL_TAB_COMMENTS VALUES ('PUBLIC', 'SIM_STOCKTRADE', '股票交易')");
+            connection.createStatement().execute("CREATE TABLE ALL_COL_COMMENTS(OWNER VARCHAR2(128), TABLE_NAME VARCHAR2(128), COLUMN_NAME VARCHAR2(128), COMMENTS VARCHAR2(1000))");
+            connection.createStatement().execute("INSERT INTO ALL_COL_COMMENTS VALUES ('PUBLIC', 'SIM_STOCKTRADE', 'CODE', '交易编码'), ('PUBLIC', 'SIM_STOCKTRADE', 'DEF15', '自定义字段十五')");
+        }
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(1L)).thenReturn(new DbConnection(1L, "oracle", "oracle", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        var columns = service.objectColumns(1, "PUBLIC", "SIM_STOCKTRADE", false);
+        assertThat(columns.remarks()).isEqualTo("股票交易");
+        assertThat(columns.columns()).extracting("remarks").containsExactly("交易编码", "自定义字段十五");
+        assertThat(service.completionCatalog(1, "PUBLIC", "sim_", 100, false).objects().get(0).remarks()).isEqualTo("股票交易");
+    }
+
+    @Test
     void readsColumnMetadataInJdbcOrderForOracleStreamValues() throws Exception {
         ResultSet rs = mock(ResultSet.class);
         when(rs.getString("COLUMN_NAME")).thenReturn("STATUS");

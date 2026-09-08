@@ -11,6 +11,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectRowCountResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectSearchResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
+import com.example.dbadmin.dto.ApiDtos.ObjectColumns;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
 import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
@@ -133,6 +134,12 @@ public class MetadataController {
     public ObjectStructure structure(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
         view(connectionId);
         return service.structure(connectionId, schemaName, objectName, refresh);
+    }
+
+    @GetMapping("/{connectionId}/objects/columns")
+    public ObjectColumns columns(@PathVariable long connectionId, @RequestParam(required = false) String schemaName, @RequestParam String objectName, @RequestParam(defaultValue = "false") boolean refresh) throws Exception {
+        view(connectionId);
+        return service.objectColumns(connectionId, schemaName, objectName, refresh);
     }
 
     @GetMapping("/{connectionId}/objects/relations")

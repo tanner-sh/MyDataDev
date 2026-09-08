@@ -110,6 +110,7 @@ export type DbObject = {
   schemaName?: string;
   name: string;
   type: string;
+  remarks?: string | null;
   columns: { name: string; type: string; size: number; nullable: boolean; remarks?: string; ordinalPosition?: number; defaultValue?: string }[];
   indexes: { name: string; columnName: string; unique: boolean; ordinalPosition?: number }[];
 };
@@ -143,6 +144,7 @@ export type TableLifecycleRequest = {
   confirmation?: string;
 };
 export type ObjectStructure = DbObject;
+export type ObjectColumns = Omit<DbObject, 'indexes'>;
 export type Metadata = {
   schemas: string[];
   currentSchema: string;
@@ -157,7 +159,8 @@ export type Metadata = {
   cachedAt?: string;
   cacheHit?: boolean;
 };
-export type ResultColumn = { key: string; label: string; typeName: string };
+export type ResultColumnSource = { connectionId: number; schemaName?: string | null; tableName: string; columnName: string };
+export type ResultColumn = { key: string; label: string; typeName: string; source?: ResultColumnSource | null };
 export type SqlSortDirection = 'ASC' | 'DESC';
 /** 服务端生效的列筛选；语义与前端一致（按文本、忽略大小写、NULL 等同空串）。 */
 export type SqlResultFilterRequest = { column: string; operator: string; value?: string | null };

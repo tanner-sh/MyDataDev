@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Compartment, StateEffect, StateField } from '@codemirror/state';
 import { Decoration, EditorView, type DecorationSet } from '@codemirror/view';
 import { autocompletion, EditorState, sqlEditorExtensions } from '../codemirrorSetup';
-import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
+import { startCompletion } from '@codemirror/autocomplete';
 import type { SqlEditorHandle, SqlEditorProps, SqlRange } from '../sqlEditorTypes';
-import { completionTriggerCharacter, toEditorCompletion } from '../sqlEditorCompletion';
+import { isConditionKeywordCompletion, type EditorCompletionOption } from '../sqlEditorCompletion';
+import { createSqlEditorCompletionSource, type CompletionLoadStatus } from '../sqlEditorCompletionSource';
 
 /** 定义跳转高亮：上层只回答「这段是不是对象引用」，画线和清线在这里。 */
 const setDefinitionMark = StateEffect.define<SqlRange | null>();
@@ -76,6 +77,7 @@ export default function SqlEditor({
   onResolveUnknownObjects
 }: SqlEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const [completionStatus, setCompletionStatus] = useState<CompletionLoadStatus>();
   const viewRef = useRef<EditorView | null>(null);
   const stateFactoryRef = useRef<((document: string) => EditorState) | null>(null);
   const themeCompartment = useRef(new Compartment()).current;
@@ -94,6 +96,7 @@ export default function SqlEditor({
     let unknownObjectTimer = 0;
     let hoveredOffset: number | null = null;
     let definitionProbeActive = false;
+    const completionBridge = createSqlEditorCompletionSource(() => callbacks.current.completionSource, setCompletionStatus);
 
     const applyDefinitionMark = (range: SqlRange | null, view: EditorView) => {
       const same = markedRange && range && markedRange.start === range.start && markedRange.end === range.end;
@@ -147,6 +150,7 @@ export default function SqlEditor({
     };
 
     const createEditorState = (document: string) => {
+      completionBridge.reset();
       clearDefinitionAfterDocumentChange();
       return EditorState.create({
         doc: document,
@@ -160,7 +164,20 @@ export default function SqlEditor({
           themeCompartment.of(EditorView.theme({}, { dark: callbacks.current.themeMode === 'dark' })),
           readOnlyCompartment.of(EditorState.readOnly.of(Boolean(callbacks.current.readOnly))),
           autocompletion({
-            override: [(context) => completionFor(context, callbacks.current.completionSource)],
+            override: [completionBridge.source],
+            activateOnCompletion: isConditionKeywordCompletion,
+            tooltipClass: () => 'sql-completion-tooltip',
+            addToOptions: [{
+              position: 60,
+              render: (completion) => {
+                const remarks = (completion as EditorCompletionOption).remarks;
+                if (!remarks) return null;
+                const span = window.document.createElement('span');
+                span.className = 'sql-completion-remarks';
+                span.textContent = remarks.replace(/\s+/gu, ' ');
+                return span;
+              }
+            }],
             icons: false
           }),
           EditorView.updateListener.of((update) => {
@@ -250,6 +267,7 @@ export default function SqlEditor({
     const disposeMount = onMount?.(handle);
 
     return () => {
+      completionBridge.reset();
       window.removeEventListener('keydown', handleModifierChange);
       window.removeEventListener('keyup', handleModifierChange);
       window.removeEventListener('blur', clearOnBlur);
@@ -288,7 +306,15 @@ export default function SqlEditor({
     });
   }, [readOnly, readOnlyCompartment]);
 
-  return <div ref={containerRef} className="sql-editor-host" style={{ height: cssSize(height) }} />;
+  return <div className="sql-editor-shell" style={{ height: cssSize(height) }}>
+    <div ref={containerRef} className="sql-editor-host" style={{ height: '100%' }} />
+    {completionStatus && <div className="sql-completion-status" role="status">
+      {completionStatus.loading ? '正在加载字段候选…' : <>{completionStatus.error}<button type="button" onClick={() => {
+        const view = viewRef.current;
+        if (view) { view.focus(); startCompletion(view); }
+      }}>重试</button></>}
+    </div>}
+  </div>;
 }
 
 function cssSize(value: string | number | undefined): string {
@@ -301,25 +327,4 @@ function replaceDocument(view: EditorView, value: string, createState: (document
   // addToHistory(false) 只是不记录这次替换，旧历史仍会被映射到新文档；真正切换文档必须
   // 换一份 EditorState，才能保证在标签 B 按撤销不会把标签 A 的内容写进来。
   view.setState(createState(value));
-}
-
-/** 把 CodeMirror 的补全上下文翻译成上层那套按偏移量表达的请求，再把结果翻回来。 */
-async function completionFor(
-  context: CompletionContext,
-  source: SqlEditorProps['completionSource']
-): Promise<CompletionResult | null> {
-  if (!source) return null;
-  const controller = new AbortController();
-  // 业务补全会发网络请求，继续输入后旧快照已经无效，必须尽早取消而不是等结果回来再重放。
-  context.addEventListener('abort', () => controller.abort(), { onDocChange: true });
-  const text = context.state.doc.toString();
-  const result = await source({
-    text,
-    offset: context.pos,
-    explicit: context.explicit,
-    triggerCharacter: completionTriggerCharacter(text, context.pos, context.explicit),
-    signal: controller.signal
-  });
-  if (!result || controller.signal.aborted || result.items.length === 0) return null;
-  return toEditorCompletion(result);
 }

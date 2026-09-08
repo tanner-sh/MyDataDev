@@ -119,7 +119,8 @@ public class SqlService {
                     return result;
                 }
                 try (ResultSet rs = statement.getResultSet()) {
-                    SqlResult result = readResult(rs, started, maxRows, dialect);
+                    SqlResult result = withColumnSources(readResult(rs, started, maxRows, dialect), rs, connection,
+                            dbConnection, connectionId, schemaName, executionSql, dialect);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
                     metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
                     return result;
@@ -183,6 +184,7 @@ public class SqlService {
                         dialect
                 );
                 audit.onConnection(actor, "MCP_SQL_QUERY", connectionId, "read-only query");
+                result = withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
                 history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
                 return result;
             }
@@ -273,6 +275,7 @@ public class SqlService {
                                         Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars),
                                         dialect
                                 );
+                                result = withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, statement.sql(), dialect);
                                 returnedRows += result.rows().size();
                                 returnedCells += result.rows().size() * result.columns().size();
                                 returnedTextChars += textChars(result);
@@ -573,6 +576,19 @@ public class SqlService {
         return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS, dialect);
     }
 
+    static SqlResult withColumnSources(SqlResult result, ResultSet rs, Connection connection, DbConnection dbConnection,
+                                       long connectionId, String schemaName, String sql, DatabaseDialect dialect) {
+        try {
+            String namespace = schemaName == null || schemaName.isBlank() ? dialect.currentSchema(connection) : schemaName;
+            var columns = ResultColumnSourceResolver.resolve(result.columns(), rs.getMetaData(), sql,
+                    dbConnection.dbType(), connectionId, namespace, dialect);
+            return new SqlResult(columns, result.rows(), result.affectedRows(), result.elapsedMs(), result.resultSet(),
+                    result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit());
+        } catch (Exception ignored) {
+            return result;
+        }
+    }
+
     private SqlResult readPageResult(
             ResultSet rs,
             long startedNanos,
@@ -625,7 +641,7 @@ public class SqlService {
         boolean hasMore = payloadLimitReached || rs.next();
         SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore,
                 schemaName, sortColumn, sortDirection, filters);
-        return new SqlResult(
+        return withColumnSources(new SqlResult(
                 columns,
                 rows,
                 -1,
@@ -636,7 +652,7 @@ public class SqlService {
                 page,
                 sourceTable,
                 editInfo(editable, rowKeyTokens, sourceTable)
-        );
+        ), rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
     }
 
     /**

@@ -393,7 +393,8 @@ public class McpDatabaseTools {
         if (textTruncated) reason = "text_limit";
         else if (cellTruncated) reason = "cell_limit";
         else if (result.truncated()) reason = "row_limit";
-        return new QueryResult(result.columns(), rows, result.elapsedMs(), result.maxRows(), truncated, reason);
+        var columns = result.columns().stream().map(column -> new McpDtos.QueryColumnView(column.key(), column.label(), column.typeName())).toList();
+        return new QueryResult(columns, rows, result.elapsedMs(), result.maxRows(), truncated, reason);
     }
 
     private SanitizedValue sanitizeValue(Object value, long remainingText, McpRuntimeConfig.Settings config) {

@@ -354,7 +354,7 @@ export function isSqlCompletionListIncomplete(context: SqlCompletionContext, col
       && (context.replacement.prefix.length > 0 || !columnsAvailable));
 }
 
-/** Returns true for the first space after a condition keyword when table columns are available. */
+/** 条件关键字后的空白（含换行、缩进）都可触发，不能因第二个空格取消字段请求。 */
 export function shouldTriggerSqlConditionColumnCompletion(context: SqlCompletionContext): boolean {
   if (context.insideCommentOrString || context.mode !== 'column' || context.replacement.prefix) return false;
   let previous: SqlToken | undefined;
@@ -370,7 +370,7 @@ export function shouldTriggerSqlConditionColumnCompletion(context: SqlCompletion
     previous.end - context.statement.start,
     context.statement.cursorInStatement
   );
-  return whitespace === ' ';
+  return /^\s+$/u.test(whitespace);
 }
 
 /** Parses FROM/JOIN/UPDATE/INTO table names and their explicit or implicit aliases. */

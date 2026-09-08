@@ -125,7 +125,7 @@ export function formatFileSize(size?: number) {
 export function sqlKeywordCompletionItems(): SqlCompletionItem[] {
   return [
     'SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN',
-    'GROUP BY', 'ORDER BY', 'HAVING', 'LIMIT', 'INSERT', 'UPDATE', 'DELETE'
+    'GROUP BY', 'ORDER BY', 'HAVING', 'ON', 'AND', 'OR', 'LIMIT', 'INSERT', 'UPDATE', 'DELETE'
   ].map((keyword) => ({
     label: keyword,
     kind: 'keyword' as const,

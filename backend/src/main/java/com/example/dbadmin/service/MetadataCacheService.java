@@ -4,6 +4,7 @@ import com.example.dbadmin.dto.ApiDtos.DbObject;
 import com.example.dbadmin.dto.ApiDtos.ObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
+import com.example.dbadmin.dto.ApiDtos.ObjectColumns;
 import com.example.dbadmin.dto.ApiDtos.ObjectDdlResponse;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectDetail;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectSummary;
@@ -47,6 +48,8 @@ public class MetadataCacheService {
             .build();
     private final Cache<ObjectKey, CachedValue<ObjectStructure>> structures =
             detailCache(value -> approximateKilobytes(value.columns().size() + value.indexes().size(), 0));
+    private final Cache<ObjectKey, CachedValue<ObjectColumns>> objectColumns =
+            detailCache(value -> approximateKilobytes(value.columns().size(), textLength(value.remarks())));
     private final Cache<ObjectKey, CachedValue<ObjectDetail>> details = detailCache(value ->
             approximateKilobytes(value.columns().size() + value.indexes().size() + value.primaryKeys().size(), 0));
     private final Cache<ObjectKey, CachedValue<ObjectRelations>> relations = detailCache(value ->
@@ -102,6 +105,28 @@ public class MetadataCacheService {
 
     public Optional<ObjectStructure> structure(long connectionId, String schemaName, String objectName) {
         return value(structures.getIfPresent(key(connectionId, schemaName, objectName)));
+    }
+
+    @FunctionalInterface
+    public interface ColumnsLoader {
+        ObjectColumns load() throws Exception;
+    }
+
+    /** 字段请求按键合并；目录刷新后切换 generation，旧请求不会重新填充当前缓存。 */
+    public ObjectColumns columns(long connectionId, String schemaName, String objectName, ColumnsLoader loader) throws Exception {
+        var key = new ObjectKey(connectionId, directoryGeneration(connectionId), exact(schemaName), exact(objectName));
+        try {
+            return objectColumns.get(key, ignored -> {
+                try {
+                    return new CachedValue<>(loader.load(), Instant.now());
+                } catch (Exception error) {
+                    throw new java.util.concurrent.CompletionException(error);
+                }
+            }).value();
+        } catch (java.util.concurrent.CompletionException error) {
+            if (error.getCause() instanceof Exception cause) throw cause;
+            throw error;
+        }
     }
 
     public void putStructure(long connectionId, String schemaName, String objectName, ObjectStructure structure) {

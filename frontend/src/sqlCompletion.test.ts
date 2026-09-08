@@ -184,6 +184,8 @@ describe('SQL completion context', () => {
   it('automatically triggers column completion after condition keywords', () => {
     const statements = [
       'select * from users where ',
+      'select * from users where  ',
+      'select * from users where\n\t ',
       'select * from users where active = 1 and ',
       'select * from users where active = 1 or ',
       'select role_id, count(*) from users group by role_id having ',
@@ -195,10 +197,9 @@ describe('SQL completion context', () => {
     });
   });
 
-  it('does not automatically trigger columns after unrelated or repeated spaces', () => {
+  it('does not automatically trigger columns after unrelated spaces', () => {
     const statements = [
       'select * from users ',
-      'select * from users where  ',
       'select * where ',
       "select * from users where 'unfinished ",
       "select * from users where status = 'OR' ",

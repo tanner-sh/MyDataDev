@@ -210,13 +210,25 @@ public final class ApiDtos {
     ) {
     }
 
-    public record DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
+    public record DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, String remarks) {
+        public DbObject(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
+            this(schemaName, name, type, columns, indexes, null);
+        }
     }
 
-    public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
+    public record ObjectColumns(String schemaName, String name, String type, String remarks, List<ColumnInfo> columns) {
     }
 
-    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, String structureVersion) {
+    public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, String remarks) {
+        public ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes) {
+            this(schemaName, name, type, columns, indexes, null);
+        }
+    }
+
+    public record ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, String structureVersion, String remarks) {
+        public ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName, String structureVersion) {
+            this(schemaName, name, type, columns, indexes, primaryKeys, primaryKeyName, structureVersion, null);
+        }
         public ObjectDetail(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, List<String> primaryKeys, String primaryKeyName) {
             this(schemaName, name, type, columns, indexes, primaryKeys, primaryKeyName, null);
         }
@@ -563,7 +575,13 @@ public final class ApiDtos {
         }
     }
 
-    public record ResultColumn(String key, String label, String typeName) {
+    public record ResultColumnSource(long connectionId, String schemaName, String tableName, String columnName) {
+    }
+
+    public record ResultColumn(String key, String label, String typeName, ResultColumnSource source) {
+        public ResultColumn(String key, String label, String typeName) {
+            this(key, label, typeName, null);
+        }
     }
 
     public record ResultSourceTable(List<String> nameParts) {

@@ -17,6 +17,7 @@ import com.example.dbadmin.dto.ApiDtos.ObjectRelation;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelations;
 import com.example.dbadmin.dto.ApiDtos.ObjectRowCountResponse;
 import com.example.dbadmin.dto.ApiDtos.ObjectStructure;
+import com.example.dbadmin.dto.ApiDtos.ObjectColumns;
 import com.example.dbadmin.dto.ApiDtos.TableDesignRequest;
 import com.example.dbadmin.dto.ApiDtos.TableDesignResponse;
 import com.example.dbadmin.dto.ApiDtos.TableLifecycleRequest;
@@ -314,7 +315,7 @@ public class MetadataService {
                     continue;
                 }
                 if (!matchesName(name, keyword, matchMode)) continue;
-                DbObject object = new DbObject(schema, name, type, List.of(), List.of());
+                DbObject object = new DbObject(schema, name, type, List.of(), List.of(), rs.getString("REMARKS"));
                 if (catalogObjects != null) {
                     catalogObjects.add(object);
                     if (catalogObjects.size() > maxCatalogObjects) catalogObjects = null;
@@ -396,6 +397,7 @@ public class MetadataService {
         }
         boolean hasMore = objects.size() > pageSize;
         if (hasMore) objects = new ArrayList<>(objects.subList(0, pageSize));
+        objects = withOracleTableRemarks(connection, dialect, selectedSchema, objects);
         if (physicalOnly) {
             return new MetadataCacheService.MetadataObjectPage(objects, total, true, hasMore);
         }
@@ -521,6 +523,66 @@ public class MetadataService {
         return mode == MatchMode.PREFIX ? candidate.startsWith(expected) : candidate.contains(expected);
     }
 
+    /** 补全和表头只读字段，不加载索引、主键或行数据。 */
+    public ObjectColumns objectColumns(long connectionId, String schemaName, String objectName, boolean refresh) throws Exception {
+        if (refresh) cache.evictObject(connectionId, schemaName, objectName);
+        return cache.columns(connectionId, schemaName, objectName, () -> {
+            try (Connection connection = connections.open(connectionId)) {
+                DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(connectionId));
+                DatabaseMetaData meta = connection.getMetaData();
+                DbObject object = findObject(meta, dialect.metadataScope(connection, schemaName), dialect, objectName);
+                var scope = dialect.metadataScope(connection, object.schemaName());
+                List<ColumnInfo> cols = columnsWithRemarks(connection, dialect, scope, object);
+                return new ObjectColumns(object.schemaName(), object.name(), object.type(),
+                        tableRemarks(connection, dialect, object), cols);
+            }
+        });
+    }
+
+    private List<ColumnInfo> columnsWithRemarks(Connection connection, DatabaseDialect dialect, DatabaseDialect.MetadataScope scope, DbObject object) throws Exception {
+        List<ColumnInfo> cols = columns(connection.getMetaData(), scope.catalog(), scope.schemaPattern(), object.name());
+        return dialect instanceof OracleDialect ? withOracleColumnRemarks(connection, dialect, object, cols) : cols;
+    }
+
+    private String tableRemarks(Connection connection, DatabaseDialect dialect, DbObject object) {
+        return dialect instanceof OracleDialect
+                ? withOracleTableRemarks(connection, dialect, object.schemaName(), List.of(object)).get(0).remarks()
+                : object.remarks();
+    }
+
+    /** 仅查询当前页的表注释，字典访问失败也保留可用的对象清单。 */
+    private List<DbObject> withOracleTableRemarks(Connection connection, DatabaseDialect dialect, String schema, List<DbObject> objects) {
+        if (objects.isEmpty()) return objects;
+        String placeholders = String.join(",", java.util.Collections.nCopies(objects.size(), "?"));
+        Map<String, String> remarks = new HashMap<>();
+        try (var statement = connection.prepareStatement("SELECT TABLE_NAME, COMMENTS FROM ALL_TAB_COMMENTS WHERE OWNER = ? AND TABLE_NAME IN (" + placeholders + ")")) {
+            dialect.configureReadStatement(connection, statement, objects.size(), METADATA_QUERY_TIMEOUT_SECONDS);
+            statement.setString(1, schema);
+            for (int index = 0; index < objects.size(); index++) statement.setString(index + 2, objects.get(index).name());
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) remarks.put(rs.getString("TABLE_NAME"), rs.getString("COMMENTS"));
+            }
+        } catch (SQLException ignored) {
+            return objects;
+        }
+        return objects.stream().map(object -> new DbObject(object.schemaName(), object.name(), object.type(),
+                object.columns(), object.indexes(), remarks.getOrDefault(object.name(), object.remarks()))).toList();
+    }
+
+    private List<ColumnInfo> withOracleColumnRemarks(Connection connection, DatabaseDialect dialect, DbObject object, List<ColumnInfo> columns) throws Exception {
+        Map<String, String> remarks = new HashMap<>();
+        try (var statement = connection.prepareStatement("SELECT COLUMN_NAME, COMMENTS FROM ALL_COL_COMMENTS WHERE OWNER = ? AND TABLE_NAME = ?")) {
+            dialect.configureReadStatement(connection, statement, Math.min(columns.size(), 200), METADATA_QUERY_TIMEOUT_SECONDS);
+            statement.setString(1, object.schemaName());
+            statement.setString(2, object.name());
+            try (ResultSet rs = statement.executeQuery()) {
+                while (rs.next()) remarks.put(rs.getString("COLUMN_NAME"), rs.getString("COMMENTS"));
+            }
+        }
+        return columns.stream().map(column -> new ColumnInfo(column.name(), column.type(), column.size(), column.nullable(),
+                remarks.getOrDefault(column.name(), column.remarks()), column.ordinalPosition(), column.defaultValue())).toList();
+    }
+
     public ObjectStructure structure(long connectionId, String schemaName, String objectName) throws Exception {
         return structure(connectionId, schemaName, objectName, false);
     }
@@ -542,8 +604,9 @@ public class MetadataService {
                     object.schemaName(),
                     object.name(),
                     object.type(),
-                    columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name()),
-                    indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name())
+                    columnsWithRemarks(connection, dialect, objectScope, object),
+                    indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name()),
+                    tableRemarks(connection, dialect, object)
             );
             cache.putStructure(connectionId, object.schemaName(), object.name(), structure);
             return structure;
@@ -629,14 +692,14 @@ public class MetadataService {
             } else {
                 object = new DbObject(
                         cachedStructure.schemaName(), cachedStructure.name(), cachedStructure.type(),
-                        cachedStructure.columns(), cachedStructure.indexes()
+                        cachedStructure.columns(), cachedStructure.indexes(), cachedStructure.remarks()
                 );
             }
             // Resolving the scope can cost a driver round trip, so do it once for
             // the object rather than separately per metadata lookup below.
             DatabaseDialect.MetadataScope objectScope = dialect.metadataScope(connection, object.schemaName());
             if (cachedStructure == null) {
-                cols = columns(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
+                cols = columnsWithRemarks(connection, dialect, objectScope, object);
                 idx = indexes(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             } else {
                 cols = cachedStructure.columns();
@@ -645,10 +708,11 @@ public class MetadataService {
             PrimaryKeyInfo pk = primaryKeyInfo(meta, objectScope.catalog(), objectScope.schemaPattern(), object.name());
             ObjectDetail detail = new ObjectDetail(
                     object.schemaName(), object.name(), object.type(), cols, idx, pk.columns(), pk.name(),
-                    structureVersion(object.schemaName(), object.name(), object.type(), cols, idx, pk)
+                    structureVersion(object.schemaName(), object.name(), object.type(), cols, idx, pk),
+                    tableRemarks(connection, dialect, object)
             );
             cache.putStructure(connectionId, object.schemaName(), object.name(),
-                    new ObjectStructure(object.schemaName(), object.name(), object.type(), cols, idx));
+                    new ObjectStructure(object.schemaName(), object.name(), object.type(), cols, idx, detail.remarks()));
             cache.putDetail(connectionId, object.schemaName(), object.name(), detail);
             return detail;
         }
@@ -1053,7 +1117,7 @@ public class MetadataService {
                 String foundName = rs.getString("TABLE_NAME");
                 String type = rs.getString("TABLE_TYPE");
                 if (!isSystemSchema(foundSchema) && objectName.equals(foundName)) {
-                    return new DbObject(foundSchema, foundName, type, List.of(), List.of());
+                    return new DbObject(foundSchema, foundName, type, List.of(), List.of(), rs.getString("REMARKS"));
                 }
             }
         }
@@ -1064,7 +1128,7 @@ public class MetadataService {
                 String foundName = rs.getString("TABLE_NAME");
                 String type = rs.getString("TABLE_TYPE");
                 if (!isSystemSchema(foundSchema) && foundName != null && foundName.equalsIgnoreCase(objectName)) {
-                    foldedMatches.add(new DbObject(foundSchema, foundName, type, List.of(), List.of()));
+                    foldedMatches.add(new DbObject(foundSchema, foundName, type, List.of(), List.of(), rs.getString("REMARKS")));
                 }
             }
         }

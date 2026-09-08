@@ -156,7 +156,7 @@ public class SqlTransactionService {
                     try {
                         boolean hasResult = jdbc.execute(statement.sql());
                         SqlResult result = hasResult
-                                ? readOne(jdbc, statementStarted, maxRows, dialect)
+                                ? readOne(jdbc, statementStarted, maxRows, dialect, transaction, dbConnection, statement.sql())
                                 : sqlService.emptyResult(jdbc.getUpdateCount(), elapsedMs(statementStarted), maxRows);
                         results.add(new SqlStatementResult(
                                 index + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result
@@ -245,9 +245,10 @@ public class SqlTransactionService {
                 "transaction:" + transaction.id() + " statements=" + unsafe.size());
     }
 
-    private SqlResult readOne(Statement jdbc, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
+    private SqlResult readOne(Statement jdbc, long startedNanos, int maxRows, DatabaseDialect dialect, OpenTransaction transaction, DbConnection dbConnection, String sql) throws Exception {
         try (ResultSet rs = jdbc.getResultSet()) {
-            return sqlService.readResult(rs, startedNanos, maxRows, dialect);
+            return SqlService.withColumnSources(sqlService.readResult(rs, startedNanos, maxRows, dialect), rs, transaction.connection(),
+                    dbConnection, transaction.connectionId(), transaction.schemaName(), sql, dialect);
         }
     }
 

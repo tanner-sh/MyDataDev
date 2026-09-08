@@ -5328,3 +5328,52 @@ body.is-resizing-column * {
 body[data-session-locked="true"] .ant-modal-root,
 body[data-session-locked="true"] .ant-drawer,
 body[data-session-locked="true"] .ant-dropdown { display: none; }
+.sql-editor-shell { position: relative; min-height: 0; }
+.sql-completion-status {
+  position: absolute;
+  right: 14px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.sql-completion-status button { border: 0; background: transparent; color: var(--primary); cursor: pointer; }
+.sql-editor-shell .cm-tooltip.sql-completion-tooltip { width: min(640px, calc(100vw - 48px)); max-width: calc(100vw - 48px); }
+.sql-editor-shell .cm-tooltip.sql-completion-tooltip > ul { max-height: 320px; }
+.sql-editor-shell .cm-tooltip.sql-completion-tooltip > ul > li {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  column-gap: 14px;
+  row-gap: 2px;
+  padding: 6px 10px;
+  line-height: 20px;
+}
+.sql-completion-tooltip .cm-completionLabel { overflow: hidden; text-overflow: ellipsis; }
+.sql-completion-tooltip .sql-completion-remarks {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-sans, sans-serif);
+  color: var(--text-secondary);
+}
+.sql-completion-tooltip .cm-completionDetail {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-sans, sans-serif);
+  font-size: 12px;
+  font-style: normal;
+  color: var(--text-secondary);
+}
+.sql-editor-shell .cm-completionInfo { max-width: min(420px, calc(100vw - 48px)); white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; }
+.column-metadata-trigger { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.column-metadata-tooltip { display: grid; gap: 5px; max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.column-metadata-source { opacity: 0.75; font-size: 12px; }

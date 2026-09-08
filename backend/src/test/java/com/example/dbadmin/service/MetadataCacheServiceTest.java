@@ -13,6 +13,41 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class MetadataCacheServiceTest {
     @Test
+    void columnRequestsCoalesceAndDirectoryRefreshRejectsOldGeneration() throws Exception {
+        var cache = new MetadataCacheService();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var ready = new java.util.concurrent.CountDownLatch(1);
+        var finish = new java.util.concurrent.CountDownLatch(1);
+        var value = new com.example.dbadmin.dto.ApiDtos.ObjectColumns("APP", "USERS", "TABLE", "用户", List.of());
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            MetadataCacheService.ColumnsLoader loader = () -> {
+                calls.incrementAndGet();
+                ready.countDown();
+                if (!finish.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("等待测试释放超时");
+                return value;
+            };
+            var first = executor.submit(() -> cache.columns(1, "APP", "USERS", loader));
+            assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            var second = executor.submit(() -> cache.columns(1, "APP", "USERS", loader));
+            finish.countDown();
+            assertThat(first.get(5, java.util.concurrent.TimeUnit.SECONDS)).isSameAs(value);
+            assertThat(second.get(5, java.util.concurrent.TimeUnit.SECONDS)).isSameAs(value);
+            assertThat(calls.get()).isEqualTo(1);
+            cache.evictMetadataDirectory(1);
+            cache.columns(1, "APP", "USERS", loader);
+            assertThat(calls.get()).isEqualTo(2);
+        } finally {
+            finish.countDown();
+            executor.shutdownNow();
+        }
+        cache.evictMetadataDirectory(1);
+        cache.columns(1, "APP", "USERS", () -> { cache.evictMetadataDirectory(1); return value; });
+        var fresh = new com.example.dbadmin.dto.ApiDtos.ObjectColumns("APP", "USERS", "TABLE", "新备注", List.of());
+        assertThat(cache.columns(1, "APP", "USERS", () -> fresh)).isSameAs(fresh);
+    }
+
+    @Test
     void directoryRefreshPreservesObjectDetails() {
         MetadataCacheService cache = new MetadataCacheService();
         ObjectDetail detail = new ObjectDetail("PUBLIC", "USERS", "TABLE", List.of(), List.of(), List.of(), null);

@@ -9,6 +9,7 @@ import { resizePreview, startColumnResizeInteraction } from '../columnResize';
 const MIN_EDITABLE_COLUMN_WIDTH = 88;
 const MAX_EDITABLE_COLUMN_WIDTH = 520;
 import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
+import { ColumnMetadataTooltip } from './ColumnMetadataTooltip';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
@@ -23,6 +24,7 @@ import {
 } from '../editableTableRows';
 
 type EditableTableProps = {
+  metadataSource?: { connectionId: number; schemaName?: string; tableName: string };
   initialScrollTop?: number; onViewScroll?: (top: number) => void;
   data: TableData | null;
   rows: TableRow[];
@@ -35,7 +37,7 @@ type EditableTableProps = {
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 };
 
-export const EditableTable = memo(function EditableTable({ initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
+export const EditableTable = memo(function EditableTable({ metadataSource, initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
   const tableRef = useRef<TableRef>(null);
   const lastScrolledDataRef = useRef<TableData | null>(null);
   const [largeEditor, setLargeEditor] = useState<{ rowId: string; column: TableColumn; value: string }>();
@@ -158,8 +160,12 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
       },
       ...data.columns.map((column) => ({
         title: (
-          <div className="resizable-column-title" title={column.truncated ? `${column.typeName} · 本页存在超长值，已截断并禁用该列编辑` : column.typeName}>
-            <span>{column.name}{column.truncated ? ' ⚠' : ''}</span>
+          <div className="resizable-column-title">
+            <ColumnMetadataTooltip name={column.name} typeName={column.typeName}
+              source={metadataSource ? { ...metadataSource, columnName: column.name } : undefined}
+              warning={column.truncated ? '本页存在超长值，已截断并禁用该列编辑' : undefined}>
+              <span className="column-metadata-trigger">{column.name}{column.truncated ? ' ⚠' : ''}</span>
+            </ColumnMetadataTooltip>
             <span
               className="column-resize-handle"
               role="separator"
@@ -214,7 +220,7 @@ export const EditableTable = memo(function EditableTable({ initialScrollTop = 0,
   // activeCell, readonly and loading are deliberately absent: they reach the
   // cells through the record, which is what shouldCellUpdate compares.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beginResize, columnWidths, data, foreignKeys, onDelete, onEdit, onFollowRelation, setColumnWidth, suggestedWidths]);
+  }, [beginResize, columnWidths, data, foreignKeys, metadataSource, onDelete, onEdit, onFollowRelation, setColumnWidth, suggestedWidths]);
 
   useLayoutEffect(() => {
     if (!data || scrollY === undefined || !tableRef.current) return;
@@ -392,4 +398,3 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
 function suggestedColumnWidth(column: TableColumn, rows: Record<string, unknown>[]) {
   return sharedColumnWidth(column.name, column.typeName, rows.map((row) => row[column.name]));
 }
-

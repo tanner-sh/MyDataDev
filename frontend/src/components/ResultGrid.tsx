@@ -1,5 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
+import { ColumnMetadataTooltip } from './ColumnMetadataTooltip';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
 import { Button, Dropdown, Input, InputNumber, Modal, Segmented, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFilled, LeftOutlined, QuestionCircleOutlined, RightOutlined, SearchOutlined, VerticalLeftOutlined } from '@ant-design/icons';
@@ -358,8 +359,10 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           const width = columnWidths[column.key] || suggestedResultColumnWidth(column, columnIndex, result.rows);
           return {
             title: (
-              <span className="resizable-column-title" title={`${column.label} · ${column.typeName}`}>
-                <span>{column.label}</span>
+              <span className="resizable-column-title">
+                <ColumnMetadataTooltip name={column.label} typeName={column.typeName} source={column.source}>
+                  <span className="column-metadata-trigger">{column.label}</span>
+                </ColumnMetadataTooltip>
                 <span
                   className="column-resize-handle"
                   role="separator"

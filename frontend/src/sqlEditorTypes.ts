@@ -20,6 +20,7 @@ export type SqlCompletionItem = {
   kind: SqlCompletionKind;
   insertText: string;
   detail?: string;
+  remarks?: string;
   /** 排序键，小的在前。跨来源统一排序时用。 */
   sortText?: string;
 };
@@ -44,6 +45,7 @@ export type SqlCompletionResult = {
    * 为 false 时编辑器可以在本地按前缀过滤已有结果，不再回调。
    */
   incomplete: boolean;
+  warning?: string;
 };
 
 /** 编辑器实例暴露给工作台的操作面。 */

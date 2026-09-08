@@ -74,6 +74,11 @@ class SqlServiceEditableResultTest {
         assertThat(result.edit()).isNotNull();
         assertThat(result.edit().editable()).isTrue();
         assertThat(result.edit().tableName()).isEqualToIgnoringCase("customers");
+        assertThat(result.columns()).allSatisfy(column -> {
+            assertThat(column.source()).isNotNull();
+            assertThat(column.source().connectionId()).isEqualTo(1L);
+            assertThat(column.source().tableName()).isEqualToIgnoringCase("customers");
+        });
         assertThat(result.edit().keyColumns()).containsExactly("ID");
         assertThat(result.edit().rowKeyTokens()).hasSize(result.rows().size()).doesNotContainNull();
         assertThat(result.edit().reason()).isNull();

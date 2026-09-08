@@ -3,7 +3,6 @@ package com.example.dbadmin.mcp;
 import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelation;
-import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 
 import java.util.List;
 import java.util.Map;
@@ -86,19 +85,23 @@ public final class McpDtos {
     ) {
     }
 
+    /** MCP 保持原有稳定列格式，Web 专用的可选备注来源不进入严格输出 schema。 */
+    public record QueryColumnView(String key, String label, String typeName) {
+    }
+
     /** 写操作的结果。写语句通常没有结果集，受影响行数才是调用方要的东西。 */
     public record ExecuteResult(
             String statementKind,
             int updatedRows,
             long elapsedMs,
-            List<ResultColumn> columns,
+            List<QueryColumnView> columns,
             List<List<Object>> rows,
             boolean truncated
     ) {
     }
 
     public record QueryResult(
-            List<ResultColumn> columns,
+            List<QueryColumnView> columns,
             List<List<Object>> rows,
             long elapsedMs,
             int maxRows,

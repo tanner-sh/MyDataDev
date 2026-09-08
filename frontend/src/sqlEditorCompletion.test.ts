@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { completionTriggerCharacter, completionValidFor, toEditorCompletion } from './sqlEditorCompletion';
+import { completionTriggerCharacter, completionValidFor, conditionKeywordInsertion, isConditionKeywordCompletion, toEditorCompletion } from './sqlEditorCompletion';
 import type { SqlCompletionResult } from './sqlEditorTypes';
+import { EditorSelection, EditorState, type TransactionSpec } from '@codemirror/state';
+import type { EditorView } from '@codemirror/view';
 
 describe('补全触发字符', () => {
-  it('只认 . 和空格', () => {
+  it('识别点号并统一空白触发字符', () => {
     expect(completionTriggerCharacter('select * from t.', 16)).toBe('.');
     expect(completionTriggerCharacter('select id ', 10)).toBe(' ');
     expect(completionTriggerCharacter('select id', 9)).toBeUndefined();
+    expect(completionTriggerCharacter('where\n', 6)).toBe(' ');
+    expect(completionTriggerCharacter('where\t', 6)).toBe(' ');
   });
 
   it('文档开头和越界偏移不算触发', () => {
@@ -71,5 +75,31 @@ describe('补全项翻译', () => {
   it('incomplete 会一路传到 validFor', () => {
     expect(toEditorCompletion({ ...result, incomplete: true }).validFor).toBeUndefined();
     expect(toEditorCompletion(result).validFor).toBeInstanceOf(RegExp);
+  });
+
+  it('注释只用于摘要和详情，不改变名称及插入值', () => {
+    const translated = toEditorCompletion({ ...result, items: [{ label: 'CODE', kind: 'column', insertText: 'CODE', remarks: '账户编码\n完整备注', detail: 'BD_ACCOUNT · VARCHAR2' }] });
+    expect(translated.options[0]).toMatchObject({ label: 'CODE', apply: 'CODE', remarks: '账户编码\n完整备注' });
+    expect(translated.options[0].info).toContain('账户编码\n完整备注');
+  });
+
+  it('条件关键字补全保留已有空白，自动激活字段候选', () => {
+    expect(conditionKeywordInsertion('whe', 3, 'WHERE')).toEqual({ insert: 'WHERE ', followingWhitespace: 0 });
+    expect(conditionKeywordInsertion('whe\n  code', 3, 'WHERE')).toEqual({ insert: 'WHERE', followingWhitespace: 3 });
+    expect(isConditionKeywordCompletion({ label: 'WHERE', type: 'keyword' })).toBe(true);
+    expect(isConditionKeywordCompletion({ label: 'WHERE', type: 'property' })).toBe(false);
+    expect(isConditionKeywordCompletion({ label: 'FROM', type: 'keyword' })).toBe(false);
+  });
+
+  it('条件关键字在多个光标处补全，分别复用换行或补空格', () => {
+    let state = EditorState.create({ doc: 'whe\n  code\nwhe',
+      extensions: EditorState.allowMultipleSelections.of(true),
+      selection: EditorSelection.create([EditorSelection.cursor(3), EditorSelection.cursor(14)]) });
+    const option = toEditorCompletion({ range: { start: 0, end: 3 }, incomplete: false,
+      items: [{ label: 'WHERE', kind: 'keyword', insertText: 'WHERE' }] }).options[0];
+    if (typeof option.apply !== 'function') throw new Error('条件补全必须使用插入函数');
+    option.apply({ state, dispatch: (spec: TransactionSpec) => { state = state.update(spec).state; } } as EditorView, option, 0, 3);
+    expect(state.doc.toString()).toBe('WHERE\n  code\nWHERE ');
+    expect(state.selection.ranges.map(range => range.head)).toEqual([8, 19]);
   });
 });
