@@ -40,6 +40,15 @@ public class SqlService {
     private static final int MAX_RESULT_CELLS = 200_000;
     private static final long MAX_RESULT_TEXT_CHARS = 20_000_000;
     private static final int MAX_CELL_TEXT_CHARS = 100_000;
+    /**
+     * 驱动不报列属于哪张表时的说明。
+     *
+     * <p>Oracle 的 ojdbc 就是这样（`getTableName()` 一律返回空串），所以在 Oracle 上结果集
+     * 就地编辑整个用不了。说清楚是驱动的限制，并指一条能走通的路，比丢下一句「不是来自单张表」
+     * 让用户去查自己的 SQL 强。</p>
+     */
+    private static final String DRIVER_REPORTS_NO_TABLE_NAMES =
+            "数据库驱动没有报告结果列属于哪张表（Oracle 驱动即如此），因此无法就地编辑；在资源树里打开这张表可以直接改数据。";
     /** CLOB 先读回多少字符用于判断截断。查询结果一屏放不下太长的文本，取一个比单元格上限小得多的窗口。 */
     private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
     private final ConnectionService connections;
@@ -651,7 +660,7 @@ public class SqlService {
                 payloadLimitReached,
                 page,
                 sourceTable,
-                editInfo(editable, rowKeyTokens, sourceTable)
+                editInfo(editable, rowKeyTokens, sourceTable, metadata, columnCount)
         ), rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
     }
 
@@ -681,9 +690,8 @@ public class SqlService {
         // ResultSetSourceResolver 会跳过没有报告表名的列（表达式、别名、部分驱动），这对推断
         // 导出目标表是合适的宽松度，但用来决定「能不能改这张表」就太松了：一次 JOIN 里只要有
         // 一侧的列没报表名，就会被当成单表来源。编辑路径要求每一个可见列都明确属于同一张表。
-        if (!everyColumnBelongsTo(metadata, visibleColumnCount, table)) {
-            return new EditableResult(null, "查询结果不是来自单张表，无法定位行");
-        }
+        String mismatch = columnsOutsideTableReason(metadata, visibleColumnCount, table);
+        if (mismatch != null) return new EditableResult(null, mismatch);
         try {
             DataEditService.ResultRowLocator locator = dataEdit.resultRowLocator(
                     connection, dbConnection, schema, table, metadata, visibleColumnCount
@@ -697,21 +705,39 @@ public class SqlService {
         }
     }
 
-    private boolean everyColumnBelongsTo(ResultSetMetaData metadata, int visibleColumnCount, String table) {
+    /** 说明为什么这些列对不上同一张表；对得上返回 null。 */
+    private String columnsOutsideTableReason(ResultSetMetaData metadata, int visibleColumnCount, String table) {
         try {
+            boolean someColumnHasNoTable = false;
             for (int index = 1; index <= visibleColumnCount; index++) {
                 String candidate = metadata.getTableName(index);
-                if (candidate == null || candidate.isBlank() || !candidate.equalsIgnoreCase(table)) return false;
+                if (candidate == null || candidate.isBlank()) {
+                    someColumnHasNoTable = true;
+                    continue;
+                }
+                if (!candidate.equalsIgnoreCase(table)) return "查询结果来自多张表，无法定位行";
             }
-            return true;
+            return someColumnHasNoTable ? "结果里有列没有报告所属的表，无法确认改动写回哪里" : null;
         } catch (Exception error) {
-            return false;
+            return DRIVER_REPORTS_NO_TABLE_NAMES;
         }
     }
 
-    private ResultEditInfo editInfo(EditableResult editable, List<String> rowKeyTokens, ResultSourceTable sourceTable) {
+    /**
+     * 「不可编辑」的说明必须说对原因。
+     *
+     * <p>Oracle 的驱动对每一列都不报表名，一条普通的单表查询同样解析不出来源表；此前这里
+     * 一律说「查询结果不是来自单张表」，用户只会去 SQL 里找那个并不存在的联表。</p>
+     */
+    private ResultEditInfo editInfo(EditableResult editable, List<String> rowKeyTokens, ResultSourceTable sourceTable,
+                                    ResultSetMetaData metadata, int columnCount) {
         if (editable == null) {
-            return ResultEditInfo.notEditable(sourceTable == null ? "查询结果不是来自单张表" : "无法确定结果来源表");
+            if (sourceTable != null) return ResultEditInfo.notEditable("无法确定结果来源表");
+            return ResultEditInfo.notEditable(
+                    ResultSetSourceResolver.classifyUnknownSource(metadata, columnCount) == ResultSetSourceResolver.UnknownSource.NO_TABLE_NAMES
+                            ? DRIVER_REPORTS_NO_TABLE_NAMES
+                            : "查询结果来自多张表，无法就地编辑"
+            );
         }
         if (editable.locator() == null) return ResultEditInfo.notEditable(editable.reason());
         return new ResultEditInfo(

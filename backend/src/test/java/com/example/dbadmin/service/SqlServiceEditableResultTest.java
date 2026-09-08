@@ -111,7 +111,7 @@ class SqlServiceEditableResultTest {
         );
 
         assertThat(result.edit().editable()).isFalse();
-        assertThat(result.edit().reason()).contains("不是来自单张表");
+        assertThat(result.edit().reason()).contains("多张表");
     }
 
     @Test
