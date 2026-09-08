@@ -526,9 +526,11 @@ public class DataEditService {
         List<String> predicates = new ArrayList<>();
         List<BoundValue> parameters = new ArrayList<>();
         appendTypedPredicates(predicates, parameters, key, dialect);
-        Map<String, Object> nonKeyOriginals = originals.entrySet().stream()
-                .filter(entry -> !key.containsKey(entry.getKey()))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (left, right) -> left, LinkedHashMap::new));
+        // NULL 原值需要保留，用于生成 IS NULL 乐观锁条件；toMap 不接受 null 值。
+        Map<String, Object> nonKeyOriginals = new LinkedHashMap<>();
+        originals.forEach((column, value) -> {
+            if (!key.containsKey(column)) nonKeyOriginals.put(column, value);
+        });
         appendPredicates(predicates, parameters, nonKeyOriginals, dialect, columns);
         return new WhereClause(String.join(" AND ", predicates), parameters);
     }

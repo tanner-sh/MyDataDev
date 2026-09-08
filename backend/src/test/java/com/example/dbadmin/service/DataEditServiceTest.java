@@ -12,6 +12,8 @@ import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -380,6 +382,54 @@ class DataEditServiceTest {
                 new LinkedHashMap<>(), row.rowKeyTokens().get(0));
 
         assertThat(service.preview(new DataPreviewRequest(1L, null, "people", List.of(change)))).isNotNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "中文更新"})
+    void previewsAndCommitsAnOriginallyNullValue(String replacement) throws Exception {
+        String url = databaseUrl();
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, NULL), (2, 'untouched')");
+        }
+        DataEditService service = service(url);
+        var row = service.table(1L, null, "people", null, 10);
+        Map<String, Object> originals = new LinkedHashMap<>();
+        originals.put("id", 1);
+        originals.put("name", null);
+        var request = new DataPreviewRequest(1L, null, "people", List.of(
+                new RowChange("UPDATE", null, Map.of("name", replacement), originals, row.rowKeyTokens().get(0))));
+
+        assertThat(service.preview(request).sql()).containsExactly(
+                "UPDATE `people` SET `name` = '" + replacement + "' WHERE `id` = 1 AND `name` IS NULL;");
+        assertThat(service.commit(request, "test").affectedRows()).isEqualTo(1);
+        var updated = service.table(1L, null, "people", null, 10);
+        assertThat(updated.rows().get(0)).containsEntry("name", replacement);
+        assertThat(updated.rows().get(1)).containsEntry("name", "untouched");
+    }
+
+    @Test
+    void rejectsConcurrentChangesToAnOriginallyNullValue() throws Exception {
+        String url = databaseUrl();
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE people(id INT PRIMARY KEY, name VARCHAR(40))");
+            connection.createStatement().execute("INSERT INTO people VALUES (1, NULL)");
+        }
+        DataEditService service = service(url);
+        var row = service.table(1L, null, "people", null, 10);
+        Map<String, Object> originals = new LinkedHashMap<>();
+        originals.put("name", null);
+        var request = new DataPreviewRequest(1L, null, "people", List.of(
+                new RowChange("UPDATE", null, Map.of("name", ""), originals, row.rowKeyTokens().get(0))));
+        try (var connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("UPDATE people SET name = 'concurrent' WHERE id = 1");
+        }
+        assertThatThrownBy(() -> service.commit(request, "test"))
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .satisfies(error -> assertThat(((com.example.dbadmin.api.ApiProblemException) error).code())
+                        .isEqualTo("DATA_EDIT_CONFLICT"));
+        assertThat(service.table(1L, null, "people", null, 10).rows().get(0))
+                .containsEntry("name", "concurrent");
     }
 
     /** H2 的 MySQL 模式不认 TIMESTAMP WITH TIME ZONE，这几条用例单独用一条不带 MODE 的 URL。 */
