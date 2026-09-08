@@ -16,6 +16,12 @@ import java.util.Locale;
 import java.util.Optional;
 
 public class OracleDialect extends DefaultDialect {
+    /** Oracle 把未加引号的标识符折成大写存进字典。 */
+    @Override
+    public String foldUnquotedIdentifier(String identifier) {
+        return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
+    }
+
     // Oracle-compatible unquoted identifiers must start with a letter. Keep this
     // helper unquoted so ResultSet metadata is consistent across Oracle and
     // OceanBase Oracle mode.

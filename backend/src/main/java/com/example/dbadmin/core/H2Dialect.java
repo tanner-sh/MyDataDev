@@ -6,6 +6,12 @@ import java.util.List;
 import java.util.Locale;
 
 public class H2Dialect extends DefaultDialect {
+    /** H2 默认把未加引号的标识符折成大写。 */
+    @Override
+    public String foldUnquotedIdentifier(String identifier) {
+        return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
+    }
+
     /** H2 2.x 认 PostgreSQL 那套 ON CONFLICT，直接复用它的写法。 */
     private final PostgreSqlDialect conflictStyles = new PostgreSqlDialect();
 

@@ -9,6 +9,12 @@ import java.util.Locale;
 import java.util.HexFormat;
 
 public class DamengDialect extends DefaultDialect {
+    /** 达梦沿用 Oracle 那套折叠规则。 */
+    @Override
+    public String foldUnquotedIdentifier(String identifier) {
+        return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
+    }
+
 
     @Override
     public String castToText(String expression) {

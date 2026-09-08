@@ -11,6 +11,12 @@ import java.util.List;
 import java.util.Locale;
 
 public class PostgreSqlDialect extends DefaultDialect {
+    /** PostgreSQL 把未加引号的标识符折成小写。 */
+    @Override
+    public String foldUnquotedIdentifier(String identifier) {
+        return identifier == null ? null : identifier.toLowerCase(Locale.ROOT);
+    }
+
 
 
     /**

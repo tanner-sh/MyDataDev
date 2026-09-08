@@ -133,6 +133,21 @@ public interface DatabaseDialect {
         return "CAST(" + expression + " AS VARCHAR(4000))";
     }
 
+    /**
+     * 把 SQL 里未加引号的标识符折成数据库实际存的那个形态。
+     *
+     * <p>只在「从 SQL 文本认出表名、再拿去查元数据」这条路上用得着：用户写
+     * {@code select * from bd_accasoa}，Oracle 存的却是 {@code BD_ACCASOA}，按原样去
+     * {@code DatabaseMetaData} 里查主键会一无所获 —— 于是一张有主键的表被报成「没有主键」。
+     * 加了引号的标识符不能折，那是用户明确写下的大小写。</p>
+     *
+     * <p>默认按原样返回（MySQL 系存的就是建表时写的那个大小写，SQL Server 的元数据查询
+     * 本身大小写不敏感）。</p>
+     */
+    default String foldUnquotedIdentifier(String identifier) {
+        return identifier;
+    }
+
     default String quoteIdentifier(String identifier) {
         return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }

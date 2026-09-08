@@ -11,7 +11,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.sql.CallableStatement;
+import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -30,6 +38,13 @@ class SqlServiceEditableResultTest {
     }
 
     private Fixture fixture(boolean readonly) throws Exception {
+        return fixture(readonly, false);
+    }
+
+    /**
+     * @param hidesTableNames 模拟 Oracle 的 ojdbc：每一列的 getTableName() 都返回空串
+     */
+    private Fixture fixture(boolean readonly, boolean hidesTableNames) throws Exception {
         String url = "jdbc:h2:mem:editable-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         new JdbcTemplate(new DriverManagerDataSource(url, "sa", "")).execute("""
                 CREATE TABLE customers(id INT PRIMARY KEY, name VARCHAR(80), city VARCHAR(40));
@@ -42,8 +57,8 @@ class SqlServiceEditableResultTest {
         DbConnection model = new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", readonly, Instant.now(), Instant.now());
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.require(anyLong())).thenReturn(model);
-        when(connections.open(anyLong())).thenAnswer(_i -> DriverManager.getConnection(url, "sa", ""));
-        when(connections.open(anyLong(), any())).thenAnswer(_i -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.open(anyLong())).thenAnswer(_i -> open(url, hidesTableNames));
+        when(connections.open(anyLong(), any())).thenAnswer(_i -> open(url, hidesTableNames));
 
         DialectRegistry dialects = new DialectRegistry();
         MetadataCacheService cache = new MetadataCacheService();
@@ -167,11 +182,82 @@ class SqlServiceEditableResultTest {
         assertThat(result.edit().reason()).contains("只读");
     }
 
+    /**
+     * Oracle 的 ojdbc 对每一列的 getTableName() 都返回空串，结果集就地编辑因此在 Oracle 上
+     * 从来没能用过 —— 而 `select * from T` 到底查的是哪张表，SQL 文本本身说得清清楚楚。
+     */
+    @Test
+    void fallsBackToTheSqlTextWhenTheDriverNamesNoTable() throws Exception {
+        SqlResult result = fixture(false, true).sql()
+                .executePage(1L, "select id, name, city from customers", 0, 10, "admin", null, null, null);
+
+        assertThat(result.edit().editable()).isTrue();
+        assertThat(result.edit().tableName()).isEqualToIgnoringCase("customers");
+        assertThat(result.edit().keyColumns()).containsExactly("ID");
+        assertThat(result.edit().rowKeyTokens()).hasSize(result.rows().size()).doesNotContainNull();
+    }
+
+    @Test
+    void refusesWhenTheDriverNamesNoTableAndTheSqlIsNotASingleTableSelect() throws Exception {
+        // 认错表就是把改动写进另一张表。文本认不出唯一来源就不给编辑，一句话说清为什么。
+        SqlResult result = fixture(false, true).sql().executePage(
+                1L, "select customers.id, orders.customer_id from customers join orders on orders.customer_id = customers.id",
+                0, 10, "admin", null, null, null
+        );
+
+        assertThat(result.edit().editable()).isFalse();
+        assertThat(result.edit().reason()).contains("无法确定这批结果来自哪张表");
+        assertThat(result.edit().rowKeyTokens()).isEmpty();
+    }
+
+    @Test
+    void keepsTheAliasDefenceOnDriversThatNameNoTable() throws Exception {
+        // 这条路上驱动帮不上忙（getColumnName 只会回显别名），挡住别名的只有 SQL 文本那一层。
+        SqlResult result = fixture(false, true).sql()
+                .executePage(1L, "select name as city, city as name, id from customers", 0, 10, "admin", null, null, null);
+
+        assertThat(result.edit().editable()).isFalse();
+        assertThat(result.edit().reason()).contains("别名或表达式");
+    }
+
+    @Test
+    void stillRequiresAStableRowIdentityWhenTheTableCameFromTheSqlText() throws Exception {
+        SqlResult result = fixture(false, true).sql()
+                .executePage(1L, "select a, b from no_key", 0, 10, "admin", null, null, null);
+
+        assertThat(result.edit().editable()).isFalse();
+        assertThat(result.edit().reason()).contains("主键");
+    }
+
     @Test
     void tokensAreDistinctPerRowSoTheyCannotBeSwapped() throws Exception {
         SqlResult result = fixture(false).sql()
                 .executePage(1L, "select id, name from customers", 0, 10, "admin", null, null, null);
 
         assertThat(result.edit().rowKeyTokens()).doesNotHaveDuplicates();
+    }
+
+    private static Connection open(String url, boolean hidesTableNames) throws Exception {
+        Connection connection = DriverManager.getConnection(url, "sa", "");
+        return hidesTableNames ? (Connection) hideTableNames(connection, Connection.class) : connection;
+    }
+
+    /** 把连接上取到的每一份结果集元数据都改成「不报表名」，其余调用原样转发。 */
+    private static Object hideTableNames(Object target, Class<?> api) {
+        return Proxy.newProxyInstance(api.getClassLoader(), new Class<?>[]{api}, (proxy, method, args) -> {
+            if (target instanceof ResultSetMetaData && "getTableName".equals(method.getName())) return "";
+            Object result;
+            try {
+                result = method.invoke(target, args);
+            } catch (InvocationTargetException error) {
+                throw error.getCause();
+            }
+            if (result instanceof ResultSetMetaData metadata) return hideTableNames(metadata, ResultSetMetaData.class);
+            if (result instanceof CallableStatement statement) return hideTableNames(statement, CallableStatement.class);
+            if (result instanceof PreparedStatement statement) return hideTableNames(statement, PreparedStatement.class);
+            if (result instanceof Statement statement) return hideTableNames(statement, Statement.class);
+            if (result instanceof ResultSet rows) return hideTableNames(rows, ResultSet.class);
+            return result;
+        });
     }
 }
