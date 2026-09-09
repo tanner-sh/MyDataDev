@@ -88,6 +88,12 @@ public class SqlRestoreTranslator {
 
             // Full AST parse for DDL or when type mapping required
             SQLStatement statement = parseAllowed(sql, source);
+            // 备份的 INSERT 前会带表名注释，无法命中上面的正则快路径。同方言无映射时保留原文，
+            // 避免 AST 输出把 _utf8mb4 十六进制文本重写成依赖 sql_mode 的反斜杠字符串。
+            if (statement instanceof SQLInsertStatement && !needsTypeMapping && namespaceMapping.isEmpty()) {
+                consumer.accept(index[0], sql, true);
+                return;
+            }
             boolean ddl = !(statement instanceof SQLInsertStatement);
             if ("APPEND".equalsIgnoreCase(conflictMode) && ddl) return;
             if (target == DbType.clickhouse && ddl) {

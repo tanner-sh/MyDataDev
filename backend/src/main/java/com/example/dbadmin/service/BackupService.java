@@ -1652,7 +1652,7 @@ public class BackupService {
                 writer.write("  (");
                 for (int i = 1; i <= md.getColumnCount(); i++) {
                     if (i > 1) writer.write(", ");
-                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1), dbType);
+                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1), dbType, dialect);
                 }
                 writer.write(")");
                 rows++;
@@ -1668,7 +1668,7 @@ public class BackupService {
         }
     }
 
-    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName, String dbType) throws Exception {
+    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName, String dbType, DatabaseDialect dialect) throws Exception {
         if (value == null) {
             writer.write("NULL");
             return;
@@ -1726,10 +1726,11 @@ public class BackupService {
             return;
         }
         if (value instanceof CharSequence text) {
-            writeQuotedLiteral(writer, text);
+            // 备份会在另一个会话恢复；使用方言的脚本字面量，不能假设 MySQL 的 sql_mode 相同。
+            writer.write(dialect.scriptLiteral(text));
             return;
         }
-        writeQuotedLiteral(writer, value.toString());
+        writer.write(dialect.scriptLiteral(value.toString()));
     }
 
     private void writeBinary(BufferedWriter writer, InputStream input, String dbType) throws Exception {

@@ -19,6 +19,20 @@ class SqlRestoreTranslatorTest {
     Path tempDir;
 
     @Test
+    void preservesModeIndependentTextLiteralsAfterBackupComments() throws Exception {
+        String insert = "-- Table: `sales`.`orders`\nINSERT INTO `sales`.`orders` (`note`) VALUES (_utf8mb4 0x615c62)";
+        List<String> translated = new ArrayList<>();
+
+        translator.translate(sql(insert + ";"), "mysql", "mysql", Map.of(), "SAFE",
+                (index, statement, data) -> {
+                    assertThat(data).isTrue();
+                    translated.add(statement);
+                });
+
+        assertThat(translated).containsExactly(insert);
+    }
+
+    @Test
     void analyzesAllowedStatementsAndDiscoversNamespacesAndTables() throws Exception {
         Path file = sql("""
                 CREATE TABLE `sales`.`orders` (`id` BIGINT AUTO_INCREMENT, `note` LONGTEXT, PRIMARY KEY (`id`));

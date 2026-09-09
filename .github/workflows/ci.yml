@@ -22,6 +22,7 @@ jobs:
   database-compatibility:
     name: MySQL 与 PostgreSQL 真实数据库回归
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     services:
       mysql:
         image: mysql:8.4
@@ -53,16 +54,34 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
-      - name: 验证元数据、游标分页、并发冲突、提交与导出
+      - name: 安装真实备份恢复客户端
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client postgresql-client-16
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
-        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest
+        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
         env:
+          TEST_DATABASES_REQUIRED: 'true'
+          TEST_NATIVE_TOOLS: 'true'
+          TEST_MYSQLDUMP_PATH: /usr/bin/mysqldump
+          TEST_MYSQL_PATH: /usr/bin/mysql
+          TEST_PG_DUMP_PATH: /usr/lib/postgresql/16/bin/pg_dump
+          TEST_PG_RESTORE_PATH: /usr/lib/postgresql/16/bin/pg_restore
           TEST_MYSQL_URL: jdbc:mysql://127.0.0.1:3306/mydatadev_test?useSSL=false&allowPublicKeyRetrieval=true
           TEST_MYSQL_USER: mydatadev
           TEST_MYSQL_PASSWORD: ci-test-password
           TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/mydatadev_test
           TEST_POSTGRES_USER: mydatadev
           TEST_POSTGRES_PASSWORD: ci-test-password
+      - name: 保存真实数据库回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: database-compatibility-reports
+          path: |
+            backend/target/surefire-reports/*DatabaseCompatibilityTest*
+            backend/target/surefire-reports/*DatabaseBackupCompatibilityTest*
 
   ui-smoke:
     name: Web 发行包浏览器回归
