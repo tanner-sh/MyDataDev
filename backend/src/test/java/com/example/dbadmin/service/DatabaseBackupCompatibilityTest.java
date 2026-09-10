@@ -120,7 +120,15 @@ class DatabaseBackupCompatibilityTest {
             String tool = toolPath(type, method.equals("PG_DUMP") ? "PG_RESTORE" : "MYSQL");
             var source = new RestoreSourceRef("HISTORY", 1L);
             var preflight = restore.preflight(new RestorePreflightRequest(source, 1L, type, method, "SAFE", Map.of(), tool, null));
-            assertThat(preflight.valid()).as("恢复预检：%s", preflight.errors()).isTrue();
+            // 预检失败时把备份文件的开头一起报出来。这条断言只说「解析不过」，而要修的是「写出去的
+            // 是什么、为什么解析器不认」—— 少了这段，每次都要再跑一轮 CI 才知道语句长什么样。
+            // 只在 SQL 逻辑备份上取（原生 dump 可能是二进制），且截断，避免把整份数据刷进日志。
+            String head = "";
+            if (!preflight.valid() && method.equals("SQL")) {
+                String script = Files.readString(Path.of(history.getValue().filePath()));
+                head = "\n备份文件开头：\n" + script.substring(0, Math.min(600, script.length()));
+            }
+            assertThat(preflight.valid()).as("恢复预检：%s%s", preflight.errors(), head).isTrue();
             restore.start(new RestoreStartRequest(preflight.planToken(), source, 1L, type, method, "SAFE", Map.of(), tool, null, null), "ci");
             verify(jobs).updateProgress(eq(1L), eq("SUCCESS"), eq("COMPLETED"), anyLong(), any(), anyString(), isNull(), any());
             verify(jobs, never()).updateProgress(anyLong(), eq("FAILED"), anyString(), anyLong(), any(), any(), any(), any());
