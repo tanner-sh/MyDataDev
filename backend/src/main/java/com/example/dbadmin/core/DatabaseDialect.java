@@ -313,7 +313,30 @@ public interface DatabaseDialect {
      */
     default String scriptLiteral(Object value) {
         if (value instanceof byte[] bytes) return scriptBinaryLiteral(bytes);
+        if (value instanceof java.time.temporal.Temporal || value instanceof java.util.Date) {
+            return scriptTemporalLiteral(temporalText(value));
+        }
         return literal(value);
+    }
+
+    /**
+     * 生成脚本里的时间字面量，入参是规范化后的 ISO 文本。
+     *
+     * <p>默认就是带引号的那串文本 —— MySQL、PostgreSQL、SQL Server 都按 ISO 解析。Oracle 不
+     * 是：它按会话的 {@code NLS_DATE_FORMAT} 解析（默认 {@code DD-MON-RR}），于是同一串文本
+     * 在这里报 ORA-01843。脚本是先生成、后（可能在别的会话）执行的，不能依赖会话设置，
+     * 所以需要方言给出显式转换的写法。</p>
+     */
+    default String scriptTemporalLiteral(String isoText) {
+        return literal(isoText);
+    }
+
+    /** 把时间值规范成 ISO 文本（日期与时间之间用空格，与备份文件里的写法一致）。 */
+    private static String temporalText(Object value) {
+        if (value instanceof java.sql.Timestamp timestamp) return timestamp.toLocalDateTime().toString().replace('T', ' ');
+        if (value instanceof java.sql.Date date) return date.toString();
+        if (value instanceof java.sql.Time time) return time.toString();
+        return value.toString().replace('T', ' ');
     }
 
     /** Binary literal used in generated scripts. The default is the SQL-standard form. */

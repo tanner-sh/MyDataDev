@@ -160,6 +160,36 @@ public class OracleDialect extends DefaultDialect {
         return "hextoraw('" + HexFormat.of().formatHex(value) + "')";
     }
 
+    /**
+     * 时间字面量必须写成显式转换。
+     *
+     * <p>Oracle 按会话的 {@code NLS_DATE_FORMAT} 解析裸字符串，默认是 {@code DD-MON-RR}：
+     * {@code '2026-09-09 12:34:56.123456'} 在那个格式下直接 ORA-01843「月份无效」。也就是说
+     * 导出的 SQL 与备份文件里的时间列，在 Oracle 上压根跑不回去 —— 而脚本是先生成、后执行的，
+     * 执行时的会话设置无从假设，所以只能在字面量里把格式写死。</p>
+     *
+     * <p>{@code FF} 不带位数时匹配任意位小数秒，所以有没有小数秒都用同一个格式串。</p>
+     */
+    @Override
+    public String scriptTemporalLiteral(String isoText) {
+        String text = isoText.trim();
+        String quoted = "'" + text.replace("'", "''") + "'";
+        boolean hasTime = text.indexOf(':') >= 0;
+        boolean hasDate = text.indexOf('-') > 0;
+        if (!hasDate) {
+            // Oracle 没有独立的 TIME 类型；只有时间的值只能当文本落地，交给列的类型去决定。
+            return quoted;
+        }
+        if (!hasTime) return "TO_DATE(" + quoted + ", 'YYYY-MM-DD')";
+        // 带时区偏移（OffsetDateTime/ZonedDateTime 的 toString）要用 TZ 版本，否则偏移被当成垃圾字符。
+        String afterTime = text.substring(text.indexOf(':'));
+        if (afterTime.indexOf('+') >= 0 || afterTime.indexOf('Z') >= 0 || afterTime.lastIndexOf('-') > 0) {
+            return "TO_TIMESTAMP_TZ(" + quoted + ", 'YYYY-MM-DD HH24:MI:SS.FF TZH:TZM')";
+        }
+        boolean hasFraction = text.indexOf('.') >= 0;
+        return "TO_TIMESTAMP(" + quoted + ", 'YYYY-MM-DD HH24:MI:SS" + (hasFraction ? ".FF" : "") + "')";
+    }
+
     @Override
     public String activeSessionsSql() {
         return """

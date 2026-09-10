@@ -1584,7 +1584,10 @@ public class BackupService {
             }
         }
         Map<String, IndexBackup> indexes = new LinkedHashMap<>();
-        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schema, table.name(), false, false)) {
+        // approximate=true：这里只取索引名与列，精确统计用不上，而 approximate=false 会让
+        // Oracle 驱动先跑一遍 DBMS_STATS.GATHER_TABLE_STATS —— 备份是定时跑在生产库上的，
+        // 顺手收一次全表统计不是它该做的事，缺 ANALYZE 权限时还会让整次备份失败。
+        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schema, table.name(), false, true)) {
             while (rows.next()) {
                 String name = rows.getString("INDEX_NAME");
                 String column = rows.getString("COLUMN_NAME");
@@ -1709,20 +1712,23 @@ public class BackupService {
             writer.write(booleanLiteral(bool, dbType));
             return;
         }
+        // 时间值交给方言写：带引号的 ISO 串不是所有库都认。Oracle 按会话的 NLS_DATE_FORMAT
+        // 解析（默认 DD-MON-RR），'2026-09-09 12:34:56' 直接 ORA-01843 —— 也就是说备份文件
+        // 里的时间列在 Oracle 上恢复不回去。方言负责套上 TO_TIMESTAMP 之类的显式转换。
         if (value instanceof java.sql.Date date) {
-            writeQuotedLiteral(writer, date.toString());
+            writer.write(dialect.scriptTemporalLiteral(date.toString()));
             return;
         }
         if (value instanceof java.sql.Time time) {
-            writeQuotedLiteral(writer, time.toString());
+            writer.write(dialect.scriptTemporalLiteral(time.toString()));
             return;
         }
         if (value instanceof java.sql.Timestamp timestamp) {
-            writeQuotedLiteral(writer, timestamp.toLocalDateTime().toString().replace('T', ' '));
+            writer.write(dialect.scriptTemporalLiteral(timestamp.toLocalDateTime().toString().replace('T', ' ')));
             return;
         }
         if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof ZonedDateTime || value instanceof Instant) {
-            writeQuotedLiteral(writer, value.toString());
+            writer.write(dialect.scriptTemporalLiteral(value.toString()));
             return;
         }
         if (value instanceof CharSequence text) {
