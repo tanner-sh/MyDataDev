@@ -39,6 +39,11 @@ public class SqlServerDialect extends DefaultDialect {
     }
 
     @Override
+    public String scriptStatementSeparator() {
+        return ";\nGO";
+    }
+
+    @Override
     public String scriptLiteral(Object value) {
         if (value instanceof byte[] bytes) return scriptBinaryLiteral(bytes);
         if (value instanceof Boolean bool) return bool ? "1" : "0";

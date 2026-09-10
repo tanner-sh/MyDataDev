@@ -339,6 +339,19 @@ public interface DatabaseDialect {
         return value.toString().replace('T', ' ');
     }
 
+    /**
+     * 生成脚本里语句之间的分隔写法。
+     *
+     * <p>默认是分号。SQL Server 是唯一的例外：{@code SqlFileStatementReader} 在 SQL Server 上
+     * 刻意不按分号切分（T-SQL 的 {@code BEGIN … END;} 里有内部分号，按分号切会把存储过程切碎），
+     * 只认独占一行的 {@code GO}。所以给 SQL Server 生成脚本时必须写出 GO —— 只写分号的话整份
+     * 文件会被当成一条语句，恢复预检直接报 multi-statement，也就是说备份根本恢复不回去。
+     * GO 同时是 sqlcmd 与 SSMS 的批分隔符，写出来的脚本因此也能直接喂给它们。</p>
+     */
+    default String scriptStatementSeparator() {
+        return ";";
+    }
+
     /** Binary literal used in generated scripts. The default is the SQL-standard form. */
     default String scriptBinaryLiteral(byte[] value) {
         return "X'" + HexFormat.of().formatHex(value) + "'";

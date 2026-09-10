@@ -228,8 +228,10 @@ class DatabaseCompatibilityTest {
             "mysql", new Flavor("MYSQL", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "mariadb", new Flavor("MARIADB", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "postgresql", new Flavor("POSTGRES", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "BYTEA", true),
-            // SQL Server 的 TIMESTAMP 是行版本戳，不是时间类型；要微秒精度只能用 DATETIME2。
-            "sqlserver", new Flavor("SQLSERVER", "BIGINT", "VARCHAR", "DECIMAL", "DATETIME2", "VARBINARY", true),
+            // SQL Server 两处特殊：TIMESTAMP 是行版本戳而不是时间类型（要微秒精度只能用
+            // DATETIME2）；VARCHAR 是非 Unicode 类型，中文写进去会按排序规则的代码页替换成
+            // 问号 —— 那是 SQL Server 的真实行为，真实用户存中文用的就是 NVARCHAR。
+            "sqlserver", new Flavor("SQLSERVER", "BIGINT", "NVARCHAR", "DECIMAL", "DATETIME2", "VARBINARY", true),
             "oracle", new Flavor("ORACLE", "NUMBER(19)", "VARCHAR2", "NUMBER", "TIMESTAMP", "RAW", false));
 
     static final class Fixture implements AutoCloseable {

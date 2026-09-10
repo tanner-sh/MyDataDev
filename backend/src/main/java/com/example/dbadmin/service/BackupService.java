@@ -1571,7 +1571,7 @@ public class BackupService {
         }
         if (!primaryKeys.isEmpty()) definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")");
         writer.write("-- Table structure: " + sqlCommentValue(qualified) + "\n");
-        writer.write("CREATE TABLE " + qualified + " (\n  " + String.join(",\n  ", definitions) + "\n);\n\n");
+        writer.write("CREATE TABLE " + qualified + " (\n  " + String.join(",\n  ", definitions) + "\n)" + dialect.scriptStatementSeparator() + "\n\n");
     }
 
     private void writeTableConstraints(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, Set<String> selectedTables) throws Exception {
@@ -1610,7 +1610,7 @@ public class BackupService {
         }
         for (Map.Entry<String, IndexBackup> entry : indexes.entrySet()) {
             writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + dialect.quoteIdentifier(entry.getKey()) + " ON " + qualified + " ("
-                    + entry.getValue().columns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+                    + entry.getValue().columns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");
         }
         Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
         try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schema, table.name())) {
@@ -1633,7 +1633,7 @@ public class BackupService {
             writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + dialect.quoteIdentifier(entry.getKey()) + " FOREIGN KEY ("
                     + key.localColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
                     + dialect.qualifiedName(key.referencedNamespace(), key.referencedTable()) + " ("
-                    + key.referencedColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+                    + key.referencedColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");
         }
         if (!indexes.isEmpty() || !foreignKeys.isEmpty()) writer.write("\n");
     }
@@ -1668,11 +1668,11 @@ public class BackupService {
                 rows++;
                 batchRows++;
                 if (batchRows >= batchSize) {
-                    writer.write(";\n");
+                    writer.write(dialect.scriptStatementSeparator() + "\n");
                     batchRows = 0;
                 }
             }
-            if (batchRows > 0) writer.write(";\n");
+            if (batchRows > 0) writer.write(dialect.scriptStatementSeparator() + "\n");
             writer.write("-- Rows: " + rows + "\n\n");
             }
         }
