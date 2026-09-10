@@ -497,6 +497,24 @@ public class ExportService {
 
     private Object sqlExportValue(ResultSet rs, ResultSetMetaData metadata, int index) throws Exception {
         int jdbcType = metadata.getColumnType(index);
+        // 时间列用类型化的 getter，不走 getObject。
+        //
+        // getObject 交回来的是驱动自己的类型：Oracle 给的是 oracle.sql.TIMESTAMP，它既不是
+        // java.util.Date 也不是 java.time 的 Temporal，可 toString() 又长得像 ISO 文本 ——
+        // 于是方言的时间字面量分支认不出它，脚本里落下一个裸字符串，而 Oracle 按会话的
+        // NLS_DATE_FORMAT 解析裸字符串，回放时直接 ORA-01843。这里有列类型信息，用
+        // getTimestamp / getDate / getTime 拿到 java.sql 的标准类型，方言那边就认得了。
+        if (jdbcType == Types.TIMESTAMP) return rs.getTimestamp(index);
+        if (jdbcType == Types.DATE) return rs.getDate(index);
+        if (jdbcType == Types.TIME) return rs.getTime(index);
+        if (jdbcType == Types.TIMESTAMP_WITH_TIMEZONE || jdbcType == Types.TIME_WITH_TIMEZONE) {
+            // 带时区的列优先按 OffsetDateTime 取（保住偏移）；驱动不支持时退回 Timestamp。
+            try {
+                return rs.getObject(index, java.time.OffsetDateTime.class);
+            } catch (Exception ignored) {
+                return rs.getTimestamp(index);
+            }
+        }
         if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
             try (InputStream input = rs.getBinaryStream(index)) {
                 if (input == null) return null;
