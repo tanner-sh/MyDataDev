@@ -61,7 +61,7 @@ jobs:
 
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
-        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
         env:
           # 点名这两家，漏配任何一个都直接失败而不是静默跳过。另外三家各有自己的作业 ——
           # 每家一个作业，一家的问题就不会把另一家的结论一起遮掉。
@@ -83,8 +83,7 @@ jobs:
         with:
           name: database-compatibility-reports
           path: |
-            backend/target/surefire-reports/*DatabaseCompatibilityTest*
-            backend/target/surefire-reports/*DatabaseBackupCompatibilityTest*
+            backend/target/surefire-reports/*Database*CompatibilityTest*
 
   mariadb-compatibility:
     name: MariaDB 真实回归
@@ -121,7 +120,7 @@ jobs:
           sudo apt-get install -y mariadb-client
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
-        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
         env:
           TEST_REQUIRED_DATABASES: mariadb
           TEST_NATIVE_TOOLS: 'true'
@@ -136,8 +135,7 @@ jobs:
         with:
           name: mariadb-compatibility-reports
           path: |
-            backend/target/surefire-reports/*DatabaseCompatibilityTest*
-            backend/target/surefire-reports/*DatabaseBackupCompatibilityTest*
+            backend/target/surefire-reports/*Database*CompatibilityTest*
 
   sqlserver-compatibility:
     name: SQL Server 真实回归
@@ -168,7 +166,7 @@ jobs:
             -Q "IF DB_ID('mydatadev_test') IS NULL CREATE DATABASE mydatadev_test"
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
-        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
         env:
           TEST_REQUIRED_DATABASES: sqlserver
           # SQL Server 方言的 nativeBackupMethods 是空的，只有 SQL 逻辑备份那条路。
@@ -207,7 +205,7 @@ jobs:
           cache: maven
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
-        run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
         env:
           TEST_REQUIRED_DATABASES: oracle
           # Oracle 的 exp / imp 客户端不在 runner 上，只有 SQL 逻辑备份那条路。
@@ -290,6 +288,9 @@ jobs:
       - name: 运行前端测试
         run: npm test
         working-directory: frontend
+
+      - name: 验证发布检查脚本
+        run: node --test scripts/verify-release-ci.test.mjs
 
       # 构建同时会跑 check-build-budget.mjs：首屏资源数与懒加载链的 gzip 体积都有硬上限，
       # 把重型模块拉进首屏会在这里失败，而不是等到发版才发现。

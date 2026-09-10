@@ -1,0 +1,101 @@
+package com.example.dbadmin.service;
+
+import com.example.dbadmin.dto.ApiDtos.DataPreviewRequest;
+import com.example.dbadmin.dto.ApiDtos.RowChange;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.*;
+
+@Timeout(value = 3, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
+class DatabaseWriteCompatibilityTest {
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    void compositeKeyInsertUpdateAndDeleteNeverTouchTheOtherTenant(String type) throws Exception {
+        try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
+            String table = f.table(f.id("tenant_id") + " NOT NULL, " + f.id("id") + " NOT NULL, "
+                    + f.varchar("name", 80) + ", PRIMARY KEY (tenant_id, id)");
+            var insert = new DataPreviewRequest(1L, f.schema, table, List.of(
+                    insert(Map.of(f.col("tenant_id"), 1, f.col("id"), 7, f.col("name"), "甲")),
+                    insert(Map.of(f.col("tenant_id"), 2, f.col("id"), 7, f.col("name"), "乙"))));
+            assertThat(f.edits.commit(insert, "ci").affectedRows()).isEqualTo(2);
+            var identity = f.metadata.rowIdentity(1L, f.schema, table);
+            assertThat(identity.columns()).containsExactly(f.col("tenant_id"), f.col("id"));
+            var page = f.edits.table(1L, f.schema, table, null, 10);
+            int row = page.rows().get(0).get(f.col("name")).equals("甲") ? 0 : 1;
+            assertThat(f.edits.commit(f.change(table, "甲", "已修改", page.rowKeyTokens().get(row)), "ci").affectedRows()).isEqualTo(1);
+            assertThat(f.scalar("SELECT name FROM " + f.q(table) + " WHERE tenant_id=2 AND id=7")).isEqualTo("乙");
+            var deletion = new RowChange("DELETE", null, Map.of(), Map.of(f.col("name"), "已修改"), page.rowKeyTokens().get(row));
+            assertThat(f.edits.commit(new DataPreviewRequest(1L, f.schema, table, List.of(deletion)), "ci").affectedRows()).isEqualTo(1);
+            assertThat(f.number("SELECT COUNT(*) FROM " + f.q(table))).isEqualTo(1);
+            assertThat(f.scalar("SELECT name FROM " + f.q(table))).isEqualTo("乙");
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    void uniqueIndexLocatesRowsButNullableUniqueIndexDoesNot(String type) throws Exception {
+        try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
+            String table = f.table(f.id("tenant_id") + " NOT NULL, " + f.varchar("code", 40) + " NOT NULL, " + f.varchar("name", 80));
+            f.execute("CREATE UNIQUE INDEX " + f.dialect.quoteIdentifier("idx_" + table) + " ON " + f.q(table) + " (tenant_id, code)");
+            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, 'same', 'first'), (2, 'same', 'second')");
+            var identity = f.metadata.rowIdentity(1L, f.schema, table);
+            assertThat(identity.source()).isEqualTo("UNIQUE_INDEX");
+            assertThat(identity.columns()).containsExactly(f.col("tenant_id"), f.col("code"));
+            var page = f.edits.table(1L, f.schema, table, null, 10);
+            int row = page.rows().get(0).get(f.col("name")).equals("first") ? 0 : 1;
+            f.edits.commit(f.change(table, "first", "changed", page.rowKeyTokens().get(row)), "ci");
+            assertThat(f.scalar("SELECT name FROM " + f.q(table) + " WHERE tenant_id=1")).isEqualTo("changed");
+            assertThat(f.scalar("SELECT name FROM " + f.q(table) + " WHERE tenant_id=2")).isEqualTo("second");
+
+            String nullable = f.table(f.varchar("code", 40) + ", " + f.varchar("name", 80));
+            f.execute("CREATE UNIQUE INDEX " + f.dialect.quoteIdentifier("idx_" + nullable) + " ON " + f.q(nullable) + " (code)");
+            f.execute("INSERT INTO " + f.q(nullable) + " VALUES (NULL, 'unchanged')");
+            assertThat(f.metadata.rowIdentity(1L, f.schema, nullable).stable()).isFalse();
+            assertThatThrownBy(() -> f.edits.commit(f.change(nullable, "unchanged", "wrong", null), "ci"))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("唯一索引");
+            assertThat(f.scalar("SELECT name FROM " + f.q(nullable))).isEqualTo("unchanged");
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    void omittedIdentityAndDefaultColumnsAreGeneratedByDatabase(String type) throws Exception {
+        try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
+            String generated = switch (type) {
+                case "mysql", "mariadb" -> " AUTO_INCREMENT";
+                case "sqlserver" -> " IDENTITY(1,1)";
+                default -> " GENERATED BY DEFAULT AS IDENTITY";
+            };
+            String table = f.table(f.id("id") + generated + " PRIMARY KEY, " + f.varchar("name", 80)
+                    + ", " + f.id("amount") + " DEFAULT 17 NOT NULL");
+            var request = new DataPreviewRequest(1L, f.schema, table, List.of(
+                    insert(Map.of(f.col("name"), "first")), insert(Map.of(f.col("name"), "second"))));
+            assertThat(f.edits.commit(request, "ci").affectedRows()).isEqualTo(2);
+            assertThat(f.number("SELECT COUNT(DISTINCT id) FROM " + f.q(table))).isEqualTo(2);
+            assertThat(f.number("SELECT MIN(id) FROM " + f.q(table))).isPositive();
+            assertThat(f.number("SELECT COUNT(*) FROM " + f.q(table) + " WHERE amount=17")).isEqualTo(2);
+        }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    void foreignKeyFailureRollsBackTheWholeInsertBatch(String type) throws Exception {
+        try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
+            String parent = f.table(f.pk("id"));
+            String child = f.table(f.pk("id") + ", " + f.id("parent_id") + " NOT NULL, FOREIGN KEY (parent_id) REFERENCES " + f.q(parent) + " (id)");
+            f.execute("INSERT INTO " + f.q(parent) + " VALUES (1)");
+            var request = new DataPreviewRequest(1L, f.schema, child, List.of(
+                    insert(Map.of(f.col("id"), 1, f.col("parent_id"), 1)),
+                    insert(Map.of(f.col("id"), 2, f.col("parent_id"), 999))));
+            assertThatThrownBy(() -> f.edits.commit(request, "ci")).isInstanceOf(java.sql.SQLException.class);
+            assertThat(f.number("SELECT COUNT(*) FROM " + f.q(child))).isZero();
+            assertThat(f.number("SELECT COUNT(*) FROM " + f.q(parent))).isEqualTo(1);
+        }
+    }
+
+    private static RowChange insert(Map<String, Object> values) {
+        return new RowChange("INSERT", null, values, null, null);
+    }
+}
