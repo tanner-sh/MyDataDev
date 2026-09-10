@@ -30,11 +30,12 @@ import static org.mockito.Mockito.*;
 /**
  * 独立实库测试；本地未配置时跳过，CI 点名的那几家必须提供配置。每例只操作随机命名的测试表。
  *
- * <p>每个用例三分钟上限：实库测试挂住的方式是等锁，而等锁不会自己超时。没有这条上限时，
- * 一个挂住的用例会一直等到作业的 35 分钟上限被外部取消 —— 那时候拿不到任何栈，surefire
- * 报告里连它跑到哪一步都没有。有了它，挂住就变成一条带栈的失败。</p>
+ * <p>每个用例三分钟上限，且必须是 SEPARATE_THREAD：实库测试挂住的方式是等锁，而等锁不会
+ * 自己超时。{@code @Timeout} 默认在原线程上跑，只在方法返回之后判定耗时 —— 真挂住时它一句话
+ * 也说不出，用例会一直等到作业上限被外部取消，surefire 报告里连它跑到哪一步都没有（SQL Server
+ * 上就这么白烧过 20 分钟）。换成独立线程后 JUnit 才会真的打断它，挂住变成一条带栈的失败。</p>
  */
-@Timeout(value = 3, unit = TimeUnit.MINUTES)
+@Timeout(value = 3, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class DatabaseCompatibilityTest {
     @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
@@ -126,7 +127,13 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    /**
+     * SQL Server 不在此列：这条用例验证「提交前别的连接看不到」的办法是从第二条连接读同一行，
+     * 而那需要 MVCC。SQL Server 默认的 READ COMMITTED 用锁实现，那个 SELECT 会一直阻塞到事务
+     * 结束 —— 用例就此挂住（第一次跑时白等到作业上限被取消）。阻塞在 SQL Server 上是正确行为，
+     * 不是产品问题；要在那边验证同一件事得改成断言「读被阻塞」，那是另一条用例。
+     */
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "oracle"})
     void manualTransactionsCommitAndRollbackAfterFailure(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.id("amount"));

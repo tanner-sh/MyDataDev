@@ -26,10 +26,11 @@ import static org.mockito.Mockito.*;
 /**
  * 调用真实备份/恢复服务；仅元数据仓库及调度边界使用 mock，原生进程和目标 JDBC 都实际执行。
  *
- * <p>每个用例五分钟上限（比兼容性用例宽，这里要真起进程读写文件）。理由同那边：挂住的方式
- * 是等锁或等子进程，都不会自己超时，没有上限就只能等作业被外部取消，那时拿不到任何栈。</p>
+ * <p>每个用例五分钟上限（比兼容性用例宽，这里要真起进程读写文件），同样用 SEPARATE_THREAD。
+ * 理由同那边：挂住的方式是等锁或等子进程，都不会自己超时；而 {@code @Timeout} 默认在原线程上
+ * 跑、只在方法返回后判定耗时，真挂住时它一句话也说不出。</p>
  */
-@Timeout(value = 5, unit = TimeUnit.MINUTES)
+@Timeout(value = 5, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class DatabaseBackupCompatibilityTest {
     @TempDir Path directory;
 

@@ -1536,8 +1536,12 @@ public class BackupService {
     }
 
     private void writeCreateTable(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
-        String quoteString = identifierQuote(connection);
-        String qualified = table(table.schema(), table.name(), quoteString);
+        // 标识符引用走方言，不用 JDBC 元数据的 getIdentifierQuoteString()。
+        // SQL Server 的元数据返回的是双引号，而它的方言用的是方括号 —— 备份文件里写成
+        // "dbo"."t" 之后，恢复时 SqlRestoreTranslator 的 SQL Server 解析器把它当字符串而不是
+        // 标识符，第一条语句就报 multi-statement be found，整份备份恢复不回去。
+        // CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
+        String qualified = dialect.qualifiedName(table.schema(), table.name());
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
         String schema = scope.schemaPattern();
@@ -1552,7 +1556,7 @@ public class BackupService {
                 boolean nullable = columns.getInt("NULLABLE") != DatabaseMetaData.columnNoNulls;
                 String defaultValue = columns.getString("COLUMN_DEF");
                 boolean autoIncrement = "YES".equalsIgnoreCase(safeMetadataString(columns, "IS_AUTOINCREMENT"));
-                StringBuilder definition = new StringBuilder(quote(name, quoteString)).append(' ').append(columnType(type, size, scale));
+                StringBuilder definition = new StringBuilder(dialect.quoteIdentifier(name)).append(' ').append(columnType(type, size, scale));
                 if (defaultValue != null && !defaultValue.isBlank() && !autoIncrement) definition.append(" DEFAULT ").append(defaultValue.trim());
                 if (!nullable) definition.append(" NOT NULL");
                 if (autoIncrement) definition.append(identityClause(dbType));
@@ -1565,14 +1569,18 @@ public class BackupService {
             while (keys.next()) ordered.put(keys.getShort("KEY_SEQ"), keys.getString("COLUMN_NAME"));
             primaryKeys.addAll(ordered.values());
         }
-        if (!primaryKeys.isEmpty()) definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ")");
+        if (!primaryKeys.isEmpty()) definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")");
         writer.write("-- Table structure: " + sqlCommentValue(qualified) + "\n");
         writer.write("CREATE TABLE " + qualified + " (\n  " + String.join(",\n  ", definitions) + "\n);\n\n");
     }
 
     private void writeTableConstraints(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, Set<String> selectedTables) throws Exception {
-        String quoteString = identifierQuote(connection);
-        String qualified = table(table.schema(), table.name(), quoteString);
+        // 标识符引用走方言，不用 JDBC 元数据的 getIdentifierQuoteString()。
+        // SQL Server 的元数据返回的是双引号，而它的方言用的是方括号 —— 备份文件里写成
+        // "dbo"."t" 之后，恢复时 SqlRestoreTranslator 的 SQL Server 解析器把它当字符串而不是
+        // 标识符，第一条语句就报 multi-statement be found，整份备份恢复不回去。
+        // CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
+        String qualified = dialect.qualifiedName(table.schema(), table.name());
         DatabaseMetaData meta = connection.getMetaData();
         DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
         String schema = scope.schemaPattern();
@@ -1601,8 +1609,8 @@ public class BackupService {
             }
         }
         for (Map.Entry<String, IndexBackup> entry : indexes.entrySet()) {
-            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + quote(entry.getKey(), quoteString) + " ON " + qualified + " ("
-                    + entry.getValue().columns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + dialect.quoteIdentifier(entry.getKey()) + " ON " + qualified + " ("
+                    + entry.getValue().columns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
         }
         Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
         try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schema, table.name())) {
@@ -1622,17 +1630,16 @@ public class BackupService {
         }
         for (Map.Entry<String, ForeignKeyBackup> entry : foreignKeys.entrySet()) {
             ForeignKeyBackup key = entry.getValue();
-            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + quote(entry.getKey(), quoteString) + " FOREIGN KEY ("
-                    + key.localColumns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
-                    + table(key.referencedNamespace(), key.referencedTable(), quoteString) + " ("
-                    + key.referencedColumns().values().stream().map(name -> quote(name, quoteString)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
+            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + dialect.quoteIdentifier(entry.getKey()) + " FOREIGN KEY ("
+                    + key.localColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
+                    + dialect.qualifiedName(key.referencedNamespace(), key.referencedTable()) + " ("
+                    + key.referencedColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ");\n");
         }
         if (!indexes.isEmpty() || !foreignKeys.isEmpty()) writer.write("\n");
     }
 
     private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
-        String quoteString = identifierQuote(connection);
-        String tableName = table(table.schema(), table.name(), quoteString);
+        String tableName = dialect.qualifiedName(table.schema(), table.name());
         writer.write("-- Table: " + sqlCommentValue(tableName) + "\n");
         try (Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getBackup().getTimeoutSeconds());
@@ -1642,7 +1649,7 @@ public class BackupService {
             for (int i = 1; i <= md.getColumnCount(); i++) {
                 columns.add(md.getColumnLabel(i));
             }
-            String columnSql = columns.stream().map(column -> quote(column, quoteString)).reduce((a, b) -> a + ", " + b).orElse("");
+            String columnSql = columns.stream().map(column -> dialect.quoteIdentifier(column)).reduce((a, b) -> a + ", " + b).orElse("");
             int batchSize = supportsMultiRowInsert(dbType)
                     ? Math.min(Math.max(1, properties.getBackup().getSqlInsertBatchSize()), 1_000)
                     : 1;
@@ -1835,24 +1842,6 @@ public class BackupService {
                 || s.equals("MYSQL")
                 || s.startsWith("PG_TOAST")
                 || s.startsWith("PG_TEMP_");
-    }
-
-    private String table(String schema, String table, String quoteString) {
-        return schema == null || schema.isBlank()
-                ? quote(table, quoteString)
-                : quote(schema, quoteString) + "." + quote(table, quoteString);
-    }
-
-    private String quote(String identifier, String quoteString) {
-        if (quoteString == null || quoteString.isBlank()) {
-            return identifier;
-        }
-        return quoteString + identifier.replace(quoteString, quoteString + quoteString) + quoteString;
-    }
-
-    private String identifierQuote(Connection connection) throws Exception {
-        String quote = connection.getMetaData().getIdentifierQuoteString();
-        return quote == null || quote.isBlank() ? "" : quote.trim();
     }
 
     private String literal(Object value, String tableName, String columnName) throws Exception {

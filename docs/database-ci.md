@@ -7,24 +7,23 @@
 | `database-compatibility` | MySQL 8.4 + PostgreSQL 16 | 是 |
 | `mariadb-compatibility` | MariaDB 11.4 | 是 |
 | `sqlserver-compatibility` | SQL Server 2022 | 暂不（有已知缺口） |
-| `oracle-compatibility` | Oracle Free 23 | 暂不（有已知缺口） |
+| `oracle-compatibility` | Oracle Free 23 | 是 |
 
 **为什么一家一个作业**：一家的问题不该把另一家的结论一起遮掉。第一次把五家塞进一个作业时，Oracle 有个用例挂住，整个作业等到 35 分钟上限被取消 —— SQL Server 那一半的结论也就没了。另外 `mariadb-client` 与 `mysql-client` 在 apt 层面互斥（两者都提供 `virtual-mysql-client`），本来就装不到同一个 runner 上，而拿 `mysqldump` 8.4 去打 MariaDB 11 会因为版本探测差异失败 —— 用一个跑不通的组合证明不了兼容性。作业并行，墙上时间不受影响。
 
-每个用例有类级超时（兼容性 3 分钟、备份恢复 5 分钟）。实库测试挂住的方式是等锁，而等锁不会自己超时：没有这条上限时，挂住的用例会一直等到作业被外部取消，那时候拿不到任何栈，surefire 报告里连它跑到哪一步都没有。
+每个用例有类级超时（兼容性 3 分钟、备份恢复 5 分钟），**必须是 `threadMode = SEPARATE_THREAD`**。实库测试挂住的方式是等锁，而等锁不会自己超时；而 `@Timeout` 默认在原线程上跑、只在方法返回之后判定耗时 —— 真挂住时它一句话也说不出，用例会一直等到作业上限被外部取消，surefire 报告里连它跑到哪一步都没有（SQL Server 上就这么白烧过 20 分钟）。换成独立线程后 JUnit 才会真的打断它。
 
-### SQL Server 与 Oracle 目前为什么不阻塞
+### SQL Server 目前为什么不阻塞
 
-两个都挂着 `continue-on-error: true`，这是**临时状态**，为的是让缺口可见可复现，而不是让每个 PR 都红着。各自的缺口是这次回归第一次跑就找出来的真实产品问题：
+它挂着 `continue-on-error: true`，这是**临时状态**：缺口刚修好，还没在 CI 上跑绿过一次。绿了就把那一行去掉。
 
-- **SQL Server：SQL 逻辑备份出来的脚本，恢复预检解析不过。** `SqlRestoreTranslator` 的 `parseSingleStatement` 报 `multi-statement be found` —— 也就是说 SQL Server 上「备份完能不能恢复」目前是不成立的。备份写出去的脚本和恢复读回来的切分方式对不上。
-- **Oracle：恢复路径调 `DBMS_STATS.GATHER_TABLE_STATS` 用的是大写表名**，而经引用创建出来的表名是小写，于是 `ORA-20000`「表不存在或权限不足」。正是 CLAUDE.md 里那条「Oracle 把未加引号的标识符折成大写，名字必须大小写不敏感匹配」。另外还有一个兼容性用例挂住（等锁），类级超时加上之后会给出带栈的失败，好定位。
+缺口本身是这次回归第一次跑就找出来的真实产品问题 —— **SQL 逻辑备份出来的脚本，恢复预检解析不过**（`SqlRestoreTranslator` 的 `parseSingleStatement` 报 `multi-statement be found`），也就是说 SQL Server 上「备份完能不能恢复」压根不成立。根因是备份写 DDL 时用的是 JDBC 元数据的 `getIdentifierQuoteString()`（SQL Server 返回双引号），而它的方言用的是方括号：写成 `"dbo"."t"` 之后，恢复端的 SQL Server 解析器把它当字符串而不是标识符。改成走方言的 `qualifiedName` / `quoteIdentifier` —— CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
 
-修好之后把对应的 `continue-on-error` 删掉。
+Oracle 已经跑绿，`continue-on-error` 已摘。它这一轮暴露了四个问题，两个是产品缺陷（读表结构与备份读索引会触发 `DBMS_STATS.GATHER_TABLE_STATS`；导出与备份的时间列写成裸 ISO 串，Oracle 按 `NLS_DATE_FORMAT` 解析必然 ORA-01843），两个是用例自己的假设太 MySQL 中心（标识符折大写、整数的包装类型）。
 
 ## 覆盖范围
 
-当前共 33 个参数化用例实例：基础兼容性 24 个、备份恢复 9 个。
+当前共 32 个参数化用例实例：基础兼容性 23 个、备份恢复 9 个。
 
 | 测试路径 | MySQL 8.4 | MariaDB 11.4 | PostgreSQL 16 | SQL Server 2022 | Oracle Free 23 |
 | --- | --- | --- | --- | --- | --- |
@@ -32,7 +31,7 @@
 | NULL → 空字符串 → 中文/emoji/引号/反斜杠/换行 → NULL，逐步回库核对 | 是 | 是 | 是 | 是 | 不适用 |
 | 超出 JavaScript 安全整数范围的 BIGINT、高精度 DECIMAL、微秒时间、二进制和文本的 SQL 导出回放 | 是 | 是 | 是 | 是 | 是 |
 | 网格批量提交后续行冲突时，前面成功的修改回滚 | 是 | 是 | 是 | 是 | 是 |
-| 手动事务提交前不可见、提交后可见、失败后回滚 | 是 | 是 | 是 | 是 | 是 |
+| 手动事务提交前不可见、提交后可见、失败后回滚 | 是 | 是 | 是 | 不适用 | 是 |
 | 通过表管理服务建表、改列长度、加列、加索引、改名和删表 | 是 | 是 | 是 | 不适用 | 是 |
 | SQL 逻辑备份 → 删除本例测试表 → 恢复 → 核对数据、主键、索引 | 是 | 是 | 是 | 是 | 是 |
 | 原生备份恢复往返 | mysqldump/mysql | mariadb-dump/mariadb | pg_dump/pg_restore | 不适用 | 不适用 |
@@ -41,6 +40,8 @@
 ### 表里的「不适用」都是有意排除，不是漏了
 
 **Oracle 不跑「NULL 与空字符串必须分开」**：Oracle 的 `VARCHAR2` 把空串直接存成 NULL，这条在 Oracle 上不成立，也不是产品能修的。与其把断言放宽成两者都接受（那等于不测），不如明确排除。备份往返那条用例里的空串行改为按方言断言：能区分的库读回空串，Oracle 读回 NULL。
+
+**SQL Server 不跑手动事务**：这条用例验证「提交前别的连接看不到」的办法是从第二条连接读同一行，而那需要 MVCC。SQL Server 默认的 READ COMMITTED 用锁实现，那个 SELECT 会一直阻塞到事务结束，用例就此挂住。阻塞在 SQL Server 上是正确行为，不是产品问题；要在那边验证同一件事得改成断言「读被阻塞」，那是另一条用例。
 
 **SQL Server 不跑表设计**：`SqlServerDialect.capabilities()` 把 `tableDesign` 声明为 false，服务端会直接拒绝，跑它等于断言一个产品不提供的功能。它同样不支持列注释（`supportsColumnComments()` 为 false）。
 
