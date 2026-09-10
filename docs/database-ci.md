@@ -6,23 +6,29 @@
 | --- | --- | --- |
 | `database-compatibility` | MySQL 8.4 + PostgreSQL 16 | 是 |
 | `mariadb-compatibility` | MariaDB 11.4 | 是 |
-| `sqlserver-compatibility` | SQL Server 2022 | 暂不（有已知缺口） |
+| `sqlserver-compatibility` | SQL Server 2022 | 是 |
 | `oracle-compatibility` | Oracle Free 23 | 是 |
 
 **为什么一家一个作业**：一家的问题不该把另一家的结论一起遮掉。第一次把五家塞进一个作业时，Oracle 有个用例挂住，整个作业等到 35 分钟上限被取消 —— SQL Server 那一半的结论也就没了。另外 `mariadb-client` 与 `mysql-client` 在 apt 层面互斥（两者都提供 `virtual-mysql-client`），本来就装不到同一个 runner 上，而拿 `mysqldump` 8.4 去打 MariaDB 11 会因为版本探测差异失败 —— 用一个跑不通的组合证明不了兼容性。作业并行，墙上时间不受影响。
 
 每个用例有类级超时（兼容性 3 分钟、备份恢复 5 分钟），**必须是 `threadMode = SEPARATE_THREAD`**。实库测试挂住的方式是等锁，而等锁不会自己超时；而 `@Timeout` 默认在原线程上跑、只在方法返回之后判定耗时 —— 真挂住时它一句话也说不出，用例会一直等到作业上限被外部取消，surefire 报告里连它跑到哪一步都没有（SQL Server 上就这么白烧过 20 分钟）。换成独立线程后 JUnit 才会真的打断它。
 
-### SQL Server 目前为什么不阻塞
+### SQL Server 与 Oracle 这一轮修掉的产品缺陷
 
-它挂着 `continue-on-error: true`，这是**临时状态**：两个缺口刚修好，还没在 CI 上跑绿过一次。绿了就把那一行去掉。
+四个实库作业现在全部阻塞合并。SQL Server 与 Oracle 刚接入时各有几处失败，逐条定性之后是五个真实产品缺陷（已全部修复）加若干条用例自己的 MySQL 中心假设。
 
-两个缺口都是这次回归找出来的真实产品问题，而且都在「备份完能不能恢复」这条链上 —— SQL Server 上它此前压根不成立：
+SQL Server 上「备份完能不能恢复」此前压根不成立，两处叠加：
 
 - **备份写 DDL 用的是 JDBC 元数据的引用字符，不是方言的。** `getIdentifierQuoteString()` 在 SQL Server 上返回双引号，而 `SqlServerDialect.quoteIdentifier` 用的是方括号：写成 `"dbo"."t"` 之后，恢复端的 SQL Server 解析器把它当字符串而不是标识符。改成走 `dialect.qualifiedName` / `quoteIdentifier` —— CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
-- **备份脚本只有分号，没有 `GO`。** `SqlFileStatementReader` 在 SQL Server 上刻意不按分号切分（T-SQL 的 `BEGIN … END;` 里有内部分号，按分号切会把存储过程切碎），只认独占一行的 `GO`。于是整份备份文件被当成一条语句，恢复预检报 `multi-statement be found`。方言新增 `scriptStatementSeparator()`：默认仍是分号，SQL Server 返回 `";\nGO"`。GO 同时是 sqlcmd 与 SSMS 的批分隔符，写出来的脚本因此也能直接喂给它们。两端的约定由 `SqlServerBackupScriptShapeTest` 钉住。
+- **备份脚本只有分号，没有 `GO`。** `SqlFileStatementReader` 在 SQL Server 上刻意不按分号切分（T-SQL 的 `BEGIN … END;` 里有内部分号，按分号切会把存储过程切碎），只认独占一行的 `GO`。于是整份备份文件被当成一条语句，恢复预检报 `multi-statement be found`。方言新增 `scriptStatementSeparator()`：默认仍是分号，SQL Server 返回 `";\nGO"`。GO 同时是 sqlcmd 与 SSMS 的批分隔符，写出来的脚本因此也能直接喂给它们。两端的约定由 `SqlServerBackupScriptShapeTest` 钉住，包括反向那条（没有 GO 时 SQL Server 就是不切分）。
 
-**还有一件相关的事没做**：用户自己提供的 SQL Server 脚本如果用分号结尾、不带 `GO`（从 SSMS 导出的脚本通常就是这样），`SqlFileStatementReader` 仍会把整份文件当成一条语句。备份这一侧已经绕开了，但 SQL 文件执行那条路上这个限制还在 —— 要修就得在 SQL Server 上按分号切分同时跟踪 `BEGIN`/`END` 深度，那是单独一件事。
+Oracle 上是三处：
+
+- **读表结构与备份读索引会在目标库上收一次全表统计。** `getIndexInfo` 的 `approximate=false` 让 Oracle 驱动先跑 `DBMS_STATS.GATHER_TABLE_STATS`，而我们只取索引名与列，精确统计用不上。生产库上那是一次实打实的负载事件，缺 ANALYZE 权限时结构连展都展不开、备份直接失败。三处调用点全改成 `approximate=true`，`MetadataServiceTest` 用动态代理钉住这个实参。
+- **导出的 SQL 与备份文件里的时间列在 Oracle 上回放不回去。** 写的是带引号的裸 ISO 串，而 Oracle 按会话的 `NLS_DATE_FORMAT` 解析（默认 `DD-MON-RR`），必然 ORA-01843。方言新增 `scriptTemporalLiteral()`：默认仍是带引号的 ISO 文本，Oracle 覆盖成 `TO_DATE` / `TO_TIMESTAMP` / `TO_TIMESTAMP_TZ`。
+- **导出侧还差一层**：`getObject` 交回的是驱动私有类型 `oracle.sql.TIMESTAMP`，既不是 `java.util.Date` 也不是 `Temporal`，方言认不出。改在有列类型信息的读取处用 `getTimestamp` / `getDate` / `getTime`。
+
+**还有一件相关的事没做****还有一件相关的事没做**：用户自己提供的 SQL Server 脚本如果用分号结尾、不带 `GO`（从 SSMS 导出的脚本通常就是这样），`SqlFileStatementReader` 仍会把整份文件当成一条语句。备份这一侧已经绕开了，但 SQL 文件执行那条路上这个限制还在 —— 要修就得在 SQL Server 上按分号切分同时跟踪 `BEGIN`/`END` 深度，那是单独一件事。
 
 Oracle 已经跑绿，`continue-on-error` 已摘。它这一轮暴露了四个问题，两个是产品缺陷（读表结构与备份读索引会触发 `DBMS_STATS.GATHER_TABLE_STATS`；导出与备份的时间列写成裸 ISO 串，Oracle 按 `NLS_DATE_FORMAT` 解析必然 ORA-01843），两个是用例自己的假设太 MySQL 中心（标识符折大写、整数的包装类型）。
 

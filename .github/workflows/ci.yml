@@ -140,12 +140,9 @@ jobs:
             backend/target/surefire-reports/*DatabaseBackupCompatibilityTest*
 
   sqlserver-compatibility:
-    name: SQL Server 真实回归（已知缺口，暂不阻塞）
+    name: SQL Server 真实回归
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # continue-on-error 是临时状态，不是长期安排：SQL Server 上「备份完能不能恢复」这条刚修好
-    # （备份写 DDL 时改走方言的标识符引用），还没在 CI 上跑绿过一次。绿了就把这一行去掉。
-    continue-on-error: true
     services:
       sqlserver:
         image: mcr.microsoft.com/mssql/server:2022-latest
