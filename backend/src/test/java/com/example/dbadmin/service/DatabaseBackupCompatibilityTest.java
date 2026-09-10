@@ -53,8 +53,8 @@ class DatabaseBackupCompatibilityTest {
             "mysql, MYSQLDUMP, false", "mariadb, MYSQLDUMP, false", "postgresql, PG_DUMP, false"})
     void backupRestoresRowsPrimaryKeyAndIndex(String type, String method, boolean noBackslashEscapes) throws Exception {
         if (!method.equals("SQL")) {
-            if (Boolean.parseBoolean(System.getenv("TEST_DATABASES_REQUIRED"))) {
-                assertThat(System.getenv("TEST_NATIVE_TOOLS")).as("CI 必须执行原生备份恢复").isEqualTo("true");
+            if (DatabaseCompatibilityTest.required().contains(type)) {
+                assertThat(System.getenv("TEST_NATIVE_TOOLS")).as("CI 点名了 %s，原生备份恢复不能跳过", type).isEqualTo("true");
             }
             assumeTrue(Boolean.parseBoolean(System.getenv("TEST_NATIVE_TOOLS")), "原生往返需要 TEST_NATIVE_TOOLS=true 及真实客户端工具");
         }

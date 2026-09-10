@@ -1,6 +1,9 @@
 # 真实数据库 CI 回归
 
-`.github/workflows/ci.yml` 在 PR、推送到 `main` 和手动触发时启动 MySQL 8.4、PostgreSQL 16、MariaDB 11.4、SQL Server 2022、Oracle Free 23 五个容器。测试连接独立的 `mydatadev_test` 数据库（Oracle 用 `FREEPDB1` 里的 `mydatadev` 用户），不读取应用里保存的连接。
+`.github/workflows/ci.yml` 在 PR、推送到 `main` 和手动触发时跑两个实库作业：一个起 MySQL 8.4、PostgreSQL 16、SQL Server 2022、Oracle Free 23，另一个单独起 MariaDB 11.4。
+
+**为什么 MariaDB 要单独一个作业**：`mariadb-client` 与 `mysql-client` 在 apt 层面互斥（两者都提供 `virtual-mysql-client`），装不到同一个 runner 上。而拿 `mysqldump` 8.4 去打 MariaDB 11 会因为版本探测与 `information_schema` 差异失败 —— 用一个跑不通的组合证明不了兼容性。两个作业并行，墙上时间几乎不变。
+测试连接独立的 `mydatadev_test` 数据库（Oracle 用 `FREEPDB1` 里的 `mydatadev` 用户），不读取应用里保存的连接。
 
 ## 覆盖范围
 
@@ -34,16 +37,18 @@
 
 ## 防止静默跳过
 
-CI 设置 `TEST_DATABASES_REQUIRED=true` 和 `TEST_NATIVE_TOOLS=true`。任何一家的数据库 URL 缺失或关闭原生测试会失败；数据库不可连接、客户端缺失或用例失败同样会失败。报告始终尝试上传到 `database-compatibility-reports` artifact。任务最长运行 35 分钟 —— Oracle 容器要建 PDB 与用户，单它就可能占掉五六分钟。
+每个作业用 `TEST_REQUIRED_DATABASES` 点名它负责哪几家（主作业是 `mysql,postgresql,sqlserver,oracle`，MariaDB 作业是 `mariadb`），再加 `TEST_NATIVE_TOOLS=true`。被点名那几家的 URL 缺失或关闭原生测试会失败；数据库不可连接、客户端缺失或用例失败同样会失败。报告始终尝试上传到 `database-compatibility-reports` artifact。任务最长运行 35 分钟 —— Oracle 容器要建 PDB 与用户，单它就可能占掉五六分钟。
 
-普通本地 `mvn test` 未配置测试数据库时跳过这些实库测试。配置数据库但未设置 `TEST_NATIVE_TOOLS=true` 时，只跳过原生往返。
+普通本地 `mvn test` 未配置测试数据库时跳过这些实库测试。配置数据库但未设置 `TEST_NATIVE_TOOLS=true` 时，只跳过原生往返。没被 `TEST_REQUIRED_DATABASES` 点名、又没配 URL 的那几家照旧跳过。
 
 ## 本地复现
 
 准备五个专用测试数据库，并安装 MySQL、MariaDB 与 PostgreSQL 16 客户端。缺哪一个的 URL，对应那家就跳过（CI 上则失败）。不要把 URL 指向业务库；测试会创建、修改并清理 `compat_` 开头的随机表。
 
 ```bash
-export TEST_DATABASES_REQUIRED=true
+# 点名清单而不是布尔开关：CI 分两个作业跑不同子集，一个「所有库都必须配」的布尔量
+# 在那种情况下只能被整体关掉，防静默跳过也就跟着失效了。
+export TEST_REQUIRED_DATABASES=mysql,mariadb,postgresql,sqlserver,oracle
 export TEST_NATIVE_TOOLS=true
 export TEST_MYSQL_URL='jdbc:mysql://127.0.0.1:3306/mydatadev_test?useSSL=false&allowPublicKeyRetrieval=true'
 export TEST_MYSQL_USER=mydatadev

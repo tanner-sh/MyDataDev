@@ -193,6 +193,21 @@ class DatabaseCompatibilityTest {
     record Flavor(String envPrefix, String bigint, String varchar, String decimal,
                   String timestamp, String binary, boolean distinguishesEmptyString) {}
 
+    /**
+     * 这一轮必须真的跑起来的数据库，逗号分隔。
+     *
+     * <p>为什么不是一个布尔开关：MariaDB 的客户端与 MySQL 的在 apt 层面互斥（都提供
+     * virtual-mysql-client），同一个 runner 上装不了两个，所以 CI 拆成两个作业跑不同的子集。
+     * 一个「所有库都必须配」的布尔量在这种情况下只能被关掉，那就等于把防静默跳过这件事
+     * 一起关了。改成点名清单之后，每个作业各自声明它负责哪几家，漏配还是照样失败。</p>
+     */
+    static Set<String> required() {
+        String value = System.getenv("TEST_REQUIRED_DATABASES");
+        if (value == null || value.isBlank()) return Set.of();
+        return Arrays.stream(value.split(",")).map(String::trim)
+                .filter(item -> !item.isEmpty()).collect(java.util.stream.Collectors.toSet());
+    }
+
     static final Map<String, Flavor> FLAVORS = Map.of(
             "mysql", new Flavor("MYSQL", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "mariadb", new Flavor("MARIADB", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
@@ -224,8 +239,8 @@ class DatabaseCompatibilityTest {
             assertThat(flavor).as("未登记的数据库类型 %s", type).isNotNull();
             String prefix = flavor.envPrefix();
             String url = System.getenv("TEST_" + prefix + "_URL");
-            if (Boolean.parseBoolean(System.getenv("TEST_DATABASES_REQUIRED"))) {
-                assertThat(url).as("CI 必须配置 TEST_%s_URL，不能跳过实库回归", prefix).isNotBlank();
+            if (required().contains(type)) {
+                assertThat(url).as("TEST_REQUIRED_DATABASES 里点名了 %s，必须配置 TEST_%s_URL，不能跳过", type, prefix).isNotBlank();
             }
             assumeTrue(url != null && !url.isBlank(), "未配置独立测试数据库 TEST_" + prefix + "_URL");
             String user = System.getenv("TEST_" + prefix + "_USER"), password = System.getenv("TEST_" + prefix + "_PASSWORD");
