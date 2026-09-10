@@ -9,6 +9,7 @@ import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlHistoryRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -19,13 +20,21 @@ import java.sql.DriverManager;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** 独立实库测试；本地未配置时跳过，CI 必须提供配置。每例只操作随机命名的测试表。 */
+/**
+ * 独立实库测试；本地未配置时跳过，CI 点名的那几家必须提供配置。每例只操作随机命名的测试表。
+ *
+ * <p>每个用例三分钟上限：实库测试挂住的方式是等锁，而等锁不会自己超时。没有这条上限时，
+ * 一个挂住的用例会一直等到作业的 35 分钟上限被外部取消 —— 那时候拿不到任何栈，surefire
+ * 报告里连它跑到哪一步都没有。有了它，挂住就变成一条带栈的失败。</p>
+ */
+@Timeout(value = 3, unit = TimeUnit.MINUTES)
 class DatabaseCompatibilityTest {
     @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
@@ -332,8 +341,23 @@ class DatabaseCompatibilityTest {
         }
         @Override public void close() throws Exception {
             try {
-                for (int i = tables.size() - 1; i >= 0; i--) execute("DROP TABLE IF EXISTS " + q(tables.get(i)));
+                for (int i = tables.size() - 1; i >= 0; i--) dropQuietly(tables.get(i));
             } finally { jdbc.close(); }
+        }
+        /**
+         * 清理失败不许盖掉用例本身的结论。
+         *
+         * <p>Oracle 没有 {@code DROP TABLE IF EXISTS} 这个语法（ORA-00933），原来那条清理在
+         * Oracle 上第一张表就抛异常，于是剩下的表全没清掉，而抛出来的又是清理的错 ——
+         * 用例真正的失败原因被埋掉了。Oracle 上还要加 CASCADE CONSTRAINTS，否则被引用的表
+         * 删不掉。吞掉异常在这里是对的：这是收尾，不是被测对象。</p>
+         */
+        private void dropQuietly(String name) {
+            try {
+                execute("DROP TABLE " + q(name) + (type.equals("oracle") ? " CASCADE CONSTRAINTS" : ""));
+            } catch (Exception ignored) {
+                // 表本来就不在（用例自己删过），或者库不让删 —— 两种都不该影响断言结果。
+            }
         }
     }
 }

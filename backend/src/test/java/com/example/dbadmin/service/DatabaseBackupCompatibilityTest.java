@@ -5,6 +5,7 @@ import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.RestoreJob;
 import com.example.dbadmin.repo.*;
 import com.example.dbadmin.storage.BackupStorageRegistry;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.*;
@@ -21,7 +23,13 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** 调用真实备份/恢复服务；仅元数据仓库及调度边界使用 mock，原生进程和目标 JDBC 都实际执行。 */
+/**
+ * 调用真实备份/恢复服务；仅元数据仓库及调度边界使用 mock，原生进程和目标 JDBC 都实际执行。
+ *
+ * <p>每个用例五分钟上限（比兼容性用例宽，这里要真起进程读写文件）。理由同那边：挂住的方式
+ * 是等锁或等子进程，都不会自己超时，没有上限就只能等作业被外部取消，那时拿不到任何栈。</p>
+ */
+@Timeout(value = 5, unit = TimeUnit.MINUTES)
 class DatabaseBackupCompatibilityTest {
     @TempDir Path directory;
 

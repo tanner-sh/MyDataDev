@@ -1,9 +1,26 @@
 # 真实数据库 CI 回归
 
-`.github/workflows/ci.yml` 在 PR、推送到 `main` 和手动触发时跑两个实库作业：一个起 MySQL 8.4、PostgreSQL 16、SQL Server 2022、Oracle Free 23，另一个单独起 MariaDB 11.4。
+`.github/workflows/ci.yml` 在 PR、推送到 `main` 和手动触发时跑四个实库作业，**一家数据库一个作业**（MySQL 与 PostgreSQL 合在一个）：
 
-**为什么 MariaDB 要单独一个作业**：`mariadb-client` 与 `mysql-client` 在 apt 层面互斥（两者都提供 `virtual-mysql-client`），装不到同一个 runner 上。而拿 `mysqldump` 8.4 去打 MariaDB 11 会因为版本探测与 `information_schema` 差异失败 —— 用一个跑不通的组合证明不了兼容性。两个作业并行，墙上时间几乎不变。
-测试连接独立的 `mydatadev_test` 数据库（Oracle 用 `FREEPDB1` 里的 `mydatadev` 用户），不读取应用里保存的连接。
+| 作业 | 数据库 | 阻塞合并 |
+| --- | --- | --- |
+| `database-compatibility` | MySQL 8.4 + PostgreSQL 16 | 是 |
+| `mariadb-compatibility` | MariaDB 11.4 | 是 |
+| `sqlserver-compatibility` | SQL Server 2022 | 暂不（有已知缺口） |
+| `oracle-compatibility` | Oracle Free 23 | 暂不（有已知缺口） |
+
+**为什么一家一个作业**：一家的问题不该把另一家的结论一起遮掉。第一次把五家塞进一个作业时，Oracle 有个用例挂住，整个作业等到 35 分钟上限被取消 —— SQL Server 那一半的结论也就没了。另外 `mariadb-client` 与 `mysql-client` 在 apt 层面互斥（两者都提供 `virtual-mysql-client`），本来就装不到同一个 runner 上，而拿 `mysqldump` 8.4 去打 MariaDB 11 会因为版本探测差异失败 —— 用一个跑不通的组合证明不了兼容性。作业并行，墙上时间不受影响。
+
+每个用例有类级超时（兼容性 3 分钟、备份恢复 5 分钟）。实库测试挂住的方式是等锁，而等锁不会自己超时：没有这条上限时，挂住的用例会一直等到作业被外部取消，那时候拿不到任何栈，surefire 报告里连它跑到哪一步都没有。
+
+### SQL Server 与 Oracle 目前为什么不阻塞
+
+两个都挂着 `continue-on-error: true`，这是**临时状态**，为的是让缺口可见可复现，而不是让每个 PR 都红着。各自的缺口是这次回归第一次跑就找出来的真实产品问题：
+
+- **SQL Server：SQL 逻辑备份出来的脚本，恢复预检解析不过。** `SqlRestoreTranslator` 的 `parseSingleStatement` 报 `multi-statement be found` —— 也就是说 SQL Server 上「备份完能不能恢复」目前是不成立的。备份写出去的脚本和恢复读回来的切分方式对不上。
+- **Oracle：恢复路径调 `DBMS_STATS.GATHER_TABLE_STATS` 用的是大写表名**，而经引用创建出来的表名是小写，于是 `ORA-20000`「表不存在或权限不足」。正是 CLAUDE.md 里那条「Oracle 把未加引号的标识符折成大写，名字必须大小写不敏感匹配」。另外还有一个兼容性用例挂住（等锁），类级超时加上之后会给出带栈的失败，好定位。
+
+修好之后把对应的 `continue-on-error` 删掉。
 
 ## 覆盖范围
 
@@ -37,7 +54,7 @@
 
 ## 防止静默跳过
 
-每个作业用 `TEST_REQUIRED_DATABASES` 点名它负责哪几家（主作业是 `mysql,postgresql,sqlserver,oracle`，MariaDB 作业是 `mariadb`），再加 `TEST_NATIVE_TOOLS=true`。被点名那几家的 URL 缺失或关闭原生测试会失败；数据库不可连接、客户端缺失或用例失败同样会失败。报告始终尝试上传到 `database-compatibility-reports` artifact。任务最长运行 35 分钟 —— Oracle 容器要建 PDB 与用户，单它就可能占掉五六分钟。
+每个作业用 `TEST_REQUIRED_DATABASES` 点名它负责哪几家（`mysql,postgresql` / `mariadb` / `sqlserver` / `oracle`），原生工具那两个作业再加 `TEST_NATIVE_TOOLS=true`。被点名那几家的 URL 缺失或关闭原生测试会失败；数据库不可连接、客户端缺失或用例失败同样会失败。报告始终尝试上传到 `database-compatibility-reports` artifact。作业上限 20~30 分钟；Oracle 容器要建 PDB 与用户，单它就可能占掉五六分钟，所以它那个作业给到 30 分钟。
 
 普通本地 `mvn test` 未配置测试数据库时跳过这些实库测试。配置数据库但未设置 `TEST_NATIVE_TOOLS=true` 时，只跳过原生往返。没被 `TEST_REQUIRED_DATABASES` 点名、又没配 URL 的那几家照旧跳过。
 
