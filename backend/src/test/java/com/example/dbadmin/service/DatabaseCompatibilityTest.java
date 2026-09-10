@@ -132,9 +132,9 @@ class DatabaseCompatibilityTest {
             try {
                 assertThat(transactions.execute(tx.id(), "UPDATE " + f.q(table) + " SET amount=42 WHERE id=1", null, "ci", false).status())
                         .isNotEqualTo("FAILED");
-                assertThat(f.scalar("SELECT amount FROM " + f.q(table))).isEqualTo(100);
+                assertThat(f.number("SELECT amount FROM " + f.q(table))).isEqualTo(100);
                 transactions.finish(tx.id(), true, "ci");
-                assertThat(f.scalar("SELECT amount FROM " + f.q(table))).isEqualTo(42);
+                assertThat(f.number("SELECT amount FROM " + f.q(table))).isEqualTo(42);
             } finally { registry.close(tx.id()); }
             tx = transactions.begin(1L, f.schema, "ci", null);
             try {
@@ -142,7 +142,7 @@ class DatabaseCompatibilityTest {
                         + f.q(table) + " VALUES (1, 99)", null, "ci", false);
                 assertThat(result.status()).isEqualTo("FAILED");
                 transactions.finish(tx.id(), false, "ci");
-                assertThat(f.scalar("SELECT amount FROM " + f.q(table))).isEqualTo(42);
+                assertThat(f.number("SELECT amount FROM " + f.q(table))).isEqualTo(42);
             } finally { registry.close(tx.id()); }
         }
     }
@@ -304,6 +304,18 @@ class DatabaseCompatibilityTest {
             try (var statement = jdbc.createStatement(); var rows = statement.executeQuery(sql)) {
                 assertThat(rows.next()).isTrue(); return rows.getObject(1);
             }
+        }
+        /**
+         * 整数值按数值比较，不按包装类型。
+         *
+         * <p>同一个整数列各家驱动返回的类型并不一样：MySQL 的 BIGINT 给 Long，MariaDB 也给
+         * Long，而 Oracle 的 NUMBER 给 BigDecimal。用 isEqualTo(100) 去比会在「100 与 100L」
+         * 上失败 —— 那不是兼容性问题，只是断言写错了地方。</p>
+         */
+        long number(String sql) throws Exception {
+            Object value = scalar(sql);
+            assertThat(value).isInstanceOf(Number.class);
+            return ((Number) value).longValue();
         }
         DataPreviewRequest change(String table, Object previous, Object next, String token) {
             return new DataPreviewRequest(1L, schema, table, List.of(new RowChange("UPDATE", null,

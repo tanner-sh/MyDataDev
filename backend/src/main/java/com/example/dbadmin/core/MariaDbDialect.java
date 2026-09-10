@@ -18,6 +18,20 @@ public class MariaDbDialect extends MySqlDialect {
         return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mariaDb());
     }
 
+    /**
+     * 流式读用正的 fetch size，不能沿用 MySQL 那个哨兵值。
+     *
+     * <p>{@code setFetchSize(Integer.MIN_VALUE)} 是 Connector/J 独有的约定，MariaDB 的驱动
+     * 直接抛 {@code invalid fetch size}。也就是说继承 MySQL 的实现会让 MariaDB 连接上每一次
+     * 流式读都失败 —— 导出、跨库传输、数据对比、大结果分页全在这条路上。MariaDB 的驱动按
+     * 正的 fetch size 分批取，语义上正是这里要的东西。</p>
+     */
+    @Override
+    public void configureStreamingStatement(java.sql.Connection connection, java.sql.Statement statement,
+                                            int fetchSize, int timeoutSeconds) throws java.sql.SQLException {
+        configureReadStatement(connection, statement, Math.max(fetchSize, 1), timeoutSeconds);
+    }
+
     @Override
     public String activeSessionsSql() {
         return """

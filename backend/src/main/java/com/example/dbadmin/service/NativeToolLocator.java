@@ -228,8 +228,8 @@ public class NativeToolLocator {
     private String safeMessage(Exception error) { return error.getMessage() == null || error.getMessage().isBlank() ? error.getClass().getSimpleName() : error.getMessage(); }
 
     public enum Tool {
-        MYSQLDUMP("MySQL mysqldump", true, List.of("--version")),
-        MYSQL("MySQL mysql", true, List.of("--version")),
+        MYSQLDUMP("MySQL/MariaDB mysqldump", true, List.of("--version")),
+        MYSQL("MySQL/MariaDB mysql", true, List.of("--version")),
         ORACLE_EXP("Oracle exp", false, List.of("help=y")),
         ORACLE_IMP("Oracle imp", false, List.of("help=y")),
         PG_DUMP("PostgreSQL pg_dump", false, List.of("--version")),
@@ -248,16 +248,29 @@ public class NativeToolLocator {
         public String displayName() { return displayName; }
         boolean mysqlFamily() { return mysqlFamily; }
         List<String> probeArguments() { return probeArguments; }
+        /**
+         * 可接受的可执行文件名。
+         *
+         * <p>MariaDB 的客户端叫 {@code mariadb-dump} / {@code mariadb}：从 10.5 起那才是正名，
+         * {@code mysqldump} 只是仍在的兼容软链接，而且在逐步移除。不认这两个名字的话，MariaDB
+         * 用户把工具路径指到自己那份客户端上会被拒（「工具路径必须指向 … 可执行文件」），
+         * 而拿 MySQL 的 mysqldump 去打 MariaDB 又会因为版本探测差异失败 —— 等于 MariaDB 的
+         * 原生备份根本没法用。</p>
+         *
+         * <p>顺序有意义（用 LinkedHashSet 保住）：两份客户端都装着时优先挑 MySQL 那个，因为
+         * 自动探测的默认目标是 MySQL 系里更常见的那一份。</p>
+         */
         Set<String> fileNames(boolean windows) {
-            String base = switch (this) {
-                case MYSQLDUMP -> "mysqldump";
-                case MYSQL -> "mysql";
-                case ORACLE_EXP -> "exp";
-                case ORACLE_IMP -> "imp";
-                case PG_DUMP -> "pg_dump";
-                case PG_RESTORE -> "pg_restore";
+            List<String> bases = switch (this) {
+                case MYSQLDUMP -> List.of("mysqldump", "mariadb-dump");
+                case MYSQL -> List.of("mysql", "mariadb");
+                case ORACLE_EXP -> List.of("exp");
+                case ORACLE_IMP -> List.of("imp");
+                case PG_DUMP -> List.of("pg_dump");
+                case PG_RESTORE -> List.of("pg_restore");
             };
-            return windows ? Set.of(base + ".exe") : Set.of(base);
+            return bases.stream().map(base -> windows ? base + ".exe" : base)
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
         }
     }
 

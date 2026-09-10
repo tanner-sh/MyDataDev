@@ -64,7 +64,7 @@ class NativeToolLocatorTest {
         assertThatCode(() -> locator.validateOverrideName(NativeToolLocator.Tool.MYSQL, "C:\\mysql\\bin\\mysql.exe"))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> locator.validateOverrideName(NativeToolLocator.Tool.MYSQL, "C:\\mysql\\bin\\mysql"))
-                .hasMessageContaining("MySQL mysql");
+                .hasMessageContaining("mysql");
     }
 
     @Test
@@ -80,6 +80,27 @@ class NativeToolLocatorTest {
         NativeToolLocator timeout = new NativeToolLocator(properties, Map.of("PATH", slow.getParent().toString()), "Linux");
         assertThatThrownBy(() -> timeout.resolve(NativeToolLocator.Tool.MYSQL, "mysql"))
                 .hasMessageContaining("版本探测超时");
+    }
+
+    /**
+     * MariaDB 的客户端叫 mariadb-dump / mariadb —— 从 10.5 起那才是正名，mysqldump 只是仍在
+     * 但正被移除的兼容软链接。不认这两个名字的话，MariaDB 用户把工具路径指到自己那份客户端上
+     * 会被直接拒，而拿 MySQL 的 mysqldump 去打 MariaDB 又会因为版本探测差异失败 —— 等于
+     * MariaDB 的原生备份根本没法用。实库回归里 MariaDB 那个作业正是用 mariadb-dump 跑的。
+     */
+    @Test
+    void acceptsMariaDbClientNamesForTheMysqlFamilyTools() throws Exception {
+        Path dump = tool(tempDir.resolve("mariadb"), "mariadb-dump", "mariadb-dump  Ver 11.4", 0);
+        NativeToolLocator locator = new NativeToolLocator(new AppProperties(), Map.of(), "Linux");
+
+        assertThatCode(() -> locator.validateOverrideName(NativeToolLocator.Tool.MYSQLDUMP, "/usr/bin/mariadb-dump"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> locator.validateOverrideName(NativeToolLocator.Tool.MYSQL, "/usr/bin/mariadb"))
+                .doesNotThrowAnyException();
+        assertThat(locator.resolve(NativeToolLocator.Tool.MYSQLDUMP, dump.toString()).version()).contains("11.4");
+        // 名字对不上还是要拒 —— 放宽的只有 MariaDB 这两个正名。
+        assertThatThrownBy(() -> locator.validateOverrideName(NativeToolLocator.Tool.MYSQLDUMP, "/usr/bin/pg_dump"))
+                .hasMessageContaining("mysqldump");
     }
 
     private Path tool(Path directory, String name, String version, int sleepSeconds) throws Exception {
