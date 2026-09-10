@@ -102,6 +102,38 @@ if (!sqlEditorEntry) {
 if (workspaceGzipBytes > MAX_SQL_WORKSPACE_GZIP_BYTES) {
   failures.push(`SQL 工作台完整依赖 gzip ${formatBytes(workspaceGzipBytes)} 超过限制 ${formatBytes(MAX_SQL_WORKSPACE_GZIP_BYTES)}`);
 }
+// ── 两套尺度必须同值 ──────────────────────────────────────────────────────
+//
+// antd 有自己的 token（圆角、字号、主色），styles.css 顶部有另一套令牌。两者一旦分叉，
+// 就会在同一个界面上互相覆盖 —— 那正是这个仓库当年出现六十多处 !important 的来源，而清理
+// 完之后除了 App.tsx 里的一句注释，没有任何东西守着它不再分叉。
+//
+// 这段检查放在这里而不是写成 vitest 用例，是因为它要读 styles.css 的原文：vitest 下 CSS
+// 走的是另一条管线，`styles.css?raw` 拿回来是空串 —— 断言会全部通过，那条守卫就等于没写。
+// 而这个脚本本来就是「硬约束」的落脚处，用 Node 直接读文件，也不牵扯 tsc 的类型配置。
+const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+// 只看 :root 那一段，别把 :root[data-theme="dark"] 里的同名令牌读进来。
+const lightTokens = styles.slice(0, styles.indexOf(':root[data-theme="dark"]'));
+const appSource = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8');
+const cssToken = (name) => new RegExp(`--${name}:\\s*([^;]+);`).exec(lightTokens)?.[1].trim();
+const antdToken = (name) => new RegExp(`${name}:\\s*([^,}]+)`).exec(appSource)?.[1].trim().replace(/['"]/g, '');
+
+for (const [antd, css, unit] of [['borderRadius', 'radius-md', 'px'], ['fontSize', 'text-md', 'px'], ['colorPrimary', 'primary', '']]) {
+  const left = antdToken(antd);
+  const right = cssToken(css);
+  if (left === undefined || right === undefined) {
+    failures.push(`尺度令牌对不上：App.tsx 的 ${antd} 或 styles.css 的 --${css} 找不到，检查是不是改了名`);
+  } else if (left + unit !== right) {
+    failures.push(`尺度令牌分叉：App.tsx 的 ${antd} 是 ${left}${unit}，styles.css 的 --${css} 是 ${right}`);
+  }
+}
+// 中文在 10px 下笔画会糊，--text-xs 是下限。浏览器回归里的布局审计会在真实渲染上复查一遍
+// （连 antd 组件自己派生的字号一起），这里守的是令牌本身。
+for (const name of ['text-xs', 'text-sm', 'text-md', 'text-lg', 'text-xl']) {
+  const value = Number.parseFloat(cssToken(name) ?? 'NaN');
+  if (!(value >= 11)) failures.push(`字号令牌 --${name} 是 ${cssToken(name)}，低于 11px 这个中文可读下限`);
+}
+
 if (failures.length > 0) {
   console.error(failures.join('\n'));
   process.exitCode = 1;
