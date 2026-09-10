@@ -637,7 +637,12 @@ public class MetadataService {
                 .collect(Collectors.toMap(ColumnInfo::name, ColumnInfo::nullable, (left, right) -> left));
         Map<String, TreeMap<Short, String>> uniqueIndexes = new HashMap<>();
         Set<String> invalidUniqueIndexes = new HashSet<>();
-        try (ResultSet rs = meta.getIndexInfo(scope.catalog(), scope.schemaPattern(), table, true, false)) {
+        // approximate=true：JdbcIndexMetadata 只取名字、列、唯一性、序号和过滤条件，精确统计
+        // 一个都用不上，而 approximate=false 会让 Oracle 驱动先跑一遍
+        // DBMS_STATS.GATHER_TABLE_STATS —— 也就是说每次读表结构都在目标库上收一次全表统计。
+        // 生产库上那是一次实打实的负载事件，缺 ANALYZE 权限时还直接 ORA-20000 报错，
+        // 于是资源树连结构都展不开。实库回归里 Oracle 那个作业盯着这条。
+        try (ResultSet rs = meta.getIndexInfo(scope.catalog(), scope.schemaPattern(), table, true, true)) {
             while (rs.next()) {
                 JdbcIndexMetadata index = readIndexMetadata(rs);
                 if (index.name() == null || index.nonUnique()) continue;
@@ -1274,7 +1279,8 @@ public class MetadataService {
     private List<IndexInfo> indexes(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {
         List<IndexInfo> indexes = new ArrayList<>();
         Set<String> unsupported = new HashSet<>();
-        try (ResultSet rs = meta.getIndexInfo(catalog, schema, table, false, false)) {
+        // approximate=true，理由同上：读索引不该在目标库上触发一次统计收集。
+        try (ResultSet rs = meta.getIndexInfo(catalog, schema, table, false, true)) {
             while (rs.next()) {
                 JdbcIndexMetadata index = readIndexMetadata(rs);
                 if (index.name() == null) continue;

@@ -33,6 +33,57 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 
 class MetadataServiceTest {
+    /**
+     * 读索引一律用近似统计。
+     *
+     * <p>{@code getIndexInfo} 的最后一个参数是 approximate。传 false 时 Oracle 驱动会先跑一遍
+     * {@code DBMS_STATS.GATHER_TABLE_STATS} 再返回 —— 也就是说每次展开一张表的结构，都在目标
+     * 库上收一次全表统计。生产库上那是一次实打实的负载事件，而缺 ANALYZE 权限时它直接
+     * ORA-20000 失败，结构连展都展不开（Oracle 实库回归就是这么发现的）。
+     *
+     * <p>而我们从这个结果集里只取名字、列、唯一性、序号和过滤条件（见 JdbcIndexMetadata），
+     * 精确统计一个都用不上。所以这里守着 approximate 恒为 true。</p>
+     */
+    @Test
+    void readsIndexesWithApproximateStatisticsOnly() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE INDEXED(ID INT PRIMARY KEY, CODE VARCHAR(20))");
+            connection.createStatement().execute("CREATE INDEX IDX_INDEXED_CODE ON INDEXED(CODE)");
+        }
+        List<Boolean> approximateFlags = new java.util.ArrayList<>();
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> recordingConnection(url, approximateFlags));
+        when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+
+        service.detail(1, "PUBLIC", "INDEXED", true);
+
+        assertThat(approximateFlags).isNotEmpty();
+        assertThat(approximateFlags).as("getIndexInfo 的 approximate 必须恒为 true").containsOnly(true);
+    }
+
+    /** 把 DatabaseMetaData 套一层代理，记下每次 getIndexInfo 的 approximate 实参。 */
+    private static Connection recordingConnection(String url, List<Boolean> approximateFlags) throws Exception {
+        Connection real = DriverManager.getConnection(url, "sa", "");
+        return (Connection) java.lang.reflect.Proxy.newProxyInstance(
+                Connection.class.getClassLoader(), new Class<?>[]{Connection.class},
+                (proxy, method, args) -> {
+                    Object result = method.invoke(real, args);
+                    if (!"getMetaData".equals(method.getName())) return result;
+                    java.sql.DatabaseMetaData meta = (java.sql.DatabaseMetaData) result;
+                    return java.lang.reflect.Proxy.newProxyInstance(
+                            java.sql.DatabaseMetaData.class.getClassLoader(),
+                            new Class<?>[]{java.sql.DatabaseMetaData.class},
+                            (metaProxy, metaMethod, metaArgs) -> {
+                                if ("getIndexInfo".equals(metaMethod.getName())) {
+                                    approximateFlags.add((Boolean) metaArgs[4]);
+                                }
+                                return metaMethod.invoke(meta, metaArgs);
+                            });
+                });
+    }
+
     @Test
     void returnsTableAndColumnRemarksWithoutRequiringIndexesAndRefreshesColumns() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";

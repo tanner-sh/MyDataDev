@@ -137,7 +137,7 @@ class DatabaseBackupCompatibilityTest {
                 assertThat(rows.next()).isFalse();
             }
             var detail = f.metadata.detail(1L, f.schema, table, true);
-            assertThat(detail.primaryKeys()).containsExactly("id");
+            assertThat(detail.primaryKeys()).containsExactly(f.col("id"));
             assertThat(detail.indexes()).extracting("name").contains(index);
         }
     }

@@ -45,13 +45,13 @@ class DatabaseCompatibilityTest {
             assertThat(first.editable()).isTrue();
             assertThat(first.hasMore()).isTrue();
             var second = f.edits.table(1L, f.schema, table, first.nextCursor(), 1);
-            assertThat(second.rows().get(0).get("name")).isEqualTo("第二行");
+            assertThat(second.rows().get(0).get(f.col("name"))).isEqualTo("第二行");
             assertThat(second.hasMore()).isFalse();
             String token = first.rowKeyTokens().get(0);
             var request = f.change(table, "原值", "我的修改", token);
             f.execute("UPDATE " + f.q(table) + " SET name='其他会话' WHERE id=1");
             assertThatThrownBy(() -> f.edits.commit(request, "ci")).isInstanceOf(ApiProblemException.class);
-            assertThat(f.edits.conflictRow(request, "ci")).containsEntry("values", Map.of("name", "其他会话"));
+            assertThat(f.edits.conflictRow(request, "ci")).containsEntry("values", Map.of(f.col("name"), "其他会话"));
             assertThat(f.edits.commit(f.change(table, "其他会话", "我的修改", token), "ci").affectedRows()).isEqualTo(1);
             assertThat(f.export(table, "csv", null)).contains("我的修改", "123.45", "第二行");
         }
@@ -70,7 +70,7 @@ class DatabaseCompatibilityTest {
             Object previous = null;
             for (Object next : new Object[]{"", "中文🙂 O'Reilly\\path\n第二行", null}) {
                 var page = f.edits.table(1L, f.schema, table, null, 10);
-                assertThat(page.rows().get(0).get("name")).isEqualTo(previous);
+                assertThat(page.rows().get(0).get(f.col("name"))).isEqualTo(previous);
                 assertThat(f.edits.commit(f.change(table, previous, next, page.rowKeyTokens().get(0)), "ci").affectedRows()).isEqualTo(1);
                 assertThat(f.scalar("SELECT name FROM " + f.q(table))).isEqualTo(next);
                 previous = next;
@@ -94,8 +94,8 @@ class DatabaseCompatibilityTest {
                 insert.setBytes(4, payload); insert.setString(5, note); insert.executeUpdate();
             }
             var page = f.edits.table(1L, f.schema, source, null, 10);
-            assertThat(page.rows().get(0).get("id")).isEqualTo(Long.toString(id));
-            assertThat(page.rows().get(0).get("amount")).isEqualTo(amount.toPlainString());
+            assertThat(page.rows().get(0).get(f.col("id"))).isEqualTo(Long.toString(id));
+            assertThat(page.rows().get(0).get(f.col("amount"))).isEqualTo(amount.toPlainString());
             for (var segment : new SqlScriptSplitter().split(f.export(source, "sql", List.of(f.schema, target)))) f.execute(segment.sql());
             try (var statement = f.jdbc.createStatement(); var rows = statement.executeQuery("SELECT * FROM " + f.q(target))) {
                 assertThat(rows.next()).isTrue();
@@ -117,8 +117,8 @@ class DatabaseCompatibilityTest {
             var page = f.edits.table(1L, f.schema, table, null, 10);
             f.execute("UPDATE " + f.q(table) + " SET name='外部修改' WHERE id=2");
             var changes = List.of(
-                    new RowChange("UPDATE", null, Map.of("name", "不应保存"), Map.of("name", "原值"), page.rowKeyTokens().get(0)),
-                    new RowChange("UPDATE", null, Map.of("name", "冲突修改"), Map.of("name", "第二行"), page.rowKeyTokens().get(1)));
+                    new RowChange("UPDATE", null, Map.of(f.col("name"), "不应保存"), Map.of(f.col("name"), "原值"), page.rowKeyTokens().get(0)),
+                    new RowChange("UPDATE", null, Map.of(f.col("name"), "冲突修改"), Map.of(f.col("name"), "第二行"), page.rowKeyTokens().get(1)));
             assertThatThrownBy(() -> f.edits.commit(new DataPreviewRequest(1L, f.schema, table, changes), "ci"))
                     .isInstanceOf(ApiProblemException.class);
             assertThat(f.scalar("SELECT name FROM " + f.q(table) + " WHERE id=1")).isEqualTo("原值");
@@ -165,21 +165,21 @@ class DatabaseCompatibilityTest {
         try (Fixture f = new Fixture(type)) {
             String table = f.reserveTable(), renamed = f.reserveTable(), index = "idx_" + table;
             var create = new TableLifecycleRequest("CREATE", f.schema, table, null,
-                    List.of(new ColumnDesign("id", f.flavor.bigint(), null, false, null, null, false),
-                            new ColumnDesign("name", f.flavor.varchar(), 80, true, null, null, false)),
-                    List.of(), List.of("id"), null, f.schema + "." + table);
+                    List.of(new ColumnDesign(f.col("id"), f.flavor.bigint(), null, false, null, null, false),
+                            new ColumnDesign(f.col("name"), f.flavor.varchar(), 80, true, null, null, false)),
+                    List.of(), List.of(f.col("id")), null, f.schema + "." + table);
             f.metadata.executeTableLifecycle(1L, create, "ci", null);
             var original = f.metadata.detail(1L, f.schema, table, true);
-            assertThat(original.primaryKeys()).containsExactly("id");
+            assertThat(original.primaryKeys()).containsExactly(f.col("id"));
             var design = new TableDesignRequest(f.schema, table,
-                    List.of(new ColumnDesign("id", f.flavor.bigint(), null, false, null, "id", false),
-                            new ColumnDesign("name", f.flavor.varchar(), 120, true, null, "name", false),
-                            new ColumnDesign("note", f.flavor.varchar(), 100, true, null, null, false)),
-                    List.of(new IndexDesign(index, List.of("name"), false, null, false)),
-                    List.of("id"), original.structureVersion(), f.schema + "." + table);
+                    List.of(new ColumnDesign(f.col("id"), f.flavor.bigint(), null, false, null, f.col("id"), false),
+                            new ColumnDesign(f.col("name"), f.flavor.varchar(), 120, true, null, f.col("name"), false),
+                            new ColumnDesign(f.col("note"), f.flavor.varchar(), 100, true, null, null, false)),
+                    List.of(new IndexDesign(index, List.of(f.col("name")), false, null, false)),
+                    List.of(f.col("id")), original.structureVersion(), f.schema + "." + table);
             f.metadata.executeDesign(1L, design, "ci");
             var changed = f.metadata.detail(1L, f.schema, table, true);
-            assertThat(changed.columns()).extracting("name").containsExactly("id", "name", "note");
+            assertThat(changed.columns()).extracting("name").containsExactly(f.col("id"), f.col("name"), f.col("note"));
             assertThat(changed.indexes()).extracting("name").contains(index);
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '" + "x".repeat(100) + "', '保留数据')");
             f.metadata.executeTableLifecycle(1L, new TableLifecycleRequest("RENAME", f.schema, table, renamed,
@@ -306,6 +306,15 @@ class DatabaseCompatibilityTest {
             return name + " " + flavor.binary() + (flavor.binary().equals("BYTEA") ? "" : "(" + size + ")");
         }
         String q(String table) { return dialect.qualifiedName(schema, table); }
+        /**
+         * 列名按库里真正存的形态写。
+         *
+         * <p>建表时列定义没有加引号，Oracle 就把它们折成大写存进字典，于是结果行的键是
+         * {@code ID} / {@code NAME} 而不是小写。按小写去取只会拿到 null —— 那不是产品的
+         * 问题，真实的 Oracle 库里标识符本来就是大写的，服务端如实返回库里报的名字才对。
+         * 用例里凡是按列名取值或构造改动的地方都过这一层。</p>
+         */
+        String col(String name) { return type.equals("oracle") ? name.toUpperCase(java.util.Locale.ROOT) : name; }
         void execute(String sql) throws Exception {
             try (var statement = jdbc.createStatement()) { statement.execute(sql); }
         }
@@ -328,7 +337,7 @@ class DatabaseCompatibilityTest {
         }
         DataPreviewRequest change(String table, Object previous, Object next, String token) {
             return new DataPreviewRequest(1L, schema, table, List.of(new RowChange("UPDATE", null,
-                    Collections.singletonMap("name", next), Collections.singletonMap("name", previous), token)));
+                    Collections.singletonMap(col("name"), next), Collections.singletonMap(col("name"), previous), token)));
         }
         String export(String table, String format, List<String> target) throws Exception {
             var exports = new ExportService(connections, dialects, properties, mapper, new SqlStatementClassifier(),
