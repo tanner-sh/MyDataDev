@@ -114,6 +114,15 @@ body {
   background: var(--app-bg);
 }
 
+/*
+  antd 的 Tag 用它自己派生的 fontSizeSM，落到 10px —— 低于 --text-xs 这个下限，而这些标签里
+  装的正是「开发」「只读」「可就地编辑」这类中文，在 10px 下笔画就糊了。标签在这个界面上到处
+  都是（连接名旁、资源树、对象标题、AI 引用），所以按令牌统一压回下限，而不是逐处覆盖。
+*/
+.ant-tag {
+  font-size: var(--text-xs);
+}
+
 .full-width {
   width: 100%;
 }
@@ -925,10 +934,25 @@ body {
 }
 
 /*
-  筛选图标让开手柄这几像素，否则点筛选会落在手柄上。排序图标在它左边，不受影响。
+  筛选图标要整个让开列宽手柄，否则点筛选会落在手柄上 —— 点漏斗的正中间开始拖列宽，而不是
+  打开筛选。排序图标在它左边，不受影响。
+
+  选择器写这么长是必须的：antd 自己的规则是 `.ant-table-wrapper … th … .ant-table-filter-trigger`
+  这种形状，优先级高于两个类名的写法。此前这里写的是 `.result-grid .ant-table-filter-trigger`，
+  计算出来的 margin-inline-end 一直是 antd 的 -4px，也就是说那次修复从来没生效过 ——
+  是布局审计的命中测试把它揪出来的（漏斗 [551,569]、手柄 [558,565]，中心点落在手柄里）。
+
+  退 9px = 手柄的 7px 再留 2px 余量。手柄必须留在列的右边界上（否则看着像列中间多了一条
+  竖线，另有断言盯着），所以让开的只能是漏斗这一侧。
+
+  z-index 是另一半：antd 的 `.ant-table-column-sorters` 是 position: static，它那个用来放大
+  排序热区的 `::after`（inset: 0）于是相对整个 th 展开，铺满一整列表头压在漏斗上面 ——
+  实测点漏斗打开的不是筛选面板，而是把这一列排了序。抬一层就够了，不去动那个伪元素：
+  「点表头任意处都能排序」是有用的行为，被让开的只有漏斗自己这 18px。
 */
-.result-grid .ant-table-filter-trigger {
-  margin-inline-end: 7px;
+.result-grid th.ant-table-cell .ant-table-filter-column .ant-table-filter-trigger {
+  z-index: 1;
+  margin-inline-end: 9px;
 }
 
 /*

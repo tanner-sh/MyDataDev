@@ -66,19 +66,9 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
 
-      - name: 运行后端测试
-        if: runner.os != 'Windows'
-        run: mvn test --batch-mode
-        working-directory: backend
-
-      - name: 运行前端测试
-        run: npm test
-        working-directory: frontend
-
-      - name: 运行桌面端测试
-        run: npm test
-        working-directory: desktop
-
+      # 这里不再重跑 mvn test / npm test：tag 是从 main 上打的，持续集成已经在同一个 commit 上
+      # 跑过全量测试。四个平台各跑一遍等于把同一份结论买四次，其中 macOS runner 按十倍计费。
+      # 这个作业只负责「打得出包、包能起来」这件 CI 无法回答的事。
       - name: 生成原生安装包
         run: npm run make
         working-directory: desktop

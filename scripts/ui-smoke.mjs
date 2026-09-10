@@ -25,11 +25,18 @@
  * 部分 —— 需要先选连接才可用的「备份与恢复」「活动会话」两个分区，过去每次都打印「已跳过」。
  *
  * 剩下的检查项刻意只覆盖「结构还在不在」：抽屉能不能开、管理分区能不能切、结果区能不能出。
- * 视觉细节靠人看截图 —— 脚本不该假装自己能判断好不好看。
+ *
+ * 界面上「坏没坏」由 layout-audit.mjs 的布局不变量审计回答：文字有没有被切掉、元素有没有跑出
+ * 容器、页面有没有横向滚动条、有没有看得见却点不到的按钮、字号有没有低于中文可读下限、对比度够不够、
+ * 暗色模式下有没有哪块忘了上色。每到一屏就过一遍，收尾再按「浅色/暗色 × 四档断点」扫一轮 ——
+ * 这类问题过去只能等自己用到才发现，而它们恰恰是确定可判的。
+ *
+ * 「好不好看」仍然只靠人看截图 —— 配色、留白、层级舒不舒服，脚本不该假装自己能回答。
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { AUDIT_SOURCE, applyBaseline, formatViolations } from './layout-audit.mjs';
 
 const CHROME = process.env.CHROME_PATH
   || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -100,6 +107,26 @@ const check = (name, ok, detail = '') => {
   }
 };
 
+/**
+ * 在当前这一屏上跑一遍布局不变量审计。
+ *
+ * 审计本身在页面里跑（见 layout-audit.mjs），这里只负责把结果并成一条 check。一屏一条，
+ * 而不是一条违规一条 check —— 一处样式问题会牵连一整列单元格，逐条报出来会把信息埋掉。
+ */
+// 已知违规清单。每条都写明实测比值和为什么还没销账 —— 它是待办账，不是豁免区，
+// 而没记在里面的新违规照样让冒烟失败。几何类违规进不了基线。
+const layoutBaseline = JSON.parse(readFileSync(new URL('./layout-baseline.json', import.meta.url), 'utf8'));
+const layoutViolations = [];
+async function auditLayout(label) {
+  const raw = await page.evaluate(AUDIT_SOURCE);
+  const violations = applyBaseline(raw, layoutBaseline);
+  // 落盘的是未经基线过滤的那份：基线里那些迟早要销账，查的时候要看得到它们还在不在。
+  for (const violation of raw) layoutViolations.push({ surface: label, baselined: !violations.includes(violation), ...violation });
+  // 日志里只留摘要（每条规则举一个例子），整份清单写进截图目录 —— 一处样式问题会牵连一整列
+  // 单元格，几十条同样的违规刷在日志里只会把别的失败埋掉，而查的时候要的是那份完整清单。
+  check(`布局不变量 — ${label}`, violations.length === 0, formatViolations(violations));
+}
+
 async function connect() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
@@ -122,8 +149,14 @@ async function session(url) {
   });
   let id = 0;
   const pending = new Map();
+  const listeners = new Map();
   socket.onmessage = (event) => {
     const message = JSON.parse(event.data);
+    // 没有 id 的是事件通知，不是某次调用的应答。
+    if (message.id == null) {
+      listeners.get(message.method)?.(message.params);
+      return;
+    }
     const entry = pending.get(message.id);
     if (!entry) return;
     pending.delete(message.id);
@@ -139,8 +172,15 @@ async function session(url) {
   });
   await send('Page.enable');
   await send('Runtime.enable');
+  // 冒烟故意留着未提交的修改，于是 App.tsx 的 beforeunload 会拦下每一次导航，等一个没人去点的
+  // 确认框 —— 主题扫描要重新加载页面，不放掉这个框，Page.navigate 就只会超时。放掉它不影响
+  // 断言：那道拦截本身另有测试，这里要看的是加载完之后的布局。
+  listeners.set('Page.javascriptDialogOpening', () => {
+    send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {});
+  });
   return {
     send,
+    on: (method, handler) => listeners.set(method, handler),
     close: () => socket.close(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     async evaluate(expression) {
@@ -316,6 +356,7 @@ try {
   check('头部渲染', await page.evaluate(`Boolean(document.querySelector('.app-header'))`));
   check('资源管理器渲染', await page.evaluate(`Boolean(document.querySelector('.app-sider, .explorer-panel'))`));
   await page.shot('01-shell');
+  await auditLayout('应用外壳');
 
   const opened = await page.evaluate(`
     (() => {
@@ -400,6 +441,7 @@ try {
       })()
     `));
     await page.shot('03-连接表单');
+    await auditLayout('连接表单');
 
     await page.evaluate(`
       (() => {
@@ -511,6 +553,7 @@ try {
     check('表数据加载出来了', firstPage.rows > 0, `实际 ${firstPage.rows} 行`);
     check('表数据页脚完整可见', await page.evaluate(`(() => { const r = document.querySelector('.table-pagination-actions')?.getBoundingClientRect(); return r?.height > 0 && r.bottom <= innerHeight; })()`));
     await page.shot('05-表数据');
+    await auditLayout('表数据');
 
     const turned = await page.evaluate(`
       (() => {
@@ -794,6 +837,7 @@ try {
       JSON.stringify(resultGrid));
     check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
     await page.shot('09-查询结果');
+    await auditLayout('查询结果');
 
     // 结果编辑曾因重建整批行记录触发 scrollTo(0)。滚到中间再改一格，保留当前位置。
     const editScroll = await page.evaluate(`(() => {
@@ -986,6 +1030,49 @@ try {
         })()
       `);
       check('列宽手柄压在列的右边界上', handle.edgeGap <= 1, `距右缘 ${handle.edgeGap}px`);
+    // 点筛选漏斗，打开的必须是筛选面板 —— 不是开始拖列宽，也不是把这一列排序。
+    // 漏斗、排序区和列宽手柄三个热区挤在表头右侧同一小块地方，谁盖住谁只看 CSS 是说不清的，
+    // 所以这里发一次真的鼠标点击，让浏览器自己做命中测试。此前 `.result-grid` 上那条让漏斗
+    // 避开手柄的规则被 antd 更高优先级的选择器盖掉，整条修复从来没生效过，而当时没有任何
+    // 断言看得见这件事。
+    const funnel = await page.evaluate(`
+      (() => {
+        const node = document.querySelector('.result-grid .ant-table-filter-trigger');
+        if (!node) return null;
+        const rect = node.getBoundingClientRect();
+        const header = node.closest('th');
+        return {
+          x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2),
+          sortedBefore: header.classList.contains('ant-table-column-sort')
+        };
+      })()
+    `);
+    check('结果表头有筛选漏斗', funnel !== null);
+
+    if (funnel) {
+      for (const type of ['mousePressed', 'mouseReleased']) {
+        await page.send('Input.dispatchMouseEvent', { type, x: funnel.x, y: funnel.y, button: 'left', clickCount: 1 });
+      }
+      await page.sleep(1200);
+      const afterFunnel = await page.evaluate(`
+        (() => {
+          const dropdown = [...document.querySelectorAll('.ant-table-filter-dropdown')]
+            .find((node) => node.getBoundingClientRect().height > 0);
+          const header = document.querySelector('.result-grid .ant-table-filter-trigger')?.closest('th');
+          return {
+            filterOpen: Boolean(dropdown),
+            sorted: Boolean(header?.classList.contains('ant-table-column-sort')),
+            resizing: Boolean(document.querySelector('.data-grid-viewport .column-resize-guide:not([hidden])'))
+          };
+        })()
+      `);
+      check('点筛选漏斗打开筛选面板', afterFunnel.filterOpen === true, JSON.stringify(afterFunnel));
+      check('点筛选漏斗不会顺手把这一列排序', afterFunnel.sorted === funnel.sortedBefore, JSON.stringify(afterFunnel));
+      check('点筛选漏斗不会开始拖列宽', afterFunnel.resizing === false, JSON.stringify(afterFunnel));
+      await page.evaluate(`document.body.click()`);
+      await page.sleep(600);
+    }
+
       check('拖列宽真的改了宽度', afterDrag.width > handle.width + 20,
         `${Math.round(handle.width)} → ${Math.round(afterDrag.width)}`);
       check('拖列宽不发请求、不触发排序', afterDrag.calls === 0 && afterDrag.sorted === false, JSON.stringify(afterDrag));
@@ -1119,6 +1206,50 @@ try {
     check('只读连接下状态栏只占一行', readonlyLayout.status > 0 && readonlyLayout.status <= 40, JSON.stringify(readonlyLayout));
     check('只读连接在工具栏里有提示', readonlyLayout.readonlyHint === true, JSON.stringify(readonlyLayout));
     await page.shot('10-只读连接SQL工作台');
+    await auditLayout('只读连接工作台');
+
+    // 主题 × 断点扫描。前面每一屏都是在 1440px 的浅色下量的，而这个界面有暗色开关和四档
+    // 断点（styles.css 里的 1199 / 1099 / 860 / 640），也就是说另外七种组合从没被跑过 ——
+    // 而「窄屏下头部把按钮挤成两行」「暗色下某块忘了上色」正是这类只能自己用到才发现的问题。
+    // 主题通过应用自己的偏好存储切换，而不是去点命令面板：这样断言的是持久化后的真实渲染，
+    // 存储键改名时这里会直接失败，而那也是应该知道的事。
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(`
+        (() => {
+          const key = 'db-admin:layout-preferences:v1';
+          const current = JSON.parse(window.localStorage.getItem(key) || '{}');
+          window.localStorage.setItem(key, JSON.stringify({ ...current, themeMode: '${theme}' }));
+        })()
+      `);
+      await page.send('Page.navigate', { url: APP_URL });
+      await page.sleep(3500);
+      if (AUTH) await loginInBrowser(page);
+      check(`偏好里的 ${theme} 主题真的落到了页面上`,
+        await page.evaluate(`document.querySelector('.app-shell')?.dataset.theme === '${theme}'`));
+      for (const width of [1440, 1100, 860, 640]) {
+        await page.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+        await page.sleep(700);
+        await auditLayout(`${theme} / ${width}px 外壳`);
+        await page.shot(`12-${theme}-${width}-外壳`);
+        // 抽屉里是表单栅格，塌成一列的断点与外壳那族不同（760 / 720），单独看一眼。
+        const drawerOpen = await page.evaluate(`
+          (() => {
+            const button = [...document.querySelectorAll('button')].find((b) => (b.textContent || '').trim() === '管理');
+            if (!button) return false;
+            button.click();
+            return true;
+          })()
+        `);
+        if (drawerOpen) {
+          await page.sleep(1200);
+          await auditLayout(`${theme} / ${width}px 管理抽屉`);
+          await page.shot(`12-${theme}-${width}-管理抽屉`);
+          await page.evaluate(`document.querySelector('.ant-drawer-close')?.click()`);
+          await page.sleep(600);
+        }
+      }
+    }
+    await page.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
     // 最后回头看一眼服务端日志。整轮冒烟刷新过页面、切过连接，SSE 与在途请求被断了好几次 ——
     // 这些「对端先走了」此前每次都留下一条带整页栈的 ERROR，用户看到的现象就是应用起着不动、
@@ -1146,6 +1277,12 @@ try {
   } finally {
     server?.kill();
   }
+}
+
+if (SHOT_DIR && layoutViolations.length > 0) {
+  const file = path.join(SHOT_DIR, 'layout-violations.json');
+  writeFileSync(file, JSON.stringify(layoutViolations, null, 2));
+  console.log(`\n布局违规完整清单（${layoutViolations.length} 条）：${file}`);
 }
 
 if (failures.length > 0) {

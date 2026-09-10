@@ -106,7 +106,9 @@ jobs:
         run: node scripts/build-web-bundle.mjs
       - name: 真实浏览器操作与数据库结果核对
         run: CHROME_PATH="$(command -v google-chrome)" node scripts/ui-smoke.mjs --serve --auth --work "$RUNNER_TEMP/mydatadev-smoke" --shots ./ui-shots
-      - name: 保存浏览器验收截图与服务日志
+      # 截图、布局违规清单和服务日志都留下：布局审计失败时要看的是 layout-violations.json
+      # 那份完整清单（日志里每条规则只举一个例子），而「好不好看」仍然只能靠人翻截图。
+      - name: 保存浏览器验收截图、布局违规清单与服务日志
         if: always()
         uses: actions/upload-artifact@v7
         with:
