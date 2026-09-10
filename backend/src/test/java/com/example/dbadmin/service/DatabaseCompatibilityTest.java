@@ -41,7 +41,7 @@ class DatabaseCompatibilityTest {
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80) + ", " + f.decimal("amount", 20, 2));
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '原值', 123.45), (2, '第二行', 99.01)");
+            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("原值") + ", 123.45), (2, " + f.text("第二行") + ", 99.01)");
             var first = f.edits.table(1L, f.schema, table, null, 1);
             assertThat(first.editable()).isTrue();
             assertThat(first.hasMore()).isTrue();
@@ -50,7 +50,7 @@ class DatabaseCompatibilityTest {
             assertThat(second.hasMore()).isFalse();
             String token = first.rowKeyTokens().get(0);
             var request = f.change(table, "原值", "我的修改", token);
-            f.execute("UPDATE " + f.q(table) + " SET name='其他会话' WHERE id=1");
+            f.execute("UPDATE " + f.q(table) + " SET name=" + f.text("其他会话") + " WHERE id=1");
             assertThatThrownBy(() -> f.edits.commit(request, "ci")).isInstanceOf(ApiProblemException.class);
             assertThat(f.edits.conflictRow(request, "ci")).containsEntry("values", Map.of(f.col("name"), "其他会话"));
             assertThat(f.edits.commit(f.change(table, "其他会话", "我的修改", token), "ci").affectedRows()).isEqualTo(1);
@@ -114,9 +114,9 @@ class DatabaseCompatibilityTest {
     void failedGridBatchRollsBackEarlierChanges(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80));
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '原值'), (2, '第二行')");
+            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("原值") + "), (2, " + f.text("第二行") + ")");
             var page = f.edits.table(1L, f.schema, table, null, 10);
-            f.execute("UPDATE " + f.q(table) + " SET name='外部修改' WHERE id=2");
+            f.execute("UPDATE " + f.q(table) + " SET name=" + f.text("外部修改") + " WHERE id=2");
             var changes = List.of(
                     new RowChange("UPDATE", null, Map.of(f.col("name"), "不应保存"), Map.of(f.col("name"), "原值"), page.rowKeyTokens().get(0)),
                     new RowChange("UPDATE", null, Map.of(f.col("name"), "冲突修改"), Map.of(f.col("name"), "第二行"), page.rowKeyTokens().get(1)));
@@ -188,7 +188,7 @@ class DatabaseCompatibilityTest {
             var changed = f.metadata.detail(1L, f.schema, table, true);
             assertThat(changed.columns()).extracting("name").containsExactly(f.col("id"), f.col("name"), f.col("note"));
             assertThat(changed.indexes()).extracting("name").contains(index);
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '" + "x".repeat(100) + "', '保留数据')");
+            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("x".repeat(100)) + ", " + f.text("保留数据") + ")");
             f.metadata.executeTableLifecycle(1L, new TableLifecycleRequest("RENAME", f.schema, table, renamed,
                     null, null, null, changed.structureVersion(), f.schema + "." + table), "ci", null);
             assertThat(f.scalar("SELECT note FROM " + f.q(renamed))).isEqualTo("保留数据");
@@ -324,6 +324,17 @@ class DatabaseCompatibilityTest {
          * 用例里凡是按列名取值或构造改动的地方都过这一层。</p>
          */
         String col(String name) { return type.equals("oracle") ? name.toUpperCase(java.util.Locale.ROOT) : name; }
+        /**
+         * 用例自己写的 SQL 里的字符串字面量。
+         *
+         * <p>T-SQL 里不带前缀的 {@code '中文'} 是 VARCHAR 字面量：字符会先按数据库的代码页
+         * 转换、再赋给 NVARCHAR 列，于是落库就成了问号。正确写法是 {@code N'中文'}。产品自己
+         * 的写入端本来就带这个前缀（备份脚本里就是 {@code N'…'}），是用例的裸 SQL 漏了它。</p>
+         */
+        String text(String value) {
+            String quoted = "'" + value.replace("'", "''") + "'";
+            return type.equals("sqlserver") ? "N" + quoted : quoted;
+        }
         void execute(String sql) throws Exception {
             try (var statement = jdbc.createStatement()) { statement.execute(sql); }
         }

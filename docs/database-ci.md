@@ -44,7 +44,7 @@ Oracle 已经跑绿，`continue-on-error` 已摘。它这一轮暴露了四个�
 
 ### 表里的「不适用」都是有意排除，不是漏了
 
-**SQL Server 的字符列用 `NVARCHAR`**：`VARCHAR` 在 SQL Server 上是非 Unicode 类型，中文写进去会按排序规则的代码页替换成问号。那是 SQL Server 的真实行为、不是产品问题 —— 真实用户存中文用的就是 `NVARCHAR`，用例的类型表跟着改。
+**SQL Server 的字符列用 `NVARCHAR`，字面量带 `N` 前缀**：`VARCHAR` 在 SQL Server 上是非 Unicode 类型，中文写进去会按排序规则的代码页替换成问号；而 T-SQL 里不带前缀的 `'中文'` 也是 VARCHAR 字面量，字符会先按代码页转换再赋给 NVARCHAR 列，同样变问号。两件都是 SQL Server 的真实行为、不是产品问题 —— 产品自己的写入端本来就带 `N` 前缀（备份脚本里就是 `N'…'`），漏掉的是用例的裸 SQL。`Fixture.text()` 负责这一层。
 
 **Oracle 不跑「NULL 与空字符串必须分开」**：Oracle 的 `VARCHAR2` 把空串直接存成 NULL，这条在 Oracle 上不成立，也不是产品能修的。与其把断言放宽成两者都接受（那等于不测），不如明确排除。备份往返那条用例里的空串行改为按方言断言：能区分的库读回空串，Oracle 读回 NULL。
 
