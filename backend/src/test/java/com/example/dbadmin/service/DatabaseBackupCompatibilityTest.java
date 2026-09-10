@@ -25,8 +25,32 @@ import static org.mockito.Mockito.*;
 class DatabaseBackupCompatibilityTest {
     @TempDir Path directory;
 
+    /**
+     * 工具路径先看按数据库限定的变量，再退回按方法命名的那个。
+     *
+     * <p>MariaDB 用的是它自己的 mariadb-dump / mariadb 客户端：MySQL 8.4 的 mysqldump 打到
+     * MariaDB 11 上会因为版本探测与 information_schema 差异失败，把两家指到同一个二进制
+     * 等于用一个跑不通的组合去证明兼容性。</p>
+     */
+    private static String toolPath(String type, String tool) {
+        String scoped = System.getenv("TEST_" + type.toUpperCase(java.util.Locale.ROOT) + "_" + tool + "_PATH");
+        return scoped != null && !scoped.isBlank() ? scoped : System.getenv("TEST_" + tool + "_PATH");
+    }
+
+    /**
+     * dump 参数按类型给。{@code --set-gtid-purged} 与 {@code --no-tablespaces} 是 mysqldump
+     * 独有的，mariadb-dump 不认这两个开关，照抄过去整条命令直接报错。
+     */
+    private static String dumpOptions(String type, String method) {
+        if (!method.equals("MYSQLDUMP")) return null;
+        return type.equals("mariadb") ? "--single-transaction"
+                : "--single-transaction\n--no-tablespaces\n--set-gtid-purged=OFF";
+    }
+
     @ParameterizedTest
-    @CsvSource({"mysql, SQL, false", "mysql, SQL, true", "postgresql, SQL, false", "mysql, MYSQLDUMP, false", "postgresql, PG_DUMP, false"})
+    @CsvSource({"mysql, SQL, false", "mysql, SQL, true", "mariadb, SQL, false", "postgresql, SQL, false",
+            "sqlserver, SQL, false", "oracle, SQL, false",
+            "mysql, MYSQLDUMP, false", "mariadb, MYSQLDUMP, false", "postgresql, PG_DUMP, false"})
     void backupRestoresRowsPrimaryKeyAndIndex(String type, String method, boolean noBackslashEscapes) throws Exception {
         if (!method.equals("SQL")) {
             if (Boolean.parseBoolean(System.getenv("TEST_DATABASES_REQUIRED"))) {
@@ -36,7 +60,7 @@ class DatabaseBackupCompatibilityTest {
         }
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
             f.properties.getBackup().setDirectory(directory.toString());
-            String table = f.table("id BIGINT PRIMARY KEY, name VARCHAR(200), amount DECIMAL(20,4)");
+            String table = f.table(f.pk("id") + ", " + f.varchar("name", 200) + ", " + f.decimal("amount", 20, 4));
             String index = "idx_" + table;
             f.execute("CREATE INDEX " + f.dialect.quoteIdentifier(index) + " ON " + f.q(table) + " (name)");
             String text = "中文 O'Reilly\\path\n第二行";
@@ -49,8 +73,7 @@ class DatabaseBackupCompatibilityTest {
             var tasks = mock(BackupTaskRepository.class);
             var histories = mock(BackupHistoryRepository.class);
             var task = new BackupTask(1, "实库往返", 1, "TABLE", f.schema, table, method,
-                    System.getenv("TEST_" + method + "_PATH"),
-                    method.equals("MYSQLDUMP") ? "--single-transaction\n--no-tablespaces\n--set-gtid-purged=OFF" : null,
+                    toolPath(type, method), dumpOptions(type, method),
                     null, null, false, null, null, null, null, null);
             when(tasks.findById(1L)).thenReturn(Optional.of(task));
             var backup = BackupServiceTestFixture.create(tasks, histories, f.connections, f.audit, f.properties);
@@ -86,7 +109,7 @@ class DatabaseBackupCompatibilityTest {
                     f.audit, f.properties, new SqlRestoreTranslator(), f.dialects, coordinator, f.mapper,
                     new NativeToolLocator(f.properties), new BackgroundTaskControl(f.properties),
                     new LargeFileUploadGuard(f.properties), mock(BackupStorageRegistry.class));
-            String tool = System.getenv("TEST_" + (method.equals("PG_DUMP") ? "PG_RESTORE" : "MYSQL") + "_PATH");
+            String tool = toolPath(type, method.equals("PG_DUMP") ? "PG_RESTORE" : "MYSQL");
             var source = new RestoreSourceRef("HISTORY", 1L);
             var preflight = restore.preflight(new RestorePreflightRequest(source, 1L, type, method, "SAFE", Map.of(), tool, null));
             assertThat(preflight.valid()).as("恢复预检：%s", preflight.errors()).isTrue();
@@ -96,7 +119,10 @@ class DatabaseBackupCompatibilityTest {
             try (var statement = f.jdbc.createStatement(); var rows = statement.executeQuery("SELECT * FROM " + f.q(table) + " ORDER BY id")) {
                 assertThat(rows.next()).isTrue(); assertThat(rows.getLong("id")).isEqualTo(2);
                 assertThat(rows.getString("name")).isNull(); assertThat(rows.getBigDecimal("amount")).isNull();
-                assertThat(rows.next()).isTrue(); assertThat(rows.getLong("id")).isEqualTo(3); assertThat(rows.getString("name")).isEmpty();
+                assertThat(rows.next()).isTrue(); assertThat(rows.getLong("id")).isEqualTo(3);
+                // Oracle 的 VARCHAR2 把空串存成 NULL，往返之后读回来也只能是 NULL。
+                if (f.flavor.distinguishesEmptyString()) assertThat(rows.getString("name")).isEmpty();
+                else assertThat(rows.getString("name")).isNull();
                 assertThat(rows.next()).isTrue(); assertThat(rows.getLong("id")).isEqualTo(9007199254740993L);
                 assertThat(rows.getString("name")).isEqualTo(text);
                 assertThat(rows.getBigDecimal("amount")).isEqualByComparingTo("123456789012.3456");

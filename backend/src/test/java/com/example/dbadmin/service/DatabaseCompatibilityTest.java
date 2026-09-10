@@ -27,10 +27,10 @@ import static org.mockito.Mockito.*;
 
 /** 独立实库测试；本地未配置时跳过，CI 必须提供配置。每例只操作随机命名的测试表。 */
 class DatabaseCompatibilityTest {
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
-            String table = f.table("id BIGINT PRIMARY KEY, name VARCHAR(80), amount DECIMAL(20,2)");
+            String table = f.table(f.pk("id") + ", " + f.varchar("name", 80) + ", " + f.decimal("amount", 20, 2));
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '原值', 123.45), (2, '第二行', 99.01)");
             var first = f.edits.table(1L, f.schema, table, null, 1);
             assertThat(first.editable()).isTrue();
@@ -48,10 +48,15 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    /**
+     * Oracle 不在此列：它的 VARCHAR2 把空串直接存成 NULL，「NULL 与空串必须分开」这条在
+     * Oracle 上不成立，也不是产品能修的 —— 与其把断言放宽成两者都接受（那就等于不测），
+     * 不如明确排除并写清原因。
+     */
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver"})
     void nullEmptyStringAndEscapedTextRemainDistinct(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
-            String table = f.table("id BIGINT PRIMARY KEY, name VARCHAR(200)");
+            String table = f.table(f.pk("id") + ", " + f.varchar("name", 200));
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, NULL)");
             Object previous = null;
             for (Object next : new Object[]{"", "中文🙂 O'Reilly\\path\n第二行", null}) {
@@ -64,11 +69,11 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void sqlExportRoundTripsPrecisionTimestampBinaryAndText(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
-            String columns = "id BIGINT PRIMARY KEY, amount DECIMAL(30,8), happened TIMESTAMP(6), payload "
-                    + (type.equals("mysql") ? "VARBINARY(30)" : "BYTEA") + ", note VARCHAR(200)";
+            String columns = f.pk("id") + ", " + f.decimal("amount", 30, 8) + ", " + f.timestamp("happened", 6)
+                    + ", " + f.binary("payload", 30) + ", " + f.varchar("note", 200);
             String source = f.table(columns), target = f.table(columns);
             long id = 9007199254740993L;
             BigDecimal amount = new BigDecimal("12345678901234567890.12345678");
@@ -95,10 +100,10 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void failedGridBatchRollsBackEarlierChanges(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
-            String table = f.table("id BIGINT PRIMARY KEY, name VARCHAR(80)");
+            String table = f.table(f.pk("id") + ", " + f.varchar("name", 80));
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, '原值'), (2, '第二行')");
             var page = f.edits.table(1L, f.schema, table, null, 10);
             f.execute("UPDATE " + f.q(table) + " SET name='外部修改' WHERE id=2");
@@ -112,10 +117,10 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void manualTransactionsCommitAndRollbackAfterFailure(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
-            String table = f.table("id BIGINT PRIMARY KEY, amount INT");
+            String table = f.table(f.pk("id") + ", " + f.id("amount"));
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, 100)");
             var registry = new SqlTransactionRegistry();
             var sql = new SqlService(f.connections, f.properties, f.audit, f.dialects, mock(SqlHistoryRepository.class),
@@ -142,21 +147,25 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "postgresql"})
+    /**
+     * SQL Server 不在此列：它的方言把 tableDesign 声明为 false（能力矩阵里明确不支持表设计），
+     * 服务端会直接拒绝，这里跑它等于断言一个产品不提供的功能。
+     */
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "oracle"})
     void tableLifecycleAndDesignExecuteAgainstRealMetadata(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.reserveTable(), renamed = f.reserveTable(), index = "idx_" + table;
             var create = new TableLifecycleRequest("CREATE", f.schema, table, null,
-                    List.of(new ColumnDesign("id", "BIGINT", null, false, null, null, false),
-                            new ColumnDesign("name", "VARCHAR", 80, true, null, null, false)),
+                    List.of(new ColumnDesign("id", f.flavor.bigint(), null, false, null, null, false),
+                            new ColumnDesign("name", f.flavor.varchar(), 80, true, null, null, false)),
                     List.of(), List.of("id"), null, f.schema + "." + table);
             f.metadata.executeTableLifecycle(1L, create, "ci", null);
             var original = f.metadata.detail(1L, f.schema, table, true);
             assertThat(original.primaryKeys()).containsExactly("id");
             var design = new TableDesignRequest(f.schema, table,
-                    List.of(new ColumnDesign("id", "BIGINT", null, false, null, "id", false),
-                            new ColumnDesign("name", "VARCHAR", 120, true, null, "name", false),
-                            new ColumnDesign("note", "VARCHAR", 100, true, null, null, false)),
+                    List.of(new ColumnDesign("id", f.flavor.bigint(), null, false, null, "id", false),
+                            new ColumnDesign("name", f.flavor.varchar(), 120, true, null, "name", false),
+                            new ColumnDesign("note", f.flavor.varchar(), 100, true, null, null, false)),
                     List.of(new IndexDesign(index, List.of("name"), false, null, false)),
                     List.of("id"), original.structureVersion(), f.schema + "." + table);
             f.metadata.executeDesign(1L, design, "ci");
@@ -174,8 +183,27 @@ class DatabaseCompatibilityTest {
         }
     }
 
+    /**
+     * 每家数据库的取值差异，集中在这一张表里，用例正文不再出现 if (type.equals(...))。
+     *
+     * <p>{@code distinguishesEmptyString} 不是取值而是语义：Oracle 的 VARCHAR2 把空串就存成
+     * NULL，产品层面无从修正，所以那条「NULL 与空串必须分开」的用例在 Oracle 上压根不成立
+     * —— 排除掉，而不是把断言放宽成两者都接受。</p>
+     */
+    record Flavor(String envPrefix, String bigint, String varchar, String decimal,
+                  String timestamp, String binary, boolean distinguishesEmptyString) {}
+
+    static final Map<String, Flavor> FLAVORS = Map.of(
+            "mysql", new Flavor("MYSQL", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
+            "mariadb", new Flavor("MARIADB", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
+            "postgresql", new Flavor("POSTGRES", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "BYTEA", true),
+            // SQL Server 的 TIMESTAMP 是行版本戳，不是时间类型；要微秒精度只能用 DATETIME2。
+            "sqlserver", new Flavor("SQLSERVER", "BIGINT", "VARCHAR", "DECIMAL", "DATETIME2", "VARBINARY", true),
+            "oracle", new Flavor("ORACLE", "NUMBER(19)", "VARCHAR2", "NUMBER", "TIMESTAMP", "RAW", false));
+
     static final class Fixture implements AutoCloseable {
         final String type;
+        final Flavor flavor;
         final Connection jdbc;
         final String schema;
         final ConnectionService connections = mock(ConnectionService.class);
@@ -192,7 +220,9 @@ class DatabaseCompatibilityTest {
 
         Fixture(String type) throws Exception {
             this.type = type;
-            String prefix = type.equals("mysql") ? "MYSQL" : "POSTGRES";
+            this.flavor = FLAVORS.get(type);
+            assertThat(flavor).as("未登记的数据库类型 %s", type).isNotNull();
+            String prefix = flavor.envPrefix();
             String url = System.getenv("TEST_" + prefix + "_URL");
             if (Boolean.parseBoolean(System.getenv("TEST_DATABASES_REQUIRED"))) {
                 assertThat(url).as("CI 必须配置 TEST_%s_URL，不能跳过实库回归", prefix).isNotBlank();
@@ -211,7 +241,15 @@ class DatabaseCompatibilityTest {
             edits = new DataEditService(metadata, connections, audit, dialects, properties,
                     new TableCursorCodec(mapper, crypto), new RowLocatorCodec(mapper, crypto), guard);
             jdbc = DriverManager.getConnection(url, user, password);
-            schema = type.equals("mysql") ? jdbc.getCatalog() : "public";
+            // schema/catalog 语义各家不同：MySQL 系用当前 catalog，PostgreSQL 是 public，
+            // SQL Server 是 dbo，Oracle 则以登录用户为 schema（字典里存的是大写）。
+            schema = switch (type) {
+                case "mysql", "mariadb" -> jdbc.getCatalog();
+                case "postgresql" -> "public";
+                case "sqlserver" -> "dbo";
+                case "oracle" -> jdbc.getMetaData().getUserName().toUpperCase(java.util.Locale.ROOT);
+                default -> throw new IllegalStateException("未登记的 schema 语义：" + type);
+            };
         }
         private Connection open(String url, String user, String password) throws Exception {
             Connection connection = DriverManager.getConnection(url, user, password);
@@ -230,6 +268,18 @@ class DatabaseCompatibilityTest {
         }
         String table(String columns) throws Exception {
             String name = reserveTable(); execute("CREATE TABLE " + q(name) + " (" + columns + ")"); return name;
+        }
+        /** 按方言写出列定义，免得每个用例都自己拼一遍类型名。 */
+        String pk(String name) { return name + " " + flavor.bigint() + " PRIMARY KEY"; }
+        String id(String name) { return name + " " + flavor.bigint(); }
+        String varchar(String name, int size) { return name + " " + flavor.varchar() + "(" + size + ")"; }
+        String decimal(String name, int precision, int scale) {
+            return name + " " + flavor.decimal() + "(" + precision + "," + scale + ")";
+        }
+        String timestamp(String name, int precision) { return name + " " + flavor.timestamp() + "(" + precision + ")"; }
+        String binary(String name, int size) {
+            // PostgreSQL 的 BYTEA 不带长度。
+            return name + " " + flavor.binary() + (flavor.binary().equals("BYTEA") ? "" : "(" + size + ")");
         }
         String q(String table) { return dialect.qualifiedName(schema, table); }
         void execute(String sql) throws Exception {

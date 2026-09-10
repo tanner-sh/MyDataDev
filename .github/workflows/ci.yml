@@ -20,9 +20,10 @@ concurrency:
 
 jobs:
   database-compatibility:
-    name: MySQL 与 PostgreSQL 真实数据库回归
+    name: 五种数据库真实回归
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Oracle 容器起得慢（要建 PDB 与用户），单它就可能占掉五六分钟，所以上限比原来放宽。
+    timeout-minutes: 35
     services:
       mysql:
         image: mysql:8.4
@@ -47,6 +48,45 @@ jobs:
         options: >-
           --health-cmd="pg_isready -U mydatadev -d mydatadev_test"
           --health-interval=10s --health-timeout=5s --health-retries=12
+      # MariaDB 与 MySQL 是两个方言实现（DialectRegistry 里 MariaDB 排在 MySQL 之前，
+      # 且 MySqlDialect.supports 显式把 mariadb 让出去），差异只有真实库跑得出来。
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: ci-test-password
+          MARIADB_DATABASE: mydatadev_test
+          MARIADB_USER: mydatadev
+          MARIADB_PASSWORD: ci-test-password
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+      # SQL Server 的方言差异最大：不支持列注释、分页走 OFFSET/FETCH、TIMESTAMP 是行版本戳、
+      # 能力矩阵里表设计为 false。镜像不会自动建库，下面用 sqlcmd 建。
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Ci-Test-Password1
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd="/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Ci-Test-Password1 -C -Q 'SELECT 1'"
+          --health-interval=10s --health-timeout=5s --health-retries=30
+      # Oracle 特有的约定最多：未加引号的标识符折成大写、空串等于 NULL、DBMS_OUTPUT、
+      # ALL_ERRORS 里的编译错误、冲突策略要整条换成 MERGE。
+      oracle:
+        image: gvenzl/oracle-free:23-slim-faststart
+        env:
+          ORACLE_PASSWORD: ci-test-password
+          APP_USER: mydatadev
+          APP_USER_PASSWORD: ci-test-password
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd="healthcheck.sh"
+          --health-interval=15s --health-timeout=10s --health-retries=40
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -57,8 +97,17 @@ jobs:
       - name: 安装真实备份恢复客户端
         run: |
           sudo apt-get update
-          sudo apt-get install -y mysql-client postgresql-client-16
-      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+          # MariaDB 用它自己的客户端：mysqldump 8.4 打到 MariaDB 11 上会因为版本探测与
+          # information_schema 差异失败，用一个跑不通的组合证明不了兼容性。
+          sudo apt-get install -y mysql-client postgresql-client-16 mariadb-client
+
+      - name: 建 SQL Server 测试库
+        run: |
+          docker exec "$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest --format '{{.ID}}')" \
+            /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Ci-Test-Password1' -C \
+            -Q "IF DB_ID('mydatadev_test') IS NULL CREATE DATABASE mydatadev_test"
+
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返（五种数据库）
         working-directory: backend
         run: mvn test --batch-mode -Dtest=DatabaseCompatibilityTest,DatabaseBackupCompatibilityTest
         env:
@@ -74,6 +123,18 @@ jobs:
           TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/mydatadev_test
           TEST_POSTGRES_USER: mydatadev
           TEST_POSTGRES_PASSWORD: ci-test-password
+          TEST_MARIADB_URL: jdbc:mariadb://127.0.0.1:3307/mydatadev_test
+          TEST_MARIADB_USER: mydatadev
+          TEST_MARIADB_PASSWORD: ci-test-password
+          TEST_MARIADB_MYSQLDUMP_PATH: /usr/bin/mariadb-dump
+          TEST_MARIADB_MYSQL_PATH: /usr/bin/mariadb
+          # SQL Server 18 版驱动默认要求加密，测试容器是自签证书，所以显式信任。
+          TEST_SQLSERVER_URL: jdbc:sqlserver://127.0.0.1:1433;databaseName=mydatadev_test;encrypt=true;trustServerCertificate=true
+          TEST_SQLSERVER_USER: sa
+          TEST_SQLSERVER_PASSWORD: Ci-Test-Password1
+          TEST_ORACLE_URL: jdbc:oracle:thin:@//127.0.0.1:1521/FREEPDB1
+          TEST_ORACLE_USER: mydatadev
+          TEST_ORACLE_PASSWORD: ci-test-password
       - name: 保存真实数据库回归报告
         if: always()
         uses: actions/upload-artifact@v7
