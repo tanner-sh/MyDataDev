@@ -289,8 +289,8 @@ jobs:
         run: npm test
         working-directory: frontend
 
-      - name: 验证发布检查脚本
-        run: node --test scripts/verify-release-ci.test.mjs
+      - name: 验证发布检查脚本与 CI Gate 清单
+        run: node --test scripts/verify-release-ci.test.mjs scripts/ci-gate.test.mjs
 
       # 构建同时会跑 check-build-budget.mjs：首屏资源数与懒加载链的 gzip 体积都有硬上限，
       # 把重型模块拉进首屏会在这里失败，而不是等到发版才发现。
@@ -322,3 +322,35 @@ jobs:
       - name: 构建桌面端主进程
         run: npm run build:main
         working-directory: desktop
+
+  # 分支保护与发布检查只认这一个作业，不再逐个点名上面的作业：新增、改名或拆分作业时不用
+  # 同步改 GitHub 设置。代价是这里的 needs 必须列全 —— 漏掉的作业等于不受保护，
+  # scripts/ci-gate.test.mjs 拦的就是这种遗漏。
+  gate:
+    name: CI Gate
+    # 用 always() 而不是 !cancelled()：整轮被取消时 Gate 如果被跳过，GitHub 会把跳过的必需
+    # 检查当成通过。这里必须真跑一次，并判失败。
+    if: always()
+    needs:
+      - database-compatibility
+      - mariadb-compatibility
+      - sqlserver-compatibility
+      - oracle-compatibility
+      - ui-smoke
+      - backend
+      - frontend
+      - desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: 所有作业必须实际成功
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          # 跳过同样不算通过：现在没有按路径跳过的作业，出现 skipped 只可能是上游出了问题。
+          failed=$(jq -r 'to_entries[] | select(.value.result != "success") | "\(.key)：\(.value.result)"' <<<"$NEEDS")
+          if [ -n "$failed" ]; then
+            printf '以下作业未成功：\n%s\n' "$failed"
+            exit 1
+          fi
+          echo "全部 $(jq length <<<"$NEEDS") 个作业成功"

@@ -3,35 +3,7 @@
     "strict": true,
     "checks": [
       {
-        "context": "MySQL 与 PostgreSQL 真实回归",
-        "app_id": 15368
-      },
-      {
-        "context": "MariaDB 真实回归",
-        "app_id": 15368
-      },
-      {
-        "context": "SQL Server 真实回归",
-        "app_id": 15368
-      },
-      {
-        "context": "Oracle 真实回归",
-        "app_id": 15368
-      },
-      {
-        "context": "Web 发行包浏览器回归",
-        "app_id": 15368
-      },
-      {
-        "context": "后端测试",
-        "app_id": 15368
-      },
-      {
-        "context": "前端测试与构建",
-        "app_id": 15368
-      },
-      {
-        "context": "桌面端测试与类型检查",
+        "context": "CI Gate",
         "app_id": 15368
       }
     ]
