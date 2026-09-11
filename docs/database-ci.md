@@ -74,7 +74,7 @@ PR、推送到 `main` 和手动运行 CI 时启动独立服务容器，不读取
 
 每个作业通过 `TEST_REQUIRED_DATABASES` 点名其负责的数据库；漏配 URL 就失败。原生往返还需要 `TEST_NATIVE_TOOLS=true`，被点名数据库的原生测试不能静默跳过。客户端缺失或数据库连不上也失败。
 
-实库报告始终尝试上传到对应的 `*-compatibility-reports` artifact。测试选择器与报告路径均覆盖 `Database*CompatibilityTest`，新增同类测试无需逐个修改工作流。
+实库报告始终尝试上传到对应的 `*-compatibility-reports` artifact；上传失败（例如 GitHub artifact 服务超时）不影响作业结论。CI 与夜间回归里所有诊断附件的上传都是 `continue-on-error`，只有发布工作流上传安装包的步骤失败即中断。测试选择器与报告路径均覆盖 `Database*CompatibilityTest`，新增同类测试无需逐个修改工作流。
 
 ## 本地复现
 

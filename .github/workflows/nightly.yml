@@ -72,6 +72,8 @@ jobs:
           TEST_MYSQL_PASSWORD: ci-test-password
       - name: 保存回归报告
         if: always()
+        # 诊断附件：上传失败不改写作业结论，否则 artifact 服务一抖就会开出一条假的「夜间回归失败」。
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: nightly-mysql-${{ matrix.version }}-reports
@@ -127,6 +129,8 @@ jobs:
           TEST_POSTGRES_PASSWORD: ci-test-password
       - name: 保存回归报告
         if: always()
+        # 诊断附件：上传失败不改写作业结论，否则 artifact 服务一抖就会开出一条假的「夜间回归失败」。
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: nightly-postgresql-${{ matrix.version }}-reports
@@ -179,6 +183,8 @@ jobs:
           TEST_MARIADB_MYSQL_PATH: /usr/bin/mariadb
       - name: 保存回归报告
         if: always()
+        # 诊断附件：上传失败不改写作业结论，否则 artifact 服务一抖就会开出一条假的「夜间回归失败」。
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: nightly-mariadb-${{ matrix.version }}-reports
@@ -233,6 +239,8 @@ jobs:
           TEST_SQLSERVER_PASSWORD: Ci-Test-Password1
       - name: 保存回归报告
         if: always()
+        # 诊断附件：上传失败不改写作业结论，否则 artifact 服务一抖就会开出一条假的「夜间回归失败」。
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: nightly-sqlserver-${{ matrix.version }}-reports
@@ -273,6 +281,8 @@ jobs:
           TEST_ORACLE_PASSWORD: ci-test-password
       - name: 保存回归报告
         if: always()
+        # 诊断附件：上传失败不改写作业结论，否则 artifact 服务一抖就会开出一条假的「夜间回归失败」。
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: nightly-oracle-xe21-reports
