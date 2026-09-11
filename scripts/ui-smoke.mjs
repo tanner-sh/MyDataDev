@@ -18,6 +18,7 @@
  * --serve 默认关闭认证；加 --auth 会初始化独立测试管理员，走真实登录表单，
  * 并验证会话过期后重新登录保留编辑现场。CI 使用 --serve --auth。
  * 数据写进 --work 指定的目录（默认 .ui-smoke-run），每次跑完不清 —— 出问题时那份日志是唯一线索。
+ * Chrome 自己的输出写进截图目录（没给 --shots 时写进工作目录）的 chrome.log。
  *
  * --serve 模式下还会经 API 播一条 H2 连接和一张 240 行的表，然后走一遍真正每天都在走的路：
  * 选连接 → 打开表 → 翻页 → 改一格 → 提交 → 导出菜单。改完那一格是回库里读出来核对的，
@@ -33,7 +34,7 @@
  *
  * 「好不好看」仍然只靠人看截图 —— 配色、留白、层级舒不舒服，脚本不该假装自己能回答。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, openSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { AUDIT_SOURCE, applyBaseline, formatViolations } from './layout-audit.mjs';
@@ -55,7 +56,11 @@ const WORK_DIR = option('--work', '.ui-smoke-run');
 const APP_URL = SERVE ? `http://127.0.0.1:${SERVE_PORT}` : option('--url', 'http://localhost:5173');
 const SHOT_DIR = option('--shots', '');
 const PORT = Number(option('--debug-port', String(19000 + process.pid % 20000)));
-const CHROME_PROFILE = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'mydatadev-ui-'));
+// Chrome 自己的输出落进截图目录（CI 会连同截图一起上传），没给 --shots 时落进工作目录。
+const CHROME_LOG = path.join(SHOT_DIR || WORK_DIR, 'chrome.log');
+let chrome = null;
+let chromeProfile = null;
+let debugPort = PORT;
 const SEED_CONNECTION_NAME = 'UI 冒烟库';
 // 第二条连接指向同一个内存库，只是标成只读：只读连接在界面上走的是另一套分支
 // （工具栏副标题、按钮禁用、布局），只测一条开发连接就看不见它们坏没坏。
@@ -127,10 +132,38 @@ async function auditLayout(label) {
   check(`布局不变量 — ${label}`, violations.length === 0, formatViolations(violations));
 }
 
-async function connect() {
+/**
+ * 起一个无头 Chrome，输出写进 chrome.log。
+ *
+ * <p>此前 Chrome 的 stdio 直接丢弃：CI 上偶发一次「连不上调试端口」，能看到的只有这一句 ——
+ * Chrome 是没起来、起来又崩了，还是端口被占，一概不知道，只能整轮重跑。</p>
+ */
+function launchChrome(attempt) {
+  mkdirSync(path.dirname(CHROME_LOG), { recursive: true });
+  const log = openSync(CHROME_LOG, 'a');
+  writeFileSync(log, `\n=== 第 ${attempt} 次启动 ${new Date().toISOString()} ===\n`);
+  debugPort = PORT + attempt - 1;
+  chromeProfile = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'mydatadev-ui-'));
+  const browser = spawn(CHROME, [
+    '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+    '--hide-scrollbars', '--force-device-scale-factor=1',
+    `--remote-debugging-port=${debugPort}`, `--user-data-dir=${chromeProfile}`,
+    'about:blank'
+  ], { stdio: ['ignore', log, log] });
+  // 路径不对时 spawn 发 error 事件，不接住的话整个脚本直接崩掉，连清理都走不到。
+  browser.on('error', (error) => { browser.launchError = error; });
+  closeSync(log);
+  chrome = browser;
+}
+
+async function connect(browser) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (browser.launchError) throw new Error(`Chrome 没能启动：${browser.launchError.message}，检查 CHROME_PATH 是否正确`);
+    if (browser.exitCode != null || browser.signalCode != null) {
+      throw new Error(`Chrome 启动后退出（${browser.exitCode ?? browser.signalCode}）`);
+    }
     try {
-      const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${debugPort}/json/list`)).json();
       const page = list.find((target) => target.type === 'page');
       if (page?.webSocketDebuggerUrl) return page.webSocketDebuggerUrl;
     } catch {
@@ -138,7 +171,48 @@ async function connect() {
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error('无法连接到 Chrome 调试端口，检查 CHROME_PATH 是否正确');
+  throw new Error(`20 秒内连不上 Chrome 调试端口 ${debugPort}`);
+}
+
+/** 结束 Chrome 并删掉它的临时配置目录；重试前与收尾时共用。 */
+async function stopChrome() {
+  const browser = chrome;
+  const profile = chromeProfile;
+  chrome = null;
+  chromeProfile = null;
+  if (browser?.pid != null && browser.exitCode == null && browser.signalCode == null) {
+    const exited = new Promise((resolve) => browser.once('exit', resolve));
+    browser.kill('SIGKILL'); // 测试故意保留草稿，不能让 beforeunload 阻止关闭独立测试浏览器。
+    await exited;
+  }
+  if (!profile) return;
+  try {
+    // Chrome 子进程可能仍在写入配置目录，给 ENOTEMPTY / EBUSY 留出有限重试。
+    rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error) {
+    if (!['ENOTEMPTY', 'EBUSY'].includes(error.code)) throw error;
+    // 浏览器子进程尚未释放文件时保留临时目录，不用清理结果覆盖功能断言结果。
+    console.warn(`Chrome 临时目录尚未释放，已保留 ${profile}：${error.code}`);
+  }
+}
+
+/**
+ * 连不上就换一份临时配置目录、换一个调试端口再试一次。
+ *
+ * <p>重试只针对「浏览器没起来」这一步：它和被测的产品无关，失败了整轮作业就白跑。界面断言
+ * 失败不在此列，那是要看的结论。两次都失败时报错里指明 chrome.log 的位置。</p>
+ */
+async function openBrowser() {
+  for (let attempt = 1; ; attempt += 1) {
+    launchChrome(attempt);
+    try {
+      return await connect(chrome);
+    } catch (error) {
+      await stopChrome();
+      if (attempt >= 2) throw new Error(`${error.message}；已换端口与配置目录重试 1 次，Chrome 输出见 ${CHROME_LOG}`);
+      console.log(`  – Chrome 第 1 次启动失败（${error.message}），换端口与配置目录重试`);
+    }
+  }
 }
 
 async function session(url) {
@@ -330,17 +404,10 @@ process.once('exit', () => server?.kill());
 if (AUTH && SERVE) await authenticateSeed();
 const seedConnectionId = SERVE ? await seedSmokeData() : null;
 
-const chrome = spawn(CHROME, [
-  '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-  '--hide-scrollbars', '--force-device-scale-factor=1',
-  `--remote-debugging-port=${PORT}`, `--user-data-dir=${CHROME_PROFILE}`,
-  'about:blank'
-], { stdio: 'ignore' });
-
 let page;
 try {
   if (SHOT_DIR) mkdirSync(SHOT_DIR, { recursive: true });
-  page = await session(await connect());
+  page = await session(await openBrowser());
   await page.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
 
   console.log(`打开 ${APP_URL}`);
@@ -1265,15 +1332,8 @@ try {
   console.log(`  ✗ ${error.message || error}`);
 } finally {
   page?.close();
-  chrome.kill('SIGKILL'); // 测试故意保留草稿，不能让 beforeunload 阻止关闭独立测试浏览器。
-  await new Promise(resolve => chrome.exitCode != null ? resolve() : chrome.once('exit', resolve));
   try {
-    // Chrome 子进程可能仍在写入配置目录，给 ENOTEMPTY / EBUSY 留出有限重试。
-    rmSync(CHROME_PROFILE, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  } catch (error) {
-    if (!['ENOTEMPTY', 'EBUSY'].includes(error.code)) throw error;
-    // 浏览器子进程尚未释放文件时保留临时目录，不用清理结果覆盖功能断言结果。
-    console.warn(`Chrome 临时目录尚未释放，已保留 ${CHROME_PROFILE}：${error.code}`);
+    await stopChrome();
   } finally {
     server?.kill();
   }
