@@ -29,7 +29,10 @@ import java.util.Set;
  */
 @Service
 public class DataImportService {
-    /** 每条 INSERT 携带的行数：太小语句数爆炸，太大单条语句会超出驱动的报文上限。 */
+    /**
+     * 每条 INSERT 携带的行数：太小语句数爆炸，太大单条语句会超出驱动的报文上限。
+     * 不认多行 VALUES 的库（{@link DatabaseDialect#supportsMultiRowValues()}）一行一条。
+     */
     static final int ROWS_PER_STATEMENT = 200;
     static final int MAX_COLUMNS = 500;
     /**
@@ -40,6 +43,11 @@ public class DataImportService {
      * 一半才 ENOSPC —— 那时请求体已经收了一大半。</p>
      */
     static final int SCRIPT_SIZE_FACTOR = 2;
+    /**
+     * 一行一条时每行都要重复一遍 INSERT 头和列名，窄表的脚本能到源文件的好几倍。4 仍是经验值 ——
+     * 列很少、值很短时照样可能超过，预检只负责挡住明显放不下的情况。
+     */
+    static final int SINGLE_ROW_SCRIPT_SIZE_FACTOR = 4;
 
     private final ConnectionService connections;
     private final DialectRegistry dialectRegistry;
@@ -172,7 +180,9 @@ public class DataImportService {
         return sqlFiles.uploadScript(
                 connectionId,
                 importScriptName(fileName, tableName),
-                contentLength > 0 ? contentLength * SCRIPT_SIZE_FACTOR : 0,
+                contentLength > 0
+                        ? contentLength * (dialect.supportsMultiRowValues() ? SCRIPT_SIZE_FACTOR : SINGLE_ROW_SCRIPT_SIZE_FACTOR)
+                        : 0,
                 out -> {
                     try (ImportRowSource source = sourceFactory.open()) {
                         return "rows=" + convert(source, out, dialect, schemaName, tableName, tableColumns, fileName, style);
@@ -231,6 +241,7 @@ public class DataImportService {
 
         long rows = 0;
         int inBatch = 0;
+        int rowsPerStatement = dialect.supportsMultiRowValues() ? ROWS_PER_STATEMENT : 1;
         List<String> row;
         while ((row = source.readRow()) != null) {
             if (row.size() != columns.size()) {
@@ -248,7 +259,7 @@ public class DataImportService {
             writer.write(")");
             rows++;
             inBatch++;
-            if (inBatch >= ROWS_PER_STATEMENT) {
+            if (inBatch >= rowsPerStatement) {
                 writer.write(style.conflictClause() + ";\n\n");
                 inBatch = 0;
             }

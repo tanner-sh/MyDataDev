@@ -8,6 +8,7 @@ import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -20,6 +21,12 @@ public class OracleDialect extends DefaultDialect {
     @Override
     public String foldUnquotedIdentifier(String identifier) {
         return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
+    }
+
+    /** 多行 VALUES 要到 23 才支持；按旧版本的写法生成，脚本在任何一台 Oracle 上都跑得通。 */
+    @Override
+    public boolean supportsMultiRowValues() {
+        return false;
     }
 
     // Oracle-compatible unquoted identifiers must start with a letter. Keep this
@@ -58,18 +65,22 @@ public class OracleDialect extends DefaultDialect {
 
     @Override
     public String currentSchema(Connection connection) throws Exception {
-        try (Statement statement = connection.createStatement();
-             ResultSet rs = statement.executeQuery("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")) {
-            if (rs.next()) {
-                String schema = rs.getString(1);
-                if (schema != null && !schema.isBlank()) {
-                    return schema;
-                }
-            }
+        try {
+            String schema = sessionCurrentSchema(connection);
+            if (schema != null) return schema;
         } catch (Exception ignored) {
             // Fall back to the portable JDBC schema/catalog lookup.
         }
         return super.currentSchema(connection);
+    }
+
+    /** 从会话上下文读当前 schema，Oracle 与 OceanBase 的 Oracle 模式都认这一条。读不到返回 null。 */
+    static String sessionCurrentSchema(Connection connection) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SELECT SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') FROM DUAL")) {
+            String schema = rs.next() ? rs.getString(1) : null;
+            return schema == null || schema.isBlank() ? null : schema;
+        }
     }
 
     @Override

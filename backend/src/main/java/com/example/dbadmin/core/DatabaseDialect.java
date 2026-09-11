@@ -72,6 +72,18 @@ public interface DatabaseDialect {
         }
     }
 
+    /**
+     * 连接此刻所在的命名空间，借出时记下、归还时照它还原。
+     *
+     * <p>与 {@link #currentSchema} 不同，这里不做任何回落：那边读不到 schema 会退回 catalog，拿来
+     * 展示没问题，拿来还原就会把连接切进一个本来不属于它的命名空间。读不到就返回 {@code null}
+     * 或抛出，由调用方按「无法还原」处理。驱动不走 JDBC 这两个方法的方言要覆盖它，并同时覆盖
+     * {@link #activateNamespace} —— 读和切必须是同一套机制。</p>
+     */
+    default String currentNamespace(Connection connection) throws SQLException {
+        return namespaceKind() == NamespaceKind.CATALOG ? connection.getCatalog() : connection.getSchema();
+    }
+
     default Optional<String> nativeDdl(Connection connection, String schemaName, String objectName, String objectType) throws Exception {
         return Optional.empty();
     }
@@ -119,6 +131,19 @@ public interface DatabaseDialect {
      * SQLite 根本没有注释，SQL Server 要走扩展属性，这两家显式关掉。</p>
      */
     default boolean supportsColumnComments() {
+        return true;
+    }
+
+    /**
+     * 一条 INSERT 能不能带多行 {@code VALUES (…), (…)}。
+     *
+     * <p>Oracle 要到 23 才支持，更早的版本报 ORA-00933；达梦与 OceanBase 的 Oracle 模式沿用备份
+     * 一直以来的判断，同样逐行写。
+     * 生成批量写入脚本的两处 —— SQL 逻辑备份与导入（跨库传输复用导入那条管线）—— 都按它决定
+     * 每条语句带几行，不支持就一行一条。不按服务端版本探测：同一份脚本可能拿到另一台库上执行，
+     * 按最保守的写法生成才可移植。</p>
+     */
+    default boolean supportsMultiRowValues() {
         return true;
     }
 
