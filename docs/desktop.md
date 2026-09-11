@@ -127,7 +127,7 @@ git push origin v0.7.1
 标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带：
 
 - `SHA256SUMS.txt`：全部文件的校验和。
-- `MyDataDev-<版本>-sbom.spdx.json`：依赖清单，由 `web` 作业扫描实际发出的 Web JAR 与前端、桌面端 lockfile 生成。某个依赖爆出漏洞时，用它判断哪些版本受影响。
+- `MyDataDev-<版本>-sbom.spdx.json`：依赖清单，由 `web` 作业扫描实际发出的 Web JAR 与前端、桌面端 lockfile 生成，覆盖打进 JAR 的 Java 依赖和前端、桌面端的运行时 npm 依赖。某个依赖爆出漏洞时，用它判断哪些版本受影响。**不含**桌面安装包自带的 Electron 与 Java 运行时：Electron 在 lockfile 里是开发依赖，扫描器默认跳过；Java 运行时由 jlink 在构建时生成，不在任何清单里。判断这两者的影响范围时，要按对应版本的 `desktop/package.json` 与构建所用的 JDK 核对。
 - 构建来源证明：`release` 作业在发布前为每个文件签发 GitHub attestation，写明文件出自哪个仓库、提交与工作流运行。用户可用 `gh attestation verify <文件> --repo tanner-sh/MyDataDev` 核对。校验和与安装包放在同一处，防不住替换；证明的签名不在 Release 里，可以独立核对。
 
 也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物（含 SBOM），不创建 Release，也不签发证明。

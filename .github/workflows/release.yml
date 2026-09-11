@@ -234,6 +234,9 @@ jobs:
       # 依赖清单扫的是真正要发出去的 JAR（BOOT-INF/lib 里实际打进去的 Java 依赖），外加前端与桌面端的
       # lockfile —— 前端依赖被打包压缩进 JAR 之后已经认不出来，只能从 lockfile 取。以后某个依赖爆出
       # 漏洞，查这份清单就知道哪个版本的发行包受影响。桌面安装包里的后端与 Web JAR 是同一套依赖。
+      # 清单不含桌面安装包自带的 Electron（lockfile 里是开发依赖，扫描器默认跳过）与 jlink 生成的 Java
+      # 运行时。刻意不打开「包含开发依赖」：那会把 vite、typescript 这些不发出去的构建工具一起列进来，
+      # 一份夸大的清单比一份写明了边界的清单更误导。边界写在 docs/desktop.md 与发行说明里。
       - name: 整理 SBOM 扫描输入
         id: sbom
         shell: bash
