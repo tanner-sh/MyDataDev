@@ -14,9 +14,11 @@ permissions:
   contents: read
 
 concurrency:
-  # 同一个分支上连着推几次时，只留最后一次 —— 前面几次的结论已经没人看了。
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # PR 上连着推几次时，只留最后一次 —— 前面几次的结论已经没人看了。main 上则每个提交都要跑完：
+  # 发布检查按 SHA 找这一轮的结论，被取消的提交永远打不了 tag。按 SHA 分组而不只是关掉取消，
+  # 是因为同一组里只保留一个排队中的运行，第三次推送照样会把第二次挤掉。
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   database-compatibility:
