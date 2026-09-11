@@ -41,7 +41,7 @@ class DatabaseWriteCompatibilityTest {
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
             String table = f.table(f.id("tenant_id") + " NOT NULL, " + f.varchar("code", 40) + " NOT NULL, " + f.varchar("name", 80));
             f.execute("CREATE UNIQUE INDEX " + f.dialect.quoteIdentifier("idx_" + table) + " ON " + f.q(table) + " (tenant_id, code)");
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, 'same', 'first'), (2, 'same', 'second')");
+            f.insert(table, "1, 'same', 'first'", "2, 'same', 'second'");
             var identity = f.metadata.rowIdentity(1L, f.schema, table);
             assertThat(identity.source()).isEqualTo("UNIQUE_INDEX");
             assertThat(identity.columns()).containsExactly(f.col("tenant_id"), f.col("code"));
