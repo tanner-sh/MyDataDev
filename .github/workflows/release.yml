@@ -35,133 +35,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # 四个平台的步骤在 package.yml 里，夜间回归调用的是同一份。
   build:
-    name: ${{ matrix.name }}
+    name: 桌面安装包
     needs: verify-ci
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS arm64
-            os: macos-15
-            platform: darwin
-            arch: arm64
-          - name: macOS x64
-            os: macos-15-intel
-            platform: darwin
-            arch: x64
-          - name: Windows x64
-            os: windows-2025
-            platform: win32
-            arch: x64
-          - name: Linux x64
-            os: ubuntu-24.04
-            platform: linux
-            arch: x64
-    runs-on: ${{ matrix.os }}
-    # 最慢的 macOS x64 实测约 9 分钟；卡在签名或烟测上时不该占着 runner 等满默认的 6 小时。
-    timeout-minutes: 30
-    env:
-      MYDATADEV_RELEASE_PLATFORM: ${{ matrix.platform }}
-      MYDATADEV_RELEASE_ARCH: ${{ matrix.arch }}
-      MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.verify-ci.outputs.commit }}
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: |
-            frontend/package-lock.json
-            desktop/package-lock.json
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: maven
-
-      - name: 安装前端依赖
-        run: npm ci
-        working-directory: frontend
-
-      - name: 安装桌面端依赖
-        run: npm ci
-        working-directory: desktop
-
-      - name: 安装 Linux 打包工具
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
-
-      # tag 构建由 verify-ci 校验 main 归属及同一 SHA 的必需检查；这里仅构建和验证产物启动。
-      - name: 生成原生安装包
-        run: npm run make
-        working-directory: desktop
-
-      - name: macOS ad-hoc 签名结构校验
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          set -euo pipefail
-          dmg=$(find desktop/out/make -name '*.dmg' -type f -print -quit)
-          test -n "$dmg"
-
-          mount_dir=$(mktemp -d "$RUNNER_TEMP/mydatadev-dmg.XXXXXX")
-          cleanup() {
-            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
-            rmdir "$mount_dir" >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
-
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
-          app="$mount_dir/MyDataDev.app"
-          codesign --verify --deep --strict --verbose=2 "$app"
-
-          signature=$(codesign -dv --verbose=4 "$app" 2>&1)
-          grep -Fq 'Identifier=com.tanner.mydatadev' <<<"$signature"
-          grep -Fq 'Signature=adhoc' <<<"$signature"
-          grep -Fq 'Sealed Resources version=2' <<<"$signature"
-
-      - name: macOS 安装前烟测
-        if: runner.os == 'macOS'
-        shell: bash
-        run: |
-          executable=$(find desktop/out -path '*/MyDataDev.app/Contents/MacOS/MyDataDev' -type f -print -quit)
-          test -n "$executable"
-          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" "$executable" --smoke-test
-
-      - name: Windows 安装前烟测
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $executable = Get-ChildItem desktop/out -Recurse -Filter MyDataDev.exe |
-            Where-Object { $_.FullName -match 'win32-x64' } |
-            Select-Object -First 1
-          if (-not $executable) { throw '未找到 MyDataDev.exe' }
-          $env:MYDATADEV_DESKTOP_HOME = Join-Path $env:RUNNER_TEMP 'mydatadev-smoke'
-          & $executable.FullName --smoke-test
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Linux 安装前烟测
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          executable=$(find desktop/out -path '*/MyDataDev-linux-x64/MyDataDev' -type f -print -quit)
-          test -n "$executable"
-          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" xvfb-run -a "$executable" --no-sandbox --smoke-test
-
-      - name: 整理安装包
-        run: npm run collect:artifacts
-        working-directory: desktop
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: mydatadev-${{ matrix.platform }}-${{ matrix.arch }}
-          path: desktop/release-assets/*
-          if-no-files-found: error
+    uses: ./.github/workflows/package.yml
+    with:
+      ref: ${{ needs.verify-ci.outputs.commit }}
 
   web:
     name: Web 发行包
@@ -252,8 +132,11 @@ jobs:
           echo "input=$input" >> "$GITHUB_OUTPUT"
           echo "output=${jar%-web.jar}-sbom.spdx.json" >> "$GITHUB_OUTPUT"
 
+      # 第三方 action 固定到提交而不是可移动的 tag：它和要发出去的 Web JAR 在同一个作业里，能改写
+      # release-assets/，而 release 作业随后会给这些文件签发来源证明 —— tag 一旦被改指向，证明就会替被改过的
+      # 文件背书。升级由 Dependabot 提 PR（它认得行尾的版本注释）。
       - name: 生成 SBOM（依赖清单）
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: ${{ steps.sbom.outputs.input }}
           format: spdx-json

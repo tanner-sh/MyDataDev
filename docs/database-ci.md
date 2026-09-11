@@ -134,8 +134,9 @@ node scripts/upgrade-smoke.mjs --from /tmp/previous/MyDataDev-<版本>-web.jar -
 
 - 最低版本取上游仍在维护（或仍被大量使用）的最旧版本；`latest` 跟着上游走，新版本不兼容时第一个晚上就会暴露。版本清单应随项目的支持策略调整。
 - PostgreSQL 按服务端版本安装同版本的 `pg_dump` / `pg_restore`（官方 apt 源）；MySQL 与 MariaDB 用 Ubuntu 自带的客户端，与 CI 相同。
+- 同一轮还有一个 `桌面安装包` 作业：调用与发布同一份的 `package.yml`，在四个平台上打包、做 macOS 签名结构校验与安装前烟测，只是不上传安装包。打包坏了在合并后的第一个晚上就会暴露，而不是等到打 tag。
 - 失败不阻塞合并。`汇报夜间结果` 作业在失败时开一个带 `nightly-ci` 标签的 issue（已开着就追加评论），恢复后自动关闭。只汇报 main 上的运行，被取消的运行不汇报。
-- 修改 `nightly.yml` 的 PR 会试跑一遍全部矩阵；功能分支也可以用 `gh workflow run nightly.yml --ref <分支>` 手动跑一遍，验证旧版本数据库上的改动。这两种运行只看结果，不开 issue。
+- 修改 `nightly.yml` 或 `package.yml` 的 PR 会试跑一遍全部矩阵（含四个平台的打包）；功能分支也可以用 `gh workflow run nightly.yml --ref <分支>` 手动跑一遍，验证旧版本数据库或打包上的改动。这两种运行只看结果，不开 issue。
 - 某项在夜间稳定失败且确属产品问题时，修复后应把对应版本提升进 CI，而不是长期留在夜间。
 - 公开仓库 60 天没有活动时，GitHub 会自动停用定时工作流，需要在 Actions 页面重新启用。
 

@@ -1,0 +1,151 @@
+name: 桌面安装包
+
+# 四个平台的原生安装包：打包、macOS 签名结构校验、安装前烟测、整理产物。由发布（release.yml）与夜间回归
+# （nightly.yml）共同调用 —— 两边各写一份步骤迟早会漂开，夜间验证过的就不再是发布时跑的那一套。
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 要构建的提交，留空则为触发工作流的那个提交
+        type: string
+        default: ''
+      upload:
+        # 发布要把安装包交给 release 作业；夜间只验证打得出来、起得来，不必每晚存一份四个平台的安装包。
+        description: 是否上传安装包
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+            platform: darwin
+            arch: arm64
+          - name: macOS x64
+            os: macos-15-intel
+            platform: darwin
+            arch: x64
+          - name: Windows x64
+            os: windows-2025
+            platform: win32
+            arch: x64
+          - name: Linux x64
+            os: ubuntu-24.04
+            platform: linux
+            arch: x64
+    runs-on: ${{ matrix.os }}
+    # 最慢的 macOS x64 实测约 9 分钟；卡在签名或烟测上时不该占着 runner 等满默认的 6 小时。
+    timeout-minutes: 30
+    env:
+      MYDATADEV_RELEASE_PLATFORM: ${{ matrix.platform }}
+      MYDATADEV_RELEASE_ARCH: ${{ matrix.arch }}
+      # github 上下文属于调用方：发布时是 tag，夜间是 main 分支，后者不带版本号。
+      MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            desktop/package-lock.json
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: frontend
+
+      - name: 安装桌面端依赖
+        run: npm ci
+        working-directory: desktop
+
+      - name: 安装 Linux 打包工具
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y fakeroot rpm xvfb
+
+      # 发布时 tag 所在提交的 CI 结论已由 release.yml 的 verify-ci 核对；这里只构建和验证产物启动。
+      - name: 生成原生安装包
+        run: npm run make
+        working-directory: desktop
+
+      - name: macOS ad-hoc 签名结构校验
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg=$(find desktop/out/make -name '*.dmg' -type f -print -quit)
+          test -n "$dmg"
+
+          mount_dir=$(mktemp -d "$RUNNER_TEMP/mydatadev-dmg.XXXXXX")
+          cleanup() {
+            hdiutil detach "$mount_dir" >/dev/null 2>&1 || true
+            rmdir "$mount_dir" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$dmg" >/dev/null
+          app="$mount_dir/MyDataDev.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+
+          signature=$(codesign -dv --verbose=4 "$app" 2>&1)
+          grep -Fq 'Identifier=com.tanner.mydatadev' <<<"$signature"
+          grep -Fq 'Signature=adhoc' <<<"$signature"
+          grep -Fq 'Sealed Resources version=2' <<<"$signature"
+
+      - name: macOS 安装前烟测
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          executable=$(find desktop/out -path '*/MyDataDev.app/Contents/MacOS/MyDataDev' -type f -print -quit)
+          test -n "$executable"
+          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" "$executable" --smoke-test
+
+      - name: Windows 安装前烟测
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $executable = Get-ChildItem desktop/out -Recurse -Filter MyDataDev.exe |
+            Where-Object { $_.FullName -match 'win32-x64' } |
+            Select-Object -First 1
+          if (-not $executable) { throw '未找到 MyDataDev.exe' }
+          $env:MYDATADEV_DESKTOP_HOME = Join-Path $env:RUNNER_TEMP 'mydatadev-smoke'
+          & $executable.FullName --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Linux 安装前烟测
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          executable=$(find desktop/out -path '*/MyDataDev-linux-x64/MyDataDev' -type f -print -quit)
+          test -n "$executable"
+          MYDATADEV_DESKTOP_HOME="$RUNNER_TEMP/mydatadev-smoke" xvfb-run -a "$executable" --no-sandbox --smoke-test
+
+      # 不上传时也照样整理：安装包的命名规则与「每种格式恰好一个」的校验都在这一步。
+      - name: 整理安装包
+        run: npm run collect:artifacts
+        working-directory: desktop
+
+      - name: 上传安装包
+        if: inputs.upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: mydatadev-${{ matrix.platform }}-${{ matrix.arch }}
+          path: desktop/release-assets/*
+          if-no-files-found: error

@@ -113,7 +113,7 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 ## GitHub Actions 发布
 
-`.github/workflows/release.yml` 在四种原生 runner 上并行构建。各平台不再重跑测试（tag 所在提交的 CI 结论由 `verify-ci` 作业核对），只生成安装包，并启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。同一个工作流还有一个 `web` 作业构建 Web 发行包，详见 [Web 部署说明](web-deploy.md)。
+`.github/workflows/release.yml` 在四种原生 runner 上并行构建。构建步骤写在 `.github/workflows/package.yml` 里，夜间回归每晚在 main 上跑同一份（只是不上传），打包问题因此不必等到打 tag 才发现。各平台不再重跑测试（tag 所在提交的 CI 结论由 `verify-ci` 作业核对），只生成安装包，并启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。同一个工作流还有一个 `web` 作业构建 Web 发行包，详见 [Web 部署说明](web-deploy.md)。
 
 发版前先更新 [CHANGELOG.md](../CHANGELOG.md)：新增一节对应版本，写清新增、变更、修复，以及**升级注意**（尤其是会让不合规配置启动失败的校验）。发布说明从这里取，而不是让读者去翻 git log。
 

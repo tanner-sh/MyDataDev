@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # 只管 GitHub Actions：第三方 action 固定到了提交 SHA（见 release.yml 的 SBOM 步骤），不靠机器人
+  # 就没人会去升级它；官方 action 的主版本升级也由这里提出。npm 与 Maven 依赖暂不接入。
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # 合成一个 PR：分支保护开着 strict，每合一个 PR，其余的都要先追上 main 再跑一轮 CI。
+    groups:
+      github-actions:
+        patterns:
+          - '*'
