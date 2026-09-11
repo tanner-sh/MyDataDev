@@ -4,6 +4,10 @@ name: 夜间回归
 # Oracle Free 23），卡的是合并。这里补的是 CI 回答不了的那一半：用户手里的库往往更旧，上游又每隔
 # 几个月出一个新版本 —— 两头的兼容性都只能靠定期实跑来发现。用例与 CI 完全相同，只换镜像版本。
 #
+# 另外把四个平台的桌面安装包也打一遍（package.yml，与发布同一份，只是不上传）。CI 的 desktop 作业只在
+# Linux 上跑单元测试和类型检查，打包、jlink 运行时与各平台的启动烟测原先只在打 tag 时才跑 —— 坏了要到
+# 发版那一刻才知道，而同名 tag 不能强推，只能再提交一个修复、换一个版本号。
+#
 # 失败不阻塞合并，但会自动开一个带 nightly-ci 标签的 issue（已经开着就追加评论），恢复后自动关闭：
 # 一个红了没人管的夜间任务，很快就会被当成常态。
 on:
@@ -11,10 +15,11 @@ on:
     # GitHub 的 cron 用 UTC：18:00 即北京时间凌晨 2 点。
     - cron: '0 18 * * *'
   workflow_dispatch:
-  # 改这个文件的 PR 也跑一遍，否则写错了要等到合并后的第一个晚上才知道。
+  # 改这个文件或它调用的 package.yml 的 PR 也跑一遍，否则写错了要等到合并后的第一个晚上才知道。
   pull_request:
     paths:
       - .github/workflows/nightly.yml
+      - .github/workflows/package.yml
 
 permissions:
   contents: read
@@ -289,13 +294,20 @@ jobs:
           path: backend/target/surefire-reports/*Database*CompatibilityTest*
           retention-days: 30
 
+  # 步骤与发布完全相同（同一份 package.yml），只是不上传安装包。
+  packaging:
+    name: 桌面安装包
+    uses: ./.github/workflows/package.yml
+    with:
+      upload: false
+
   report:
     name: 汇报夜间结果
     # 只汇报 main 上的运行（定时或手动）。PR 试跑和在功能分支上手动触发的验证不汇报 —— 否则一个
     # 还没合并的分支上的失败，会被开成一条「夜间回归失败」。被取消的一轮也不汇报：取消是人为的，
     # 既不是失败也不代表恢复。
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-    needs: [mysql, postgresql, mariadb, sqlserver, oracle]
+    needs: [mysql, postgresql, mariadb, sqlserver, oracle, packaging]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
