@@ -72,18 +72,6 @@ public interface DatabaseDialect {
         }
     }
 
-    /**
-     * 连接此刻所在的命名空间，借出时记下、归还时照它还原。
-     *
-     * <p>与 {@link #currentSchema} 不同，这里不做任何回落：那边读不到 schema 会退回 catalog，拿来
-     * 展示没问题，拿来还原就会把连接切进一个本来不属于它的命名空间。读不到就返回 {@code null}
-     * 或抛出，由调用方按「无法还原」处理。驱动不走 JDBC 这两个方法的方言要覆盖它，并同时覆盖
-     * {@link #activateNamespace} —— 读和切必须是同一套机制。</p>
-     */
-    default String currentNamespace(Connection connection) throws SQLException {
-        return namespaceKind() == NamespaceKind.CATALOG ? connection.getCatalog() : connection.getSchema();
-    }
-
     default Optional<String> nativeDdl(Connection connection, String schemaName, String objectName, String objectType) throws Exception {
         return Optional.empty();
     }
