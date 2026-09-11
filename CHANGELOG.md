@@ -9,6 +9,7 @@
 ### 修复
 
 - CSV/Excel 导入与跨库数据传输写入 Oracle 21 及更早版本时，脚本不再使用这些版本不支持的多行 `VALUES`（此前两行以上即整批报 ORA-00933），改为一行一条；达梦与 OceanBase 的 Oracle 模式按 SQL 逻辑备份一直以来的判断同样逐行生成。「每条语句带几行」收进方言接口，备份与导入共用同一处定义。
+- OceanBase（Oracle 模式）连接在 SQL 工作台选定 Schema 后执行查询不再报「服务器内部错误」：驱动在默认配置下没有实现 JDBC 的 `getSchema`/`setSchema`（抛 `AbstractMethodError`），现在改为用 `SYS_CONTEXT` 读取、`ALTER SESSION SET CURRENT_SCHEMA` 切换。此前每失败一次还会漏掉一条池化连接，连续几次后这条连接上的所有请求都卡在借连接超时；现在切换命名空间失败时，借出的连接一定会归还，报错改为「无法切换到 Schema」。
 
 ## [0.7.1] - 2026-09-09
 

@@ -16,7 +16,12 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -133,5 +138,40 @@ class ConnectionServiceNamespaceTest {
         scoped.close();
 
         assertThat(scoped.isClosed()).isTrue();
+    }
+
+    /**
+     * 切换命名空间时驱动抛出的是 Error 而不是 Exception（OceanBase Oracle 模式下未实现的
+     * getSchema/setSchema 抛 AbstractMethodError），借出的连接也必须还回去。此前每失败一次就漏
+     * 一条，连接池借空之后这条连接上的所有请求都只剩借连接超时。
+     */
+    @Test
+    void returnsTheBorrowedConnectionWhenTheDriverThrowsAnErrorWhileSwitching() throws Exception {
+        Connection driver = mock(Connection.class);
+        when(driver.getSchema()).thenThrow(new AbstractMethodError("Unimplemented method: getSchema()"));
+        doThrow(new AbstractMethodError("Unimplemented method: getSchema()")).when(driver).setSchema(anyString());
+        RemoteDataSourceRegistry registry = mock(RemoteDataSourceRegistry.class);
+        when(registry.open(any(), any(), any())).thenReturn(driver);
+        ConnectionService overDriver = serviceOver(registry);
+
+        assertThatThrownBy(() -> overDriver.open(CONNECTION_ID, "REPORTING"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("REPORTING");
+        verify(driver).close();
+    }
+
+    private ConnectionService serviceOver(RemoteDataSourceRegistry registry) {
+        DbConnection row = new DbConnection(
+                CONNECTION_ID, "h2", "h2", jdbcUrl, "sa", "cipher", "dev", false, Instant.EPOCH, Instant.EPOCH
+        );
+        ConnectionRepository repository = mock(ConnectionRepository.class);
+        when(repository.findById(CONNECTION_ID)).thenReturn(Optional.of(row));
+        CryptoService crypto = mock(CryptoService.class);
+        when(crypto.decrypt("cipher")).thenReturn("");
+        return new ConnectionService(
+                repository, crypto, mock(AuditRepository.class), mock(BackupTaskRepository.class),
+                mock(MetadataCacheService.class), registry, new DialectRegistry(), mock(RestoreJobRepository.class),
+                new SqlTransactionRegistry(), new SqlScriptSplitter(), new SqlStatementClassifier()
+        );
     }
 }
