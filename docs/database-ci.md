@@ -18,7 +18,7 @@ gh api --method PUT repos/tanner-sh/MyDataDev/branches/main/protection --input .
 gh api repos/tanner-sh/MyDataDev/branches/main/protection
 ```
 
-tag 发布在构建前、上传 Release 前均执行 `scripts/verify-release-ci.mjs`：待发布 SHA 必须属于 `main`；同一 SHA 最新一轮 main CI 必须成功，且必需检查清单里的作业（现为 `CI Gate`）实际成功。缺失、失败、取消、跳过或 API 错误均拒绝发布。正在运行的 CI 最多等待 35 分钟。构建与发布 checkout 固定同一个 SHA。
+tag 发布在构建前、上传 Release 前均执行 `scripts/verify-release-ci.mjs`：待发布 SHA 必须属于 `main`；同一 SHA 最新一轮 main CI 必须成功，且必需检查清单里的作业（现为 `CI Gate`）实际成功。缺失、失败、取消、跳过或 API 错误均拒绝发布。正在运行的 CI 最多等待 35 分钟。main 上的 CI 按提交分组且不取消，每个合入 main 的提交都会跑出完整结论；PR 上连续推送时只保留最后一次。构建与发布 checkout 固定同一个 SHA。
 
 普通分支上的手动发布工作流仍可生成测试安装包，但不会创建 Release。只有 tag 运行创建 Release。发布检查与分支保护共用上述必需检查清单；该脚本与 Gate 清单的测试由前端 CI 任务执行。
 
