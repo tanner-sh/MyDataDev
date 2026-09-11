@@ -15,6 +15,12 @@ public class DamengDialect extends DefaultDialect {
         return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
     }
 
+    /** 与备份一直以来的判断一致，达梦逐行写。 */
+    @Override
+    public boolean supportsMultiRowValues() {
+        return false;
+    }
+
 
     @Override
     public String castToText(String expression) {

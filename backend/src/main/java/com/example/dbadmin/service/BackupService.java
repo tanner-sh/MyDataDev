@@ -1650,7 +1650,7 @@ public class BackupService {
                 columns.add(md.getColumnLabel(i));
             }
             String columnSql = columns.stream().map(column -> dialect.quoteIdentifier(column)).reduce((a, b) -> a + ", " + b).orElse("");
-            int batchSize = supportsMultiRowInsert(dbType)
+            int batchSize = dialect.supportsMultiRowValues()
                     ? Math.min(Math.max(1, properties.getBackup().getSqlInsertBatchSize()), 1_000)
                     : 1;
             long rows = 0;
@@ -1768,11 +1768,6 @@ public class BackupService {
         if (normalized.equals("postgresql")) writer.write("', 'hex')");
         else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("')");
         else if (!normalized.equals("sqlserver")) writer.write("'");
-    }
-
-    private boolean supportsMultiRowInsert(String dbType) {
-        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        return !Set.of("oracle", "dm", "dameng", "oceanbase-oracle").contains(normalized);
     }
 
     private String backupOperationKey(long taskId) {

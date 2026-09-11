@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.core.MySqlDialect;
+import com.example.dbadmin.core.OracleDialect;
 import org.junit.jupiter.api.Test;
 
 import java.io.StringReader;
@@ -122,6 +123,22 @@ class DataImportServiceTest {
         // 201 行 → 200 行一条 + 剩下 1 行一条。
         assertThat(sql.split("INSERT INTO", -1).length - 1).isEqualTo(2);
         assertThat(sql.chars().filter(ch -> ch == ';').count()).isEqualTo(2);
+    }
+
+    /**
+     * Oracle 23 之前不认多行 VALUES（ORA-00933）：这类库上一行一条，否则导入与跨库传输在旧版本上
+     * 整批失败 —— CI 只跑 Oracle 23，恰好认这种写法。
+     */
+    @Test
+    void writesOneRowPerStatementWhereMultiRowValuesAreUnsupported() throws Exception {
+        StringWriter out = new StringWriter();
+        try (CsvStreamReader reader = new CsvStreamReader(new StringReader("id,name\n1,张三\n2,李四\n3,王五\n"))) {
+            DataImportService.convert(reader, out, new OracleDialect(), "SHOP", "ORDERS", COLUMNS, "orders.csv");
+        }
+        String sql = out.toString();
+        assertThat(sql.split("INSERT INTO", -1).length - 1).isEqualTo(3);
+        assertThat(sql.chars().filter(ch -> ch == ';').count()).isEqualTo(3);
+        assertThat(sql).doesNotContain("),\n");
     }
 
     @Test

@@ -22,6 +22,12 @@ public class OracleDialect extends DefaultDialect {
         return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
     }
 
+    /** 多行 VALUES 要到 23 才支持；按旧版本的写法生成，脚本在任何一台 Oracle 上都跑得通。 */
+    @Override
+    public boolean supportsMultiRowValues() {
+        return false;
+    }
+
     // Oracle-compatible unquoted identifiers must start with a letter. Keep this
     // helper unquoted so ResultSet metadata is consistent across Oracle and
     // OceanBase Oracle mode.
