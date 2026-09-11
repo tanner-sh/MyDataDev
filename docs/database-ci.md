@@ -101,6 +101,25 @@ MariaDB、SQL Server、Oracle 分别配置 `TEST_MARIADB_*`、`TEST_SQLSERVER_*`
 
 普通 `mvn test` 未配置独立数据库时会跳过这些实库实例。只跑新增用例可指定 `-Dtest=DatabaseWriteCompatibilityTest,DatabaseRecoveryCompatibilityTest,DatabaseFaultCompatibilityTest`，不需要原生客户端。
 
+## 升级回归
+
+`upgrade` 作业（旧版本升级回归）下载最新 Release 的 Web JAR，在空目录里当作新装的机器启动，经 API 建一条带密码的 H2 文件库连接、写几行数据、执行一条查询、存一个 SQL 片段；优雅停机后，用当前代码构建的后端 JAR 打开同一个目录，核对：
+
+- 不传 `DB_ADMIN_WEB_PASSWORD` 也能用升级前的密码登录（账号库非空时不会重建管理员）；
+- 连接配置原样保留，且「测试连接」成功 —— 目标库带密码，主密钥解错就连不上；
+- 经这条连接读回升级前写入的数据；
+- SQL 历史、SQL 片段和该连接的审计记录都还在。
+
+Flyway 在旧数据上执行了几个迁移会打印在日志里；当前代码与最新 Release 之间没有新迁移时，这一轮只证明旧数据目录能原样复用。只覆盖「最新 Release → 当前代码」这一步，不覆盖跨多个版本的升级，也不覆盖桌面版（迁移是同一套，但数据目录与主密钥的来源不同）。升级前后的服务日志上传为 `upgrade-smoke-logs`。
+
+本地复现：
+
+```bash
+gh release download --pattern '*-web.jar' --dir /tmp/previous
+(cd backend && mvn -q package -DskipTests)
+node scripts/upgrade-smoke.mjs --from /tmp/previous/MyDataDev-<版本>-web.jar --to backend/target/web-db-admin-<版本>.jar
+```
+
 ## 尚未覆盖
 
 SQLite、ClickHouse、达梦、OceanBase 没有独立实库任务；现有五种数据库缺多版本矩阵。存储过程、复杂视图、全库灾难恢复、恢复后 identity/sequence 的完整状态、跨版本/跨库迁移、恢复任务中途取消、真实网络丢包与数据库重启、磁盘耗尽、大数据压力测试仍未覆盖。CI 通过不表示这些场景已经验证。

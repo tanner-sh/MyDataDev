@@ -325,6 +325,48 @@ jobs:
         run: npm run build:main
         working-directory: desktop
 
+  upgrade:
+    name: 旧版本升级回归
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      # 只拿最新发行版：用户升级绝大多数是从上一版来的。不带 tag 时 gh 取的就是 Latest。
+      - name: 下载最新发行版的 Web JAR
+        run: gh release download --pattern '*-web.jar' --dir "$RUNNER_TEMP/previous"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # 只要后端 JAR：这里测的是数据有没有跟过来，界面归浏览器回归管，省掉一次前端构建。
+      - name: 构建当前后端 JAR
+        run: mvn package --batch-mode -DskipTests
+        working-directory: backend
+
+      - name: 旧版本的数据目录交给当前版本打开
+        run: |
+          node scripts/upgrade-smoke.mjs \
+            --from "$(ls "$RUNNER_TEMP"/previous/*-web.jar)" \
+            --to "$(ls backend/target/web-db-admin-*.jar)" \
+            --work "$RUNNER_TEMP/mydatadev-upgrade"
+
+      - name: 保存升级前后的服务日志
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upgrade-smoke-logs
+          path: ${{ runner.temp }}/mydatadev-upgrade/*.log
+
   # 分支保护与发布检查只认这一个作业，不再逐个点名上面的作业：新增、改名或拆分作业时不用
   # 同步改 GitHub 设置。代价是这里的 needs 必须列全 —— 漏掉的作业等于不受保护，
   # scripts/ci-gate.test.mjs 拦的就是这种遗漏。
@@ -342,6 +384,7 @@ jobs:
       - backend
       - frontend
       - desktop
+      - upgrade
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
