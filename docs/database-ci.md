@@ -4,10 +4,12 @@
 
 `main` 的分支保护配置保存在 `.github/main-protection.json`，通过 GitHub API 应用到仓库：
 
-- 必须通过 PR 合入，分支需要保持最新，8 个 CI 检查必须全部成功。
+- 必须通过 PR 合入，分支需要保持最新，`CI Gate` 检查必须成功。
 - 管理员同样遵守；禁止强制推送和删除 `main`，PR 讨论必须解决。
 - 不要求另一人批准（审批数为 0），个人维护者可以在检查通过后自行合并。
 - 检查绑定 GitHub Actions 的 App，其他来源不能用同名状态代替。
+
+`CI Gate` 是 `ci.yml` 的最后一个作业，`needs` 列出其余全部作业，任何一个不是 success（失败、取消、跳过）都判失败。分支保护与发布检查只认它，所以新增、改名或拆分 CI 作业时不用改 GitHub 设置，只需把作业加进 Gate 的 `needs`；漏加会被 `scripts/ci-gate.test.mjs` 拦住。整轮被取消时 Gate 仍会运行并判失败（`if: always()`），不会以「跳过」状态被 GitHub 当成通过。
 
 配置文件本身不会自动更新 GitHub 设置。管理员变更清单后，应执行并回读确认：
 
@@ -16,9 +18,9 @@ gh api --method PUT repos/tanner-sh/MyDataDev/branches/main/protection --input .
 gh api repos/tanner-sh/MyDataDev/branches/main/protection
 ```
 
-tag 发布在构建前、上传 Release 前均执行 `scripts/verify-release-ci.mjs`：待发布 SHA 必须属于 `main`；同一 SHA 最新一轮 main CI 必须成功，且所有必需作业实际成功。缺失、失败、取消、跳过或 API 错误均拒绝发布。正在运行的 CI 最多等待 35 分钟。构建与发布 checkout 固定同一个 SHA。
+tag 发布在构建前、上传 Release 前均执行 `scripts/verify-release-ci.mjs`：待发布 SHA 必须属于 `main`；同一 SHA 最新一轮 main CI 必须成功，且必需检查清单里的作业（现为 `CI Gate`）实际成功。缺失、失败、取消、跳过或 API 错误均拒绝发布。正在运行的 CI 最多等待 35 分钟。构建与发布 checkout 固定同一个 SHA。
 
-普通分支上的手动发布工作流仍可生成测试安装包，但不会创建 Release。只有 tag 运行创建 Release。发布检查与分支保护共用上述必需检查清单；该脚本的行为测试由前端 CI 任务执行。
+普通分支上的手动发布工作流仍可生成测试安装包，但不会创建 Release。只有 tag 运行创建 Release。发布检查与分支保护共用上述必需检查清单；该脚本与 Gate 清单的测试由前端 CI 任务执行。
 
 ## CI 数据库环境
 
