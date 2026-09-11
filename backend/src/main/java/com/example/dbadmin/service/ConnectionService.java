@@ -211,24 +211,35 @@ public class ConnectionService {
         if (schemaName == null || schemaName.isBlank()) return dataSources.open(configured, password(id), sshSpec(id));
         Connection connection = dataSources.open(configured, password(id), sshSpec(id));
         var dialect = dialectRegistry.dialectFor(configured);
+        boolean handedOut = false;
         try {
             // 池化连接上的 setCatalog/setSchema 不会被 Hikari 归还时重置，必须自己还原，
             // 否则下一个借用者（表浏览、元数据、备份、MCP 查询）会静默继承这个命名空间。
-            String original = NamespaceScopedConnection.readNamespace(connection, dialect.namespaceKind());
+            String original = NamespaceScopedConnection.readNamespace(connection, dialect);
             dialect.activateNamespace(connection, schemaName);
-            return NamespaceScopedConnection.wrap(
-                    connection, dialect.namespaceKind(), original, () -> dataSources.evict(id)
+            Connection scoped = NamespaceScopedConnection.wrap(
+                    connection, dialect, original, () -> dataSources.evict(id)
             );
-        } catch (Exception error) {
-            try {
-                connection.close();
-            } catch (Exception closeError) {
-                error.addSuppressed(closeError);
-            }
+            handedOut = true;
+            return scoped;
+        } catch (Exception | LinkageError error) {
+            // LinkageError：驱动声明了 JDBC 接口却没实现（AbstractMethodError），对用户来说同样是「切不过去」。
             String targetKind = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
                     ? "数据库"
                     : "Schema";
             throw new IllegalArgumentException("无法切换到" + targetKind + "：" + schemaName, error);
+        } finally {
+            // 借出的连接只有两个去处：包好交给调用方，或者还回池里。收尾只写在 catch (Exception) 里时，
+            // 驱动抛出的 Error 会让它两头都不去 —— 每失败一次漏一条，直到连接池被借空。
+            if (!handedOut) closeQuietly(connection);
+        }
+    }
+
+    private static void closeQuietly(Connection connection) {
+        try {
+            connection.close();
+        } catch (Exception ignored) {
+            // 切换失败的原因已经在往外抛；关不掉的连接由连接池自己判定淘汰。
         }
     }
 

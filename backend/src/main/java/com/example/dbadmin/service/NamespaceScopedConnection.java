@@ -24,53 +24,57 @@ import java.util.Objects;
  * 「MCP 不带 namespace 的查询继承了 UI 上一次选的 schema」。</p>
  *
  * <p>还原发生在委托 {@code close()} 之前；只有在确实无法还原时（驱动不报告命名空间，或
- * 还原语句本身失败）才回退到淘汰整个连接池，因为留一条脏连接在池里比重建池危险得多。</p>
+ * 还原语句本身失败）才回退到淘汰整个连接池，因为留一条脏连接在池里比重建池危险得多。
+ * 读和切都交给方言（{@link DatabaseDialect#currentNamespace} / {@code activateNamespace}），
+ * 与借出时切换用的是同一套机制 —— 有的驱动根本不实现 JDBC 的 getSchema/setSchema。</p>
  */
 final class NamespaceScopedConnection implements InvocationHandler {
     private static final Logger log = LoggerFactory.getLogger(NamespaceScopedConnection.class);
 
     private final Connection delegate;
-    private final DatabaseDialect.NamespaceKind kind;
+    private final DatabaseDialect dialect;
     private final String original;
     private final Runnable onUnrestorable;
 
     private NamespaceScopedConnection(
             Connection delegate,
-            DatabaseDialect.NamespaceKind kind,
+            DatabaseDialect dialect,
             String original,
             Runnable onUnrestorable
     ) {
         this.delegate = delegate;
-        this.kind = kind;
+        this.dialect = dialect;
         this.original = original;
         this.onUnrestorable = onUnrestorable;
     }
 
     /**
      * 读取连接当前的命名空间。驱动不支持时返回 {@code null}，调用方据此判断还原是否可行。
+     *
+     * <p>{@link AbstractMethodError} 要和 {@link SQLException} 一起接住：有的驱动声明了 JDBC 4.1
+     * 的 {@code getSchema} 却没有实现（OceanBase 的 Oracle 模式在默认配置下就是这样）。它是
+     * {@code Error}，漏过去就会越过调用方所有按 {@code Exception} 写的收尾，借出的连接再也不会归还。</p>
      */
-    static String readNamespace(Connection connection, DatabaseDialect.NamespaceKind kind) {
+    static String readNamespace(Connection connection, DatabaseDialect dialect) {
         try {
-            String value = kind == DatabaseDialect.NamespaceKind.CATALOG
-                    ? connection.getCatalog()
-                    : connection.getSchema();
+            String value = dialect.currentNamespace(connection);
             return value == null || value.isBlank() ? null : value;
-        } catch (SQLException error) {
-            log.debug("驱动不支持读取当前{}，归还时将无法还原", label(kind), error);
+        } catch (SQLException | AbstractMethodError error) {
+            log.debug("驱动不支持读取当前{}，归还时将无法还原", label(dialect), error);
             return null;
         }
     }
 
     static Connection wrap(
             Connection delegate,
-            DatabaseDialect.NamespaceKind kind,
+            DatabaseDialect dialect,
             String original,
             Runnable onUnrestorable
     ) {
         return (Connection) Proxy.newProxyInstance(
                 NamespaceScopedConnection.class.getClassLoader(),
                 new Class<?>[]{Connection.class},
-                new NamespaceScopedConnection(delegate, kind, original, onUnrestorable)
+                new NamespaceScopedConnection(delegate, dialect, original, onUnrestorable)
         );
     }
 
@@ -97,25 +101,25 @@ final class NamespaceScopedConnection implements InvocationHandler {
     }
 
     private boolean restore() {
-        String current;
         try {
-            current = readNamespace(delegate, kind);
+            String current = readNamespace(delegate, dialect);
             if (Objects.equals(current, original)) return true;
             if (original == null) {
                 // 借出时驱动没有报告命名空间，没有可写回的目标值。
-                log.warn("无法还原池化连接的{}：借出时未知，当前为 {}，将淘汰该连接池", label(kind), current);
+                log.warn("无法还原池化连接的{}：借出时未知，当前为 {}，将淘汰该连接池", label(dialect), current);
                 return false;
             }
-            if (kind == DatabaseDialect.NamespaceKind.CATALOG) delegate.setCatalog(original);
-            else delegate.setSchema(original);
+            dialect.activateNamespace(delegate, original);
             return true;
-        } catch (SQLException error) {
-            log.warn("还原池化连接的{}失败，将淘汰该连接池", label(kind), error);
+        } catch (SQLException | RuntimeException | AbstractMethodError error) {
+            // 不论卡在哪一步都只返回 false：后面那次委托 close() 必须照常执行，
+            // 否则这条连接既不回池也不关闭，一直占着池的名额。
+            log.warn("还原池化连接的{}失败，将淘汰该连接池", label(dialect), error);
             return false;
         }
     }
 
-    private static String label(DatabaseDialect.NamespaceKind kind) {
-        return kind == DatabaseDialect.NamespaceKind.CATALOG ? "数据库" : "Schema";
+    private static String label(DatabaseDialect dialect) {
+        return dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? "数据库" : "Schema";
     }
 }
