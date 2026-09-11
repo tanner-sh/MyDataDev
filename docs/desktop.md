@@ -113,7 +113,7 @@ Linux 构建机还需要 `fakeroot` 和 `rpm`。生成物位于 `desktop/out`；
 
 ## GitHub Actions 发布
 
-`.github/workflows/release.yml` 在四种原生 runner 上并行构建。每个平台都会运行后端、前端和桌面端测试，生成安装包后启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。同一个工作流还有一个 `web` 作业构建 Web 发行包，详见 [Web 部署说明](web-deploy.md)。
+`.github/workflows/release.yml` 在四种原生 runner 上并行构建。各平台不再重跑测试（tag 所在提交的 CI 结论由 `verify-ci` 作业核对），只生成安装包，并启动未安装的应用进行首页与 MCP 未认证烟测，再上传产物。同一个工作流还有一个 `web` 作业构建 Web 发行包，详见 [Web 部署说明](web-deploy.md)。
 
 发版前先更新 [CHANGELOG.md](../CHANGELOG.md)：新增一节对应版本，写清新增、变更、修复，以及**升级注意**（尤其是会让不合规配置启动失败的校验）。发布说明从这里取，而不是让读者去翻 git log。
 
@@ -124,7 +124,13 @@ git tag v0.7.1
 git push origin v0.7.1
 ```
 
-标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带 `SHA256SUMS.txt`。也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物，不创建 Release。
+标签构建成功后会发布四个平台的安装包和 Web 发行包，并附带：
+
+- `SHA256SUMS.txt`：全部文件的校验和。
+- `MyDataDev-<版本>-sbom.spdx.json`：依赖清单，由 `web` 作业扫描实际发出的 Web JAR 与前端、桌面端 lockfile 生成。某个依赖爆出漏洞时，用它判断哪些版本受影响。
+- 构建来源证明：`release` 作业在发布前为每个文件签发 GitHub attestation，写明文件出自哪个仓库、提交与工作流运行。用户可用 `gh attestation verify <文件> --repo tanner-sh/MyDataDev` 核对。校验和与安装包放在同一处，防不住替换；证明的签名不在 Release 里，可以独立核对。
+
+也可以从 Actions 页面手动运行工作流；手动运行只保存构建产物（含 SBOM），不创建 Release，也不签发证明。
 
 ## 更新检查
 
@@ -152,6 +158,6 @@ git push origin v0.7.1
   ```
 
 - Windows 可能显示 SmartScreen 警告，用户需要确认来源后继续运行。
-- Linux DEB/RPM 未使用发行仓库签名，应通过 Release 中的 `SHA256SUMS.txt` 校验下载文件。
+- Linux DEB/RPM 未使用发行仓库签名，应通过 Release 中的 `SHA256SUMS.txt` 校验下载文件，并可用 `gh attestation verify` 核对来源。
 
 每次 macOS 构建都会对 DMG 内的应用执行 `codesign --verify --deep --strict`，并检查 bundle ID、ad-hoc 签名和资源密封。当前策略不能提供“下载后直接双击”的无警告体验；如果未来需要面向非开发用户无提示分发，仍需改为 Apple Developer ID 签名和公证。

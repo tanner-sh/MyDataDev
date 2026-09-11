@@ -231,6 +231,34 @@ jobs:
           # 元数据库控制台在发行包中必须是关闭的。
           test "$(curl -s -b cookies.txt -o /dev/null -w '%{http_code}' http://127.0.0.1:8099/h2-console)" = "404"
 
+      # 依赖清单扫的是真正要发出去的 JAR（BOOT-INF/lib 里实际打进去的 Java 依赖），外加前端与桌面端的
+      # lockfile —— 前端依赖被打包压缩进 JAR 之后已经认不出来，只能从 lockfile 取。以后某个依赖爆出
+      # 漏洞，查这份清单就知道哪个版本的发行包受影响。桌面安装包里的后端与 Web JAR 是同一套依赖。
+      - name: 整理 SBOM 扫描输入
+        id: sbom
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar=$(find release-assets -name '*-web.jar' -type f -print -quit)
+          test -n "$jar"
+          input="$RUNNER_TEMP/sbom-input"
+          mkdir -p "$input/frontend" "$input/desktop"
+          cp "$jar" "$input/"
+          cp frontend/package-lock.json "$input/frontend/"
+          cp desktop/package-lock.json "$input/desktop/"
+          echo "input=$input" >> "$GITHUB_OUTPUT"
+          echo "output=${jar%-web.jar}-sbom.spdx.json" >> "$GITHUB_OUTPUT"
+
+      - name: 生成 SBOM（依赖清单）
+        uses: anchore/sbom-action@v0
+        with:
+          path: ${{ steps.sbom.outputs.input }}
+          format: spdx-json
+          output-file: ${{ steps.sbom.outputs.output }}
+          # 只生成文件，随 Web 发行包一起交给 release 作业上传，不让 action 自己往 Release 或 artifact 里放。
+          upload-artifact: false
+          upload-release-assets: false
+
       - uses: actions/upload-artifact@v7
         with:
           name: mydatadev-web
@@ -246,6 +274,9 @@ jobs:
     permissions:
       contents: write
       actions: read
+      # 构建来源证明要向 GitHub 的 OIDC 换一个短期签名身份，并把证明写进仓库的 attestations。
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -271,6 +302,14 @@ jobs:
       - name: 生成 SHA-256 校验文件
         working-directory: release-assets
         run: sha256sum MyDataDev-* > SHA256SUMS.txt
+
+      # 构建来源证明：由 GitHub 签发，写明每个文件出自哪个仓库、哪个提交、哪次工作流运行。
+      # SHA256SUMS 防得住下载损坏，防不住替换 —— 它和安装包放在同一个地方，能换掉一个就能换掉两个；
+      # 证明的签名不在 Release 里，用户可以用 gh attestation verify 独立核对。放在发布之前：签发失败就不发布。
+      - name: 签发构建来源证明
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: release-assets/MyDataDev-*
 
       - name: 发布安装包
         env:

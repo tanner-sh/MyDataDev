@@ -13,8 +13,13 @@
 | `MyDataDev-<version>-linux-x64.deb` / `.rpm` | Linux 桌面版。 |
 | `MyDataDev-<version>-web.jar` | Web 服务端，内置前端，需要 Java 17+。 |
 | `MyDataDev-<version>-frontend-dist.tar.gz` | 前端静态资源，仅前后端分离部署需要。 |
+| `MyDataDev-<version>-sbom.spdx.json` | 依赖清单（SPDX），列出发行包里的第三方组件及版本。 |
 
-请使用 `SHA256SUMS.txt` 校验下载文件。
+请使用 `SHA256SUMS.txt` 校验下载文件。每个文件还附有 GitHub 签发的构建来源证明，安装了 [GitHub CLI](https://cli.github.com/) 时可以核对它确实出自本仓库的发布工作流：
+
+```bash
+gh attestation verify MyDataDev-<version>-web.jar --repo tanner-sh/MyDataDev
+```
 
 ## Web 服务端快速启动
 
