@@ -59,6 +59,8 @@ jobs:
             platform: linux
             arch: x64
     runs-on: ${{ matrix.os }}
+    # 最慢的 macOS x64 实测约 9 分钟；卡在签名或烟测上时不该占着 runner 等满默认的 6 小时。
+    timeout-minutes: 30
     env:
       MYDATADEV_RELEASE_PLATFORM: ${{ matrix.platform }}
       MYDATADEV_RELEASE_ARCH: ${{ matrix.arch }}
@@ -165,6 +167,7 @@ jobs:
     name: Web 发行包
     needs: verify-ci
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
       MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     steps:
@@ -239,6 +242,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: [verify-ci, build, web]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
       actions: read
