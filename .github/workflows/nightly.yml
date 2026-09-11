@@ -1,0 +1,311 @@
+name: 夜间回归
+
+# 持续集成每家数据库只测一个代表版本（MySQL 8.4、PostgreSQL 16、MariaDB 11.4、SQL Server 2022、
+# Oracle Free 23），卡的是合并。这里补的是 CI 回答不了的那一半：用户手里的库往往更旧，上游又每隔
+# 几个月出一个新版本 —— 两头的兼容性都只能靠定期实跑来发现。用例与 CI 完全相同，只换镜像版本。
+#
+# 失败不阻塞合并，但会自动开一个带 nightly-ci 标签的 issue（已经开着就追加评论），恢复后自动关闭：
+# 一个红了没人管的夜间任务，很快就会被当成常态。
+on:
+  schedule:
+    # GitHub 的 cron 用 UTC：18:00 即北京时间凌晨 2 点。
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+  # 改这个文件的 PR 也跑一遍，否则写错了要等到合并后的第一个晚上才知道。
+  pull_request:
+    paths:
+      - .github/workflows/nightly.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mysql:
+    name: MySQL ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 8.0 是仍在大量使用的最低版本；latest 跟着上游走，新版本不兼容时第一个晚上就知道。
+        version: ['8.0', 'latest']
+    services:
+      mysql:
+        image: mysql:${{ matrix.version }}
+        env:
+          MYSQL_ROOT_PASSWORD: ci-test-password
+          MYSQL_DATABASE: mydatadev_test
+          MYSQL_USER: mydatadev
+          MYSQL_PASSWORD: ci-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # 用 Ubuntu 自带的 8.0 客户端，与 CI 相同。产品调用的就是用户机器上的 mysqldump，
+      # 旧客户端备份新服务端失败，同样是用户会遇到的问题。
+      - name: 安装备份恢复客户端
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: mysql
+          TEST_NATIVE_TOOLS: 'true'
+          TEST_MYSQLDUMP_PATH: /usr/bin/mysqldump
+          TEST_MYSQL_PATH: /usr/bin/mysql
+          TEST_MYSQL_URL: jdbc:mysql://127.0.0.1:3306/mydatadev_test?useSSL=false&allowPublicKeyRetrieval=true
+          TEST_MYSQL_USER: mydatadev
+          TEST_MYSQL_PASSWORD: ci-test-password
+      - name: 保存回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-mysql-${{ matrix.version }}-reports
+          path: backend/target/surefire-reports/*Database*CompatibilityTest*
+          retention-days: 30
+
+  postgresql:
+    name: PostgreSQL ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 上游仍在维护的最旧与最新两个大版本。
+        version: ['14', '18']
+    services:
+      postgres:
+        image: postgres:${{ matrix.version }}
+        env:
+          POSTGRES_DB: mydatadev_test
+          POSTGRES_USER: mydatadev
+          POSTGRES_PASSWORD: ci-test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U mydatadev -d mydatadev_test"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # pg_dump 不能比服务端旧，而新版 pg_dump 的输出又可能带旧服务端不认的设置（17 起会写
+      # transaction_timeout），所以按服务端版本装同版本客户端，走 PostgreSQL 官方 apt 源。
+      - name: 安装与服务端同版本的 pg_dump / pg_restore
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-${{ matrix.version }}
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: postgresql
+          TEST_NATIVE_TOOLS: 'true'
+          TEST_PG_DUMP_PATH: /usr/lib/postgresql/${{ matrix.version }}/bin/pg_dump
+          TEST_PG_RESTORE_PATH: /usr/lib/postgresql/${{ matrix.version }}/bin/pg_restore
+          TEST_POSTGRES_URL: jdbc:postgresql://127.0.0.1:5432/mydatadev_test
+          TEST_POSTGRES_USER: mydatadev
+          TEST_POSTGRES_PASSWORD: ci-test-password
+      - name: 保存回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-postgresql-${{ matrix.version }}-reports
+          path: backend/target/surefire-reports/*Database*CompatibilityTest*
+          retention-days: 30
+
+  mariadb:
+    name: MariaDB ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # 10.11 是仍在维护的最旧 LTS；latest 跟着上游的滚动版本走。
+        version: ['10.11', 'latest']
+    services:
+      mariadb:
+        image: mariadb:${{ matrix.version }}
+        env:
+          MARIADB_ROOT_PASSWORD: ci-test-password
+          MARIADB_DATABASE: mydatadev_test
+          MARIADB_USER: mydatadev
+          MARIADB_PASSWORD: ci-test-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s --health-timeout=5s --health-retries=12
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: 安装 MariaDB 客户端
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mariadb-client
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: mariadb
+          TEST_NATIVE_TOOLS: 'true'
+          TEST_MARIADB_URL: jdbc:mariadb://127.0.0.1:3306/mydatadev_test
+          TEST_MARIADB_USER: mydatadev
+          TEST_MARIADB_PASSWORD: ci-test-password
+          TEST_MARIADB_MYSQLDUMP_PATH: /usr/bin/mariadb-dump
+          TEST_MARIADB_MYSQL_PATH: /usr/bin/mariadb
+      - name: 保存回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-mariadb-${{ matrix.version }}-reports
+          path: backend/target/surefire-reports/*Database*CompatibilityTest*
+          retention-days: 30
+
+  sqlserver:
+    name: SQL Server ${{ matrix.version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ['2019', '2025']
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:${{ matrix.version }}-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: Ci-Test-Password1
+        ports:
+          - 1433:1433
+        # 较早的镜像只有 /opt/mssql-tools（不认 -C），新镜像换成了 /opt/mssql-tools18，两条都试。
+        options: >-
+          --health-cmd="/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Ci-Test-Password1 -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P Ci-Test-Password1 -Q 'SELECT 1'"
+          --health-interval=10s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: 建 SQL Server 测试库
+        env:
+          CONTAINER: ${{ job.services.sqlserver.id }}
+        run: |
+          if docker exec "$CONTAINER" test -x /opt/mssql-tools18/bin/sqlcmd; then
+            sqlcmd=(/opt/mssql-tools18/bin/sqlcmd -C)
+          else
+            sqlcmd=(/opt/mssql-tools/bin/sqlcmd)
+          fi
+          docker exec "$CONTAINER" "${sqlcmd[@]}" -S localhost -U sa -P 'Ci-Test-Password1' \
+            -Q "IF DB_ID('mydatadev_test') IS NULL CREATE DATABASE mydatadev_test"
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: sqlserver
+          TEST_SQLSERVER_URL: jdbc:sqlserver://127.0.0.1:1433;databaseName=mydatadev_test;encrypt=true;trustServerCertificate=true
+          TEST_SQLSERVER_USER: sa
+          TEST_SQLSERVER_PASSWORD: Ci-Test-Password1
+      - name: 保存回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-sqlserver-${{ matrix.version }}-reports
+          path: backend/target/surefire-reports/*Database*CompatibilityTest*
+          retention-days: 30
+
+  oracle:
+    name: Oracle XE 21
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # CI 用的已经是最新的 Oracle Free 23，这里只补一个更旧的版本。
+    services:
+      oracle:
+        image: gvenzl/oracle-xe:21-slim-faststart
+        env:
+          ORACLE_PASSWORD: ci-test-password
+          APP_USER: mydatadev
+          APP_USER_PASSWORD: ci-test-password
+        ports:
+          - 1521:1521
+        options: >-
+          --health-cmd="healthcheck.sh"
+          --health-interval=15s --health-timeout=10s --health-retries=40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: oracle
+          TEST_ORACLE_URL: jdbc:oracle:thin:@//127.0.0.1:1521/XEPDB1
+          TEST_ORACLE_USER: mydatadev
+          TEST_ORACLE_PASSWORD: ci-test-password
+      - name: 保存回归报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-oracle-xe21-reports
+          path: backend/target/surefire-reports/*Database*CompatibilityTest*
+          retention-days: 30
+
+  report:
+    name: 汇报夜间结果
+    # 被取消的一轮不汇报：取消是人为的，既不是失败也不代表恢复。PR 上的试跑也不汇报。
+    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    needs: [mysql, postgresql, mariadb, sqlserver, oracle]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: 失败时开 issue 或追加评论，恢复后关闭
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          failed=$(jq -r 'to_entries[] | select(.value.result != "success") | "- \(.key)：\(.value.result)"' <<<"$NEEDS")
+          open=$(gh issue list --label nightly-ci --state open --json number -q '.[0].number')
+          if [ -n "$failed" ]; then
+            body=$(printf '夜间回归未通过：%s\n\n%s\n\n矩阵里具体是哪个版本失败，见运行页。' "$RUN_URL" "$failed")
+            if [ -n "$open" ]; then
+              gh issue comment "$open" --body "$body"
+            else
+              gh label create nightly-ci --color B60205 --description '夜间回归失败' --force
+              gh issue create --title '夜间回归失败' --label nightly-ci --body "$body"
+            fi
+          elif [ -n "$open" ]; then
+            gh issue close "$open" --comment "夜间回归已恢复：$RUN_URL"
+          fi

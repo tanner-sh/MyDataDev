@@ -120,6 +120,27 @@ gh release download --pattern '*-web.jar' --dir /tmp/previous
 node scripts/upgrade-smoke.mjs --from /tmp/previous/MyDataDev-<版本>-web.jar --to backend/target/web-db-admin-<版本>.jar
 ```
 
+## 夜间回归
+
+`nightly.yml` 每天 UTC 18:00（北京时间凌晨 2 点）运行，也可以手动触发。用例与 CI 完全相同（`Database*CompatibilityTest`），只换数据库版本：
+
+| 数据库 | CI（卡合并） | 夜间 |
+| --- | --- | --- |
+| MySQL | 8.4 | 8.0、latest |
+| PostgreSQL | 16 | 14、18 |
+| MariaDB | 11.4 | 10.11、latest |
+| SQL Server | 2022 | 2019、2025 |
+| Oracle | Free 23 | XE 21 |
+
+- 最低版本取上游仍在维护（或仍被大量使用）的最旧版本；`latest` 跟着上游走，新版本不兼容时第一个晚上就会暴露。版本清单应随项目的支持策略调整。
+- PostgreSQL 按服务端版本安装同版本的 `pg_dump` / `pg_restore`（官方 apt 源）；MySQL 与 MariaDB 用 Ubuntu 自带的客户端，与 CI 相同。
+- 失败不阻塞合并。`汇报夜间结果` 作业在失败时开一个带 `nightly-ci` 标签的 issue（已开着就追加评论），恢复后自动关闭；被取消的运行不汇报。
+- 修改 `nightly.yml` 的 PR 会试跑一遍全部矩阵，但不汇报。
+- 某项在夜间稳定失败且确属产品问题时，修复后应把对应版本提升进 CI，而不是长期留在夜间。
+- 公开仓库 60 天没有活动时，GitHub 会自动停用定时工作流，需要在 Actions 页面重新启用。
+
+报告上传为 `nightly-<数据库>-<版本>-reports`，保留 30 天。
+
 ## 尚未覆盖
 
-SQLite、ClickHouse、达梦、OceanBase 没有独立实库任务；现有五种数据库缺多版本矩阵。存储过程、复杂视图、全库灾难恢复、恢复后 identity/sequence 的完整状态、跨版本/跨库迁移、恢复任务中途取消、真实网络丢包与数据库重启、磁盘耗尽、大数据压力测试仍未覆盖。CI 通过不表示这些场景已经验证。
+SQLite、ClickHouse、达梦、OceanBase 没有独立实库任务；现有五种数据库的多版本只在夜间覆盖最低与最新两档。存储过程、复杂视图、全库灾难恢复、恢复后 identity/sequence 的完整状态、跨版本/跨库迁移、恢复任务中途取消、真实网络丢包与数据库重启、磁盘耗尽、大数据压力测试仍未覆盖。CI 通过不表示这些场景已经验证。
