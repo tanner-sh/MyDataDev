@@ -281,8 +281,10 @@ jobs:
 
   report:
     name: 汇报夜间结果
-    # 被取消的一轮不汇报：取消是人为的，既不是失败也不代表恢复。PR 上的试跑也不汇报。
-    if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+    # 只汇报 main 上的运行（定时或手动）。PR 试跑和在功能分支上手动触发的验证不汇报 —— 否则一个
+    # 还没合并的分支上的失败，会被开成一条「夜间回归失败」。被取消的一轮也不汇报：取消是人为的，
+    # 既不是失败也不代表恢复。
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     needs: [mysql, postgresql, mariadb, sqlserver, oracle]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
