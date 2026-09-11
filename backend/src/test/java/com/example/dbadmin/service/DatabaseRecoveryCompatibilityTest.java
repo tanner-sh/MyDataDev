@@ -38,8 +38,8 @@ class DatabaseRecoveryCompatibilityTest {
                     + f.varchar("code", 40) + " NOT NULL, PRIMARY KEY (parent_id, seq), "
                     + "FOREIGN KEY (parent_id) REFERENCES " + f.q(parent) + " (id)");
             f.execute("CREATE UNIQUE INDEX " + f.dialect.quoteIdentifier("idx_" + child) + " ON " + f.q(child) + " (code)");
-            f.execute("INSERT INTO " + f.q(parent) + " VALUES (1, 'parent'), (2, 'other')");
-            f.execute("INSERT INTO " + f.q(child) + " VALUES (1, 1, 'a'), (1, 2, 'b'), (2, 1, 'c')");
+            f.insert(parent, "1, 'parent'", "2, 'other'");
+            f.insert(child, "1, 1, 'a'", "1, 2, 'b'", "2, 1, 'c'");
             var tasks = mock(BackupTaskRepository.class);
             var histories = mock(BackupHistoryRepository.class);
             var task = new BackupTask(1, "关联表恢复", 1, "TABLES", f.schema, parent, List.of(parent, child),
