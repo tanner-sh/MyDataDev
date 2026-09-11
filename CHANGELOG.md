@@ -4,12 +4,28 @@
 
 0.5.0 之前的条目是从 git 历史回溯整理的（此前没有维护本文件），因此越早的版本描述越粗；从 0.5.0 起，发版时应同步更新这里。
 
-## [未发布]
+## [0.7.2] - 2026-09-11
 
 ### 修复
 
 - CSV/Excel 导入与跨库数据传输写入 Oracle 21 及更早版本时，脚本不再使用这些版本不支持的多行 `VALUES`（此前两行以上即整批报 ORA-00933），改为一行一条；达梦与 OceanBase 的 Oracle 模式按 SQL 逻辑备份一直以来的判断同样逐行生成。「每条语句带几行」收进方言接口，备份与导入共用同一处定义。
 - OceanBase（Oracle 模式）连接在 SQL 工作台选定 Schema 后执行查询不再报「服务器内部错误」：驱动在默认配置下没有实现 JDBC 的 `getSchema`/`setSchema`（抛 `AbstractMethodError`），现在改为用 `SYS_CONTEXT` 读取、`ALTER SESSION SET CURRENT_SCHEMA` 切换。此前每失败一次还会漏掉一条池化连接，连续几次后这条连接上的所有请求都卡在借连接超时；现在切换命名空间失败时，借出的连接一定会归还，报错改为「无法切换到 Schema」。
+- MariaDB 连接上的流式读取不再失败：导出、跨库数据传输、数据对比与大结果分页此前都报 `invalid fetch size`（MySQL 驱动的流式哨兵值 MariaDB 驱动不认），现改为按正数 fetch size 分批读取。MariaDB 的原生备份与恢复可以使用 `mariadb-dump` / `mariadb` 客户端（此前只认 `mysqldump` / `mysql` 这两个文件名）。
+- SQL Server 的 SQL 逻辑备份现在能恢复回去：备份文件里的标识符改用方括号引用，语句之间写入 `GO` 分批（此前恢复预检直接报 multi-statement，整份备份无法恢复）；写出的脚本也能直接交给 sqlcmd / SSMS 执行。
+- Oracle 上导出的 SQL 与 SQL 逻辑备份里的时间列可以回放了：时间值写成 `TO_DATE` / `TO_TIMESTAMP` / `TO_TIMESTAMP_TZ` 显式转换，不再依赖执行端会话的 `NLS_DATE_FORMAT`（此前报 ORA-01843「月份无效」）。
+- Oracle 上展开表结构、打开表设计、结构对比、结构快照与备份不再顺带在目标库上执行一次 `DBMS_STATS.GATHER_TABLE_STATS`：这在生产库上是一次额外负载，账号没有 ANALYZE 权限时还会直接报错（ORA-20000）。
+- MySQL 的 SQL 逻辑备份不再丢失数据里的反斜杠，恢复时也不再改写字符串字面量；不同 `sql_mode` 下往返结果一致。
+- 结果表格列头的筛选漏斗可以正常点开（此前点击实际触发的是这一列的排序）；标签里的文字不再低于 11px 的可读下限。
+
+### 改进
+
+- Release 附带依赖清单（SPDX 格式的 SBOM）与 GitHub 签发的构建来源证明，可用 `gh attestation verify <文件> --repo tanner-sh/MyDataDev` 核对下载的文件确实出自本仓库的发布流水线。
+- 发布前强制校验：tag 必须来自 main，且同一提交的 CI 已全部通过。
+- 持续集成的真实数据库回归从 MySQL、PostgreSQL 扩展到 MariaDB、SQL Server 与 Oracle，并新增五种数据库最低与最新版本的夜间回归、从最新 Release 升级的数据目录回归，以及界面布局审计。上面几条修复大多是这些回归第一次跑时发现的。
+
+### 升级注意
+
+- 无新增元数据库迁移（schema 仍为 v20），从 0.7.1 升级直接替换发行包即可。
 
 ## [0.7.1] - 2026-09-09
 
