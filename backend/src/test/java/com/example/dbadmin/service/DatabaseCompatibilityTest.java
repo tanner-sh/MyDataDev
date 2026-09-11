@@ -41,7 +41,7 @@ class DatabaseCompatibilityTest {
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80) + ", " + f.decimal("amount", 20, 2));
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("原值") + ", 123.45), (2, " + f.text("第二行") + ", 99.01)");
+            f.insert(table, "1, " + f.text("原值") + ", 123.45", "2, " + f.text("第二行") + ", 99.01");
             var first = f.edits.table(1L, f.schema, table, null, 1);
             assertThat(first.editable()).isTrue();
             assertThat(first.hasMore()).isTrue();
@@ -114,7 +114,7 @@ class DatabaseCompatibilityTest {
     void failedGridBatchRollsBackEarlierChanges(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80));
-            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("原值") + "), (2, " + f.text("第二行") + ")");
+            f.insert(table, "1, " + f.text("原值"), "2, " + f.text("第二行"));
             var page = f.edits.table(1L, f.schema, table, null, 10);
             f.execute("UPDATE " + f.q(table) + " SET name=" + f.text("外部修改") + " WHERE id=2");
             var changes = List.of(
@@ -337,6 +337,16 @@ class DatabaseCompatibilityTest {
         }
         void execute(String sql) throws Exception {
             try (var statement = jdbc.createStatement()) { statement.execute(sql); }
+        }
+        /**
+         * 逐行插入用例的准备数据。
+         *
+         * <p>多行 {@code VALUES (…), (…)} 要到 Oracle 23 才支持，更早的版本报 ORA-00933。这些用例
+         * 要测的不是多行插入语法，逐行写五家都认 —— 否则夜间回归跑 Oracle 21 时，用例在准备数据
+         * 这一步就失败了，根本走不到被测的产品路径。</p>
+         */
+        void insert(String table, String... rows) throws Exception {
+            for (String row : rows) execute("INSERT INTO " + q(table) + " VALUES (" + row + ")");
         }
         Object scalar(String sql) throws Exception {
             try (var statement = jdbc.createStatement(); var rows = statement.executeQuery(sql)) {
