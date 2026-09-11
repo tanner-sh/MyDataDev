@@ -12,6 +12,9 @@ MyDataDev 是一个数据库工作台，由三个模块组成：`backend`（Spri
 node scripts/ui-smoke.mjs --serve --shots ./ui-shots   # 自己拉起 release-assets 里的 Web 发行包
 node scripts/ui-smoke.mjs --shots ./ui-shots           # 连到已经跑着的前后端（不播种）
 
+# 升级回归：最新 Release 的 Web JAR 建一份数据目录，再交给当前后端 JAR 打开，核对登录、连接解密与历史记录
+node scripts/upgrade-smoke.mjs --from <旧版本 web.jar> --to backend/target/web-db-admin-<版本>.jar
+
 # 后端（无 mvnw wrapper，直接用 mvn）
 # 首次启动自动生成 backend/secrets/mydatadev-master.key
 cd backend && mvn spring-boot:run            # 启动 API，端口 8080
