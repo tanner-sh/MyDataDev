@@ -4,6 +4,8 @@ import com.example.dbadmin.dto.ApiDtos.ColumnInfo;
 import com.example.dbadmin.dto.ApiDtos.IndexInfo;
 import com.example.dbadmin.dto.ApiDtos.ObjectRelation;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.List;
 import java.util.Map;
 
@@ -32,7 +34,7 @@ public final class McpDtos {
 
     public record NamespacePage(
             String namespaceKind,
-            String currentNamespace,
+            @Schema(nullable = true) String currentNamespace,
             List<NamespaceItem> items,
             int page,
             int pageSize,
@@ -40,12 +42,12 @@ public final class McpDtos {
     ) {
     }
 
-    public record ObjectSummary(String schemaName, String name, String type) {
+    public record ObjectSummary(@Schema(nullable = true) String schemaName, String name, String type) {
     }
 
     public record ObjectPage(
             String namespaceKind,
-            String selectedSchema,
+            @Schema(nullable = true) String selectedSchema,
             List<ObjectSummary> items,
             int page,
             int pageSize,
@@ -56,13 +58,13 @@ public final class McpDtos {
     }
 
     public record ObjectDescription(
-            String schemaName,
+            @Schema(nullable = true) String schemaName,
             String name,
             String type,
             List<ColumnInfo> columns,
             List<IndexInfo> indexes,
             List<String> primaryKeys,
-            String primaryKeyName,
+            @Schema(nullable = true) String primaryKeyName,
             String structureVersion,
             List<ObjectRelation> importedKeys,
             List<ObjectRelation> exportedKeys
@@ -79,7 +81,7 @@ public final class McpDtos {
             List<TableColumnView> columns,
             List<Map<String, Object>> rows,
             String navigationMode,
-            String nextCursor,
+            @Schema(nullable = true) String nextCursor,
             boolean hasMore,
             boolean truncated
     ) {
@@ -106,7 +108,7 @@ public final class McpDtos {
             long elapsedMs,
             int maxRows,
             boolean truncated,
-            String truncatedReason
+            @Schema(nullable = true) String truncatedReason
     ) {
     }
 }

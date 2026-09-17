@@ -1,5 +1,6 @@
 package com.example.dbadmin.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Max;
@@ -367,13 +368,18 @@ public final class ApiDtos {
         }
     }
 
-    public record ObjectRelation(String constraintName, String pkSchemaName, String pkTableName, String pkColumnName, String fkSchemaName, String fkTableName, String fkColumnName) {
+    public record ObjectRelation(@Schema(nullable = true) String constraintName,
+                                 @Schema(nullable = true) String pkSchemaName, String pkTableName, String pkColumnName,
+                                 @Schema(nullable = true) String fkSchemaName, String fkTableName, String fkColumnName) {
     }
 
-    public record ColumnInfo(String name, String type, int size, boolean nullable, String remarks, int ordinalPosition, String defaultValue) {
+    // JDBC 元数据中的缺省值必须在 MCP 自动生成的输出 schema 中允许为 null。
+    public record ColumnInfo(String name, String type, int size, boolean nullable,
+                             @Schema(nullable = true) String remarks, int ordinalPosition,
+                             @Schema(nullable = true) String defaultValue) {
     }
 
-    public record IndexInfo(String name, String columnName, boolean unique, int ordinalPosition) {
+    public record IndexInfo(String name, @Schema(nullable = true) String columnName, boolean unique, int ordinalPosition) {
         public IndexInfo(String name, String columnName, boolean unique) {
             this(name, columnName, unique, 0);
         }
