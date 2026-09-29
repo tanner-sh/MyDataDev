@@ -133,6 +133,9 @@ public class SqlTransactionRegistry {
             if (transaction.lastUsedAt().isAfter(deadline)) continue;
             if (!transaction.lock().tryLock()) continue;
             try {
+                // 初筛和拿锁之间，执行请求可能刚刷新时间，或提交请求刚结束事务。
+                // 必须在同一把锁内重查，不能依据旧快照回滚刚使用过的连接。
+                if (transaction.isClosed() || transaction.lastUsedAt().isAfter(deadline)) continue;
                 log.warn("手动事务空闲超过 {}，自动回滚 transaction={} connection={}",
                         idleTimeout, transaction.id(), transaction.connectionId());
                 try {

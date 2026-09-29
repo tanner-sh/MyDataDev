@@ -154,21 +154,36 @@ final class DataComparison {
             List<String> keyColumns,
             boolean includeDeletes
     ) {
+        return syncScript(result, dialect, qualifiedTable, columns, keyColumns, includeDeletes, ignored -> { });
+    }
+
+    static List<String> syncScript(
+            Result result, DatabaseDialect dialect, String qualifiedTable, List<String> columns,
+            List<String> keyColumns, boolean includeDeletes, java.util.function.LongConsumer reserveScriptBytes
+    ) {
         List<String> statements = new ArrayList<>();
         Map<String, Integer> columnIndex = new LinkedHashMap<>();
         for (int index = 0; index < columns.size(); index++) columnIndex.put(columns.get(index), index);
 
         for (Difference difference : result.differences()) {
-            switch (difference.change()) {
-                case ONLY_IN_SOURCE -> statements.add(insert(dialect, qualifiedTable, columns, difference.source()));
-                case DIFFERENT -> statements.add(update(dialect, qualifiedTable, difference, columnIndex, keyColumns));
-                case ONLY_IN_TARGET -> {
-                    if (includeDeletes) {
-                        statements.add("DELETE FROM " + qualifiedTable
-                                + where(dialect, keyColumns, difference.target().key()) + ";");
-                    }
-                }
+            if (difference.change() == Change.ONLY_IN_TARGET && !includeDeletes) continue;
+            // 生成之前预留，而不是先分配一个巨大 SQL 字符串再发现超限。8 倍字符余量覆盖
+            // MySQL 含反斜杠文本的 UTF-8 十六进制展开，另为拼接及最终字符串预留空间。
+            long chars = 256L + 4L * qualifiedTable.length();
+            for (String column : columns) chars += 32L + 4L * column.length();
+            for (String column : keyColumns) chars += 32L + 4L * column.length();
+            for (String value : difference.key()) chars += 16L + (value == null ? 0 : 8L * value.length());
+            if (difference.source() != null) {
+                for (String value : difference.source().values()) chars += 16L + (value == null ? 0 : 8L * value.length());
             }
+            reserveScriptBytes.accept(64L + 4L * chars);
+            String statement = switch (difference.change()) {
+                case ONLY_IN_SOURCE -> insert(dialect, qualifiedTable, columns, difference.source());
+                case DIFFERENT -> update(dialect, qualifiedTable, difference, columnIndex, keyColumns);
+                case ONLY_IN_TARGET -> "DELETE FROM " + qualifiedTable
+                        + where(dialect, keyColumns, difference.target().key()) + ";";
+            };
+            statements.add(statement);
         }
         return List.copyOf(statements);
     }

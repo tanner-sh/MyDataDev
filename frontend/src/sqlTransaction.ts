@@ -48,7 +48,7 @@ export function transactionTooltip(state: SqlTransactionState): string {
     return '当前为自动提交：每条语句立即生效，失败时前面已成功的语句不会回滚。开启手动事务可先看效果再决定。';
   }
   const minutes = Math.max(1, Math.round(transaction.idleTimeoutSeconds / 60));
-  return `手动事务进行中，独占一条数据库连接。空闲超过 ${minutes} 分钟会被服务端自动回滚。`;
+  return `手动事务进行中，独占一条数据库连接。仅支持查询和普通增删改，请用按钮提交或回滚。空闲超过 ${minutes} 分钟会被服务端自动回滚。非事务表和数据库外部副作用不受回滚保护。`;
 }
 
 /** 提交/回滚前的确认文案，写清楚影响范围。 */
@@ -57,11 +57,11 @@ export function transactionFinishPrompt(state: SqlTransactionState, commit: bool
   if (commit) {
     return count === 0
       ? '当前事务还没有执行任何语句，提交不会产生任何变化。'
-      : `提交后，本事务中的 ${count} 条语句将一次性生效，无法撤销。`;
+      : `本事务已执行 ${count} 条语句，提交将保存其中尚未提交的改动。`;
   }
   return count === 0
     ? '当前事务还没有执行任何语句，回滚只会释放这条连接。'
-    : `回滚将丢弃本事务中 ${count} 条语句的全部改动。`;
+    : `本事务已执行 ${count} 条语句，回滚将丢弃其中尚未提交的改动。非事务表和数据库外部副作用不受回滚保护。`;
 }
 
 /** 离开工作台前必须提醒：忘了处理会一直占着连接直到超时。 */
@@ -102,7 +102,7 @@ export function transactionStateAfterError(state: SqlTransactionState, errorCode
 /** 事务已被服务端回收时给用户的解释，说清楚「已经回滚了」和「现在回到了自动提交」。 */
 export function transactionGoneNotice(state: SqlTransactionState): string {
   const count = state.transaction?.statementCount ?? 0;
-  const dropped = count === 0 ? '' : `本事务中 ${count} 条语句的改动已丢弃。`;
+  const dropped = count === 0 ? '' : `本事务曾执行 ${count} 条语句，请核对数据库中的最终结果。`;
   return `手动事务已被服务端结束（通常是空闲超时后自动回滚）。${dropped}已切回自动提交，请重新开启事务后再试。`;
 }
 

@@ -11,6 +11,29 @@ class SqlStatementClassifierTest {
     private final SqlStatementClassifier classifier = new SqlStatementClassifier();
 
     @Test
+    void manualTransactionsStillAllowQueriesAndDmlWithQuotedControlWords() {
+        for (String sql : java.util.List.of("SELECT 'COMMIT', 'CREATE TABLE x'",
+                "SELECT * FROM accounts FOR UPDATE", "INSERT INTO accounts VALUES (1, 5)",
+                "UPDATE accounts SET balance=2 WHERE id=1", "DELETE FROM accounts WHERE id=1",
+                "WITH q AS (SELECT 1 AS id) SELECT * FROM q",
+                "SELECT CASE WHEN 1=1 THEN 'COMMIT' ELSE 'ROLLBACK' END",
+                "SELECT TRUNCATE(price, 2), '/*!COMMIT*/' FROM orders",
+                "WITH q AS (INSERT INTO accounts VALUES (1, 2) RETURNING *) SELECT * FROM q",
+                "WITH q AS (SELECT 1 AS id) INSERT INTO accounts SELECT id, 5 FROM q")) {
+            assertThat(classifier.isAllowedInManualTransaction(sql)).as(sql).isTrue();
+        }
+    }
+
+    @Test
+    void manualTransactionsRejectBoundariesInSqlServerBatchesWithoutSemicolons() {
+        for (String sql : java.util.List.of("UPDATE accounts SET balance=7 WHERE id=1 COMMIT",
+                "SELECT 1 ROLLBACK", "SELECT 1 CREATE TABLE x(id INT)", "SELECT 1 EXEC commits_inside",
+                "SELECT 1 TRUNCATE TABLE accounts", "SELECT 1 /*!; COMMIT */", "SELECT 1 /*M!; COMMIT */")) {
+            assertThat(classifier.isAllowedInManualTransaction(sql)).as(sql).isFalse();
+        }
+    }
+
+    @Test
     void classifiesQueriesWithoutBeingFooledByCommentsOrStringLiterals() {
         assertThat(classifier.classify("/* UPDATE users */ SELECT 'FOR UPDATE', \"DELETE\" FROM users"))
                 .isEqualTo(QUERY);

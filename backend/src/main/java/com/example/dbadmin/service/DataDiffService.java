@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Semaphore;
 
 /**
  * 两张表之间的逐行数据对比，以及把目标端对齐到源端的同步脚本。
@@ -56,6 +57,7 @@ public class DataDiffService {
     private final DialectRegistry dialectRegistry;
     private final AuditRepository audit;
     private final AppProperties properties;
+    private final Semaphore comparisons;
 
     public DataDiffService(
             ConnectionService connections,
@@ -69,9 +71,24 @@ public class DataDiffService {
         this.dialectRegistry = dialectRegistry;
         this.audit = audit;
         this.properties = properties;
+        this.comparisons = new Semaphore(properties.getDataDiff().getMaxConcurrent());
     }
 
     public DataDiffResponse compare(DataDiffRequest request, String actor) throws Exception {
+        // 在读取元数据或借 JDBC 连接之前限流，不排队占住 HTTP 工作线程。
+        if (!comparisons.tryAcquire()) {
+            throw new ApiProblemException(HttpStatus.TOO_MANY_REQUESTS, "DATA_DIFF_BUSY",
+                    "数据对比并发数已达上限，请等待其他对比完成后重试。");
+        }
+        try {
+            return compareWithinBudget(request, actor, new DataDiffBudget(
+                    properties.getDataDiff().getMaxEstimatedBytes(), properties.getDataDiff().getMaxCellChars()));
+        } finally {
+            comparisons.release();
+        }
+    }
+
+    private DataDiffResponse compareWithinBudget(DataDiffRequest request, String actor, DataDiffBudget budget) throws Exception {
         DbConnection source = connections.require(request.sourceConnectionId());
         DbConnection target = connections.require(request.targetConnectionId());
         String sourceSchema = resolveSchema(request.sourceConnectionId(), request.sourceSchema());
@@ -102,17 +119,20 @@ public class DataDiffService {
         DatabaseDialect sourceDialect = dialectRegistry.dialectFor(source);
         DatabaseDialect targetDialect = dialectRegistry.dialectFor(target);
         Map<String, DataComparison.Row> sourceRows = readRows(
-                request.sourceConnectionId(), sourceSchema, sourceTable, sourceDialect, keyColumns, columns, "源");
+                request.sourceConnectionId(), sourceSchema, sourceTable, sourceDialect, keyColumns, columns, "源", budget);
         Map<String, DataComparison.Row> targetRows = readRows(
-                request.targetConnectionId(), targetSchema, targetTable, targetDialect, keyColumns, columns, "目标");
+                request.targetConnectionId(), targetSchema, targetTable, targetDialect, keyColumns, columns, "目标", budget);
 
+        // 差异记录、字段索引和展示用截断副本的对象/引用开销也计入预算。
+        budget.reserve((long) Math.min(MAX_DIFFERENCES, (long) sourceRows.size() + targetRows.size())
+                * (256L + 32L * columns.size()));
         DataComparison.Result result = DataComparison.compare(sourceRows, targetRows, columns, MAX_DIFFERENCES);
         if (result.truncated()) {
             warnings.add("差异超过 " + MAX_DIFFERENCES + " 条，只列出并生成了前 " + MAX_DIFFERENCES
                     + " 条的同步语句 —— 这份脚本是不完整的，请缩小对比范围后重跑。");
         }
         List<String> script = DataComparison.syncScript(result, targetDialect,
-                targetDialect.qualifiedName(targetSchema, targetTable), columns, keyColumns, request.includeDeletes());
+                targetDialect.qualifiedName(targetSchema, targetTable), columns, keyColumns, request.includeDeletes(), budget::reserve);
 
         audit.onConnection(actor, ACTION_DATA_DIFF, request.sourceConnectionId(), "table:" + sourceTable,
                 "target=" + target.name() + "." + targetTable
@@ -224,7 +244,8 @@ public class DataDiffService {
             DatabaseDialect dialect,
             List<String> keyColumns,
             List<String> columns,
-            String side
+            String side,
+            DataDiffBudget budget
     ) throws Exception {
         List<String> selected = new ArrayList<>(keyColumns);
         for (String column : columns) {
@@ -240,6 +261,8 @@ public class DataDiffService {
             statement.setMaxRows(MAX_ROWS_PER_SIDE + 1);
             try (ResultSet rs = statement.executeQuery(sql)) {
                 Map<String, Integer> position = new LinkedHashMap<>();
+                int[] types = new int[selected.size()];
+                for (int index = 0; index < types.length; index++) types[index] = rs.getMetaData().getColumnType(index + 1);
                 for (int index = 0; index < selected.size(); index++) position.put(fold(selected.get(index)), index + 1);
                 while (rs.next()) {
                     if (rows.size() >= MAX_ROWS_PER_SIDE) {
@@ -247,13 +270,21 @@ public class DataDiffService {
                                 side + "表超过 " + MAX_ROWS_PER_SIDE + " 行，超出逐行对比的规模上限。"
                                         + "请改为对比数据量更小的表，或先用备份/校验和缩小范围。");
                     }
+                    budget.reserve(256L + 32L * columns.size() + 32L * keyColumns.size());
+                    List<String> cellValues = new ArrayList<>(selected.size());
+                    // 每列只读一次，复用主键值；Reader 始终关闭，超限通过外层 try 归还连接。
+                    for (int index = 0; index < selected.size(); index++) {
+                        cellValues.add(budget.readCell(rs, index + 1, types[index]));
+                    }
                     List<String> key = new ArrayList<>(keyColumns.size());
-                    for (String column : keyColumns) key.add(rs.getString(position.get(fold(column))));
+                    for (String column : keyColumns) key.add(cellValues.get(position.get(fold(column)) - 1));
                     List<String> values = new ArrayList<>(columns.size());
-                    for (String column : columns) values.add(rs.getString(position.get(fold(column))));
+                    for (String column : columns) values.add(cellValues.get(position.get(fold(column)) - 1));
                     DataComparison.Row row = new DataComparison.Row(key, values);
+                    String matchKey = DataComparison.keyOf(key);
+                    budget.retainText(matchKey);
                     // 主键重复说明这个键选错了（不是唯一），继续比下去只会给出没有意义的结论。
-                    if (rows.putIfAbsent(DataComparison.keyOf(key), row) != null) {
+                    if (rows.putIfAbsent(matchKey, row) != null) {
                         throw new ApiProblemException(HttpStatus.CONFLICT, "DATA_DIFF_DUPLICATE_KEY",
                                 side + "表里有重复的匹配键：" + DataComparison.keyOf(key).replace((char) 0, '/')
                                         + "。请换一组能唯一确定一行的字段。");

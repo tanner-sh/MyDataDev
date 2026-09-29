@@ -15,6 +15,9 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -26,6 +29,7 @@ import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 /**
  * 数据对比跑在两个真的 H2 库上：主键、列类型、NULL 的形状都来自真实的 JDBC 元数据 ——
@@ -176,6 +180,84 @@ class DataDiffServiceTest {
         return new DataDiffRequest(1L, "PUBLIC", "orders", 2L, "PUBLIC", null, List.of(), includeDeletes);
     }
 
+    @Test
+    void byteBudgetIncludesBothSidesAndReleasesThePermitOnFailure() throws Exception {
+        String ddl = "CREATE TABLE orders(id INT PRIMARY KEY, note VARCHAR(2000)); "
+                + "INSERT INTO orders VALUES (1, REPEAT('x', 1000));";
+        AppProperties properties = new AppProperties();
+        properties.getDataDiff().setMaxConcurrent(1);
+        properties.getDataDiff().setMaxEstimatedBytes(7_000);
+        DataDiffService service = service(database(ddl), database(ddl), mock(AuditRepository.class), properties);
+
+        assertThatThrownBy(() -> service.compare(request(false), "admin"))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        error -> assertThat(error.code()).isEqualTo("DATA_DIFF_MEMORY_LIMIT"));
+        properties.getDataDiff().setMaxEstimatedBytes(100_000);
+        assertThat(service.compare(request(false), "admin").summary().identical()).isEqualTo(1);
+    }
+
+    @Test
+    void refusesOversizeTextInsteadOfReturningTruncatedDataOrScript() throws Exception {
+        String ddl = "CREATE TABLE orders(id INT PRIMARY KEY, note VARCHAR(1000)); "
+                + "INSERT INTO orders VALUES (1, REPEAT('x', 100));";
+        AppProperties properties = new AppProperties();
+        properties.getDataDiff().setMaxCellChars(20);
+        properties.getDataDiff().setMaxConcurrent(1);
+        DataDiffService service = service(database(ddl), database(ddl), mock(AuditRepository.class), properties);
+
+        assertThatThrownBy(() -> service.compare(request(false), "admin"))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        error -> assertThat(error.code()).isEqualTo("DATA_DIFF_CELL_LIMIT"));
+        properties.getDataDiff().setMaxCellChars(100);
+        assertThat(service.compare(request(false), "admin").summary().identical()).isEqualTo(1);
+    }
+
+    @Test
+    void scriptExpansionMustFitTheSameBudgetAsTheRows() throws Exception {
+        String ddl = "CREATE TABLE orders(id INT PRIMARY KEY, note VARCHAR(2000));";
+        AppProperties properties = new AppProperties();
+        properties.getDataDiff().setMaxEstimatedBytes(7_000);
+        DataDiffService service = service(database(ddl + "INSERT INTO orders VALUES (1, REPEAT('x', 1000));"),
+                database(ddl), mock(AuditRepository.class), properties);
+
+        // 只有源端一行，读取能放下；生成同步脚本所需的余量却不能被忽略。
+        assertThatThrownBy(() -> service.compare(request(false), "admin"))
+                .isInstanceOfSatisfying(ApiProblemException.class,
+                        error -> assertThat(error.code()).isEqualTo("DATA_DIFF_MEMORY_LIMIT"));
+        properties.getDataDiff().setMaxEstimatedBytes(100_000);
+        assertThat(service.compare(request(false), "admin").script()).hasSize(1);
+    }
+
+    @Test
+    void rejectsConcurrentComparisonsAndAcceptsWorkAfterCompletion() throws Exception {
+        String ddl = "CREATE TABLE orders(id INT PRIMARY KEY); INSERT INTO orders VALUES (1);";
+        AppProperties properties = new AppProperties();
+        properties.getDataDiff().setMaxConcurrent(1);
+        AuditRepository audit = mock(AuditRepository.class);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            entered.countDown();
+            assertThat(release.await(10, TimeUnit.SECONDS)).isTrue();
+            return null;
+        }).when(audit).onConnection(anyString(), eq(DataDiffService.ACTION_DATA_DIFF), eq(1L), anyString(), anyString());
+        DataDiffService service = service(database(ddl), database(ddl), audit, properties);
+        var pool = Executors.newSingleThreadExecutor();
+        try {
+            var first = pool.submit(() -> service.compare(request(false), "admin"));
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(() -> service.compare(request(false), "another-user"))
+                    .isInstanceOfSatisfying(ApiProblemException.class,
+                            error -> assertThat(error.code()).isEqualTo("DATA_DIFF_BUSY"));
+            release.countDown();
+            assertThat(first.get(10, TimeUnit.SECONDS).summary().identical()).isEqualTo(1);
+            assertThat(service.compare(request(false), "admin").summary().identical()).isEqualTo(1);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+    }
+
     private static String database(String ddl) throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "");
@@ -188,6 +270,10 @@ class DataDiffServiceTest {
     }
 
     private static DataDiffService service(String sourceUrl, String targetUrl, AuditRepository audit) throws Exception {
+        return service(sourceUrl, targetUrl, audit, new AppProperties());
+    }
+
+    private static DataDiffService service(String sourceUrl, String targetUrl, AuditRepository audit, AppProperties properties) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong(), nullable(String.class)))
                 .thenAnswer(invocation -> DriverManager.getConnection(
@@ -201,6 +287,6 @@ class DataDiffServiceTest {
                 2L, "target", "h2", targetUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
         MetadataService metadata = new MetadataService(
                 connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
-        return new DataDiffService(connections, metadata, new DialectRegistry(), audit, new AppProperties());
+        return new DataDiffService(connections, metadata, new DialectRegistry(), audit, properties);
     }
 }

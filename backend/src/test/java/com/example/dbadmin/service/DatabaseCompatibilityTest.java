@@ -163,6 +163,33 @@ class DatabaseCompatibilityTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    void manualTransactionsRejectCommitAndDdlBeforeExecutingAnyStatement(String type) throws Exception {
+        try (Fixture f = new Fixture(type)) {
+            String table = f.table(f.pk("id") + ", " + f.id("amount"));
+            f.execute("INSERT INTO " + f.q(table) + " VALUES (1, 100)");
+            var registry = new SqlTransactionRegistry();
+            var sql = new SqlService(f.connections, f.properties, f.audit, f.dialects, mock(SqlHistoryRepository.class),
+                    f.metadata, new SqlScriptSplitter(), new SqlStatementClassifier(), f.guard,
+                    new SqlExecutionRegistry(), f.edits, new SqlExecutionMetrics());
+            var transactions = new SqlTransactionService(f.connections, f.dialects, new SqlScriptSplitter(),
+                    new SqlStatementClassifier(), f.guard, registry, sql, f.audit, mock(SqlHistoryRepository.class), f.metadata);
+            try {
+                for (String forbidden : List.of("COMMIT", "TRUNCATE TABLE " + f.q(table))) {
+                    var tx = transactions.begin(1L, f.schema, "ci", null);
+                    assertThatThrownBy(() -> transactions.execute(tx.id(), "UPDATE " + f.q(table)
+                            + " SET amount=7 WHERE id=1; " + forbidden, null, "ci", false))
+                            .isInstanceOfSatisfying(ApiProblemException.class,
+                                    error -> assertThat(error.code()).isEqualTo("TRANSACTION_STATEMENT_UNSUPPORTED"));
+                    transactions.finish(tx.id(), false, "ci");
+                    assertThat(f.number("SELECT amount FROM " + f.q(table))).isEqualTo(100);
+                }
+            } finally {
+                registry.closeAll();
+            }
+        }
+    }
+
     /**
      * SQL Server 不在此列：它的方言把 tableDesign 声明为 false（能力矩阵里明确不支持表设计），
      * 服务端会直接拒绝，这里跑它等于断言一个产品不提供的功能。

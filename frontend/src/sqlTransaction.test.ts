@@ -56,7 +56,7 @@ describe('transactionTooltip', () => {
 
 describe('transactionFinishPrompt', () => {
   it('states the blast radius for both outcomes', () => {
-    expect(transactionFinishPrompt(active({ statementCount: 4 }), true)).toContain('4 条语句将一次性生效');
+    expect(transactionFinishPrompt(active({ statementCount: 4 }), true)).toContain('保存其中尚未提交的改动');
     expect(transactionFinishPrompt(active({ statementCount: 4 }), false)).toContain('丢弃');
   });
 
@@ -117,8 +117,9 @@ describe('restoredTransactionNotice', () => {
       expect(transactionStateAfterError(open, undefined)).toEqual({ ...open, pending: false });
     });
 
-    it('提示里说清楚改动已丢弃并且回到了自动提交', () => {
-      expect(transactionGoneNotice(open)).toContain('3 条语句的改动已丢弃');
+    it('事务消失时不猜测提交结果，并说明回到了自动提交', () => {
+      expect(transactionGoneNotice(open)).toContain('请核对数据库中的最终结果');
+      expect(transactionGoneNotice(open)).not.toContain('改动已丢弃');
       expect(transactionGoneNotice(open)).toContain('自动提交');
       expect(transactionGoneNotice({ transaction: { ...open.transaction!, statementCount: 0 }, pending: false }))
         .not.toContain('丢弃');
