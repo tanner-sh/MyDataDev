@@ -1583,7 +1583,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         try {
           await api<SqlTransaction>(`/sql/transactions/${transaction.id}/${commit ? 'commit' : 'rollback'}`, { method: 'POST' });
           setTransactionState(IDLE_SQL_TRANSACTION);
-          showSuccess(commit ? `事务已提交，共 ${transaction.statementCount} 条语句生效` : '事务已回滚，本次改动全部丢弃');
+          showSuccess(commit ? '事务已提交' : '已完成回滚，事务内未提交的改动已丢弃');
           if (selected) void loadMetadata(selected, { page: 0, refresh: true, background: true });
         } catch (e) {
           // 提交/回滚失败同样可能是事务已经不在了。那种情况要退出事务模式并让弹窗关掉，

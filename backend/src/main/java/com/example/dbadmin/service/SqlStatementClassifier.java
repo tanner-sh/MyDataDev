@@ -32,6 +32,12 @@ public class SqlStatementClassifier {
     private static final Set<String> SELECT_SIDE_EFFECT_TOKENS = Set.of("NEXTVAL", "SETVAL", "UPDLOCK", "XLOCK");
     private static final Set<String> TOP_LEVEL_PAGING_TOKENS = Set.of("LIMIT", "OFFSET", "FETCH", "TOP");
     private static final Set<String> UNSCOPED_MUTATIONS = Set.of("UPDATE", "DELETE");
+    private static final Set<String> MANUAL_TRANSACTION_OPERATIONS = Set.of(
+            "SELECT", "SHOW", "DESCRIBE", "DESC", "VALUES", "TABLE",
+            "INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE");
+    private static final Set<String> TRANSACTION_BOUNDARY_WORDS = Set.of(
+            "COMMIT", "ROLLBACK", "BEGIN", "START", "SAVEPOINT", "RELEASE",
+            "CREATE", "ALTER", "DROP", "GRANT", "REVOKE", "CALL", "EXEC", "EXECUTE", "DECLARE");
     // Words that may sit between EXPLAIN and the verb of the statement it explains.
     private static final Set<String> EXPLAIN_MODIFIERS = Set.of(
             "ANALYZE", "ANALYSE", "VERBOSE", "EXTENDED", "PARTITIONS", "FORMAT", "PLAN", "FOR", "QUERY"
@@ -82,6 +88,38 @@ public class SqlStatementClassifier {
         List<Token> tokens = tokens(sql);
         Operation operation = tokens.isEmpty() ? null : operation(tokens);
         return operation != null && SESSION.contains(operation.word());
+    }
+
+    /**
+     * 工作台持有事务边界，只接收查询和普通 DML。DDL 在各库的提交语义不同，
+     * CALL/DO/匿名块还可能在内部提交，因此不能仅排除 COMMIT/ROLLBACK。
+     * 这不替代数据库对非事务表、序列或函数副作用的约束。
+     */
+    public boolean isAllowedInManualTransaction(String sql) {
+        List<Token> tokens = tokens(sql, true);
+        Operation operation = tokens.isEmpty() ? null : operation(tokens);
+        Kind kind = classify(sql);
+        if (operation == null || kind == Kind.DDL || kind == Kind.UNKNOWN) return false;
+        if (!MANUAL_TRANSACTION_OPERATIONS.contains(operation.word())) return false;
+        // SQL Server 不要求语句间一定有分号，不能只检查 splitter 返回的片段首词。
+        if (tokens.stream().anyMatch(token -> token.depth() == 0
+                && TRANSACTION_BOUNDARY_WORDS.contains(token.word()))) return false;
+        // SELECT INTO 可能建表或写文件；两者都不能承诺随这个事务回滚。
+        // INSERT INTO（含可写 CTE）仍然允许。
+        for (int index = 0; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            // TRUNCATE(price, 2) 是普通函数；TRUNCATE TABLE 却可能隐式提交。
+            if (token.depth() == 0 && "TRUNCATE".equals(token.word())
+                    && (index + 1 == tokens.size() || tokens.get(index + 1).depth() <= token.depth())) return false;
+            if (!"INTO".equals(token.word())) continue;
+            for (int before = index - 1; before >= 0; before--) {
+                Token preceding = tokens.get(before);
+                if (preceding.group() != token.group()) continue;
+                if ("SELECT".equals(preceding.word())) return false;
+                if (Set.of("INSERT", "MERGE", "REPLACE", "UPSERT").contains(preceding.word())) break;
+            }
+        }
+        return true;
     }
 
     /**
@@ -208,6 +246,10 @@ public class SqlStatementClassifier {
     }
 
     private List<Token> tokens(String sql) {
+        return tokens(sql, false);
+    }
+
+    private List<Token> tokens(String sql, boolean rejectExecutableComments) {
         List<Token> tokens = new ArrayList<>();
         int depth = 0;
         boolean atGroupStart = true;
@@ -226,6 +268,9 @@ public class SqlStatementClassifier {
                 continue;
             }
             if (ch == '/' && next == '*') {
+                if (rejectExecutableComments && (sql.startsWith("/*!", index) || sql.startsWith("/*M!", index))) {
+                    return List.of(new Token("UNSUPPORTED_EXECUTABLE_COMMENT", 0, true, 0));
+                }
                 index = skipBlockComment(sql, index + 2);
                 continue;
             }

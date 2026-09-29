@@ -107,6 +107,12 @@ app:
     max-page-offset: 1000000
     max-statements: 500
     timeout-seconds: 60
+  data-diff:
+    # 两侧数据和同步脚本共用估算预算；驱动内部缓存不在此预算内。
+    max-estimated-bytes: 67108864
+    max-cell-chars: 262144
+    # 单个后端进程的全局上限，超出立即返回 429。
+    max-concurrent: 2
   backup:
     directory: ./backups
     timeout-seconds: 7200

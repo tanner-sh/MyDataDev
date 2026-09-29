@@ -16,6 +16,7 @@ public class AppProperties {
     private String cryptoKeySource = "FILE";
     private String cryptoKeyFile = "./secrets/mydatadev-master.key";
     private final Sql sql = new Sql();
+    private final DataDiff dataDiff = new DataDiff();
     private final Backup backup = new Backup();
     private final ScheduledQuery scheduledQuery = new ScheduledQuery();
     private final Restore restore = new Restore();
@@ -50,6 +51,8 @@ public class AppProperties {
     public Sql getSql() {
         return sql;
     }
+
+    public DataDiff getDataDiff() { return dataDiff; }
 
     public Backup getBackup() {
         return backup;
@@ -231,6 +234,29 @@ public class AppProperties {
 
         public void setHeartbeatSeconds(int heartbeatSeconds) {
             this.heartbeatSeconds = heartbeatSeconds;
+        }
+    }
+
+    /** 数据对比在单个进程内共享并发限额；预算是应用对象的保守估算，不是 JVM 堆硬限制。 */
+    public static class DataDiff {
+        private long maxEstimatedBytes = 64L * 1024 * 1024;
+        private int maxCellChars = 262_144;
+        private int maxConcurrent = 2;
+
+        public long getMaxEstimatedBytes() { return maxEstimatedBytes; }
+        public void setMaxEstimatedBytes(long value) {
+            if (value <= 0) throw new IllegalArgumentException("数据对比内存预算必须大于 0");
+            maxEstimatedBytes = value;
+        }
+        public int getMaxCellChars() { return maxCellChars; }
+        public void setMaxCellChars(int value) {
+            if (value <= 0) throw new IllegalArgumentException("数据对比单字段长度上限必须大于 0");
+            maxCellChars = value;
+        }
+        public int getMaxConcurrent() { return maxConcurrent; }
+        public void setMaxConcurrent(int value) {
+            if (value <= 0) throw new IllegalArgumentException("数据对比并发上限必须大于 0");
+            maxConcurrent = value;
         }
     }
 

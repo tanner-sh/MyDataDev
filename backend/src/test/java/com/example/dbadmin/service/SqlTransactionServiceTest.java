@@ -9,6 +9,8 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -167,6 +169,29 @@ class SqlTransactionServiceTest {
                 .hasMessageContaining("会话状态");
 
         service.finish(transaction.id(), false, "admin");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"COMMIT", "ROLLBACK", "BEGIN", "START TRANSACTION", "END",
+            "SAVEPOINT s", "RELEASE SAVEPOINT s", "CREATE TABLE ddl_probe(id INT)",
+            "ALTER TABLE accounts ADD note VARCHAR(20)", "TRUNCATE TABLE accounts",
+            "CALL commits_inside()", "DO $$ BEGIN COMMIT; END $$", "VACUUM", "ANALYZE accounts",
+            "EXPLAIN ANALYZE UPDATE accounts SET balance=9 WHERE id=1",
+            "SELECT * INTO accounts_copy FROM accounts", "/* comment */ COMMIT"})
+    void rejectsTheWholeBatchBeforeAnyWriteAndPreservesEarlierPendingChanges(String forbidden) throws Exception {
+        var transaction = service.begin(1L, null, "admin", null);
+        service.execute(transaction.id(), "UPDATE accounts SET balance=8 WHERE id=1", null, "admin", false);
+
+        assertThatThrownBy(() -> service.execute(transaction.id(),
+                "UPDATE accounts SET balance=7 WHERE id=1; " + forbidden, null, "admin", false))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem ->
+                        assertThat(problem.code()).isEqualTo("TRANSACTION_STATEMENT_UNSUPPORTED"));
+
+        assertThat(balance()).isEqualTo(100);
+        var read = service.execute(transaction.id(), "SELECT balance FROM accounts", null, "admin", false);
+        assertThat(read.results().get(0).result().rows().get(0).get(0)).isEqualTo(8);
+        service.finish(transaction.id(), false, "admin");
+        assertThat(balance()).isEqualTo(100);
     }
 
     @Test

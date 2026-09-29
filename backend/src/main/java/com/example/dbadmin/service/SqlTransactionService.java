@@ -126,6 +126,11 @@ public class SqlTransactionService {
             if (classifier.changesSession(statement.sql())) {
                 throw new IllegalArgumentException("手动事务里不允许执行会改变会话状态的语句（USE/SET 等）。");
             }
+            if (!classifier.isAllowedInManualTransaction(statement.sql())) {
+                throw new ApiProblemException(HttpStatus.BAD_REQUEST, "TRANSACTION_STATEMENT_UNSUPPORTED",
+                        "手动事务只支持查询和普通增删改，不支持事务控制语句、DDL、存储过程或其他管理语句。"
+                                + "请使用工作台的提交/回滚按钮；其他语句请结束事务后执行。本批 SQL 尚未执行。");
+            }
         }
         requireUnscopedConfirmation(statements, unscopedMutationConfirmed, transaction, actor);
 
@@ -173,7 +178,7 @@ public class SqlTransactionService {
                 }
             }
             transaction.recordUse(results.size());
-            // 事务里 DDL 往往会隐式提交，缓存无论成败都不能再信。
+            // 保留元数据失效检查，避免后续扩展可执行语句时漏掉缓存更新。
             if (metadataChanged) metadata.invalidateConnection(transaction.connectionId());
             history.insert(transaction.connectionId(), sql, "TRANSACTION_EXECUTE", status, elapsedMs(started), errorMessage, actor);
             return new SqlTransactionScriptResponse(
