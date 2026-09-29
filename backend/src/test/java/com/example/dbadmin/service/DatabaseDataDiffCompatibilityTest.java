@@ -18,8 +18,10 @@ class DatabaseDataDiffCompatibilityTest {
     @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void boundedReadsPreserveScalarAndTextValuesAndRejectOversizeCells(String type) throws Exception {
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
+            // Oracle 默认可能按字节限制 VARCHAR2；后面的 100 个汉字占 300 个 UTF-8 字节。
+            // 先让样本能存入数据库，再验证应用的 40 字符上限，不能提前撞上数据库列宽。
             String columns = f.pk("id") + ", " + f.decimal("amount", 12, 2) + ", "
-                    + f.varchar("note", 200) + ", " + f.timestamp("created_at", 6);
+                    + f.varchar("note", 400) + ", " + f.timestamp("created_at", 6);
             String source = f.table(columns), target = f.table(columns);
             f.insert(source, "1, 123.45, " + f.text("原文中文") + ", CURRENT_TIMESTAMP", "2, NULL, NULL, NULL");
             f.execute("INSERT INTO " + f.q(target) + " SELECT * FROM " + f.q(source));
