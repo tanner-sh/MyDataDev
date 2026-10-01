@@ -260,6 +260,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const objectDetailPrefetchTimerRef = useRef<number | null>(null);
   const objectDetailPrefetchCandidateRef = useRef('');
   const sqlExecutionIdRef = useRef<string | null>(null);
+  const [scriptTransactionMode, setScriptTransactionMode] = useState<'AUTO' | 'SCRIPT'>('AUTO');
+  const [scriptEndAction, setScriptEndAction] = useState<'COMMIT' | 'ROLLBACK'>('ROLLBACK');
+  useEffect(() => { setScriptTransactionMode('AUTO'); setScriptEndAction('ROLLBACK'); }, [selected?.id]);
   const exportAbortRef = useRef<AbortController | null>(null);
   const sqlBusyRef = useRef(false);
   const sqlTabsRef = useRef(sqlTabs);
@@ -1296,6 +1299,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         // 手动事务开着时走事务端点：同一条连接、同一个事务，由用户决定提交还是回滚。
         const transactionPath = transactionExecutePath(transactionState);
         const executeScript = async (unscopedMutationConfirmed: boolean): Promise<SqlScriptResult> => {
+          if (transactionPath && scriptTransactionMode === 'SCRIPT') throw new Error('请先结束手动事务，再执行脚本事务。');
           if (transactionPath) {
             const response = await api<SqlTransactionScriptResult>(transactionPath, {
               method: 'POST',
@@ -1313,7 +1317,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               pageSize: layoutPreferences.sqlPageSize,
               executionId,
               schemaName: activeSqlSchema,
-              unscopedMutationConfirmed
+              unscopedMutationConfirmed,
+              transactionMode: scriptTransactionMode,
+              endOfFileAction: scriptEndAction
             })
           });
         };
@@ -1345,7 +1351,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         updateActiveSqlTab({
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
-          message: nextMessage,
+          message: data.transactionMessage ? `${nextMessage}；${data.transactionMessage}` : nextMessage,
           statusKind: failed ? 'error' : 'success',
           // 单条语句的失败由结果标签自己展示，这里不再重复整体错误面板。
           errorDetail: undefined
@@ -3332,6 +3338,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onPreviewResultEdits={previewResultEditsEvent}
                 onCommitResultEdits={commitResultEditsEvent}
                 transactionState={transactionState}
+                scriptTransactionMode={scriptTransactionMode}
+                scriptEndAction={scriptEndAction}
+                onScriptTransactionModeChange={setScriptTransactionMode}
+                onScriptEndActionChange={setScriptEndAction}
                 onBeginTransaction={beginTransactionEvent}
                 onFinishTransaction={finishTransactionEvent}
               />

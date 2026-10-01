@@ -1,6 +1,7 @@
 package com.example.dbadmin.repo;
 
 import com.example.dbadmin.model.SqlFileExecution;
+import com.example.dbadmin.model.SqlFileTransaction;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -26,7 +27,11 @@ public class SqlFileExecutionRepository {
             rs.getLong("query_row_count"), rs.getObject("failed_statement_index", Long.class), rs.getString("failed_sql_preview"),
             rs.getString("message"), rs.getBoolean("metadata_changed"), rs.getBoolean("session_changed"),
             rs.getBoolean("cancel_requested"), rs.getString("actor"), instant(rs.getTimestamp("expires_at")),
-            instant(rs.getTimestamp("started_at")), instant(rs.getTimestamp("finished_at")), instant(rs.getTimestamp("created_at"))
+            instant(rs.getTimestamp("started_at")), instant(rs.getTimestamp("finished_at")), instant(rs.getTimestamp("created_at")),
+            new SqlFileTransaction(rs.getString("transaction_mode"), rs.getString("end_of_file_action"),
+                    rs.getLong("transaction_control_count"), rs.getLong("opaque_count"), rs.getLong("commit_count"),
+                    rs.getLong("rollback_count"), rs.getObject("last_commit_index", Long.class), rs.getString("transaction_outcome"),
+                    rs.getObject("failed_start_line", Integer.class), rs.getObject("failed_end_line", Integer.class))
     );
 
     public SqlFileExecutionRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -97,15 +102,30 @@ public class SqlFileExecutionRepository {
                 """, charset, total, query, mutation, ddl, unknown, metadata, session, id);
     }
 
-    public boolean queue(long id) {
+    public boolean queue(long id) { return queue(id, "BATCH", "COMMIT"); }
+
+    public void updateTransactionAnalysis(long id, long controlCount, long opaqueCount) {
+        jdbc.update("UPDATE sql_file_execution SET transaction_control_count=?, opaque_count=? WHERE id=? AND status='ANALYZING'",
+                controlCount, opaqueCount, id);
+    }
+
+    public void updateTransactionProgress(long id, long commits, long rollbacks, Long lastCommit, String outcome,
+                                          Integer startLine, Integer endLine) {
+        jdbc.update("""
+                UPDATE sql_file_execution SET commit_count=?, rollback_count=?, last_commit_index=?,
+                transaction_outcome=?, failed_start_line=?, failed_end_line=? WHERE id=?
+                """, commits, rollbacks, lastCommit, outcome, startLine, endLine, id);
+    }
+
+    public boolean queue(long id, String mode, String endOfFileAction) {
         return jdbc.update("""
-                UPDATE sql_file_execution job SET status='QUEUED', phase='QUEUED', message='任务已进入执行队列。'
+                UPDATE sql_file_execution job SET status='QUEUED', phase='QUEUED', transaction_mode=?, end_of_file_action=?, message='任务已进入执行队列。'
                 WHERE job.id=? AND job.status='READY' AND NOT EXISTS (
                   SELECT 1 FROM sql_file_execution active
                   WHERE active.connection_id=job.connection_id AND active.id<>job.id
                     AND active.status IN ('QUEUED','RUNNING')
                 )
-                """, id) == 1;
+                """, mode, endOfFileAction, id) == 1;
     }
 
     public int countRunningByConnection(long connectionId) {
@@ -142,7 +162,7 @@ public class SqlFileExecutionRepository {
     public void failStaleRunning() {
         jdbc.update("""
                 UPDATE sql_file_execution SET status='FAILED', phase='INTERRUPTED',
-                  message='服务重启，上一轮 SQL 文件任务已中断。', finished_at=CURRENT_TIMESTAMP
+                  transaction_outcome='UNKNOWN', message='服务重启，上一轮 SQL 文件任务已中断；提交结果需核对，不会自动重跑。', finished_at=CURRENT_TIMESTAMP
                 WHERE status IN ('ANALYZING','QUEUED','RUNNING')
                 """);
     }

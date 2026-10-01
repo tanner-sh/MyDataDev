@@ -202,7 +202,7 @@ export type SqlPageNavigation = {
   filters?: SqlResultFilterRequest[] | null;
 };
 export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
-export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean };
+export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean; transactionMessage?: string };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
 export type LegacyBackupScope = BackupScope | 'TABLE';
 export type BackupMethod = 'SQL' | 'MYSQLDUMP' | 'ORACLE_EXP' | 'PG_DUMP';
@@ -503,7 +503,20 @@ export type SqlHistoryGroup = { text: string; hits: number; averageMs: number; l
 
 export type SqlHistory = { id: number; connectionId: number; sql: string; type: string; status: string; elapsedMs: number; errorMessage?: string; actor?: string; actorUserId?: number; createdAt: string };
 export type SqlFileExecutionStatus = 'ANALYZING' | 'READY' | 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED' | 'EXPIRED';
+export type SqlFileTransaction = {
+  mode: 'BATCH' | 'SCRIPT';
+  endOfFileAction: 'COMMIT' | 'ROLLBACK';
+  controlCount: number;
+  opaqueCount: number;
+  commitCount: number;
+  rollbackCount: number;
+  lastCommitIndex?: number;
+  outcome: string;
+  failedStartLine?: number;
+  failedEndLine?: number;
+};
 export type SqlFileExecution = {
+  transaction?: SqlFileTransaction;
   id: number;
   connectionId: number;
   connectionName: string;

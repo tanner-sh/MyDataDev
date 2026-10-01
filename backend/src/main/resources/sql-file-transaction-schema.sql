@@ -1,0 +1,10 @@
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS transaction_mode VARCHAR(20) NOT NULL DEFAULT 'BATCH';
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS end_of_file_action VARCHAR(20) NOT NULL DEFAULT 'COMMIT';
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS transaction_control_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS opaque_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS commit_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS rollback_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS last_commit_index BIGINT;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS transaction_outcome VARCHAR(40) NOT NULL DEFAULT 'NOT_STARTED';
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS failed_start_line INT;
+ALTER TABLE sql_file_execution ADD COLUMN IF NOT EXISTS failed_end_line INT;

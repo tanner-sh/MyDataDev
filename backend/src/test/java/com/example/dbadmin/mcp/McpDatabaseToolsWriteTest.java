@@ -164,6 +164,15 @@ class McpDatabaseToolsWriteTest {
                 .hasMessageContaining("db_query");
     }
 
+    @Test
+    void sqlServerGoBatchCannotBypassSingleStatementWritePermission() {
+        when(connections.require(1L)).thenReturn(new DbConnection(1L, "dev", "sqlserver", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        authenticate(Map.of(1L, McpAccessLevel.DATA_WRITE));
+        assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance=0 WHERE id=1; DROP TABLE accounts;", null, false))
+                .hasMessageContaining("仅支持一条 SQL");
+        assertThat(balance()).isEqualTo(100);
+    }
+
     private void connection(long id, String name, String environment, boolean readonly) {
         DbConnection model = new DbConnection(id, name, "h2", url, "sa", "", environment, readonly, Instant.now(), Instant.now());
         when(connections.require(id)).thenReturn(model);

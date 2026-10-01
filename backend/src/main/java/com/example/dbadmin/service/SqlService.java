@@ -92,7 +92,7 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
-        String executionSql = singleStatement(sql, "单条执行");
+        String executionSql = singleStatement(connectionId, sql, "单条执行");
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, classifier.classify(executionSql), productionConfirmation);
         requireUnscopedMutationConfirmation(
@@ -160,7 +160,7 @@ public class SqlService {
             String actor,
             SqlQueryLimits limits
     ) throws Exception {
-        String executionSql = singleStatement(sql, "MCP 查询");
+        String executionSql = singleStatement(connectionId, sql, "MCP 查询");
         if (classifier.classify(executionSql) != SqlStatementClassifier.Kind.QUERY) {
             throw new IllegalArgumentException("MCP 只允许执行单条只读查询");
         }
@@ -211,7 +211,22 @@ public class SqlService {
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
-        List<StatementSegment> statements = scriptSplitter.split(sql);
+        return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed, null, null);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction) throws Exception {
+        boolean scriptMode = "SCRIPT".equals(transactionMode);
+        if (transactionMode != null && !java.util.Set.of("SCRIPT", "AUTO").contains(transactionMode)) throw new IllegalArgumentException("不支持的窗口事务模式。");
+        String ending = endOfFileAction == null ? "ROLLBACK" : endOfFileAction;
+        if (!java.util.Set.of("COMMIT", "ROLLBACK").contains(ending)) throw new IllegalArgumentException("不支持的脚本结束策略。");
+        if (scriptMode) {
+            connections.requireNoManualTransaction(connectionId);
+            executionGuard.requireMutationAllowed(connections.require(connectionId), productionConfirmation);
+        }
+        if (scriptMode && !SqlScriptSyntax.scriptTransactionsSupported(connections.require(connectionId).dbType())) {
+            throw new IllegalArgumentException("脚本事务模式目前支持 Oracle 和 OceanBase Oracle。");
+        }
+        List<StatementSegment> statements = scriptSplitter.split(sql, connections.require(connectionId).dbType());
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         int maxStatements = Math.max(1, properties.getSql().getMaxStatements());
         if (statements.size() > maxStatements) {
@@ -219,12 +234,18 @@ public class SqlService {
         }
 
         DbConnection dbConnection = connections.require(connectionId);
-        for (StatementSegment statement : statements) {
+        List<StatementSegment> checkedStatements = java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbConnection.dbType().toLowerCase(java.util.Locale.ROOT))
+                ? statements.stream().flatMap(unit -> scriptSplitter.split(unit.sql()).stream()).toList() : statements;
+        for (StatementSegment statement : checkedStatements) {
+            if (scriptMode) SqlScriptSyntax.validateScriptControl(statement.sql());
+            else if (SqlScriptSyntax.transaction(statement.sql()) != SqlScriptSyntax.Transaction.NONE) {
+                throw new IllegalArgumentException("脚本含事务控制语句，请选择脚本控制事务模式，或使用手动事务的提交/回滚按钮。");
+            }
             executionGuard.requireQueryAllowed(dbConnection, classifier.classify(statement.sql()), productionConfirmation);
         }
-        requireUnscopedMutationConfirmation(connectionId, actor, statements, unscopedMutationConfirmed);
+        requireUnscopedMutationConfirmation(connectionId, actor, checkedStatements, unscopedMutationConfirmed);
 
-        if (requestedPageSize != null && statements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
+        if (!scriptMode && requestedPageSize != null && statements.size() == 1 && checkedStatements.size() == 1 && classifier.isAutomaticallyPageable(statements.get(0).sql())) {
             long started = System.nanoTime();
             try {
                 SqlResult result = executePage(connectionId, statements.get(0).sql(), 0, requestedPageSize, actor, executionId, productionConfirmation, schemaName);
@@ -245,14 +266,15 @@ public class SqlService {
         List<SqlStatementResult> results = new ArrayList<>();
         String status = "SUCCESS";
         String errorMessage = null;
-        boolean metadataChanged = false;
-        boolean sessionChanged = statements.stream().anyMatch(statement -> classifier.changesSession(statement.sql()));
+        boolean metadataChanged = checkedStatements.stream().anyMatch(statement -> changesMetadata(statement.sql()));
+        boolean sessionChanged = checkedStatements.stream().anyMatch(statement -> classifier.changesSession(statement.sql()) || SqlScriptSyntax.opaqueBlock(statement.sql()));
         int returnedRows = 0;
         int returnedCells = 0;
         long returnedTextChars = 0;
 
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
+             SqlScriptTransaction tx = scriptMode ? new SqlScriptTransaction(connection, () -> { }) : null;
              Statement jdbc = connection.createStatement()) {
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             dialect.configureReadStatement(connection, jdbc, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
@@ -267,7 +289,7 @@ public class SqlService {
                     boolean statementChangesMetadata = changesMetadata(statement.sql());
                     metadataChanged = metadataChanged || statementChangesMetadata;
                     try {
-                        boolean hasResult = jdbc.execute(statement.sql());
+                        boolean hasResult = tx == null ? jdbc.execute(statement.sql()) : tx.execute(jdbc, statement.sql(), index + 1);
                         SqlResult result;
                         if (hasResult) {
                             try (ResultSet rs = jdbc.getResultSet()) {
@@ -287,11 +309,31 @@ public class SqlService {
                         } else {
                             result = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
                         }
-                        results.add(new SqlStatementResult(index + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
+                        results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
+                        // SQL Server GO preserves a batch; consume all its results instead of losing later SELECTs.
+                        if (java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbConnection.dbType().toLowerCase(java.util.Locale.ROOT))) {
+                            while (true) {
+                                boolean more = jdbc.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
+                                if (!more && jdbc.getUpdateCount() == -1) break;
+                                if (results.size() >= maxStatements) throw new IllegalArgumentException("批次返回结果超过窗口上限，请使用 SQL 文件任务。");
+                                SqlResult nextResult;
+                                if (more) {
+                                    try (ResultSet rs = jdbc.getResultSet()) {
+                                        nextResult = readResult(rs, statementStarted, Math.min(maxRows, Math.max(0, MAX_SCRIPT_RESULT_ROWS - returnedRows)),
+                                                Math.max(0, MAX_RESULT_CELLS - returnedCells), Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars), dialect);
+                                        returnedRows += nextResult.rows().size();
+                                        returnedCells += nextResult.rows().size() * nextResult.columns().size();
+                                        returnedTextChars += textChars(nextResult);
+                                    }
+                                } else nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
+                                results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, nextResult));
+                            }
+                        }
                     } catch (Exception e) {
+                        if (tx != null) tx.fail(e);
                         long elapsedMs = elapsed(statementStarted);
-                        errorMessage = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
-                        results.add(new SqlStatementResult(index + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), emptyResult(-1, elapsedMs, maxRows)));
+                        errorMessage = (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + (tx == null ? "" : "；" + tx.summary());
+                        results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), emptyResult(-1, elapsedMs, maxRows)));
                         status = "FAILED";
                         break;
                     }
@@ -299,13 +341,18 @@ public class SqlService {
             } finally {
                 executions.unregister(registeredId, jdbc);
             }
+            if (tx != null && "SUCCESS".equals(status)) {
+                try { tx.finish("COMMIT".equals(ending), statements.size()); }
+                catch (Exception error) { tx.fail(error); throw new IllegalStateException("脚本收尾失败；" + tx.summary(), error); }
+            }
             long elapsedMs = elapsed(scriptStarted);
             audit.onConnection(actor, "SQL_EXECUTE_SCRIPT", connectionId, abbreviate(sql));
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", status, elapsedMs, errorMessage == null ? null : abbreviate(errorMessage), actor);
             // 脚本跑完了但中间某条语句失败，同样按失败计 —— 用户眼里那就是一次没跑成的执行。
             if ("SUCCESS".equals(status)) metrics.success(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted);
             else metrics.failure(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted, null);
-            return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged);
+            return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged,
+                    tx == null ? null : tx.summary());
         } catch (Exception e) {
             long elapsedMs = elapsed(scriptStarted);
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsedMs, error(e), actor);
@@ -410,7 +457,7 @@ public class SqlService {
             String sortDirection,
             List<SqlResultFilter> filters
     ) throws Exception {
-        String executionSql = singleStatement(sql, "分页查询");
+        String executionSql = singleStatement(connectionId, sql, "分页查询");
         if (!classifier.isAutomaticallyPageable(executionSql)) {
             throw new IllegalArgumentException("当前 SQL 不支持自动分页；仅支持未自带分页子句的单条 SELECT。");
         }
@@ -484,7 +531,7 @@ public class SqlService {
 
     public SqlResult explain(long connectionId, String sql, String actor, String productionConfirmation, String schemaName) throws Exception {
         long started = System.nanoTime();
-        String executionSql = singleStatement(sql, "执行计划");
+        String executionSql = singleStatement(connectionId, sql, "执行计划");
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (!dialect.capabilities().explain()) {
@@ -514,7 +561,7 @@ public class SqlService {
             SqlQueryLimits limits
     ) throws Exception {
         long started = System.nanoTime();
-        String executionSql = singleStatement(sql, "MCP 执行计划");
+        String executionSql = singleStatement(connectionId, sql, "MCP 执行计划");
         DbConnection dbConnection = connections.require(connectionId);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
         if (!dialect.capabilities().explain()) {
@@ -853,8 +900,15 @@ public class SqlService {
         return Math.min(Math.max(requested, 1), configuredMaximum);
     }
 
-    private String singleStatement(String sql, String action) {
-        List<StatementSegment> statements = scriptSplitter.split(sql);
+    private String singleStatement(long connectionId, String sql, String action) {
+        String dbType = connections.require(connectionId).dbType();
+        List<StatementSegment> statements = scriptSplitter.split(sql, dbType);
+        // A GO execution unit is a batch, not permission to send several writes through a single-statement API.
+        if (java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbType.toLowerCase(java.util.Locale.ROOT))
+                && classifier.classify(sql) != SqlStatementClassifier.Kind.DDL && classifier.classify(sql) != SqlStatementClassifier.Kind.UNKNOWN
+                && scriptSplitter.split(sql).size() != 1) {
+            throw new IllegalArgumentException(action + "仅支持一条 SQL；多条语句请使用脚本执行接口。");
+        }
         if (statements.size() != 1) {
             throw new IllegalArgumentException(action + "仅支持一条 SQL；多条语句请使用脚本执行接口。");
         }
@@ -862,7 +916,7 @@ public class SqlService {
     }
 
     boolean changesMetadata(String sql) {
-        return classifier.classify(sql) == SqlStatementClassifier.Kind.DDL;
+        return classifier.classify(sql) == SqlStatementClassifier.Kind.DDL || SqlScriptSyntax.opaqueBlock(sql);
     }
 
     private Object serializableValue(Object value, int maxTextChars) throws Exception {

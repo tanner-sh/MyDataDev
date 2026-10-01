@@ -13,6 +13,16 @@ public final class McpDtos {
     private McpDtos() {
     }
 
+    public record ScriptJobResult(long taskId, long connectionId, String status, String phase,
+                                  @Schema(nullable = true) Long statementTotal, long executedCount,
+                                  @Schema(nullable = true) Long failedStatementIndex,
+                                  String transactionMode, String endOfFileAction, String transactionOutcome,
+                                  long commitCount, long rollbackCount,
+                                  @Schema(nullable = true) Long lastCommitIndex,
+                                  @Schema(nullable = true) Integer failedStartLine,
+                                  @Schema(nullable = true) Integer failedEndLine,
+                                  String message) { }
+
     public record ConnectionView(
             long connectionId,
             String name,

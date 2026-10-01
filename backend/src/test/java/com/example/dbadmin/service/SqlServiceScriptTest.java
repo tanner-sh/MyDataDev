@@ -453,6 +453,27 @@ class SqlServiceScriptTest {
         );
     }
 
+    @Test
+    void windowScriptModeUsesExplicitCommitAndTailRollback() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1;MODE=Oracle";
+        try (Connection c = DriverManager.getConnection(url, "sa", "")) { c.createStatement().execute("CREATE TABLE t(id INT PRIMARY KEY)"); }
+        var connections = mock(ConnectionService.class);
+        when(connections.require(1)).thenReturn(new DbConnection(1L, "oracle-test", "oracle", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        when(connections.open(1)).thenAnswer(i -> DriverManager.getConnection(url, "sa", ""));
+        SqlService service = new SqlService(connections, new AppProperties(), mock(AuditRepository.class), new DialectRegistry(),
+                mock(SqlHistoryRepository.class), mock(MetadataService.class), new SqlScriptSplitter(), new SqlStatementClassifier(),
+                new ExecutionGuard(), new SqlExecutionRegistry(), mock(DataEditService.class), new SqlExecutionMetrics());
+        var result = service.executeScript(1, "INSERT INTO t VALUES(1); COMMIT; INSERT INTO t VALUES(2);", 10, null,
+                "tester", null, null, null, false, "SCRIPT", "ROLLBACK");
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.transactionMessage()).contains("剩余未提交事务已回滚");
+        try (Connection c = DriverManager.getConnection(url, "sa", ""); var rs = c.createStatement().executeQuery("SELECT COUNT(*) FROM t")) {
+            rs.next(); assertThat(rs.getInt(1)).isEqualTo(1);
+        }
+        assertThatThrownBy(() -> service.executeScript(1, "INSERT INTO t VALUES(3); COMMIT;", 10, "tester"))
+                .hasMessageContaining("脚本控制事务");
+    }
+
     private String selectScript(int statements) {
         return java.util.stream.IntStream.rangeClosed(1, statements)
                 .mapToObj(index -> "select " + index + " as val")

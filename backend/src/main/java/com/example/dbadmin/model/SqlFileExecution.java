@@ -33,6 +33,40 @@ public record SqlFileExecution(
         Instant expiresAt,
         Instant startedAt,
         Instant finishedAt,
-        Instant createdAt
+        Instant createdAt,
+        SqlFileTransaction transaction
 ) {
+    public SqlFileExecution(
+        long id,
+        long connectionId,
+        String connectionName,
+        String targetDbType,
+        String fileName,
+        String filePath,
+        long fileSize,
+        String checksumSha256,
+        String detectedCharset,
+        String status,
+        String phase,
+        long processedBytes,
+        Long statementTotal,
+        long statementCurrent,
+        long queryCount,
+        long mutationCount,
+        long ddlCount,
+        long unknownCount,
+        long successCount,
+        long queryRowCount,
+        Long failedStatementIndex,
+        String failedSqlPreview,
+        String message,
+        boolean metadataChanged,
+        boolean sessionChanged,
+        boolean cancelRequested,
+        String actor,
+        Instant expiresAt,
+        Instant startedAt,
+        Instant finishedAt,
+        Instant createdAt
+    ) { this(id, connectionId, connectionName, targetDbType, fileName, filePath, fileSize, checksumSha256, detectedCharset, status, phase, processedBytes, statementTotal, statementCurrent, queryCount, mutationCount, ddlCount, unknownCount, successCount, queryRowCount, failedStatementIndex, failedSqlPreview, message, metadataChanged, sessionChanged, cancelRequested, actor, expiresAt, startedAt, finishedAt, createdAt, SqlFileTransaction.defaults()); }
 }

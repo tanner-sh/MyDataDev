@@ -81,6 +81,9 @@ class McpEndpointIntegrationTest {
                 .contains("db_browse_table")
                 .contains("db_query")
                 .contains("db_explain")
+                .contains("db_execute_script")
+                .contains("db_script_status")
+                .contains("db_cancel_script")
                 .contains("\"readOnlyHint\":true")
                 .doesNotContain("db_update")
                 .doesNotContain("db_delete");
