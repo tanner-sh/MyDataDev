@@ -167,11 +167,14 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 | `db_browse_table` | 使用不透明 cursor 分页浏览表数据，不返回编辑 token |
 | `db_query` | 执行一条只读查询 |
 | `db_explain` | 获取一条查询的执行计划 |
-| `db_execute` | 执行一条写语句，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
+| `db_execute` | 执行一个完整写入单元，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
+| `db_execute_script` | 按指定事务策略后台执行 SQL 文本，返回 taskId |
+| `db_script_status` | 查询当前 agent 创建的脚本任务状态 |
+| `db_cancel_script` | 请求取消当前 agent 的脚本任务，已提交内容保留 |
 
 `db_list_connections` 会返回当前 agent 在每条连接上的档位，agent 据此知道自己能做什么。
 
-除 `db_execute` 外的所有工具都发布 `readOnlyHint: true` 和 `destructiveHint: false`；`db_execute` 发布 `readOnlyHint: false` 和 `destructiveHint: true`，客户端可以据此对它单独要求人工批准。数据库返回的对象名、注释、DDL、数据和错误均属于不可信输入，agent 不应把这些内容当作指令执行。
+除 `db_execute`、`db_execute_script`、`db_cancel_script` 外的所有工具都发布 `readOnlyHint: true` 和 `destructiveHint: false`；这三个写操作工具发布 `readOnlyHint: false` 和 `destructiveHint: true`，客户端可以据此对它单独要求人工批准。数据库返回的对象名、注释、DDL、数据和错误均属于不可信输入，agent 不应把这些内容当作指令执行。
 
 ## 限制与可观测性
 
@@ -190,3 +193,5 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 - `dbadmin.mcp.security.denied`：按原因统计被拒绝的 MCP 请求。
 
 调整结果上限时应同时评估目标数据库负载、后端堆内存和 agent 上下文大小。
+
+脚本模式、结束策略、失败和取消语义见 [SQL 脚本与文件事务](sql-script-transactions.md)。

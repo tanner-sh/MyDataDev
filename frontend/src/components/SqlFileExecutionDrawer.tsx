@@ -39,6 +39,8 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [confirmation, setConfirmation] = useState('');
+  const [transactionMode, setTransactionMode] = useState<'BATCH' | 'SCRIPT'>('BATCH');
+  const [endOfFileAction, setEndOfFileAction] = useState<'COMMIT' | 'ROLLBACK'>('ROLLBACK');
   const uploadAbortRef = useRef<AbortController | undefined>(undefined);
   const handledCandidateRef = useRef(0);
   const handledFocusRef = useRef(0);
@@ -46,6 +48,11 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   const focused = jobs.find((job) => job.id === focusedId) || jobs[0];
   const focusedTarget = connections.find((connection) => connection.id === focused?.connectionId);
   const hasActive = jobs.some((job) => ACTIVE.has(job.status));
+  const supportsScript = ['oracle', 'oceanbase-oracle'].includes(focused?.targetDbType || '');
+  useEffect(() => {
+    setTransactionMode('BATCH');
+    setEndOfFileAction('ROLLBACK');
+  }, [focused?.id]);
 
   useEffect(() => {
     if (!open || candidate || !selected) return;
@@ -160,7 +167,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     try {
       const next = await api<SqlFileExecution>(`/sql-file-executions/${job.id}/start`, {
         method: 'POST',
-        body: JSON.stringify({ productionConfirmation: connection?.environment === 'prod' ? confirmation : undefined })
+        body: JSON.stringify({ productionConfirmation: connection?.environment === 'prod' ? confirmation : undefined, transactionMode, endOfFileAction: transactionMode === 'BATCH' ? 'COMMIT' : endOfFileAction })
       });
       setJobs((current) => current.map((item) => item.id === next.id ? next : item));
       setConfirmation('');
@@ -174,7 +181,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     try {
       const next = await api<SqlFileExecution>(`/sql-file-executions/${job.id}/cancel`, { method: 'POST' });
       setJobs((current) => current.map((item) => item.id === next.id ? next : item));
-      toast.info('SQL 文件任务已取消');
+      toast.info('已发送取消请求，任务停止并完成回滚后更新状态');
     } catch (error) {
       toast.error(localizeMessage((error as Error).message));
     }
@@ -211,7 +218,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
         <div className="sql-file-confirm-card">
           <Alert type={focused.mutationCount + focused.ddlCount + focused.unknownCount > 0 ? 'warning' : 'info'} showIcon
                  title="文件解析完成，请确认执行目标"
-                 description="任务逐条提交；任一语句失败后立即停止，已经提交的语句不会自动回滚。" />
+                 description={transactionMode === 'BATCH' ? '按批次提交；失败时停止并回滚当前未提交批次，先前提交保留。' : `按脚本内 COMMIT / ROLLBACK 执行；成功结束时${endOfFileAction === 'COMMIT' ? '提交' : '回滚'}剩余事务。失败或取消只回滚未提交内容。`} />
           <Descriptions size="small" column={2} items={[
             { key: 'file', label: '文件', children: focused.fileName },
             { key: 'target', label: '目标连接', children: focused.connectionName },
@@ -220,6 +227,18 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
             { key: 'statements', label: '执行单元', children: focused.statementTotal ?? 0 },
             { key: 'checksum', label: 'SHA-256', children: <Text className="sql-file-checksum" copyable>{focused.checksumSha256}</Text> }
           ]} />
+          <Space wrap>
+            <Select aria-label="文件事务模式" value={transactionMode} onChange={setTransactionMode} options={[
+              { value: 'BATCH', label: '工具分批提交' },
+              { value: 'SCRIPT', label: '脚本控制事务', disabled: !supportsScript }
+            ]} />
+            {transactionMode === 'SCRIPT' && <Select aria-label="文件结束策略" value={endOfFileAction} onChange={setEndOfFileAction} options={[
+              { value: 'ROLLBACK', label: '结束时回滚剩余事务（仅保留脚本已提交内容）' },
+              { value: 'COMMIT', label: '全部成功后提交剩余事务' }
+            ]} />}
+          </Space>
+          {(focused.transaction?.controlCount || 0) > 0 && <Alert showIcon type="info" title={`包含 ${focused.transaction?.controlCount} 个顶层事务控制单元，请选择脚本控制事务。`} />}
+          {(focused.transaction?.opaqueCount || 0) > 0 && <Alert showIcon type="warning" title="包含过程调用或匿名块，内部提交和动态 DDL 无法完整追踪，失败不代表整份脚本回滚。" />}
           <Space wrap>{summary.map((item) => <Tag key={item.label} color={item.color}>{item.label} {item.value}</Tag>)}</Space>
           {focusedTarget?.readonly && focused.mutationCount + focused.ddlCount + focused.unknownCount > 0 && (
             <Alert type="error" showIcon title="目标连接为只读连接，文件包含非查询语句，无法执行。" />
@@ -228,7 +247,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
             <Input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={`请输入生产连接名：${focused.connectionName}`} />
           )}
           <Button type="primary" danger={focused.mutationCount + focused.ddlCount + focused.unknownCount > 0}
-                  disabled={Boolean(focusedTarget?.readonly && focused.mutationCount + focused.ddlCount + focused.unknownCount > 0)}
+                  disabled={Boolean(focusedTarget?.readonly && focused.mutationCount + focused.ddlCount + focused.unknownCount > 0) || (transactionMode === 'BATCH' && (focused.transaction?.controlCount || 0) > 0)}
                   icon={<PlayCircleOutlined />} onClick={() => void start(focused)}>确认并执行</Button>
         </div>
       )}
@@ -248,7 +267,9 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
               <Space orientation="vertical" size={3} className="full-width">
                 <Text type="secondary">{job.connectionName} · {formatSqlFileBytes(job.fileSize)} · {formatTime(job.createdAt)}</Text>
                 {(ACTIVE.has(job.status) || job.status === 'READY') && <Progress size="small" percent={percent} status={job.status === 'RUNNING' || job.status === 'ANALYZING' ? 'active' : 'normal'} />}
-                {job.statementTotal != null && <Text type="secondary">进度 {job.statementCurrent}/{job.statementTotal} · 成功 {job.successCount} · 查询返回 {job.queryRowCount} 行</Text>}
+                {job.statementTotal != null && <Text type="secondary">进度 {job.statementCurrent}/{job.statementTotal} · 执行成功 {job.successCount} · 查询返回 {job.queryRowCount} 行</Text>}
+                {job.transaction?.mode === 'SCRIPT' && <Text type="secondary">脚本事务 · 确认提交 {job.transaction.commitCount} 次 · 回滚 {job.transaction.rollbackCount} 次 · 最近顶层提交单元 {job.transaction.lastCommitIndex ?? '无'}（不含过程内部提交）</Text>}
+                {job.transaction?.outcome === 'UNKNOWN' && <Alert type="warning" showIcon title="提交结果未知，请核对数据库；任务不会自动重跑。" />}
                 {job.message && <Text type={job.status === 'FAILED' ? 'danger' : 'secondary'}>{job.message}</Text>}
                 {job.failedStatementIndex != null && <Alert type="error" showIcon title={`第 ${job.failedStatementIndex} 条执行失败`} description={job.failedSqlPreview ? <pre className="sql-file-error-sql">{job.failedSqlPreview}</pre> : undefined} />}
               </Space>

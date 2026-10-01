@@ -14,7 +14,6 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Locale;
 
 final class SqlFileStatementReader {
     private SqlFileStatementReader() {
@@ -78,22 +77,21 @@ final class SqlFileStatementReader {
 
     static void read(Path path, Charset charset, String dbType, int maxStatementChars,
                      StatementConsumer consumer, ProgressConsumer progress) throws Exception {
+        readUnits(path, charset, dbType, maxStatementChars, unit -> consumer.accept(unit.index(), unit.sql()), progress);
+    }
+
+    static void readUnits(Path path, Charset charset, String dbType, int maxStatementChars,
+                          SqlScriptParser.UnitConsumer consumer, ProgressConsumer progress) throws Exception {
         try (CountingInputStream input = new CountingInputStream(Files.newInputStream(path));
              BufferedReader reader = new BufferedReader(new InputStreamReader(input, decoder(charset)), 128 * 1024)) {
-            Parser parser = new Parser(dbType, maxStatementChars, consumer);
-            String line;
-            long lastProgress = 0;
-            boolean firstLine = true;
-            while ((line = reader.readLine()) != null) {
-                if (firstLine && !line.isEmpty() && line.charAt(0) == '\ufeff') line = line.substring(1);
-                firstLine = false;
-                parser.acceptLine(line);
-                if (input.count() - lastProgress >= 4L * 1024 * 1024) {
-                    lastProgress = input.count();
-                    progress.accept(lastProgress);
+            long[] lastProgress = {0};
+            SqlScriptParser.read(reader, dbType, maxStatementChars, unit -> {
+                consumer.accept(unit);
+                if (input.count() - lastProgress[0] >= 4L * 1024 * 1024) {
+                    lastProgress[0] = input.count();
+                    progress.accept(lastProgress[0]);
                 }
-            }
-            parser.finish();
+            });
             progress.accept(input.count());
         }
     }
@@ -104,218 +102,6 @@ final class SqlFileStatementReader {
                 .onUnmappableCharacter(CodingErrorAction.REPORT);
     }
 
-    private static final class Parser {
-        private final boolean mysql;
-        private final boolean backslashEscapes;
-        private final boolean sqlServer;
-        private final boolean oracle;
-        private final int maxStatementChars;
-        private final StatementConsumer consumer;
-        private final StringBuilder statement = new StringBuilder();
-        private String delimiter = ";";
-        private String dollarQuote;
-        private char oracleQuoteEnd;
-        private boolean single;
-        private boolean doubleQuoted;
-        private boolean backtick;
-        private boolean bracket;
-        private boolean blockComment;
-        private boolean oracleBlock;
-        private boolean statementStarted;
-        private long index;
-
-        private Parser(String dbType, int maxStatementChars, StatementConsumer consumer) {
-            String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-            this.mysql = type.equals("mysql") || type.equals("mariadb") || type.equals("oceanbase-mysql");
-            this.backslashEscapes = mysql || type.equals("clickhouse");
-            this.sqlServer = type.equals("sqlserver") || type.equals("sql-server") || type.equals("mssql");
-            this.oracle = type.equals("oracle") || type.equals("dm") || type.equals("dameng") || type.equals("oceanbase-oracle");
-            this.maxStatementChars = Math.max(1, maxStatementChars);
-            this.consumer = consumer;
-        }
-
-        private void acceptLine(String line) throws Exception {
-            String trimmed = line.trim();
-            if (cleanState()) {
-                if (mysql && !statementStarted && trimmed.toUpperCase(Locale.ROOT).startsWith("DELIMITER ")) {
-                    String next = trimmed.substring("DELIMITER".length()).trim();
-                    if (next.isBlank() || next.length() > 16 || next.chars().anyMatch(Character::isWhitespace)) {
-                        throw new IllegalArgumentException("MySQL DELIMITER 指令不合法。");
-                    }
-                    delimiter = next;
-                    statement.setLength(0);
-                    statementStarted = false;
-                    return;
-                }
-                if (sqlServer && trimmed.equalsIgnoreCase("GO")) {
-                    emit();
-                    return;
-                }
-                if (sqlServer && trimmed.toUpperCase(Locale.ROOT).matches("GO\\s+\\d+")) {
-                    throw new IllegalArgumentException("暂不支持带重复次数的 SQL Server GO 指令。");
-                }
-                if (oracle && trimmed.equals("/")) {
-                    emit();
-                    oracleBlock = false;
-                    return;
-                }
-            }
-
-            if (oracle && !statementStarted) oracleBlock = isOracleBlockStart(trimmed);
-            boolean lineComment = false;
-            for (int cursor = 0; cursor < line.length(); cursor++) {
-                char current = line.charAt(cursor);
-                char next = cursor + 1 < line.length() ? line.charAt(cursor + 1) : '\0';
-                append(current);
-                if (lineComment) continue;
-                if (dollarQuote != null) {
-                    if (line.startsWith(dollarQuote, cursor)) {
-                        for (int extra = 1; extra < dollarQuote.length(); extra++) append(line.charAt(cursor + extra));
-                        cursor += dollarQuote.length() - 1;
-                        dollarQuote = null;
-                    }
-                    continue;
-                }
-                if (oracleQuoteEnd != '\0') {
-                    if (current == oracleQuoteEnd && next == '\'') {
-                        append(next);
-                        cursor++;
-                        oracleQuoteEnd = '\0';
-                    }
-                    continue;
-                }
-                if (blockComment) {
-                    if (current == '*' && next == '/') {
-                        append(next);
-                        cursor++;
-                        blockComment = false;
-                    }
-                    continue;
-                }
-                if (single) {
-                    if (current == '\'' && next == '\'') {
-                        append(next);
-                        cursor++;
-                    } else if (current == '\'' && !escapedByBackslash(line, cursor)) single = false;
-                    continue;
-                }
-                if (doubleQuoted) {
-                    if (current == '"' && next == '"') {
-                        append(next);
-                        cursor++;
-                    } else if (current == '"') doubleQuoted = false;
-                    continue;
-                }
-                if (backtick) {
-                    if (current == '`' && next == '`') {
-                        append(next);
-                        cursor++;
-                    } else if (current == '`') backtick = false;
-                    continue;
-                }
-                if (bracket) {
-                    if (current == ']' && next == ']') {
-                        append(next);
-                        cursor++;
-                    } else if (current == ']') bracket = false;
-                    continue;
-                }
-
-                if (current == '-' && next == '-') {
-                    append(next);
-                    cursor++;
-                    lineComment = true;
-                } else if (current == '/' && next == '*') {
-                    append(next);
-                    cursor++;
-                    blockComment = true;
-                } else if (current == '\'') single = true;
-                else if (current == '"') doubleQuoted = true;
-                else if (current == '`') backtick = true;
-                else if (current == '[') bracket = true;
-                else if ((current == 'q' || current == 'Q') && next == '\'' && cursor + 2 < line.length()) {
-                    append(next);
-                    append(line.charAt(cursor + 2));
-                    oracleQuoteEnd = matchingOracleQuote(line.charAt(cursor + 2));
-                    cursor += 2;
-                } else if (current == '$' && !mysql) {
-                    String tag = dollarDelimiter(line, cursor);
-                    if (tag != null) {
-                        for (int extra = 1; extra < tag.length(); extra++) append(line.charAt(cursor + extra));
-                        cursor += tag.length() - 1;
-                        dollarQuote = tag;
-                    }
-                }
-
-                if (cleanState() && !sqlServer && !(oracle && oracleBlock) && endsWithDelimiter()) {
-                    statement.setLength(statement.length() - delimiter.length());
-                    emit();
-                }
-            }
-            append('\n');
-        }
-
-        private void finish() throws Exception {
-            if (!cleanState()) throw new IllegalArgumentException("SQL 文件存在未闭合的字符串或注释。");
-            emit();
-        }
-
-        /** A quote is escaped only after an odd run of backslashes, and only in dialects that support it. */
-        private boolean escapedByBackslash(String line, int cursor) {
-            if (!backslashEscapes) return false;
-            int count = 0;
-            for (int index = cursor - 1; index >= 0 && line.charAt(index) == '\\'; index--) count++;
-            return (count & 1) == 1;
-        }
-
-        private boolean cleanState() {
-            return !single && !doubleQuoted && !backtick && !bracket && !blockComment && dollarQuote == null && oracleQuoteEnd == '\0';
-        }
-
-        private boolean endsWithDelimiter() {
-            if (statement.length() < delimiter.length()) return false;
-            for (int i = 0; i < delimiter.length(); i++) {
-                if (statement.charAt(statement.length() - delimiter.length() + i) != delimiter.charAt(i)) return false;
-            }
-            return true;
-        }
-
-        private void emit() throws Exception {
-            String sql = statement.toString().trim();
-            statement.setLength(0);
-            statementStarted = false;
-            if (sql.isBlank() || sql.replaceAll("(?s)/\\*.*?\\*/|--.*?(?:\\R|$)", "").isBlank()) return;
-            consumer.accept(++index, sql);
-        }
-
-        private void append(char value) {
-            statement.append(value);
-            if (!statementStarted && !Character.isWhitespace(value)) statementStarted = true;
-            if (statement.length() > maxStatementChars) {
-                throw new IllegalArgumentException("单条 SQL 超过允许大小（" + maxStatementChars + " 字符）。");
-            }
-        }
-
-        private boolean isOracleBlockStart(String value) {
-            String normalized = value.toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
-            return normalized.equals("BEGIN") || normalized.startsWith("BEGIN ") || normalized.equals("DECLARE")
-                    || normalized.startsWith("DECLARE ")
-                    || normalized.matches("CREATE( OR REPLACE)? (PROCEDURE|FUNCTION|PACKAGE|TRIGGER|TYPE BODY)\\b.*");
-        }
-
-        private char matchingOracleQuote(char opening) {
-            return switch (opening) { case '[' -> ']'; case '{' -> '}'; case '(' -> ')'; case '<' -> '>'; default -> opening; };
-        }
-
-        private String dollarDelimiter(String line, int start) {
-            int end = start + 1;
-            while (end < line.length() && (Character.isLetterOrDigit(line.charAt(end)) || line.charAt(end) == '_')) end++;
-            if (end >= line.length() || line.charAt(end) != '$') return null;
-            String tag = line.substring(start + 1, end);
-            return tag.isEmpty() || Character.isLetter(tag.charAt(0)) || tag.charAt(0) == '_' ? line.substring(start, end + 1) : null;
-        }
-    }
-
     private static final class CountingInputStream extends FilterInputStream {
         private long count;
         private CountingInputStream(InputStream input) { super(input); }
@@ -324,21 +110,6 @@ final class SqlFileStatementReader {
             int read = super.read(value, offset, length); if (read > 0) count += read; return read;
         }
         private long count() { return count; }
-    }
-
-    enum Kind { QUERY, MUTATION, DDL }
-
-    static Kind classifySql(String sql) {
-        String normalized = sql.trim().toUpperCase(Locale.ROOT);
-        if (normalized.startsWith("SELECT") || normalized.startsWith("WITH") || normalized.startsWith("SHOW")
-                || normalized.startsWith("DESCRIBE") || normalized.startsWith("DESC") || normalized.startsWith("EXPLAIN")) {
-            return Kind.QUERY;
-        }
-        if (normalized.startsWith("INSERT") || normalized.startsWith("UPDATE") || normalized.startsWith("DELETE")
-                || normalized.startsWith("REPLACE") || normalized.startsWith("MERGE")) {
-            return Kind.MUTATION;
-        }
-        return Kind.DDL;
     }
 
     @FunctionalInterface interface StatementConsumer { void accept(long index, String sql) throws Exception; }

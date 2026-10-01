@@ -45,6 +45,7 @@ public class SqlStatementClassifier {
 
     public Kind classify(String sql) {
         if (sql == null || sql.isBlank()) return Kind.UNKNOWN;
+        if (SqlScriptSyntax.opaqueBlock(sql)) return Kind.UNKNOWN;
         List<Token> tokens = tokens(sql);
         if (tokens.isEmpty()) return Kind.UNKNOWN;
         Operation operation = operation(tokens);

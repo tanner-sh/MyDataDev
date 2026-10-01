@@ -103,8 +103,12 @@ public class SqlFileExecutionController {
             @RequestHeader(value = "X-User", required = false) String actor
     ) throws Exception {
         access.requireSqlFileExecution(id);
+        if (request != null && "SCRIPT".equalsIgnoreCase(request.transactionMode())) {
+            access.require(service.get(id).connectionId(), ConnectionPermission.DATA_WRITE);
+        }
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(
-                service.start(id, request == null ? null : request.productionConfirmation(), actor));
+                service.start(id, request == null ? null : request.productionConfirmation(), actor,
+                        request == null ? null : request.transactionMode(), request == null ? null : request.endOfFileAction()));
     }
 
     @PostMapping("/{id}/cancel")

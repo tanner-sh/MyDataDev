@@ -36,7 +36,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange }: {
   /** 工作区标签条，由 App 统一渲染后交给各工作区放进工具栏最左边。 */
   documentTabs?: ReactNode;
   draftSaveState?: string;
@@ -93,6 +93,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   onPreviewResultEdits: (request: ResultEditCommit) => Promise<string[]>;
   onCommitResultEdits: (request: ResultEditCommit) => Promise<void>;
   transactionState: SqlTransactionState;
+  scriptTransactionMode: 'AUTO' | 'SCRIPT';
+  scriptEndAction: 'COMMIT' | 'ROLLBACK';
+  onScriptTransactionModeChange: (mode: 'AUTO' | 'SCRIPT') => void;
+  onScriptEndActionChange: (action: 'COMMIT' | 'ROLLBACK') => void;
   onBeginTransaction: () => void;
   onFinishTransaction: (commit: boolean) => void;
 }) {
@@ -465,6 +469,17 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             </Dropdown>
           </Space>
           <Space size={4} className="sql-toolbar-group sql-toolbar-transaction-group">
+            {selected && ['oracle', 'oceanbase-oracle'].includes(selected.dbType) && <Space size={4}>
+              <Select size="small" aria-label="窗口事务模式" value={scriptTransactionMode}
+                disabled={loading || Boolean(transactionState.transaction) || transactionState.pending}
+                onChange={onScriptTransactionModeChange} options={[
+                  { value: 'AUTO', label: '普通执行' }, { value: 'SCRIPT', label: '脚本控制事务' }
+                ]} />
+              {scriptTransactionMode === 'SCRIPT' && <Select size="small" aria-label="脚本结束策略" value={scriptEndAction}
+                disabled={loading} onChange={onScriptEndActionChange} options={[
+                  { value: 'ROLLBACK', label: '结束时回滚剩余事务' }, { value: 'COMMIT', label: '成功后提交剩余事务' }
+                ]} />}
+            </Space>}
             <Tooltip title={transactionTooltip(transactionState)}>
               {transactionState.transaction ? (
                 <Space.Compact>
@@ -494,7 +509,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
                   className="sql-toolbar-button"
                   size="small"
                   icon={<BranchesOutlined />}
-                  disabled={!canWrite || selected?.readonly || loading}
+                  disabled={!canWrite || selected?.readonly || loading || scriptTransactionMode === 'SCRIPT'}
                   loading={transactionState.pending}
                   onClick={onBeginTransaction}
                 >

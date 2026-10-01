@@ -117,7 +117,7 @@ public class SqlTransactionService {
     ) throws Exception {
         OpenTransaction transaction = registry.require(transactionId);
         DbConnection dbConnection = connections.require(transaction.connectionId());
-        List<StatementSegment> statements = splitter.split(sql);
+        List<StatementSegment> statements = splitter.split(sql, dbConnection.dbType());
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         if (statements.size() > MAX_STATEMENTS_PER_CALL) {
             throw new IllegalArgumentException("手动事务里一次最多执行 " + MAX_STATEMENTS_PER_CALL + " 条 SQL。");

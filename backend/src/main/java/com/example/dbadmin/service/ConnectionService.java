@@ -25,6 +25,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class ConnectionService {
+    public void requireNoManualTransaction(long connectionId) {
+        if (transactions != null && transactions.activeFor(connectionId) != null) {
+            throw new IllegalArgumentException("请先结束该连接的手动事务，再执行脚本事务。");
+        }
+    }
+
     public static final String PASSWORD_MASK = "******";
 
     /**

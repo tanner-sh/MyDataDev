@@ -667,15 +667,21 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed) {
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction) {
         public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId) {
-            this(connectionId, sql, maxRows, pageSize, executionId, null, false);
+            this(connectionId, sql, maxRows, pageSize, executionId, null, false, null, null);
+        }
+        public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId, String schemaName, boolean confirmed) {
+            this(connectionId, sql, maxRows, pageSize, executionId, schemaName, confirmed, null, null);
         }
     }
 
-    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
+    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged, String transactionMessage) {
         public SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results) {
-            this(status, elapsedMs, executedCount, results, false);
+            this(status, elapsedMs, executedCount, results, false, null);
+        }
+        public SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged) {
+            this(status, elapsedMs, executedCount, results, metadataChanged, null);
         }
     }
 
@@ -689,7 +695,8 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlFileExecutionStartRequest(String productionConfirmation) {
+    public record SqlFileExecutionStartRequest(String productionConfirmation, String transactionMode, String endOfFileAction) {
+        public SqlFileExecutionStartRequest(String productionConfirmation) { this(productionConfirmation, null, null); }
     }
 
     public record SqlFileExecutionResponse(
@@ -721,7 +728,8 @@ public final class ApiDtos {
             Instant expiresAt,
             Instant startedAt,
             Instant finishedAt,
-            Instant createdAt
+            Instant createdAt,
+            com.example.dbadmin.model.SqlFileTransaction transaction
     ) {
     }
 
