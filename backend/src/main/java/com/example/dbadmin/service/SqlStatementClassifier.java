@@ -78,6 +78,15 @@ public class SqlStatementClassifier {
         return operation != null && "SELECT".equals(operation.word()) && classify(sql) == Kind.QUERY;
     }
 
+    /** Parameter templates cannot contain a second T-SQL operation without a semicolon. */
+    public boolean isParameterizedSelectQuery(String sql) {
+        if (!isSelectQuery(sql)) return false;
+        Set<String> boundaries = Set.of("INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP",
+                "TRUNCATE", "GRANT", "REVOKE", "EXEC", "EXECUTE", "CALL", "COMMIT", "ROLLBACK", "BEGIN",
+                "SET", "USE", "WAITFOR", "DBCC", "BACKUP", "RESTORE", "SHUTDOWN", "PRINT", "DECLARE", "RETURN", "GO");
+        return tokens(sql, true).stream().noneMatch(token -> token.depth() == 0 && boundaries.contains(token.word()));
+    }
+
     public boolean isAutomaticallyPageable(String sql) {
         List<Token> tokens = tokens(sql);
         Operation operation = tokens.isEmpty() ? null : operation(tokens);

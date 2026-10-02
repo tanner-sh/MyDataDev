@@ -14,7 +14,7 @@ import java.util.Optional;
 
 @Repository
 public class SqlSnippetRepository {
-    private static final String COLUMNS = "id, name, description, sql_text, db_type, tags, use_count, last_used_at, actor, updated_at, visibility, owner_user_id";
+    private static final String COLUMNS = "id, name, description, sql_text, db_type, tags, use_count, last_used_at, actor, updated_at, visibility, owner_user_id, parameters_json";
     private final JdbcTemplate jdbc;
 
     public SqlSnippetRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -66,12 +66,12 @@ public class SqlSnippetRepository {
     }
 
     public long insert(String name, String description, String sql, String dbType, String tags, String actor,
-                       String visibility, Long ownerUserId) {
+                       String visibility, Long ownerUserId, String parametersJson) {
         KeyHolder keys = new GeneratedKeyHolder();
         jdbc.update(connection -> {
             var statement = connection.prepareStatement("""
-                    INSERT INTO sql_snippet(name, description, sql_text, db_type, tags, actor, visibility, owner_user_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO sql_snippet(name, description, sql_text, db_type, tags, actor, visibility, owner_user_id, parameters_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, new String[]{"id"});
             statement.setString(1, name);
             statement.setString(2, description);
@@ -81,6 +81,7 @@ public class SqlSnippetRepository {
             statement.setString(6, actor);
             statement.setString(7, visibility);
             statement.setObject(8, ownerUserId);
+            statement.setString(9, parametersJson);
             return statement;
         }, keys);
         Number id = keys.getKey();
@@ -89,13 +90,13 @@ public class SqlSnippetRepository {
     }
 
     public void update(long id, String name, String description, String sql, String dbType, String tags,
-                       String visibility, Long ownerUserId) {
+                       String visibility, Long ownerUserId, String parametersJson) {
         jdbc.update("""
                 UPDATE sql_snippet
                 SET name = ?, description = ?, sql_text = ?, db_type = ?, tags = ?,
-                    visibility = ?, owner_user_id = ?, updated_at = CURRENT_TIMESTAMP
+                    visibility = ?, owner_user_id = ?, parameters_json = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-                """, name, description, sql, dbType, tags, visibility, ownerUserId, id);
+                """, name, description, sql, dbType, tags, visibility, ownerUserId, parametersJson, id);
     }
 
     public void delete(long id) { jdbc.update("DELETE FROM sql_snippet WHERE id = ?", id); }
@@ -130,8 +131,19 @@ public class SqlSnippetRepository {
                 rs.getLong("id"), rs.getString("name"), rs.getString("description"), rs.getString("sql_text"),
                 rs.getString("db_type"), rs.getString("tags"), rs.getLong("use_count"),
                 lastUsed == null ? null : lastUsed.toInstant().toString(), rs.getString("actor"),
-                updated == null ? null : updated.toInstant().toString(), visibility, ownerUserId, editable
+                updated == null ? null : updated.toInstant().toString(), visibility, ownerUserId, editable, readParameters(rs.getString("parameters_json"))
         );
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+    public static String writeParameters(java.util.List<com.example.dbadmin.dto.ApiDtos.SqlParameterDefinition> parameters) {
+        try { return JSON.writeValueAsString(parameters == null ? java.util.List.of() : parameters); }
+        catch (java.io.IOException e) { throw new IllegalArgumentException("无法保存参数定义", e); }
+    }
+    private static java.util.List<com.example.dbadmin.dto.ApiDtos.SqlParameterDefinition> readParameters(String json) {
+        if (json == null) return java.util.List.of();
+        try { return JSON.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<>() { }); }
+        catch (java.io.IOException e) { throw new IllegalStateException("无法读取参数定义", e); }
     }
 
     private String likePattern(String keyword) {

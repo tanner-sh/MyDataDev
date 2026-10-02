@@ -1,3 +1,4 @@
+import { normalizeParameterDefinitions, type SqlParameterDefinition } from './sqlParameters';
 import { workspaceIdentity } from './auth';
 import type { SqlTab } from './types';
 
@@ -7,6 +8,7 @@ const STORAGE_PREFIX = 'db-admin:sql-session:v2:';
 type SessionStorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
 type StoredSqlTab = {
+  parameters?: SqlParameterDefinition[];
   id: string;
   title: string;
   sql: string;
@@ -50,7 +52,8 @@ export function writeSqlSession(
     id: tab.id,
     title: tab.title,
     sql: tab.sql,
-    dirty: tab.dirty
+    dirty: tab.dirty,
+    ...(tab.parameters ? { parameters: tab.parameters } : {})
   }));
   if (storedTabs.length === 0) return false;
   const session: StoredSqlSession = {
@@ -83,6 +86,7 @@ export function normalizeSqlSession(value: unknown): SqlSession | undefined {
         : `查询 ${tabs.length + 1}`,
       sql: candidate.sql,
       dirty: candidate.dirty === true,
+      ...(candidate.parameters ? { parameters: normalizeParameterDefinitions(candidate.parameters) } : {}),
       results: [],
       message: ''
     });

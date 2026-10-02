@@ -31,6 +31,7 @@ public class SqlSnippetService {
     public List<SqlSnippetResponse> list(String keyword, String dbType) { return list(keyword, dbType, null); }
 
     public SqlSnippetResponse create(SqlSnippetRequest request, WebIdentity identity, String fallbackActor) {
+        SqlParameters.validateDefinitions(request.sql(), request.dbType(), request.parameters());
         String visibility = normalizeVisibility(request.visibility(), identity);
         Long ownerUserId = identity == null ? null : identity.userId();
         String name = requireName(request.name(), null, visibility, ownerUserId);
@@ -39,7 +40,7 @@ public class SqlSnippetService {
         }
         String actor = actor(identity, fallbackActor);
         long id = repository.insert(name, trimToNull(request.description()), request.sql(),
-                normalizeDbType(request.dbType()), trimToNull(request.tags()), actor, visibility, ownerUserId);
+                normalizeDbType(request.dbType()), trimToNull(request.tags()), actor, visibility, ownerUserId, SqlSnippetRepository.writeParameters(request.parameters()));
         audit.global(actor, "SQL_SNIPPET_CREATE", "snippet:" + id, name + ", visibility=" + visibility);
         return requireVisible(id, identity);
     }
@@ -49,6 +50,7 @@ public class SqlSnippetService {
     }
 
     public SqlSnippetResponse update(long id, SqlSnippetRequest request, WebIdentity identity, String fallbackActor) {
+        SqlParameters.validateDefinitions(request.sql(), request.dbType(), request.parameters());
         SqlSnippetResponse existing = requireAny(id, identity);
         requireEditable(existing, identity);
         String visibility = normalizeVisibility(request.visibility() == null ? existing.visibility() : request.visibility(), identity);
@@ -56,7 +58,7 @@ public class SqlSnippetService {
         if (ownerUserId == null && "PERSONAL".equals(visibility)) ownerUserId = requireUser(identity);
         String name = requireName(request.name(), id, visibility, ownerUserId);
         repository.update(id, name, trimToNull(request.description()), request.sql(),
-                normalizeDbType(request.dbType()), trimToNull(request.tags()), visibility, ownerUserId);
+                normalizeDbType(request.dbType()), trimToNull(request.tags()), visibility, ownerUserId, SqlSnippetRepository.writeParameters(request.parameters()));
         String actor = actor(identity, fallbackActor);
         audit.global(actor, "SQL_SNIPPET_UPDATE", "snippet:" + id, name + ", visibility=" + visibility);
         return requireVisible(id, identity);

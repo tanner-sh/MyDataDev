@@ -67,7 +67,8 @@ describe('snippetRequestBody', () => {
       sql: 'select 1',
       dbType: undefined,
       tags: undefined,
-      visibility: 'PERSONAL'
+      visibility: 'PERSONAL',
+      parameters: []
     });
   });
 

@@ -35,6 +35,19 @@ class SqlSnippetServiceTest {
         service = new SqlSnippetService(new SqlSnippetRepository(new JdbcTemplate(dataSource)), audit);
     }
 
+    @Test
+    void persistsTemplateParametersAndReplacesThemWhenEditing() {
+        var definitions = java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlParameterDefinition("id", "INTEGER", true, "42"));
+        var created = service.create(new SqlSnippetRequest("template", null, "select :id", "h2", null, "SHARED", definitions), "admin");
+        assertThat(created.parameters()).isEqualTo(definitions);
+        assertThat(service.list(null, null).get(0).parameters()).isEqualTo(definitions);
+        var updated = service.update(created.id(), new SqlSnippetRequest("template", null, "select 1", "h2", null), "admin");
+        assertThat(updated.parameters()).isEmpty();
+        assertThatThrownBy(() -> service.create(new SqlSnippetRequest("invalid", null, "select :other", "h2", null, "SHARED", definitions), "admin"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(service.list(null, null)).hasSize(1);
+    }
+
     private SqlSnippetRequest request(String name, String sql, String dbType) {
         return new SqlSnippetRequest(name, "对账用", sql, dbType, "对账,日常");
     }

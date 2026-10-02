@@ -19,6 +19,19 @@ import static org.mockito.Mockito.when;
 
 class SqlControllerTest {
     @Test
+    void parameterizedQueriesRequireQueryPermissionBeforeExecution() throws Exception {
+        var access = mock(com.example.dbadmin.access.ConnectionAccessService.class);
+        SqlService sql = mock(SqlService.class);
+        var controller = new SqlController(sql, mock(ExportService.class), mock(SqlTransactionService.class), access);
+        var request = new com.example.dbadmin.dto.ApiDtos.SqlParameterizedRequest(1L, "select :id", null, null, null,
+                java.util.Map.of("id", new com.example.dbadmin.dto.ApiDtos.SqlParameter("INTEGER", "1")));
+        org.mockito.Mockito.doThrow(new IllegalArgumentException("denied")).when(access)
+                .require(1L, com.example.dbadmin.access.ConnectionPermission.QUERY);
+        assertThatThrownBy(() -> controller.executeParameterized(request, "alice", null)).hasMessage("denied");
+        org.mockito.Mockito.verifyNoInteractions(sql);
+    }
+
+    @Test
     void exposesTheActualPreparedExportTruncationState() throws Exception {
         ExportService exports = mock(ExportService.class);
         var constructor = ExportService.PreparedExport.class

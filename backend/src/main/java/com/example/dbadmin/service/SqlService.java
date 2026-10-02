@@ -92,7 +92,23 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
-        String executionSql = singleStatement(connectionId, sql, "单条执行");
+        return executeBound(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed, null);
+    }
+
+    public SqlResult executeParameterized(com.example.dbadmin.dto.ApiDtos.SqlParameterizedRequest request, String actor, String productionConfirmation) throws Exception {
+        SqlParameters.Parsed parsed = SqlParameters.parse(request.sql(), connections.require(request.connectionId()).dbType());
+        SqlParameters.validateValues(parsed, request.parameters());
+        return executeBound(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation,
+                request.schemaName(), false, request.parameters());
+    }
+
+    private SqlResult executeBound(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId,
+            String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed,
+            Map<String, com.example.dbadmin.dto.ApiDtos.SqlParameter> parameters) throws Exception {
+        SqlParameters.Parsed parsed = parameters == null ? null : SqlParameters.parse(sql, connections.require(connectionId).dbType());
+        String executionSql = singleStatement(connectionId, parsed == null ? sql : parsed.sql(), "单条执行");
+        if (parsed != null && !classifier.isParameterizedSelectQuery(executionSql)) throw new IllegalArgumentException("参数化执行只支持单条 SELECT 查询。");
+
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, classifier.classify(executionSql), productionConfirmation);
         requireUnscopedMutationConfirmation(
@@ -106,14 +122,15 @@ public class SqlService {
         int maxRows = normalizeMaxRows(requestedMaxRows);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
-             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
-             Statement statement = connection.createStatement()) {
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, parsed != null || dbConnection.readonly());
+             Statement statement = parsed == null ? connection.createStatement() : connection.prepareStatement(executionSql)) {
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(maxRows + 1);
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
-                boolean hasResult = statement.execute(executionSql);
+                if (parsed != null) SqlParameters.bind((java.sql.PreparedStatement) statement, parsed, parameters);
+                boolean hasResult = parsed == null ? statement.execute(executionSql) : ((java.sql.PreparedStatement) statement).execute();
                 audit.onConnection(actor, "SQL_EXECUTE", connectionId, abbreviate(sql));
                 if (!hasResult) {
                     long elapsedMs = elapsed(started);
@@ -123,7 +140,7 @@ public class SqlService {
                     return result;
                 }
                 try (ResultSet rs = statement.getResultSet()) {
-                    SqlResult result = withColumnSources(readResult(rs, started, maxRows, dialect), rs, connection,
+                    SqlResult result = parsed != null ? readResult(rs, started, maxRows, dialect) : withColumnSources(readResult(rs, started, maxRows, dialect), rs, connection,
                             dbConnection, connectionId, schemaName, executionSql, dialect);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
                     metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
@@ -134,7 +151,7 @@ public class SqlService {
             }
         } catch (Exception e) {
             long elapsedMs = elapsed(started);
-            history.insert(connectionId, sql, "EXECUTE", "FAILED", elapsedMs, error(e), actor);
+            history.insert(connectionId, sql, "EXECUTE", "FAILED", elapsedMs, parsed == null ? error(e) : "参数查询执行失败（参数值不记录）", actor);
             metrics.failure(SqlExecutionMetrics.KIND_QUERY, started, e);
             throw e;
         } finally {

@@ -1,3 +1,5 @@
+import { useSqlParameters } from './components/useSqlParameters';
+import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValues } from './sqlParameters';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
 import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
@@ -1136,14 +1138,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   /** 在新标签页里打开一段 SQL，保留当前标签的草稿。 */
-  function openSqlInNewTab(sql: string, title: string) {
+  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[]) {
     if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
       toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
       return;
     }
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
-    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true };
+    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true, parameters };
     setSqlTabs((tabs) => [...tabs, tab]);
     setActiveSqlTabId(tab.id);
     setMode('sql');
@@ -1241,6 +1243,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
   }
 
+  const sqlParameters = useSqlParameters(`${selected?.id}:${activeSqlTab.id}`);
+
   async function execute(path = '/sql/execute', productionConfirmation?: string, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
@@ -1262,6 +1266,18 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
     sqlBusyRef.current = true;
     try {
+      let parameterValues: SqlParameterValues | undefined;
+      if (target.sql.includes(':')) {
+        const names = await api<string[]>('/sql/parameters', { method: 'POST', body: JSON.stringify({ sql: target.sql, dbType: selected.dbType }) });
+        if (names.length) {
+          if (path === '/sql/explain') { showInfo('参数查询暂不支持执行计划，请先执行查询'); return; }
+          if (transactionExecutePath(transactionState) || scriptTransactionMode === 'SCRIPT') { showInfo('参数查询需先结束手动事务并切换到普通执行模式'); return; }
+          const definitions = reconcileParameters(names, activeSqlTab.parameters);
+          const values = await sqlParameters.request(definitions);
+          if (!values) return;
+          parameterValues = values;
+        }
+      }
       if (selected.environment === 'prod' && !productionConfirmation) {
         const confirmation = await requestProductionConfirmation(path === '/sql/explain' ? '生成执行计划' : '执行 SQL');
         if (!confirmation) {
@@ -1299,6 +1315,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         // 手动事务开着时走事务端点：同一条连接、同一个事务，由用户决定提交还是回滚。
         const transactionPath = transactionExecutePath(transactionState);
         const executeScript = async (unscopedMutationConfirmed: boolean): Promise<SqlScriptResult> => {
+          if (parameterValues) {
+            const result = await api<SqlResult>('/sql/execute-parameterized', {
+              method: 'POST', headers: productionConfirmationHeaders(productionConfirmation),
+              body: JSON.stringify({ connectionId: selected.id, sql: target.sql, schemaName: activeSqlSchema,
+                executionId, parameters: parameterValues })
+            });
+            return { status: 'SUCCESS', elapsedMs: result.elapsedMs, executedCount: 1,
+              results: [{ index: 1, sql: target.sql, startOffset: 0, endOffset: target.sql.length, status: 'SUCCESS', errorMessage: null, result }] };
+          }
           if (transactionPath && scriptTransactionMode === 'SCRIPT') throw new Error('请先结束手动事务，再执行脚本事务。');
           if (transactionPath) {
             const response = await api<SqlTransactionScriptResult>(transactionPath, {
@@ -1380,6 +1405,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         setSqlCancellable(false);
         setSqlLoading(false);
       }
+    } catch (error) {
+      showError(localizeError(error));
     } finally {
       sqlBusyRef.current = false;
     }
@@ -1700,6 +1727,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
     sqlBusyRef.current = true;
     try {
+      if (target.sql.includes(':')) {
+        const names = await api<string[]>('/sql/parameters', { method: 'POST', body: JSON.stringify({ sql: target.sql, dbType: selected.dbType }) });
+        if (names.length) { showInfo('参数查询请先执行，再使用结果表格中的导出功能导出已加载结果'); return; }
+      }
       const productionConfirmation = await requestProductionConfirmation('导出查询结果');
       if (selected.environment === 'prod' && !productionConfirmation) return;
       let targetTableParts: string[] | undefined;
@@ -2963,10 +2994,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     setSnippetDraft(undefined);
   });
   const saveSnippetEvent = useStableEvent((sql: string) => {
-    setSnippetDraft({ draft: snippetDraftFromSql(sql, selected?.dbType), token: Date.now() });
+    setSnippetDraft({ draft: { ...snippetDraftFromSql(sql, selected?.dbType), parameters: activeSqlTab.parameters }, token: Date.now() });
     setSnippetsOpen(true);
   });
   const insertSnippetEvent = useStableEvent((snippet: SqlSnippet) => {
+    if (snippet.parameters?.length) {
+      openSqlInNewTab(snippet.sql, snippet.name, snippet.parameters);
+      return;
+    }
     const editor = editorRef.current;
     const currentSql = editor?.getValue() ?? activeSqlTab.sql;
     const nextSql = appendSnippetToSql(currentSql, snippet.sql);
@@ -3773,6 +3808,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           />
         </Suspense>
       )}
+      {sqlParameters.dialog}
       {snippetsOpen && (
         <Suspense fallback={null}>
           <SqlSnippetDrawer
