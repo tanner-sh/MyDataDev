@@ -1,3 +1,5 @@
+import { SqlParameterDefinitions } from './SqlParameterDefinitions';
+import { reconcileParameters } from '../sqlParameters';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Drawer, Empty, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
@@ -46,6 +48,7 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
   const [scopeToDbType, setScopeToDbType] = useState(true);
   const [editing, setEditing] = useState<SqlSnippetDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<SqlSnippet | null>(null);
   const requestSeqRef = useRef(0);
   const debounceRef = useRef<number | null>(null);
@@ -92,6 +95,18 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
     }, SNIPPET_SEARCH_DEBOUNCE_MS);
   }
 
+  async function detectParameters() {
+    if (!editing) return;
+    const draft = editing;
+    setDetecting(true);
+    setError('');
+    try {
+      const names = await api<string[]>('/sql/parameters', { method: 'POST', body: JSON.stringify({ sql: draft.sql, dbType: draft.dbType || dbType }) });
+      setEditing((current) => current === draft ? { ...draft, parameters: reconcileParameters(names, draft.parameters) } : current);
+    } catch (e) { setError(localizeError(e)); }
+    finally { setDetecting(false); }
+  }
+
   async function save() {
     if (!editing) return;
     const validation = validateSnippetDraft(editing);
@@ -132,7 +147,7 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
 
   return (
     <Drawer
-      title="SQL 片段"
+      title="SQL 片段与查询模板"
       size={DRAWER_WIDTH.browse}
       open={open}
       rootClassName="management-drawer"
@@ -206,6 +221,7 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
             />
             {validation?.sqlError && <Text type="danger">{validation.sqlError}</Text>}
           </label>
+          <SqlParameterDefinitions value={editing.parameters || []} onChange={(parameters) => setEditing({ ...editing, parameters })} onDetect={() => void detectParameters()} detecting={detecting} />
           {error && <Text type="danger">{error}</Text>}
           <Space>
             <Button type="primary" icon={<SaveOutlined />} loading={saving} disabled={!validation?.valid} onClick={() => void save()}>
@@ -250,11 +266,12 @@ export const SqlSnippetDrawer = memo(function SqlSnippetDrawer({
                   <div className="snippet-item-heading">
                     <div className="snippet-item-title">
                       <Text strong ellipsis>{snippet.name}</Text>
+                      {!!snippet.parameters?.length && <Tag>参数模板 · {snippet.parameters.length} 个参数</Tag>}
                       <Text type="secondary">{snippetSubtitle(snippet)}</Text>
                     </div>
                     <Space size={2}>
-                      <Tooltip title="插入到当前编辑器">
-                        <Button size="small" type="primary" ghost onClick={() => void insert(snippet)}>插入</Button>
+                      <Tooltip title={snippet.parameters?.length ? "在新标签页打开查询模板" : "插入到当前编辑器"}>
+                        <Button size="small" type="primary" ghost onClick={() => void insert(snippet)}>{snippet.parameters?.length ? '打开模板' : '插入'}</Button>
                       </Tooltip>
                       {snippet.editable !== false && <Tooltip title="编辑">
                         <Button size="small" type="text" icon={<EditOutlined />} aria-label={`编辑 ${snippet.name}`} onClick={() => setEditing(snippetDraftFrom(snippet))} />

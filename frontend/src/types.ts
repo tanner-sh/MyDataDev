@@ -476,6 +476,7 @@ export type ConnectionSshForm = {
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = {
+  parameters?: import('./sqlParameters').SqlParameterDefinition[];
   id: string;
   title: string;
   sql: string;

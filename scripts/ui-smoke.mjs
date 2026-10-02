@@ -1236,6 +1236,38 @@ try {
     check('大结果 Excel 导出经过 Worker，文件包含全部 400 行', exported.workers === 1 && exported.stopped === 1 && exported.xlsx, JSON.stringify(exported));
     await page.shot('11-大结果导出');
 
+    const templateResponse = await fetch(APP_URL + '/api/sql-snippets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '参数模板冒烟', sql: 'select cast(:id as bigint) as TEMPLATE_ID, cast(:message as varchar) as TEMPLATE_TEXT', dbType: 'h2', visibility: 'SHARED',
+        parameters: [{ name: 'id', type: 'INTEGER', required: true, defaultValue: '7' }, { name: 'message', type: 'TEXT', required: true, defaultValue: 'template-default' }] })
+    });
+    check('创建带类型与默认值的查询模板', templateResponse.ok);
+    await page.evaluate(`document.querySelector('button[aria-label="更多 SQL 操作"]')?.click()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.includes('SQL 片段库'))?.click(); })()`);
+    await page.sleep(1000);
+    await page.evaluate(`document.querySelector('button[aria-label="编辑 参数模板冒烟"]')?.click()`);
+    await page.sleep(400);
+    check('模板编辑保留整数默认值', await page.evaluate(`document.querySelector('input[aria-label="id 默认值"]')?.value === '7'`));
+    await page.shot('11a-查询模板编辑');
+    await page.evaluate(`(() => { [...document.querySelectorAll('.snippet-editor button')].find(node => node.textContent.replace(/\\s/g, '') === '保存')?.click(); })()`);
+    await page.sleep(700);
+    await page.evaluate(`(() => { const item = [...document.querySelectorAll('.snippet-item')].find(node => node.textContent.includes('参数模板冒烟')); [...(item?.querySelectorAll('button') || [])].find(node => node.textContent.includes('打开模板'))?.click(); })()`);
+    await page.sleep(700);
+    check('模板在独立 SQL 标签打开', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes(':message')`));
+    await page.evaluate(`document.querySelector('.sql-execute-button')?.click()`);
+    await page.sleep(600);
+    check('执行前填写参数并带出默认值', await page.evaluate(`document.querySelector('.ant-modal input[aria-label="id"]')?.value === '7'`));
+    await page.evaluate(`(() => { const input = document.querySelector('.ant-modal input[aria-label="message"]'); input?.focus(); input?.select(); })()`);
+    await page.send('Input.insertText', { text: "bound-value'; --" });
+    await page.shot('11b-填写查询参数');
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal button')].find(node => node.textContent.replace(/\\s/g, '') === '执行查询')?.click(); })()`);
+    await page.sleep(1200);
+    check('参数经绑定返回原值', await page.evaluate(`document.querySelector('.sql-results-pane')?.textContent.includes("bound-value'; --")`));
+    const templateHistory = await (await fetch(APP_URL + '/api/sql/history?connectionId=' + seedConnectionId)).json();
+    check('SQL 历史保留模板不写入参数值', JSON.stringify(templateHistory).includes(':message') && !JSON.stringify(templateHistory).includes("bound-value'; --"));
+    await page.shot('11c-参数查询结果');
+
     // 切到只读连接再看一眼 SQL 工作台。只读连接曾经把编辑器压成一行：.sql-workspace 是网格
     // 布局，那时给只读连接多排了一行（对应工具栏下面那条只读提示 Alert），提示挪进副标题后
     // 行数比子元素多了一行，于是分栏拿到 36px 那一行、状态栏拿到 minmax(0,1fr)。开发连接上

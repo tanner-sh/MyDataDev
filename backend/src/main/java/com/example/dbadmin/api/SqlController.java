@@ -53,6 +53,21 @@ public class SqlController {
         return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed());
     }
 
+    @PostMapping("/parameters")
+    public java.util.List<String> parameters(@Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlParameterParseRequest request) {
+        return com.example.dbadmin.service.SqlParameters.parse(request.sql(), request.dbType()).names();
+    }
+
+    @PostMapping("/execute-parameterized")
+    public SqlResult executeParameterized(
+            @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlParameterizedRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
+        return sqlService.executeParameterized(request, actor, productionConfirmation);
+    }
+
     @PostMapping("/execute-script")
     public SqlScriptResponse executeScript(
             @Valid @RequestBody SqlScriptRequest request,

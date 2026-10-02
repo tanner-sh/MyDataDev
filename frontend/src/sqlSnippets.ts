@@ -1,3 +1,4 @@
+import { parameterError, type SqlParameterDefinition } from './sqlParameters';
 /**
  * 保存的 SQL 片段。
  *
@@ -23,10 +24,12 @@ export type SqlSnippet = {
   visibility?: 'PERSONAL' | 'SHARED';
   ownerUserId?: number;
   editable?: boolean;
+  parameters?: SqlParameterDefinition[];
 };
 
 export type SqlSnippetDraft = {
   id?: number;
+  parameters?: SqlParameterDefinition[];
   name: string;
   description: string;
   sql: string;
@@ -46,7 +49,8 @@ export function snippetDraftFrom(snippet: SqlSnippet): SqlSnippetDraft {
     sql: snippet.sql,
     dbType: snippet.dbType || '',
     tags: snippet.tags || '',
-    visibility: snippet.visibility || 'SHARED'
+    visibility: snippet.visibility || 'SHARED',
+    parameters: snippet.parameters
   };
 }
 
@@ -88,7 +92,7 @@ export function validateSnippetDraft(draft: SqlSnippetDraft): SnippetValidation 
     : name.length > MAX_SNIPPET_NAME_LENGTH
       ? `名称最多 ${MAX_SNIPPET_NAME_LENGTH} 个字符`
       : undefined;
-  const sqlError = sql ? undefined : '片段内容不能为空';
+  const sqlError = !sql ? '片段内容不能为空' : draft.parameters?.some((item) => item.defaultValue != null && parameterError(item, item.defaultValue)) ? '请修正参数默认值' : undefined;
   return { valid: !nameError && !sqlError, nameError, sqlError };
 }
 
@@ -100,7 +104,8 @@ export function snippetRequestBody(draft: SqlSnippetDraft) {
     // 空串在后端表示「通用」，别把它当成一个叫 "" 的数据库类型。
     dbType: draft.dbType.trim() || undefined,
     tags: parseSnippetTags(draft.tags).join(',') || undefined,
-    visibility: draft.visibility
+    visibility: draft.visibility,
+    parameters: draft.parameters || []
   };
 }
 

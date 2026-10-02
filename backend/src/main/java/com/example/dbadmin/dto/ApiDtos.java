@@ -1205,6 +1205,14 @@ public final class ApiDtos {
     ) {
     }
 
+    public record SqlParameter(String type, String value) { }
+    public record SqlParameterDefinition(String name, String type, boolean required, String defaultValue) { }
+    public record SqlParameterParseRequest(@NotBlank @Size(max = 200_000) String sql, String dbType) { }
+    public record SqlParameterizedRequest(
+            @NotNull Long connectionId, @NotBlank @Size(max = 200_000) String sql,
+            Integer maxRows, @Size(max = 120) String executionId, @Size(max = 240) String schemaName,
+            @NotNull @Size(max = 100) Map<String, SqlParameter> parameters) { }
+
     public record SqlSnippetResponse(
             long id,
             String name,
@@ -1218,7 +1226,8 @@ public final class ApiDtos {
             String updatedAt,
             String visibility,
             Long ownerUserId,
-            boolean editable
+            boolean editable,
+            List<SqlParameterDefinition> parameters
     ) {
     }
 
@@ -1228,8 +1237,12 @@ public final class ApiDtos {
             @NotBlank @Size(max = 200_000) String sql,
             @Size(max = 40) String dbType,
             @Size(max = 500) String tags,
-            @jakarta.validation.constraints.Pattern(regexp = "PERSONAL|SHARED", message = "片段范围只支持 PERSONAL 或 SHARED") String visibility
+            @jakarta.validation.constraints.Pattern(regexp = "PERSONAL|SHARED", message = "片段范围只支持 PERSONAL 或 SHARED") String visibility,
+            @Size(max = 100) List<SqlParameterDefinition> parameters
     ) {
+        public SqlSnippetRequest(String name, String description, String sql, String dbType, String tags, String visibility) {
+            this(name, description, sql, dbType, tags, visibility, null);
+        }
         public SqlSnippetRequest(String name, String description, String sql, String dbType, String tags) {
             this(name, description, sql, dbType, tags, null);
         }
