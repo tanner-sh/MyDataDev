@@ -310,7 +310,7 @@ jobs:
         working-directory: frontend
 
       - name: 验证发布检查脚本与 CI Gate 清单
-        run: node --test scripts/verify-release-ci.test.mjs scripts/ci-gate.test.mjs
+        run: node --test scripts/verify-release-ci.test.mjs scripts/ci-gate.test.mjs scripts/start-dameng-test.test.mjs
 
       # 构建同时会跑 check-build-budget.mjs：首屏资源数与懒加载链的 gzip 体积都有硬上限，
       # 把重型模块拉进首屏会在这里失败，而不是等到发版才发现。

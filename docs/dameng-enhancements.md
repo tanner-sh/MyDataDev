@@ -60,3 +60,15 @@ docker rm -fv mydatadev-dm-test
 CI 为模式 0 / 2 分别启动全新的实例，configure-dameng-test.sh 只配置这个测试容器。模式 2 改动在重启后由管理员检查，普通账号通过空串语义核对测试环境。
 
 新增 SQL 逻辑备份往返、关联表约束恢复和失败回滚/重试回归。修复 DM 系统生成索引和外键名称无法重新创建的问题，自动名称会转换为稳定名称；保留业务数据和唯一/外键约束。没有增加原生物理备份或跨模式迁移支持。
+
+## CI 镜像下载备用路径
+
+GitHub runner 下载官方归档可能返回 HTTP 403。启动脚本优先下载官方归档；网络下载失败时清理 `.part`，从 Docker Hub 的 `greyhawk/dm8_single` 副本按固定 manifest 摘要拉取。归档校验失败不触发回退，备用拉取失败也不会启动本地同名镜像。
+
+此副本不是达梦官方维护的仓库；已将其配置摘要与官方归档中的配置文件逐字节校验，确认一致。配置包含所有未压缩文件层的摘要；Docker 拉取时校验 manifest、配置及各文件层，固定内容不受远程标签更新影响。
+
+- 官方归档 SHA-256：`97cc976b618e0eb75a20c831fb4e258c74ccc574ffa3e59b187c0c9bb90f019c`。
+- 归档与备用镜像共同配置 SHA-256：`f745b299b7623ece3a82fcb072b259d8dad4c131ee4cda4c316a2da91dea79a7`。
+- 备用 manifest：`docker.io/greyhawk/dm8_single@sha256:9a2d9aecc31372c8f7c765625f36987a54ce69aa015eb3d856cfa1e29b06811b`，仍为同一 20241022 x86_64 版本。
+
+`node --test scripts/start-dameng-test.test.mjs` 覆盖 HTTP 失败回退、正常归档加载、校验失败与备用仓库失败；已加入 CI。达梦两种模式及 CI Gate 均保持必需检查。
