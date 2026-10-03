@@ -268,6 +268,7 @@ export function TableLifecyclePanel({
           </div>
           {createMessage && <Alert type={createPreview.length > 0 ? 'info' : 'error'} showIcon title={createMessage} />}
           <TableDefinitionEditor
+            dbType={connection?.dbType}
             mode="create"
             columns={columns}
             indexes={indexes}

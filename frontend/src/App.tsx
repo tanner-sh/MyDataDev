@@ -1,3 +1,4 @@
+import { resolveLiveCapabilities, type CapabilityReport, type ConnectionCapabilityReport } from './databaseCapabilities';
 import { useSqlParameters } from './components/useSqlParameters';
 import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValues } from './sqlParameters';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -160,9 +161,22 @@ const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel'
 export default function App({ workspaceOwner = 'local', workspaceLocked = false }: { workspaceOwner?: string; workspaceLocked?: boolean }) {
   const [draftSaveState, setDraftSaveState] = useState('草稿保存中…');
   const wasWorkspaceLocked = useRef(workspaceLocked);
-  const [connections, setConnections] = useState<Connection[]>([]);
+  const [baseConnections, setConnections] = useState<Connection[]>([]);
+  const [capabilityReports, setCapabilityReports] = useState<Record<number, ConnectionCapabilityReport>>({});
+  const connections = useMemo(() => baseConnections.map(connection => resolveLiveCapabilities(connection, capabilityReports[connection.id])), [baseConnections, capabilityReports]);
   const [favoriteConnectionIds, setFavoriteConnectionIds] = useState<number[]>(() => readFavoriteConnectionIds());
-  const [selected, setSelected] = useState<Connection | null>(null);
+  const [baseSelected, setSelected] = useState<Connection | null>(null);
+  const selected = useMemo(() => baseSelected ? resolveLiveCapabilities(baseSelected, capabilityReports[baseSelected.id]) : null, [baseSelected, capabilityReports]);
+  useEffect(() => {
+    let live = true;
+    if (baseSelected && hasConnectionPermission(baseSelected, 'QUERY')) {
+      const connectionId = baseSelected.id;
+      void api<CapabilityReport>(`/connections/${connectionId}/capability-report`).then(report => {
+        if (live) setCapabilityReports(current => ({ ...current, [connectionId]: { source: baseSelected, report } }));
+      }).catch(() => { /* The workspace and server-info panel surface connection failures. */ });
+    }
+    return () => { live = false; };
+  }, [baseSelected]);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [metadataQuery, setMetadataQuery] = useState({ schema: '', keyword: '' });
   const [metadataAppliedKeyword, setMetadataAppliedKeyword] = useState('');
@@ -764,7 +778,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         return next;
       });
       resources.documents.filter(item => item.connectionId === connection.id).forEach(item => resources.close(item.key));
-      const remaining = connections.filter((row) => row.id !== connection.id);
+      const remaining = baseConnections.filter((row) => row.id !== connection.id);
       setConnections(remaining);
       if (selected?.id === connection.id) {
         const nextConnection = remaining[0] || null;
@@ -802,7 +816,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
     activateSqlSession(connection.id, true);
-    setSelected(connection);
+    setSelected(baseConnections.find(item => item.id === connection.id) ?? connection);
     writeSelectedConnectionId(connection.id);
     setMetadata(null);
     setMetadataQuery({ schema: '', keyword: '' });
@@ -1319,10 +1333,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             const result = await api<SqlResult>('/sql/execute-parameterized', {
               method: 'POST', headers: productionConfirmationHeaders(productionConfirmation),
               body: JSON.stringify({ connectionId: selected.id, sql: target.sql, schemaName: activeSqlSchema,
-                executionId, parameters: parameterValues })
+                executionId, parameters: parameterValues, pageSize: layoutPreferences.sqlPageSize })
             });
             return { status: 'SUCCESS', elapsedMs: result.elapsedMs, executedCount: 1,
-              results: [{ index: 1, sql: target.sql, startOffset: 0, endOffset: target.sql.length, status: 'SUCCESS', errorMessage: null, result }] };
+              results: [{ queryParameters: parameterValues, index: 1, sql: target.sql, startOffset: 0, endOffset: target.sql.length, status: 'SUCCESS', errorMessage: null, result }] };
           }
           if (transactionPath && scriptTransactionMode === 'SCRIPT') throw new Error('请先结束手动事务，再执行脚本事务。');
           if (transactionPath) {
@@ -1494,7 +1508,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           // 排序与筛选都下推给服务端：只作用于当前这一页会让用户以为看到的是全量结论。
           sortColumn: navigation.sort?.column,
           sortDirection: navigation.sort?.direction,
-          filters: navigation.filters || []
+          filters: navigation.filters || [],
+          parameters: statementResult.queryParameters
         })
       });
       if (data.page) data.page.previousOffsets = navigation.previousOffsets;
@@ -1632,12 +1647,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
   async function cancelSqlExecution() {
     if (sqlCancelling) return;
-    // An export has no server-side execution id; it is aborted client-side,
-    // which also frees the workspace and lets the user switch connections.
+    // Parameterized exports register the JDBC statement before reading rows.
     const exportController = exportAbortRef.current;
     if (exportController) {
       setSqlCancelling(true);
-      exportController.abort();
+      const exportExecutionId = sqlExecutionIdRef.current;
+      try {
+        if (exportExecutionId) await api(`/sql/executions/${exportExecutionId}/cancel`, { method: 'POST' });
+      } catch (error) { showError(`取消数据库导出失败：${localizeError(error)}`); }
+      finally { exportController.abort(); }
       return;
     }
     const executionId = sqlExecutionIdRef.current;
@@ -1727,9 +1745,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
     sqlBusyRef.current = true;
     try {
+      let parameterValues: SqlParameterValues | undefined;
       if (target.sql.includes(':')) {
         const names = await api<string[]>('/sql/parameters', { method: 'POST', body: JSON.stringify({ sql: target.sql, dbType: selected.dbType }) });
-        if (names.length) { showInfo('参数查询请先执行，再使用结果表格中的导出功能导出已加载结果'); return; }
+        if (names.length) {
+          const values = await sqlParameters.request(reconcileParameters(names, activeSqlTab.parameters));
+          if (!values) return;
+          parameterValues = values;
+        }
       }
       const productionConfirmation = await requestProductionConfirmation('导出查询结果');
       if (selected.environment === 'prod' && !productionConfirmation) return;
@@ -1749,22 +1772,24 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       // switching, so it must be interruptible like a normal execution.
       const controller = new AbortController();
       exportAbortRef.current = controller;
+      const executionId = parameterValues ? createUuid() : undefined;
+      if (executionId) sqlExecutionIdRef.current = executionId;
       setSqlLoading(true);
       setSqlCancellable(true);
       try {
-      const response = await apiResponse('/sql/export', {
+      const response = await apiResponse(parameterValues ? '/sql/export-parameterized' : '/sql/export', {
         method: 'POST',
         signal: controller.signal,
         headers: {
           ...productionConfirmationHeaders(productionConfirmation)
         },
-        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts })
+        body: JSON.stringify({ connectionId: selected.id, sql: target.sql, format, schemaName: activeSqlSchema, targetTableParts, parameters: parameterValues, fullResult: Boolean(parameterValues), executionId })
       });
       const blob = await response.blob();
       downloadBlob(blob, `query-result-${timestamp()}.${exportFileExtension(format)}`);
       const rowLimit = response.headers.get('x-export-row-limit') || '10000';
       const truncated = response.headers.get('x-export-truncated') === 'true';
-      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}（最多 ${rowLimit} 行${truncated ? '，本次已截断' : ''}）`;
+      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}（${rowLimit === 'all' ? '完整查询结果' : `最多 ${rowLimit} 行`}${truncated ? '，本次已截断' : ''}）`;
       updateActiveSqlTab({ message: nextMessage, statusKind: 'success' });
       toastApi.success(nextMessage);
       } catch (e) {
@@ -1778,6 +1803,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         }
       } finally {
         if (exportAbortRef.current === controller) exportAbortRef.current = null;
+        if (executionId && sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;
         setSqlCancellable(false);
         setSqlCancelling(false);
         setSqlLoading(false);

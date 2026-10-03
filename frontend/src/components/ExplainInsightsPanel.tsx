@@ -1,7 +1,7 @@
 import { memo, useMemo, useState } from 'react';
 import { Alert, Button, Space, Tag, Typography } from 'antd';
 import { BulbOutlined } from '@ant-design/icons';
-import { explainFindings, explainFindingsSummary, isExplainResult, type ExplainFinding } from '../explainInsights';
+import { explainFindings, explainFindingsSummary, explainPlanShape, isExplainResult, type ExplainFinding } from '../explainInsights';
 
 const { Text } = Typography;
 
@@ -26,6 +26,8 @@ export const ExplainInsightsPanel = memo(function ExplainInsightsPanel({ columns
   const findings = useMemo(() => explainFindings(columns, rows), [columns, rows]);
   if (!isExplainResult(columns)) return null;
 
+  const shape = explainPlanShape(columns);
+  const planLabel = shape === 'sqlserver' ? 'SQL Server 估算计划 · ' : shape === 'dm' ? '达梦估算计划 · ' : '';
   const hasWarning = findings.some((finding) => finding.level === 'warning');
   return (
     <Alert
@@ -33,7 +35,7 @@ export const ExplainInsightsPanel = memo(function ExplainInsightsPanel({ columns
       type={hasWarning ? 'warning' : findings.length > 0 ? 'info' : 'success'}
       showIcon
       icon={<BulbOutlined />}
-      title={explainFindingsSummary(findings)}
+      title={`${planLabel}${explainFindingsSummary(findings)}`}
       action={findings.length > 0 || onAskAi ? (
         <Space size={8}>
           {onAskAi && (

@@ -376,7 +376,10 @@ public final class ApiDtos {
     // JDBC 元数据中的缺省值必须在 MCP 自动生成的输出 schema 中允许为 null。
     public record ColumnInfo(String name, String type, int size, boolean nullable,
                              @Schema(nullable = true) String remarks, int ordinalPosition,
-                             @Schema(nullable = true) String defaultValue) {
+                             @Schema(nullable = true) String defaultValue, boolean identity, boolean generated) {
+        public ColumnInfo(String name, String type, int size, boolean nullable, String remarks, int ordinalPosition, String defaultValue) {
+            this(name, type, size, nullable, remarks, ordinalPosition, defaultValue, false, false);
+        }
     }
 
     public record IndexInfo(String name, @Schema(nullable = true) String columnName, boolean unique, int ordinalPosition) {
@@ -394,7 +397,11 @@ public final class ApiDtos {
     /** @param remarks 列注释；{@code null} 表示这次不改注释，空串表示清空 */
     public record ColumnDesign(@NotBlank String name, @NotBlank String type, Integer size, boolean nullable,
                                String defaultValue, String originalName, boolean deleted,
-                               @Size(max = 1000) String remarks) {
+                               @Size(max = 1000) String remarks, Boolean identity) {
+        public ColumnDesign(String name, String type, Integer size, boolean nullable, String defaultValue,
+                            String originalName, boolean deleted, String remarks) {
+            this(name, type, size, nullable, defaultValue, originalName, deleted, remarks, null);
+        }
         public ColumnDesign(String name, String type, Integer size, boolean nullable, String defaultValue,
                             String originalName, boolean deleted) {
             this(name, type, size, nullable, defaultValue, originalName, deleted, null);
@@ -565,8 +572,13 @@ public final class ApiDtos {
             @Size(max = 240) String schemaName,
             @Size(max = 128) String sortColumn,
             @Size(max = 8) String sortDirection,
-            @Size(max = 30) List<@jakarta.validation.Valid SqlResultFilter> filters
+            @Size(max = 30) List<@jakarta.validation.Valid SqlResultFilter> filters,
+            @Size(max = 100) Map<String, SqlParameter> parameters
     ) {
+        public SqlPageRequest(Long connectionId, String sql, Integer offset, Integer pageSize, String executionId,
+                String schemaName, String sortColumn, String sortDirection, List<SqlResultFilter> filters) {
+            this(connectionId, sql, offset, pageSize, executionId, schemaName, sortColumn, sortDirection, filters, null);
+        }
         public SqlPageRequest {
             filters = filters == null ? List.of() : List.copyOf(filters);
         }
@@ -1045,7 +1057,11 @@ public final class ApiDtos {
     public record DataCommitResponse(List<String> sql, int affectedRows) {
     }
 
-    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format, @Size(max = 240) String schemaName, @Size(max = 3) List<@NotBlank @Size(max = 240) String> targetTableParts) {
+    public record ExportRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, @NotBlank @Size(max = 10) String format, @Size(max = 240) String schemaName, @Size(max = 3) List<@NotBlank @Size(max = 240) String> targetTableParts,
+            @Size(max = 100) Map<String, SqlParameter> parameters, boolean fullResult, @Size(max = 120) String executionId) {
+        public ExportRequest(Long connectionId, String sql, String format, String schemaName, List<String> targetTableParts) {
+            this(connectionId, sql, format, schemaName, targetTableParts, null, false, null);
+        }
         public ExportRequest(Long connectionId, String sql, String format) {
             this(connectionId, sql, format, null, null);
         }
@@ -1211,7 +1227,11 @@ public final class ApiDtos {
     public record SqlParameterizedRequest(
             @NotNull Long connectionId, @NotBlank @Size(max = 200_000) String sql,
             Integer maxRows, @Size(max = 120) String executionId, @Size(max = 240) String schemaName,
-            @NotNull @Size(max = 100) Map<String, SqlParameter> parameters) { }
+            @NotNull @Size(max = 100) Map<String, SqlParameter> parameters, Integer pageSize) {
+        public SqlParameterizedRequest(Long connectionId, String sql, Integer maxRows, String executionId, String schemaName, Map<String, SqlParameter> parameters) {
+            this(connectionId, sql, maxRows, executionId, schemaName, parameters, null);
+        }
+    }
 
     public record SqlSnippetResponse(
             long id,

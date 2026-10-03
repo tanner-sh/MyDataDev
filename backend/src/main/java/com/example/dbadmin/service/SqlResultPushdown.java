@@ -88,7 +88,7 @@ public final class SqlResultPushdown {
         }
 
         StringBuilder shaped = new StringBuilder("SELECT * FROM (")
-                .append(EmbeddableSql.of(sql))
+                .append(dialect.resultPushdownSource(EmbeddableSql.of(sql)))
                 .append(") ").append(ALIAS);
         if (!where.isEmpty()) shaped.append(" WHERE ").append(where);
         if (sortColumn != null) {

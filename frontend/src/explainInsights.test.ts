@@ -192,3 +192,37 @@ describe('发给模型的规则结论', () => {
     expect(explainFindingsText([])).toBe('');
   });
 });
+
+describe('explainFindings · SQL Server', () => {
+  const columns = ['Statement', 'NodeId', 'ParentNodeId', 'PhysicalOp', 'LogicalOp', 'EstimateRows', 'EstimatedTotalSubtreeCost'];
+  it('识别估算计划，并把输出行数与实际扫描量区分开', () => {
+    expect(isExplainResult(columns)).toBe(true);
+    const findings = explainFindings(columns, [[1, '0', '', 'Clustered Index Scan', 'Clustered Index Scan', '200000', '3.5']]);
+    expect(findings.map(f => f.code)).toEqual(['sqlserver-scan', 'large-row-estimate']);
+    expect(findings[1].detail).toContain('不是实际扫描行数');
+  });
+  it('不把 Index Seek 误报为扫描', () => {
+    expect(explainFindings(columns, [[1, '0', '', 'Index Seek', 'Index Seek', '1', '0.01']])).toEqual([]);
+  });
+});
+
+describe('explainFindings · 达梦', () => {
+  const columns = ['PLAN_ID', 'LEVEL_ID', 'OPERATION', 'TAB_NAME', 'IDX_NAME', 'ROW_NUMS', 'COST'];
+  it('识别只读连接的原生文本计划，保留扫描与估算行数提示', () => {
+    expect(isExplainResult(['DM_PLAN'])).toBe(true);
+    const findings = explainFindings(['DM_PLAN'], [['3    #CSCN2: [4, 200000, 8]; INDEX_ORDERS']]);
+    expect(findings.map(f => f.code)).toEqual(['dm-clustered-scan', 'large-row-estimate']);
+    expect(explainFindings(['DM_PLAN'], [['2  #SSEK2: [1, 1, 8]']])).toEqual([]);
+  });
+  it('识别 EXPLAIN FOR，并提示聚集索引扫描与较大估算行数', () => {
+    expect(isExplainResult(columns)).toBe(true);
+    const findings = explainFindings(columns, [[1, 2, 'CSCN2', 'ORDERS', 'PK_ORDERS', 200000, 5]]);
+    expect(findings.map(f => f.code)).toEqual(['dm-clustered-scan', 'large-row-estimate']);
+    expect(findings[1].detail).toContain('不是实际运行测量值');
+  });
+  it('不把索引定位或未知算子误报为扫描，兼容小写列标签', () => {
+    expect(explainFindings(columns.map(c => c.toLowerCase()), [[1, 2, 'SSEK2', 'ORDERS', 'IX_ID', 1, 1]])).toEqual([]);
+    expect(explainFindings(columns, [[1, 2, 'FUTURE_OP', null, null, null, null]])).toEqual([]);
+    expect(isExplainResult(['OPERATION', 'COST'])).toBe(false);
+  });
+});

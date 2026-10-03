@@ -15,6 +15,13 @@ class SqlResultPushdownTest {
     private static final DefaultDialect DEFAULT = new DefaultDialect();
 
     @Test
+    void sqlServerAllowsOrderedSourceInsideFilterWrapperWithoutChangingBindOrder() {
+        var shaped = SqlResultPushdown.apply("SELECT id FROM t WHERE id > ? ORDER BY id -- tail", List.of(), "id", "DESC",
+                new com.example.dbadmin.core.SqlServerDialect());
+        assertThat(shaped.sql()).contains("WHERE id > ? ORDER BY id -- tail\n OFFSET 0 ROWS) mdd_view ORDER BY [id] DESC");
+    }
+
+    @Test
     void wrapsTheQueryInsteadOfAppendingToIt() {
         var shaped = SqlResultPushdown.apply("SELECT id, name FROM app_user", List.of(), "name", "DESC", DEFAULT);
 

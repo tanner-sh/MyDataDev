@@ -29,7 +29,7 @@ import static org.mockito.Mockito.*;
 class DatabaseRecoveryCompatibilityTest {
     @TempDir Path directory;
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle", "dm"})
     void relatedTablesRestoreDataCompositeKeyUniqueAndForeignKey(String type) throws Exception {
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
             f.properties.getBackup().setDirectory(directory.toString());
@@ -66,7 +66,7 @@ class DatabaseRecoveryCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle", "dm"})
     void restoreFailureAfter501InsertsLeavesExistingDataAndAllowsRetry(String type) throws Exception {
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
             f.properties.getBackup().setDirectory(directory.toString());

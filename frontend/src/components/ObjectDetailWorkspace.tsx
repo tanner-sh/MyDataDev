@@ -1,3 +1,5 @@
+import { OracleTableStoragePanel } from './OracleTableStoragePanel';
+import { MySqlTablePropertiesPanel } from './MySqlTablePropertiesPanel';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { Alert, Button, Dropdown, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
@@ -39,6 +41,7 @@ export interface ObjectDetailWorkspaceProps {
   documentTabs?: ReactNode;
   active?: boolean;
   connectionId?: number;
+  dbType?: string;
   readonlyConnection?: boolean;
   capabilities?: DatabaseCapabilities;
   productionConfirmationText?: string;
@@ -60,6 +63,7 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
   documentTabs,
   active = true,
   connectionId,
+  dbType,
   readonlyConnection,
   capabilities,
   productionConfirmationText,
@@ -185,6 +189,10 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
             items={[
               { key: 'columns', label: `字段 (${detail.columns.length})`, children: <ColumnTable key={detailKey} rows={columnRows} primaryKeys={detail.primaryKeys} active={active && activeTabKey === 'columns'} /> },
               { key: 'indexes', label: `索引 (${indexRows.length})`, children: <IndexTable rows={indexRows} active={active && activeTabKey === 'indexes'} /> },
+              ...(!isView && dbType === 'oracle' ? [{ key: 'storage', label: '存储与分区', children: <OracleTableStoragePanel key={detailKey} connectionId={connectionId} detail={detail} active={active && activeTabKey === 'storage'} /> }] : []),
+              ...(!isView && ['mysql', 'mariadb'].includes(dbType || '') ? [{ key: 'properties', label: '表属性', children:
+                <MySqlTablePropertiesPanel key={detailKey} connectionId={connectionId} detail={detail} active={active && activeTabKey === 'properties'}
+                  disabled={Boolean(readonlyConnection || !tableDesignSupported)} productionConfirmationText={productionConfirmationText} onReloadDetail={onReloadDetail} /> }] : []),
               { key: 'relations', label: '关系', children: <RelationsPanel connectionId={connectionId} detail={detail} active={active && activeTabKey === 'relations'} onOpenRelation={onOpenRelation} /> },
               { key: 'ddl', label: 'DDL', children: <DdlPanel connectionId={connectionId} detail={detail} active={active && activeTabKey === 'ddl'} /> },
               {
@@ -193,6 +201,7 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
                 children: (
                   <TableDesigner
                     connectionId={connectionId}
+                    dbType={dbType}
                     detail={detail}
                     disabled={isView || readonlyConnection || !tableDesignSupported || loading}
                     readonlyConnection={readonlyConnection}
@@ -233,6 +242,7 @@ export const ObjectDocumentPanel = memo(function ObjectDocumentPanel({ document,
     <ObjectDetailWorkspace {...props}
       active={active}
       connectionId={document.connectionId}
+      dbType={connection?.dbType}
       readonlyConnection={connection?.readonly}
       capabilities={capabilities}
       productionConfirmationText={connection?.environment === 'prod' ? connection.name : undefined}
@@ -575,8 +585,9 @@ function DdlViewer({ ddl, source }: { ddl: string; source?: string }) {
   );
 }
 
-function TableDesigner({ connectionId, detail, disabled, readonlyConnection, unsupported, commentsSupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
+function TableDesigner({ connectionId, dbType, detail, disabled, readonlyConnection, unsupported, commentsSupported, productionConfirmationText, onReloadDetail, onDirtyChange }: {
   connectionId?: number;
+  dbType?: string;
   detail: ObjectDetail;
   disabled?: boolean;
   readonlyConnection?: boolean;
@@ -705,6 +716,7 @@ function TableDesigner({ connectionId, detail, disabled, readonlyConnection, uns
       </div>
       <TableDefinitionEditor
         mode="edit"
+        dbType={dbType}
         columns={columns}
         indexes={indexes}
         primaryKeys={primaryKeys}

@@ -21,6 +21,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  oceanbase-compatibility:
+    name: OceanBase MySQL 真实回归
+    uses: ./.github/workflows/oceanbase-compatibility.yml
+
+  dameng-compatibility:
+    name: 达梦真实回归
+    uses: ./.github/workflows/dameng-compatibility.yml
+
   database-compatibility:
     name: MySQL 与 PostgreSQL 真实回归
     runs-on: ubuntu-24.04
@@ -302,7 +310,7 @@ jobs:
         working-directory: frontend
 
       - name: 验证发布检查脚本与 CI Gate 清单
-        run: node --test scripts/verify-release-ci.test.mjs scripts/ci-gate.test.mjs
+        run: node --test scripts/verify-release-ci.test.mjs scripts/ci-gate.test.mjs scripts/start-dameng-test.test.mjs
 
       # 构建同时会跑 check-build-budget.mjs：首屏资源数与懒加载链的 gzip 体积都有硬上限，
       # 把重型模块拉进首屏会在这里失败，而不是等到发版才发现。
@@ -388,6 +396,8 @@ jobs:
     # 检查当成通过。这里必须真跑一次，并判失败。
     if: always()
     needs:
+      - oceanbase-compatibility
+      - dameng-compatibility
       - database-compatibility
       - mariadb-compatibility
       - sqlserver-compatibility

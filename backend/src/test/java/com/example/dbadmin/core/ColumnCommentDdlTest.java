@@ -98,7 +98,7 @@ class ColumnCommentDdlTest {
     @Test
     void staysSilentWhereCommentsAreNotSupported() {
         assertThat(new SqliteDialect().supportsColumnComments()).isFalse();
-        assertThat(new SqlServerDialect().supportsColumnComments()).isFalse();
+        assertThat(new SqlServerDialect().supportsColumnComments()).isTrue();
         assertThat(new SqliteDialect().capabilities().columnComments()).isFalse();
         assertThat(POSTGRES.capabilities().columnComments()).isTrue();
     }

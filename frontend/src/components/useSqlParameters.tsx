@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Checkbox, Input, Modal, Select, Space, Typography } from 'antd';
 import { initialParameterValues, parameterError, PARAMETER_TYPES, type SqlParameterDefinition, type SqlParameterValues } from '../sqlParameters';
 
-/** Values live only while the dialog is open; SQL drafts/history never contain them. */
+/** Values remain in memory for result pagination; SQL drafts/history never contain them. */
 export function useSqlParameters(scope: string) {
   const [definitions, setDefinitions] = useState<SqlParameterDefinition[] | null>(null);
   const [values, setValues] = useState<SqlParameterValues>({});
@@ -29,7 +29,7 @@ export function useSqlParameters(scope: string) {
   const invalid = definitions?.some((item) => parameterError(item, values[item.name]?.value ?? null));
   const dialog = <Modal open={definitions !== null} title="填写查询参数" okText="执行查询" cancelText="取消"
     onCancel={() => finish(null)} onOk={() => { if (!invalid) finish(values); }} okButtonProps={{ disabled: !!invalid }} destroyOnHidden styles={{ body: { maxHeight: '65vh', overflowY: 'auto' } }}>
-    <Typography.Paragraph type="secondary">参数值仅用于本次查询。文本空字符串与 NULL 分开处理；日期时间不带时区。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">参数值仅在内存中用于本次查询、翻页或导出，不写入历史。文本空字符串与 NULL 分开处理；日期时间不带时区。</Typography.Paragraph>
     {definitions?.map((item) => {
       const current = values[item.name]?.value ?? null;
       const error = parameterError(item, current);
@@ -44,7 +44,9 @@ export function useSqlParameters(scope: string) {
         </Space>
         {item.type === 'BOOLEAN'
           ? <Select aria-label={item.name} disabled={current === null} value={current || undefined} options={[{ value: 'true', label: 'true' }, { value: 'false', label: 'false' }]} onChange={update} />
-          : <Input aria-label={item.name} disabled={current === null} value={current ?? ''} status={error ? 'error' : undefined}
+          : item.type === 'TEXT' ? <Input.TextArea aria-label={item.name} autoSize={{ minRows: 2, maxRows: 6 }} disabled={current === null}
+              value={current ?? ''} status={error ? 'error' : undefined} onChange={event => update(event.target.value)} />
+          : <Input type={item.type === 'DATE' ? 'date' : 'text'} aria-label={item.name} disabled={current === null} value={current ?? ''} status={error ? 'error' : undefined}
               placeholder={item.type === 'DATE' ? 'YYYY-MM-DD' : item.type === 'TIMESTAMP' ? 'YYYY-MM-DD HH:mm:ss' : undefined}
               onChange={(event) => update(event.target.value)} />}
         {error && <Typography.Text type="danger">{error}</Typography.Text>}

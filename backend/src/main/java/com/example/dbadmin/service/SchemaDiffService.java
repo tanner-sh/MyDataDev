@@ -87,13 +87,12 @@ public class SchemaDiffService {
         }
 
         DatabaseDialect targetDialect = dialectRegistry.dialectFor(target);
-        // 表设计器在 MetadataService 里也有这道闸门。生成建表/改表语句走的是同一个方言方法，
-        // 声明不支持表设计的方言（SQL Server、ClickHouse、SQLite）没有重写它，继承的是
-        // DefaultDialect 那套 PostgreSQL 写法 —— 在 T-SQL 里 `ALTER COLUMN x TYPE y` 根本
-        // 不是合法语法。与其发一份跑不通的脚本，不如只给差异清单，让人自己写 DDL。
-        boolean canGenerateDdl = targetDialect.capabilities().tableDesign();
+        // SQL Server 表设计已支持，但通用结构对比尚未携带计算表达式、IDENTITY 种子、
+        // INCLUDE / 过滤索引等属性。保持只展示差异，避免迁移脚本悄悄丢失这些定义。
+        boolean canGenerateDdl = targetDialect.capabilities().tableDesign()
+                && !(targetDialect instanceof com.example.dbadmin.core.SqlServerDialect);
         if (!canGenerateDdl) {
-            warnings.add("目标库（" + target.dbType() + "）不支持自动生成建表/改表语句，本次只列出结构差异。"
+            warnings.add("目标库（" + target.dbType() + "）暂不支持结构对比自动生成建表/改表语句，本次只列出结构差异。"
                     + "删除语句仍会生成，其余请按差异清单手工编写 DDL。");
         }
         List<SchemaDiffTable> tables = new ArrayList<>();

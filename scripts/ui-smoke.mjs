@@ -1258,7 +1258,7 @@ try {
     await page.evaluate(`document.querySelector('.sql-execute-button')?.click()`);
     await page.sleep(600);
     check('执行前填写参数并带出默认值', await page.evaluate(`document.querySelector('.ant-modal input[aria-label="id"]')?.value === '7'`));
-    await page.evaluate(`(() => { const input = document.querySelector('.ant-modal input[aria-label="message"]'); input?.focus(); input?.select(); })()`);
+    await page.evaluate(`(() => { const input = document.querySelector('.ant-modal textarea[aria-label="message"]'); input?.focus(); input?.select(); })()`);
     await page.send('Input.insertText', { text: "bound-value'; --" });
     await page.shot('11b-填写查询参数');
     await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal button')].find(node => node.textContent.replace(/\\s/g, '') === '执行查询')?.click(); })()`);

@@ -83,6 +83,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   AI_GLOSSARY_UPDATE: { label: '修改 AI 业务词典', category: 'ai' },
   AI_GLOSSARY_GAP_DISMISS: { label: '忽略 AI 词典待补词条', category: 'ai' },
   DATA_COMMIT: { label: '提交表数据变更', category: 'data', dangerous: true },
+  TABLE_PROPERTIES_UPDATE: { label: '修改表属性', category: 'schema', dangerous: true },
   TABLE_DESIGN_EXECUTE: { label: '执行表结构变更', category: 'schema', dangerous: true },
   TABLE_CREATE: { label: '新建表', category: 'schema' },
   TABLE_RENAME: { label: '重命名表', category: 'schema', dangerous: true },

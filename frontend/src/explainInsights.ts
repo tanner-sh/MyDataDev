@@ -41,10 +41,13 @@ function lower(values: string[]): string[] {
  * <p>必须先分清方言再套规则：PostgreSQL 的「Index Scan using idx」里也有 scan 一词，若拿
  * SQLite 的 SCAN 规则去匹配，一条走了索引的计划会被误报成表扫描。</p>
  */
-export type ExplainPlanShape = 'mysql' | 'text' | 'sqlite' | 'unknown';
+export type ExplainPlanShape = 'mysql' | 'text' | 'sqlite' | 'sqlserver' | 'dm' | 'unknown';
 
 export function explainPlanShape(columns: string[]): ExplainPlanShape {
   const normalized = lower(columns);
+  if (normalized.length === 1 && normalized[0] === 'dm_plan') return 'dm';
+  if (['operation', 'level_id', 'row_nums', 'cost'].every(column => normalized.includes(column))) return 'dm';
+  if (['physicalop', 'logicalop', 'estimaterows', 'nodeid'].every(column => normalized.includes(column))) return 'sqlserver';
   if (SQLITE_PLAN_COLUMNS.every((column) => normalized.includes(column))) return 'sqlite';
   if (TABULAR_PLAN_COLUMNS.every((column) => normalized.includes(column))) return 'mysql';
   if (normalized.length === 1 && TEXT_PLAN_COLUMNS.has(normalized[0])) return 'text';
@@ -108,6 +111,34 @@ export function explainFindings(columns: string[], rows: unknown[][]): ExplainFi
   const rowsIndex = columnIndex(columns, 'rows');
 
   rows.forEach((row, rowIndex) => {
+    if (shape === 'dm') {
+      const text = cellText(row, columnIndex(columns, 'dm_plan'));
+      const match = /^\s*\d+\s+#([A-Z0-9_ ]+):\s*\[\s*[^,]+,\s*([^,]+),/i.exec(text);
+      const operation = (match?.[1] ?? cellText(row, columnIndex(columns, 'operation'))).trim().toUpperCase();
+      const estimated = parseCount(match?.[2] ?? cellText(row, columnIndex(columns, 'row_nums')));
+      if (operation === 'CSCN2') {
+        record(findings, { level: 'notice', code: 'dm-clustered-scan', title: '聚集索引扫描（CSCN2）',
+          detail: '该算子扫描聚集索引。小表或返回数据比例较高时可能合理，请结合过滤条件和预估行数判断。' }, rowIndex);
+      }
+      if (estimated != null && estimated >= LARGE_ROW_ESTIMATE) {
+        record(findings, { level: 'notice', code: 'large-row-estimate', title: `预估输出行数偏大（约 ${formatCount(estimated)} 行）`,
+          detail: 'ROW_NUMS 是算子结果集的预测行数；COST 是优化器估算代价，都不是实际运行测量值。' }, rowIndex);
+      }
+      return;
+    }
+    if (shape === 'sqlserver') {
+      const operation = cellText(row, columnIndex(columns, 'physicalop')).toLowerCase();
+      const estimated = parseCount(cellText(row, columnIndex(columns, 'estimaterows')));
+      if (['table scan', 'clustered index scan', 'index scan'].includes(operation)) {
+        record(findings, { level: 'notice', code: 'sqlserver-scan', title: '扫描算子',
+          detail: '估算计划选择了表或索引扫描；小表或返回比例较高时可能合理，请结合过滤条件和数据量判断。' }, rowIndex);
+      }
+      if (estimated != null && estimated >= LARGE_ROW_ESTIMATE) {
+        record(findings, { level: 'notice', code: 'large-row-estimate', title: `预估输出行数偏大（约 ${formatCount(estimated)} 行）`,
+          detail: 'EstimateRows 是算子预计输出的行数，不是实际扫描行数；可结合统计信息与查询条件排查。' }, rowIndex);
+      }
+      return;
+    }
     if (shape === 'mysql') {
       const type = cellText(row, typeIndex).trim().toLowerCase();
       const extra = cellText(row, extraIndex).toLowerCase();

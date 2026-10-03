@@ -80,7 +80,7 @@ public class DefaultDialect implements DatabaseDialect {
                 }
                 if (column.deleted()) {
                     if (originalName != null) {
-                        columnSql.add("ALTER TABLE " + table + " DROP COLUMN " + quoteIdentifier(originalName));
+                        columnSql.add(dropColumnSql(table, originalName));
                     }
                     continue;
                 }
@@ -174,6 +174,10 @@ public class DefaultDialect implements DatabaseDialect {
             sql.addAll(columnCommentSql(table, columnName, column.remarks()));
         }
         return sql;
+    }
+
+    protected String dropColumnSql(String table, String columnName) {
+        return "ALTER TABLE " + table + " DROP COLUMN " + quoteIdentifier(columnName);
     }
 
     protected String addColumnSql(String table, ColumnDesign column) {

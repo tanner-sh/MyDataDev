@@ -55,4 +55,22 @@ class SqlParameterizedExecutionTest {
         verify(history).insert(eq(1L), eq("select cast(:value as integer)"), eq("EXECUTE"), eq("FAILED"), anyLong(), eq("参数查询执行失败（参数值不记录）"), eq("admin"));
         assertThat(executions.cancel("22222222-2222-4222-8222-222222222222")).isFalse();
     }
+    @Test void parameterizedPagingBindsRepeatedValuesBeforeFiltersAndSortsAcrossPages() throws Exception {
+        var service = service("dev");
+        String sql = "SELECT X, CAST(:value AS VARCHAR) AS NOTE FROM SYSTEM_RANGE(1,7) WHERE X >= :minimum AND :minimum > 0 ORDER BY X";
+        var values = Map.of("value", new SqlParameter("TEXT", "secret'; --"), "minimum", new SqlParameter("INTEGER", "2"));
+        var first = service.executeParameterized(new SqlParameterizedRequest(1L, sql, null, null, null, values, 2), "admin", null);
+        assertThat(first.rows()).hasSize(2);
+        assertThat(first.page().hasMore()).isTrue();
+        assertThat(first.edit()).isNull();
+        var page = service.executePage(1L, sql, 2, 2, "admin", null, null, null, "X", "DESC",
+                java.util.List.of(new com.example.dbadmin.dto.ApiDtos.SqlResultFilter("NOTE", "equals", "secret'; --")), values);
+        assertThat(page.rows()).hasSize(2);
+        assertThat(page.rows().get(0)).containsExactly("5", "secret'; --");
+        assertThat(page.rows().get(1)).containsExactly("4", "secret'; --");
+        assertThat(page.edit()).isNull();
+        assertThatThrownBy(() -> service.executePage(1L, sql, 0, 2, "admin", null, null, null, null, null, java.util.List.of(), Map.of()))
+                .hasMessageContaining("参数名称");
+    }
+
 }

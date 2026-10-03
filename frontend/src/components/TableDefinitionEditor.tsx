@@ -9,11 +9,12 @@ const COLUMN_TYPE_OPTIONS = ['VARCHAR', 'CHAR', 'TEXT', 'INTEGER', 'BIGINT', 'DE
   .map((value) => ({ value, label: value }));
 let rowSequence = 0;
 
-export type DesignColumnRow = ColumnDesign & { key: string };
+export type DesignColumnRow = ColumnDesign & { key: string; generated?: boolean };
 export type DesignIndexRow = IndexDesign & { key: string };
 
 export function TableDefinitionEditor({
   mode,
+  dbType,
   columns,
   indexes,
   primaryKeys,
@@ -26,6 +27,7 @@ export function TableDefinitionEditor({
   setPrimaryKeys
 }: {
   mode: 'create' | 'edit';
+  dbType?: string;
   columns: DesignColumnRow[];
   indexes: DesignIndexRow[];
   primaryKeys: string[];
@@ -100,10 +102,11 @@ export function TableDefinitionEditor({
             sticky
             columns={[
               { title: '字段名', dataIndex: 'name', key: 'name', width: 150, render: (value, row) => <Input aria-label="字段名" size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { name: event.target.value })} /> },
-              { title: '类型', dataIndex: 'type', key: 'type', width: 150, render: (value, row) => <AutoComplete aria-label="字段类型" size="small" className="full-width" disabled={disabled || row.deleted} value={value} options={COLUMN_TYPE_OPTIONS} filterOption={(input, option) => String(option?.value || '').includes(input.toUpperCase())} onChange={(next) => patchColumn(row, { type: next.toUpperCase() })} /> },
-              { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber aria-label="字段长度" size="small" min={0} disabled={disabled || row.deleted} value={value || undefined} onChange={(next) => patchColumn(row, { size: next || null })} /> },
-              { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新字段'}允许为空`} disabled={disabled || row.deleted} checked={value} onChange={(event) => patchColumn(row, { nullable: event.target.checked })} /> },
-              { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input aria-label="字段默认值" size="small" disabled={disabled || row.deleted} value={value} onChange={(event) => patchColumn(row, { defaultValue: event.target.value })} /> },
+              { title: '类型', dataIndex: 'type', key: 'type', width: 150, render: (value, row) => <AutoComplete aria-label="字段类型" size="small" className="full-width" disabled={disabled || row.deleted || row.generated || Boolean(row.originalName && row.identity)} value={value} options={dbType === 'sqlserver' ? ['INT', 'BIGINT', 'NVARCHAR', 'VARCHAR', 'NVARCHAR(MAX)', 'VARBINARY(MAX)', 'DECIMAL(18,2)', 'BIT', 'DATE', 'DATETIME2(7)', 'UNIQUEIDENTIFIER'].map(value => ({ value })) : COLUMN_TYPE_OPTIONS} filterOption={(input, option) => String(option?.value || '').includes(input.toUpperCase())} onChange={(next) => patchColumn(row, { type: next.toUpperCase() })} /> },
+              { title: '长度', dataIndex: 'size', key: 'size', width: 90, render: (value, row) => <InputNumber aria-label="字段长度" size="small" min={0} disabled={disabled || row.deleted || row.generated || Boolean(row.originalName && row.identity)} value={value || undefined} onChange={(next) => patchColumn(row, { size: next || null })} /> },
+              { title: '可空', dataIndex: 'nullable', key: 'nullable', width: 80, render: (value, row) => <Checkbox aria-label={`${row.name || '新字段'}允许为空`} disabled={disabled || row.deleted || row.generated || Boolean(row.identity)} checked={value} onChange={(event) => patchColumn(row, { nullable: event.target.checked })} /> },
+              { title: '默认值', dataIndex: 'defaultValue', key: 'defaultValue', width: 150, render: (value, row) => <Input aria-label="字段默认值" size="small" disabled={disabled || row.deleted || row.generated || Boolean(row.originalName && row.identity)} value={value} onChange={(event) => patchColumn(row, { defaultValue: event.target.value })} /> },
+              ...(dbType === 'sqlserver' ? [{ title: '自增', key: 'identity', width: 70, render: (_: unknown, row: DesignColumnRow) => <Checkbox aria-label={`${row.name || '新字段'}设为自增`} disabled={disabled || row.deleted || Boolean(row.originalName)} checked={Boolean(row.identity)} onChange={(event) => patchColumn(row, { identity: event.target.checked, ...(event.target.checked ? { type: 'INT', size: null, nullable: false, defaultValue: '' } : {}) })} /> }] : []),
               // 注释是这个产品最依赖的元数据（资源树、结构对比、AI 的结构搜索都在读它），
               // 以前只能在数据库里改。不支持的方言直接不显示这一列。
               ...(commentsSupported ? [{ title: '注释', dataIndex: 'remarks', key: 'remarks', width: 180, render: (value: string | undefined, row: DesignColumnRow) => <Input aria-label="字段注释" size="small" placeholder="说明这个字段是什么" disabled={disabled || row.deleted} value={value ?? ''} onChange={(event) => patchColumn(row, { remarks: event.target.value })} /> }] : []),
@@ -150,7 +153,9 @@ export function designColumns(detail: ObjectDetail): DesignColumnRow[] {
     defaultValue: column.defaultValue || '',
     originalName: column.name,
     deleted: false,
-    remarks: column.remarks || ''
+    remarks: column.remarks || '',
+    identity: column.identity,
+    generated: column.generated
   }));
 }
 
@@ -182,7 +187,7 @@ export function tableDefinitionSignature(columns: DesignColumnRow[], indexes: De
 }
 
 export function serializeColumns(columns: DesignColumnRow[]): ColumnDesign[] {
-  return columns.map(({ key: _key, ...column }) => column);
+  return columns.map(({ key: _key, generated: _generated, ...column }) => column);
 }
 
 export function serializeIndexes(indexes: DesignIndexRow[]): IndexDesign[] {
