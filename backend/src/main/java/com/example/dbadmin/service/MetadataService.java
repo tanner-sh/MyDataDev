@@ -541,7 +541,8 @@ public class MetadataService {
 
     private List<ColumnInfo> columnsWithRemarks(Connection connection, DatabaseDialect dialect, DatabaseDialect.MetadataScope scope, DbObject object) throws Exception {
         List<ColumnInfo> cols = columns(connection.getMetaData(), scope.catalog(), scope.schemaPattern(), object.name());
-        return dialect instanceof OracleDialect ? withOracleColumnRemarks(connection, dialect, object, cols) : cols;
+        return dialect instanceof OracleDialect ? withOracleColumnRemarks(connection, dialect, object, cols)
+                : dialect.enrichColumns(connection, object.schemaName(), object.name(), cols);
     }
 
     private String tableRemarks(Connection connection, DatabaseDialect dialect, DbObject object) {
@@ -1018,6 +1019,9 @@ public class MetadataService {
                 && request.columns().stream().anyMatch(column -> column.remarks() != null && !column.deleted())) {
             throw new IllegalStateException("当前数据库类型不支持修改列注释。");
         }
+        try (Connection connection = connections.open(connectionId)) {
+            dialect.validateTableDesign(connection, original, request);
+        }
         return dialect.alterTableSql(original.schemaName(), original.name(), original, request);
     }
 
@@ -1254,6 +1258,9 @@ public class MetadataService {
                     appendVersionValue(canonical, String.valueOf(column.size()));
                     appendVersionValue(canonical, String.valueOf(column.nullable()));
                     appendVersionValue(canonical, column.defaultValue());
+                    appendVersionValue(canonical, column.remarks());
+                    appendVersionValue(canonical, String.valueOf(column.identity()));
+                    appendVersionValue(canonical, String.valueOf(column.generated()));
                 });
         indexes.stream()
                 .sorted(Comparator.comparing(IndexInfo::name, Comparator.nullsFirst(Comparator.naturalOrder()))

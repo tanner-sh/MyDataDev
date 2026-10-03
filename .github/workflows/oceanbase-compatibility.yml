@@ -1,0 +1,38 @@
+name: OceanBase MySQL 真实回归
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  oceanbase:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: bash scripts/start-oceanbase-test.sh
+      - name: 验证租户识别、模式校验及通用数据库功能
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: oceanbase-mysql
+          TEST_OB_MYSQL_URL: jdbc:oceanbase://127.0.0.1:12881/mydatadev_test
+          TEST_OB_MYSQL_USER: root@test
+          TEST_OB_MYSQL_PASSWORD: MyDataDev_Test2026!
+      - if: always()
+        run: docker logs mydatadev-ob-test > oceanbase-container.log 2>&1 || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        continue-on-error: true
+        with:
+          name: oceanbase-compatibility-reports
+          path: |
+            backend/target/surefire-reports/*Database*CompatibilityTest*
+            oceanbase-container.log
+      - if: always()
+        run: docker rm -fv mydatadev-ob-test || true

@@ -86,15 +86,33 @@ public class OracleDialect extends DefaultDialect {
     @Override
     public SqlResult explain(Connection connection, String sql, int maxRows, int timeoutSeconds) throws Exception {
         long started = System.nanoTime();
-        try (Statement explain = connection.createStatement()) {
-            explain.setQueryTimeout(timeoutSeconds);
-            explain.execute("EXPLAIN PLAN FOR " + sql);
-        }
-        try (Statement display = connection.createStatement()) {
-            display.setQueryTimeout(timeoutSeconds);
-            display.setMaxRows(maxRows + 1);
-            try (ResultSet rs = display.executeQuery("SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY())")) {
-                return readResult(rs, (System.nanoTime() - started) / 1_000_000, maxRows);
+        String planId = "MDD_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 26);
+        Exception failure = null;
+        try {
+            try (Statement explain = connection.createStatement()) {
+                explain.setQueryTimeout(timeoutSeconds);
+                explain.execute("EXPLAIN PLAN SET STATEMENT_ID = '" + planId + "' FOR " + sql);
+            }
+            try (var display = connection.prepareStatement("SELECT PLAN_TABLE_OUTPUT FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', ?, 'TYPICAL'))")) {
+                display.setString(1, planId);
+                display.setQueryTimeout(timeoutSeconds);
+                display.setMaxRows(maxRows + 1);
+                try (ResultSet rs = display.executeQuery()) {
+                    return readResult(rs, (System.nanoTime() - started) / 1_000_000, maxRows);
+                }
+            }
+        } catch (Exception error) {
+            failure = error;
+            throw error;
+        } finally {
+            // Only remove this invocation's rows; never commit the caller's transaction.
+            try (var cleanup = connection.prepareStatement("DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = ?")) {
+                cleanup.setString(1, planId);
+                cleanup.setQueryTimeout(timeoutSeconds);
+                cleanup.executeUpdate();
+            } catch (Exception cleanupFailure) {
+                if (failure != null) failure.addSuppressed(cleanupFailure);
+                else throw cleanupFailure;
             }
         }
     }

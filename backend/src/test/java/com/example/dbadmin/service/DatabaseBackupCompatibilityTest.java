@@ -58,7 +58,7 @@ class DatabaseBackupCompatibilityTest {
 
     @ParameterizedTest
     @CsvSource({"mysql, SQL, false", "mysql, SQL, true", "mariadb, SQL, false", "postgresql, SQL, false",
-            "sqlserver, SQL, false", "oracle, SQL, false",
+            "sqlserver, SQL, false", "oracle, SQL, false", "dm, SQL, false",
             "mysql, MYSQLDUMP, false", "mariadb, MYSQLDUMP, false", "postgresql, PG_DUMP, false"})
     void backupRestoresRowsPrimaryKeyAndIndex(String type, String method, boolean noBackslashEscapes) throws Exception {
         if (!method.equals("SQL")) {
@@ -70,6 +70,7 @@ class DatabaseBackupCompatibilityTest {
         try (var f = new DatabaseCompatibilityTest.Fixture(type)) {
             f.properties.getBackup().setDirectory(directory.toString());
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 200) + ", " + f.decimal("amount", 20, 4));
+            if (type.equals("dm")) f.execute("ALTER TABLE " + f.q(table) + " ADD UNIQUE (name)");
             String index = "idx_" + table;
             f.execute("CREATE INDEX " + f.dialect.quoteIdentifier(index) + " ON " + f.q(table) + " (name)");
             String text = "中文 O'Reilly\\path\n第二行";
@@ -144,6 +145,12 @@ class DatabaseBackupCompatibilityTest {
                 assertThat(rows.getString("name")).isEqualTo(text);
                 assertThat(rows.getBigDecimal("amount")).isEqualByComparingTo("123456789012.3456");
                 assertThat(rows.next()).isFalse();
+            }
+            if (type.equals("dm")) {
+                try (var duplicate = f.jdbc.prepareStatement("INSERT INTO " + f.q(table) + " VALUES (99, ?, NULL)")) {
+                    duplicate.setString(1, text);
+                    assertThatThrownBy(duplicate::executeUpdate).isInstanceOf(java.sql.SQLException.class);
+                }
             }
             var detail = f.metadata.detail(1L, f.schema, table, true);
             assertThat(detail.primaryKeys()).containsExactly(f.col("id"));

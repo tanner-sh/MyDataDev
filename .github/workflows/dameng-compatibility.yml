@@ -1,0 +1,55 @@
+name: 达梦真实回归
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dameng:
+    name: DM8 执行计划与功能回归
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [0, 2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: 启动固定版本的官方达梦测试镜像
+        run: bash scripts/start-dameng-test.sh
+      - name: 配置普通账号和兼容模式
+        run: bash scripts/configure-dameng-test.sh
+        env:
+          DM_TEST_MODE: ${{ matrix.mode }}
+      - name: 验证执行计划、元数据、编辑、事务、导出和表设计
+        working-directory: backend
+        run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
+        env:
+          TEST_REQUIRED_DATABASES: dm
+          TEST_DM_URL: jdbc:dm://127.0.0.1:15239
+          TEST_DM_USER: MYDATADEV_TEST
+          TEST_DM_COMPATIBLE_MODE: ${{ matrix.mode }}
+          TEST_DM_PASSWORD: MyDataDev_Test2026!
+      - name: 保存达梦启动日志
+        if: always()
+        run: docker logs mydatadev-dm-test > dameng-container.log 2>&1 || true
+      - name: 保存达梦回归报告
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: dameng-compatibility-reports-${{ matrix.mode }}
+          path: |
+            backend/target/surefire-reports/*Database*CompatibilityTest*
+            dameng-container.log
+      - name: 清理测试实例
+        if: always()
+        run: docker rm -fv mydatadev-dm-test || true

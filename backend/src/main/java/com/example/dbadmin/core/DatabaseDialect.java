@@ -15,6 +15,18 @@ import java.util.List;
 import java.util.Optional;
 
 public interface DatabaseDialect {
+    default boolean supportsCteResultPushdown() { return true; }
+
+    /** Makes an already validated, unpaged SELECT legal inside the pagination/filter wrapper. */
+    default String resultPushdownSource(String sql) { return sql; }
+
+    default String backupConstraintName(String schema, String table, String name) { return name; }
+
+    /** Empty means an internal index already recreated by table/primary-key DDL. */
+    default java.util.Optional<String> backupIndexName(java.sql.Connection connection, String schema, String table, String index) throws Exception {
+        return java.util.Optional.of(index);
+    }
+
     enum NamespaceKind {
         SCHEMA,
         CATALOG
@@ -128,11 +140,19 @@ public interface DatabaseDialect {
      *
      * <p>注释是这个产品最依赖的元数据（资源树、结构对比、AI 的结构搜索都在读它），却长期
      * 只读不可写。默认认为支持 —— 绝大多数关系库都有 {@code COMMENT ON} 或等价写法；
-     * SQLite 根本没有注释，SQL Server 要走扩展属性，这两家显式关掉。</p>
+     * SQLite 根本没有注释，显式关闭；SQL Server 使用扩展属性。</p>
      */
     default boolean supportsColumnComments() {
         return true;
     }
+
+    /** 补充 JDBC 未完整返回的列属性，例如计算列、IDENTITY 和精度。 */
+    default java.util.List<com.example.dbadmin.dto.ApiDtos.ColumnInfo> enrichColumns(Connection connection, String schema, String table,
+            java.util.List<com.example.dbadmin.dto.ApiDtos.ColumnInfo> columns) throws Exception { return columns; }
+
+    /** 预览及执行前，用原生元数据检查通用设计稿无法表达的属性。 */
+    default void validateTableDesign(Connection connection, com.example.dbadmin.dto.ApiDtos.ObjectDetail original,
+            com.example.dbadmin.dto.ApiDtos.TableDesignRequest request) throws Exception { }
 
     /**
      * 一条 INSERT 能不能带多行 {@code VALUES (…), (…)}。

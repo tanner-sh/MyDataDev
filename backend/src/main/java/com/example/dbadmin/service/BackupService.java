@@ -1609,7 +1609,9 @@ public class BackupService {
             }
         }
         for (Map.Entry<String, IndexBackup> entry : indexes.entrySet()) {
-            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + dialect.quoteIdentifier(entry.getKey()) + " ON " + qualified + " ("
+            var backupName = dialect.backupIndexName(connection, table.schema(), table.name(), entry.getKey());
+            if (backupName.isEmpty()) continue;
+            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + dialect.quoteIdentifier(backupName.get()) + " ON " + qualified + " ("
                     + entry.getValue().columns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");
         }
         Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
@@ -1630,7 +1632,7 @@ public class BackupService {
         }
         for (Map.Entry<String, ForeignKeyBackup> entry : foreignKeys.entrySet()) {
             ForeignKeyBackup key = entry.getValue();
-            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + dialect.quoteIdentifier(entry.getKey()) + " FOREIGN KEY ("
+            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + dialect.quoteIdentifier(dialect.backupConstraintName(table.schema(), table.name(), entry.getKey())) + " FOREIGN KEY ("
                     + key.localColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
                     + dialect.qualifiedName(key.referencedNamespace(), key.referencedTable()) + " ("
                     + key.referencedColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");

@@ -31,6 +31,25 @@ describe('SQL parameters', () => {
     writeSqlSession(1, [tab], tab.id, { getItem: () => serialized, setItem: (_, value) => { serialized = value; } }, 'test');
     expect(normalizeSqlSession(JSON.parse(serialized))?.tabs[0].parameters).toEqual(definitions);
   });
+  it('checks calendar dates, clock ranges and decimal scale before submission', () => {
+    const date = { ...definitions[0], type: 'DATE' as const };
+    expect(parameterError(date, '2025-02-29')).toBeDefined();
+    expect(parameterError(date, '2024-02-29')).toBeUndefined();
+    expect(parameterError(date, '2026-04-31')).toBeDefined();
+    expect(parameterError({ ...date, type: 'TIMESTAMP' }, '2026-10-01 24:00:00')).toBeDefined();
+    expect(parameterError({ ...date, type: 'DECIMAL' }, '1e999999')).toBeDefined();
+    expect(parameterError({ ...date, type: 'DECIMAL' }, '0.00001e-999')).toBeDefined();
+    expect(parameterError({ ...date, type: 'DECIMAL' }, '1.234e100')).toBeUndefined();
+  });
+  it('does not serialize values retained for pagination', () => {
+    const tab = { ...createSqlTab(1), results: [{ index: 1, sql: 'select :secret', startOffset: 0, endOffset: 14,
+      status: 'SUCCESS' as const, result: { columns: [], rows: [], elapsedMs: 1, resultSet: true, affectedRows: -1 },
+      queryParameters: { secret: { type: 'TEXT' as const, value: 'never-store-this' } } }] };
+    let serialized = '';
+    writeSqlSession(1, [tab], tab.id, { getItem: () => serialized, setItem: (_, value) => { serialized = value; } }, 'test');
+    expect(serialized).not.toContain('never-store-this');
+    expect(serialized).not.toContain('queryParameters');
+  });
   it('rejects corrupt stored metadata', () => {
     expect(normalizeParameterDefinitions([{ name: 'id', type: 'INVALID', required: true }])).toBeUndefined();
     expect(normalizeParameterDefinitions([definitions[0], definitions[0]])).toBeUndefined();

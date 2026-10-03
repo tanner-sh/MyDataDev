@@ -87,6 +87,11 @@ public class SqlStatementClassifier {
         return tokens(sql, true).stream().noneMatch(token -> token.depth() == 0 && boundaries.contains(token.word()));
     }
 
+    public boolean isCommonTableExpression(String sql) {
+        List<Token> tokens = tokens(sql);
+        return !tokens.isEmpty() && "WITH".equals(tokens.get(0).word());
+    }
+
     public boolean isAutomaticallyPageable(String sql) {
         List<Token> tokens = tokens(sql);
         Operation operation = tokens.isEmpty() ? null : operation(tokens);

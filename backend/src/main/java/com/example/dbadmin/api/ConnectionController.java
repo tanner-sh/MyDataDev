@@ -81,6 +81,12 @@ public class ConnectionController {
         return new MessageResponse(true, "deleted");
     }
 
+    @GetMapping("/{id}/server-info")
+    public com.example.dbadmin.core.DatabaseServerInfo serverInfo(@PathVariable long id) throws Exception {
+        access.require(id, ConnectionPermission.QUERY);
+        return service.serverInfo(id);
+    }
+
     @PostMapping("/test")
     public com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse test(@Valid @RequestBody TestConnectionRequest request) throws Exception {
         return new com.example.dbadmin.dto.ApiDtos.ConnectionTestResponse(true, "连接测试成功", service.diagnose(request));

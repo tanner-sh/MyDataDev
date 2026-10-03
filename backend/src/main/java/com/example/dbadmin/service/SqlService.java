@@ -98,6 +98,20 @@ public class SqlService {
     public SqlResult executeParameterized(com.example.dbadmin.dto.ApiDtos.SqlParameterizedRequest request, String actor, String productionConfirmation) throws Exception {
         SqlParameters.Parsed parsed = SqlParameters.parse(request.sql(), connections.require(request.connectionId()).dbType());
         SqlParameters.validateValues(parsed, request.parameters());
+        boolean wrappingSupported = !classifier.isCommonTableExpression(parsed.sql())
+                || dialectRegistry.dialectFor(connections.require(request.connectionId())).supportsCteResultPushdown();
+        if (request.pageSize() != null && wrappingSupported && classifier.isAutomaticallyPageable(parsed.sql())) {
+            long started = System.nanoTime();
+            try {
+                var result = executePage(request.connectionId(), request.sql(), 0, request.pageSize(), actor, request.executionId(),
+                        productionConfirmation, request.schemaName(), null, null, List.of(), request.parameters());
+                history.insert(request.connectionId(), request.sql(), "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
+                return result;
+            } catch (Exception error) {
+                history.insert(request.connectionId(), request.sql(), "EXECUTE", "FAILED", elapsed(started), "参数查询执行失败（参数值不记录）", actor);
+                throw error;
+            }
+        }
         return executeBound(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation,
                 request.schemaName(), false, request.parameters());
     }
@@ -474,7 +488,17 @@ public class SqlService {
             String sortDirection,
             List<SqlResultFilter> filters
     ) throws Exception {
-        String executionSql = singleStatement(connectionId, sql, "分页查询");
+        return executePage(connectionId, sql, requestedOffset, requestedPageSize, actor, executionId,
+                productionConfirmation, schemaName, sortColumn, sortDirection, filters, null);
+    }
+
+    public SqlResult executePage(long connectionId, String sql, Integer requestedOffset, Integer requestedPageSize,
+            String actor, String executionId, String productionConfirmation, String schemaName, String sortColumn,
+            String sortDirection, List<SqlResultFilter> filters, Map<String, com.example.dbadmin.dto.ApiDtos.SqlParameter> parameters) throws Exception {
+        SqlParameters.Parsed parsed = parameters == null ? null : SqlParameters.parse(sql, connections.require(connectionId).dbType());
+        if (parsed != null) SqlParameters.validateValues(parsed, parameters);
+        String executionSql = singleStatement(connectionId, parsed == null ? sql : parsed.sql(), "分页查询");
+        if (parsed != null && !classifier.isParameterizedSelectQuery(executionSql)) throw new IllegalArgumentException("参数化分页只支持 SELECT 查询。");
         if (!classifier.isAutomaticallyPageable(executionSql)) {
             throw new IllegalArgumentException("当前 SQL 不支持自动分页；仅支持未自带分页子句的单条 SELECT。");
         }
@@ -501,25 +525,27 @@ public class SqlService {
         String pageSql = dialect.pageQuery(shaped.sql(), pageSize + 1, offset);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
-             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, parsed != null || dbConnection.readonly());
              // 筛选值一律绑定，绝不拼进 SQL：列名是标识符可以引用转义，值来自输入框，拼进去就是注入点。
-             Statement statement = shaped.hasParameters()
+             Statement statement = parsed != null || shaped.hasParameters()
                      ? connection.prepareStatement(pageSql) : connection.createStatement()) {
             dialect.configureReadStatement(connection, statement, Math.min(pageSize + 1, 500), properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(pageSize + 1);
+            if (parsed != null) SqlParameters.bind((java.sql.PreparedStatement) statement, parsed, parameters);
+            int parameterOffset = parsed == null ? 0 : parsed.occurrences().size();
             for (int index = 0; index < shaped.parameters().size(); index++) {
-                ((java.sql.PreparedStatement) statement).setObject(index + 1, shaped.parameters().get(index));
+                ((java.sql.PreparedStatement) statement).setObject(parameterOffset + index + 1, shaped.parameters().get(index));
             }
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
-                try (ResultSet rs = shaped.hasParameters()
+                try (ResultSet rs = parsed != null || shaped.hasParameters()
                         ? ((java.sql.PreparedStatement) statement).executeQuery()
                         : statement.executeQuery(pageSql)) {
                     SqlResult result = readPageResult(
                             rs, started, connectionId, offset, rawPageSize, pageSize,
                             dialect.paginationHelperColumn(), schemaName, dialect, connection, dbConnection,
                             // 就地编辑的判定要看用户写的那条 SQL，不是排序包装之后的。
-                            executionSql, normalizedSortColumn, normalizedSortDirection, normalizedFilters
+                            executionSql, normalizedSortColumn, normalizedSortDirection, normalizedFilters, parsed != null
                     );
                     audit.onConnection(actor, "SQL_QUERY_PAGE", connectionId, "offset=" + offset + "; " + abbreviate(sql));
                     metrics.success(SqlExecutionMetrics.KIND_PAGE, started);
@@ -672,7 +698,8 @@ public class SqlService {
             String executionSql,
             String sortColumn,
             String sortDirection,
-            List<SqlResultFilter> filters
+            List<SqlResultFilter> filters,
+            boolean parameterized
     ) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
@@ -685,7 +712,7 @@ public class SqlService {
         }
         int effectivePageSize = Math.min(pageSize, MAX_RESULT_CELLS / Math.max(columnCount, 1));
         ResultSourceTable sourceTable = ResultSetSourceResolver.resolve(metadata, dialect);
-        EditableResult editable = editableResult(connection, dbConnection, sourceTable, metadata, columnCount, executionSql, schemaName);
+        EditableResult editable = parameterized ? null : editableResult(connection, dbConnection, sourceTable, metadata, columnCount, executionSql, schemaName);
         List<List<Object>> rows = new ArrayList<>();
         List<String> rowKeyTokens = new ArrayList<>();
         long textChars = 0;
@@ -719,7 +746,7 @@ public class SqlService {
                 payloadLimitReached,
                 page,
                 sourceTable,
-                editInfo(editable, rowKeyTokens)
+                parameterized ? null : editInfo(editable, rowKeyTokens)
         ), rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
     }
 

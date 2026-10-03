@@ -39,7 +39,7 @@ class DialectRegistryTest {
         assertThat(dialect.pageQuery("SELECT * FROM users ORDER BY id", 101, 200))
                 .isEqualTo("SELECT * FROM users ORDER BY id OFFSET 200 ROWS FETCH NEXT 101 ROWS ONLY");
         assertThat(dialect.quoteIdentifier("a]b")).isEqualTo("[a]]b]");
-        assertThat(dialect.capabilities().tableDesign()).isFalse();
+        assertThat(dialect.capabilities().tableDesign()).isTrue();
     }
 
     @Test

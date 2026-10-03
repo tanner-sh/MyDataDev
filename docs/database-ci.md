@@ -32,21 +32,22 @@ PR、推送到 `main` 和手动运行 CI 时启动独立服务容器，不读取
 | `mariadb-compatibility` | MariaDB 11.4 | mariadb-dump/mariadb |
 | `sqlserver-compatibility` | SQL Server 2022 | 未覆盖原生备份 |
 | `oracle-compatibility` | Oracle Free 23 | 未安装 exp/imp，仅 SQL 逻辑备份 |
+| `dameng-compatibility` | DM8 rev244896（官方固定镜像） | 未覆盖原生备份；见 [达梦回归](dameng-enhancements.md) |
 
-所有实库作业的失败都使 CI 失败。前三个作业最长 20 分钟，Oracle 最长 30 分钟。用例另有 JUnit 超时，但驱动或子进程不响应线程中断时，仍需依靠作业超时兜底。
+所有实库作业的失败都使 CI 失败。Oracle 最长 30 分钟，其余实库作业最长 20 分钟。用例另有 JUnit 超时，但驱动或子进程不响应线程中断时，仍需依靠作业超时兜底。
 
 ## 覆盖范围
 
-当前共 74 个参数化用例实例：基础兼容性 27、原有备份恢复 9、复杂写入 20、复杂恢复 10、故障注入 8。各 CI 作业只实际运行其配置数据库对应的用例，其他数据库实例会跳过；不能把单个作业的跳过数当作缺失覆盖。
+各 CI 作业只实际运行其配置数据库对应的用例，其他数据库实例会跳过；不能把单个作业的跳过数当作缺失覆盖。下表的「五种」指 MySQL、MariaDB、PostgreSQL、SQL Server 和 Oracle。达梦新增 7 条通用用例及 2 条专项用例，实际数量以 JUnit 报告为准。
 
 | 路径 | 覆盖数据库 |
 | --- | --- |
-| 元数据、游标分页、编辑冲突、重新提交、CSV 内容 | 五种 |
-| NULL、空字符串、中文、emoji、引号、反斜杠、换行往返 | MySQL、MariaDB、PostgreSQL、SQL Server |
-| BIGINT、DECIMAL、微秒时间、二进制、文本的 SQL 导出回放 | 五种 |
-| 网格后续行冲突时，前面的修改回滚 | 五种 |
-| 手动事务提交前不可见、提交后可见、失败回滚 | MySQL、MariaDB、PostgreSQL、Oracle |
-| 表管理服务建表、改列、加列、索引、改名、删表 | MySQL、MariaDB、PostgreSQL、Oracle |
+| 元数据、游标分页、编辑冲突、重新提交、CSV 内容 | 五种、达梦 |
+| NULL、空字符串、中文、emoji、引号、反斜杠、换行往返 | MySQL、MariaDB、PostgreSQL、SQL Server、达梦 |
+| BIGINT、DECIMAL、微秒时间、二进制、文本的 SQL 导出回放 | 五种、达梦 |
+| 网格后续行冲突时，前面的修改回滚 | 五种、达梦 |
+| 手动事务提交前不可见、提交后可见、失败回滚 | MySQL、MariaDB、PostgreSQL、Oracle、达梦 |
+| 表管理服务建表、改列、加列、索引、改名、删表 | 五种、达梦 |
 | SQL 逻辑备份恢复及数据、主键、索引核对 | 五种 |
 | 原生备份恢复 | MySQL、MariaDB、PostgreSQL |
 | MySQL 两种反斜杠转义模式间的恢复 | MySQL |
@@ -66,7 +67,7 @@ PR、推送到 `main` 和手动运行 CI 时启动独立服务容器，不读取
 
 - Oracle 将空字符串存为 NULL，因此不运行必须区分二者的用例。
 - SQL Server 默认读已锁定行会阻塞；现有手动事务用例以 MVCC 可见性为前提，尚未为 SQL Server 单独验证锁行为。
-- SQL Server 当前产品不开放可视化表设计，因此不跑该功能用例。
+- SQL Server 已覆盖可视化建表、改表、重命名、删除；专项用例验证默认约束、中文注释、IDENTITY、计算列保护、高级索引保护和 SHOWPLAN 会话恢复。
 - MariaDB 使用自身客户端，避免 MySQL 客户端探测差异造成无效测试。
 - SQL Server 备份按 `GO` 分批；Oracle 时间用显式转换，读取索引不触发精确统计收集。
 
@@ -131,6 +132,7 @@ node scripts/upgrade-smoke.mjs --from /tmp/previous/MyDataDev-<版本>-web.jar -
 | MariaDB | 11.4 | 10.11、latest |
 | SQL Server | 2022 | 2019、2025 |
 | Oracle | Free 23 | XE 21 |
+| 达梦 | DM8 rev244896 | 暂无多版本矩阵 |
 
 - 最低版本取上游仍在维护（或仍被大量使用）的最旧版本；`latest` 跟着上游走，新版本不兼容时第一个晚上就会暴露。版本清单应随项目的支持策略调整。
 - PostgreSQL 按服务端版本安装同版本的 `pg_dump` / `pg_restore`（官方 apt 源）；MySQL 与 MariaDB 用 Ubuntu 自带的客户端，与 CI 相同。
@@ -144,4 +146,10 @@ node scripts/upgrade-smoke.mjs --from /tmp/previous/MyDataDev-<版本>-web.jar -
 
 ## 尚未覆盖
 
-SQLite、ClickHouse、达梦、OceanBase 没有独立实库任务；现有五种数据库的多版本只在夜间覆盖最低与最新两档。存储过程、复杂视图、全库灾难恢复、恢复后 identity/sequence 的完整状态、跨版本/跨库迁移、恢复任务中途取消、真实网络丢包与数据库重启、磁盘耗尽、大数据压力测试仍未覆盖。CI 通过不表示这些场景已经验证。
+SQLite、ClickHouse、OceanBase Oracle 模式没有独立实库任务；现有五种数据库的多版本只在夜间覆盖最低与最新两档。存储过程、复杂视图、全库灾难恢复、恢复后 identity/sequence 的完整状态、跨版本/跨库迁移、恢复任务中途取消、真实网络丢包与数据库重启、磁盘耗尽、大数据压力测试仍未覆盖。CI 通过不表示这些场景已经验证。
+
+## 本轮数据库增强回归
+
+达梦独立任务使用 RESOURCE 普通账号，矩阵覆盖 COMPATIBLE_MODE 0 / 2，并包含逻辑备份恢复。OceanBase 独立任务固定社区版 4.3.5-lts 镜像，只覆盖 MySQL 模式。两者纳入 CI Gate；Oracle 租户缺失不视为实测通过。
+
+现有 MySQL/MariaDB 作业自动包含表属性回归，Oracle 作业包含分区容量与执行计划隔离回归；DatabaseParameterizedCompatibilityTest 在各数据库任务中验证参数绑定、分页筛选和导出。详见 [推进清单](database-enhancement-roadmap.md)。

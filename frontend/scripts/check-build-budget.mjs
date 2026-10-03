@@ -18,7 +18,9 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // 首屏与编辑器的独立预算保持原值，继续防止引入大型依赖。
 // 增量行更新、统一缓存预算、可取消导出与阶段计时增加约 3.5 KiB；首屏实测仍为 238.9 KiB。
 // 给完整可选功能链增加 8 KiB 余量，并新增下面独立的可输入工作台预算。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 798 * 1024;
+// 数据库属性/分区面板、能力报告及参数分页导出后实测 799.5 KiB；增加 6 KiB 功能余量。
+// 未新增依赖，首屏、可输入工作台及编辑器预算保持不变。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 804 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;

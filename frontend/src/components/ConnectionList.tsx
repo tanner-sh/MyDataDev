@@ -1,4 +1,5 @@
 import { Alert, Button, Card, Dropdown, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
+import { DatabaseServerInfoPanel } from './DatabaseServerInfoPanel';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -24,6 +25,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   onDelete: (connection: Connection) => void;
   onToggleFavorite: (connectionId: number) => void;
 }) {
+  const [infoConnection, setInfoConnection] = useState<Connection | null>(null);
   const [keyword, setKeyword] = useState('');
   const [environment, setEnvironment] = useState<string>('all');
   const [dbType, setDbType] = useState<string>('all');
@@ -173,7 +175,8 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                     onTest,
                     onEdit,
                     onDuplicate,
-                    () => setPendingDelete(connection)
+                    () => setPendingDelete(connection),
+                    () => setInfoConnection(connection)
                   )}
                 >
                   <Tooltip title="更多连接操作">
@@ -190,6 +193,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
         ))}
         {visibleConnections.length === 0 && <PanelEmpty title="没有匹配的数据库连接" description="换个关键字，或清空环境与类型筛选。" />}
       </div>
+      <DatabaseServerInfoPanel connection={infoConnection} onClose={() => setInfoConnection(null)} />
       <Modal
         open={pendingDelete !== null}
         title={pendingDelete ? `删除连接「${pendingDelete.name}」？` : undefined}
@@ -223,11 +227,13 @@ function connectionMenu(
   onTest: (connection: Connection) => void,
   onEdit: (connection: Connection) => void,
   onDuplicate: (connection: Connection) => void,
-  onRequestDelete: () => void
+  onRequestDelete: () => void,
+  onInfo: () => void
 ): MenuProps {
   const canAdminister = connection.permissions?.includes('CONNECTION_ADMIN') ?? true;
   return {
     items: [
+      { key: 'info', label: '服务端信息', disabled: !(connection.permissions?.includes('QUERY') ?? true) },
       { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing || !canAdminister },
       { key: 'edit', icon: <EditOutlined />, label: '编辑连接', disabled: !canAdminister },
       { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接', disabled: !canAdminister },
@@ -235,6 +241,7 @@ function connectionMenu(
       { key: 'delete', icon: <DeleteOutlined />, label: '删除连接', danger: true, disabled: !canAdminister }
     ],
     onClick: ({ key }) => {
+      if (key === 'info') onInfo();
       if (key === 'test') onTest(connection);
       if (key === 'edit') onEdit(connection);
       if (key === 'duplicate') onDuplicate(connection);

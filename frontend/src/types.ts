@@ -111,7 +111,7 @@ export type DbObject = {
   name: string;
   type: string;
   remarks?: string | null;
-  columns: { name: string; type: string; size: number; nullable: boolean; remarks?: string; ordinalPosition?: number; defaultValue?: string }[];
+  columns: { name: string; type: string; size: number; nullable: boolean; remarks?: string; ordinalPosition?: number; defaultValue?: string; identity?: boolean; generated?: boolean }[];
   indexes: { name: string; columnName: string; unique: boolean; ordinalPosition?: number }[];
 };
 
@@ -127,7 +127,7 @@ export type ObjectRowCount = { value?: number | null; exact: boolean; elapsedMs:
 export type ObjectRelation = { constraintName?: string; pkSchemaName?: string; pkTableName: string; pkColumnName: string; fkSchemaName?: string; fkTableName: string; fkColumnName: string };
 export type ObjectRelations = { importedKeys: ObjectRelation[]; exportedKeys: ObjectRelation[] };
 /** remarks 为 undefined 表示这次不改注释，空串表示清空 —— 两者必须分开，否则改一次类型就会把注释抹掉。 */
-export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean; remarks?: string };
+export type ColumnDesign = { name: string; type: string; size?: number | null; nullable: boolean; defaultValue?: string; originalName?: string; deleted: boolean; remarks?: string; identity?: boolean | null };
 export type IndexDesign = { name: string; columns: string[]; unique: boolean; originalName?: string; deleted: boolean };
 export type TableDesignRequest = { schemaName?: string; tableName: string; columns: ColumnDesign[]; indexes: IndexDesign[]; primaryKeys: string[]; structureVersion: string; confirmation?: string };
 export type TableDesignResponse = { sql: string[]; message: string };
@@ -201,7 +201,7 @@ export type SqlPageNavigation = {
   /** 服务端筛选；同样要跟着翻页走。 */
   filters?: SqlResultFilterRequest[] | null;
 };
-export type SqlStatementResult = { index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
+export type SqlStatementResult = { queryParameters?: import('./sqlParameters').SqlParameterValues; index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
 export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean; transactionMessage?: string };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
 export type LegacyBackupScope = BackupScope | 'TABLE';

@@ -163,22 +163,19 @@ class SchemaDiffServiceTest {
 
     @Test
     void skipsDdlForTargetsThatCannotBeDesigned() throws Exception {
-        // SQL Server、ClickHouse、SQLite 声明不支持表设计，也没重写 alterTableSql，继承的是
-        // DefaultDialect 那套 PostgreSQL 写法 —— `ALTER COLUMN x TYPE y` 在 T-SQL 里根本不是
-        // 合法语法。表设计器早就有这道闸门（MetadataService），结构对比曾漏抄，于是发出去一份
-        // 看起来完整、实际一条都跑不通的脚本。差异清单本身仍然有用，照常返回。
+        // SQLite 尚未开放表设计，结构对比只返回差异清单。
         String source = database("""
                 CREATE TABLE orders(id BIGINT PRIMARY KEY, amount DECIMAL(12,2) NOT NULL, note VARCHAR(200));
                 CREATE TABLE audit_trail(id BIGINT PRIMARY KEY);
                 """);
         String target = database("CREATE TABLE orders(id BIGINT PRIMARY KEY, amount DECIMAL(12,2));");
-        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlserver");
+        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlite");
 
         SchemaDiffResponse response = service.compare(
                 new SchemaDiffRequest(1L, "PUBLIC", 2L, "PUBLIC", List.of(), false), "admin");
 
         assertThat(response.warnings()).anySatisfy(warning ->
-                assertThat(warning).contains("不支持自动生成建表/改表语句"));
+                assertThat(warning).contains("暂不支持结构对比自动生成建表/改表语句"));
         assertThat(table(response, "ORDERS").status()).isEqualTo(SchemaComparison.STATUS_DIFFERENT);
         assertThat(table(response, "ORDERS").items()).isNotEmpty();
         assertThat(table(response, "ORDERS").migration()).isEmpty();
@@ -194,7 +191,7 @@ class SchemaDiffServiceTest {
                 CREATE TABLE orders(id BIGINT PRIMARY KEY);
                 CREATE TABLE legacy_export(id BIGINT PRIMARY KEY);
                 """);
-        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlserver");
+        SchemaDiffService service = service(source, target, mock(AuditRepository.class), "h2", "sqlite");
 
         SchemaDiffResponse response = service.compare(
                 new SchemaDiffRequest(1L, "PUBLIC", 2L, "PUBLIC", List.of(), true), "admin");

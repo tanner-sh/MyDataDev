@@ -206,6 +206,13 @@ public class ConnectionService {
      * 连接，于是 SQL 文件执行、导出、备份这些不带 schema 参数的调用方全都绕过了默认命名空间，
      * 脚本里的无限定表名会落到登录账号的默认库，而不是用户在连接上配置的那个。</p>
      */
+    public com.example.dbadmin.core.DatabaseServerInfo serverInfo(long id) throws Exception {
+        DbConnection configured = require(id);
+        try (Connection connection = dataSources.open(configured, password(id), sshSpec(id))) {
+            return com.example.dbadmin.core.DatabaseServerInfo.inspect(connection, configured.dbType());
+        }
+    }
+
     public Connection open(long id) throws Exception {
         return open(id, null);
     }
@@ -214,8 +221,14 @@ public class ConnectionService {
         DbConnection configured = require(id);
         // 未指定命名空间时用连接上配置的默认值，省去每次打开连接后再手动切库。
         if (schemaName == null || schemaName.isBlank()) schemaName = configured.defaultSchema();
-        if (schemaName == null || schemaName.isBlank()) return dataSources.open(configured, password(id), sshSpec(id));
         Connection connection = dataSources.open(configured, password(id), sshSpec(id));
+        try {
+            com.example.dbadmin.core.DatabaseServerInfo.validateOceanBase(connection, configured.dbType());
+        } catch (Exception error) {
+            try { connection.close(); } catch (Exception closeError) { error.addSuppressed(closeError); }
+            throw error;
+        }
+        if (schemaName == null || schemaName.isBlank()) return connection;
         var dialect = dialectRegistry.dialectFor(configured);
         boolean handedOut = false;
         try {

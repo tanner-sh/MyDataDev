@@ -216,6 +216,24 @@ public class ExportService {
     private PreparedExport prepareInternal(long connectionId, String sql, DataEditService.StatementBinder binder,
             String format, String actor, String productionConfirmation, String schemaName,
             List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement) throws Exception {
+        return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation, schemaName, targetTableParts,
+                auditDetail, onStatement, EXPORT_MAX_ROWS);
+    }
+
+    public PreparedExport prepareParameterized(com.example.dbadmin.dto.ApiDtos.ExportRequest request, String actor,
+            String confirmation, java.util.function.Consumer<Statement> onStatement) throws Exception {
+        var parsed = SqlParameters.parse(request.sql(), connections.require(request.connectionId()).dbType());
+        SqlParameters.validateValues(parsed, request.parameters());
+        if (!classifier.isParameterizedSelectQuery(parsed.sql())) throw new IllegalArgumentException("参数化导出只支持 SELECT 查询。");
+        String sql = requireSingleQuery(parsed.sql());
+        return prepareInternal(request.connectionId(), sql, statement -> SqlParameters.bind(statement, parsed, request.parameters()),
+                request.format(), actor, confirmation, request.schemaName(), request.targetTableParts(), abbreviate(request.sql()), onStatement,
+                request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS);
+    }
+
+    private PreparedExport prepareInternal(long connectionId, String sql, DataEditService.StatementBinder binder,
+            String format, String actor, String productionConfirmation, String schemaName,
+            List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement, int rowLimit) throws Exception {
         String normalizedFormat = normalizeFormat(format);
         List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
@@ -234,7 +252,7 @@ public class ExportService {
              OutputStream rawOutput = Files.newOutputStream(file);
              OutputStream output = new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES)) {
             dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
-            statement.setMaxRows(EXPORT_MAX_ROWS + 1);
+            statement.setMaxRows(rowLimit == Integer.MAX_VALUE - 1 ? 0 : rowLimit + 1);
             if (binder != null) binder.bind((java.sql.PreparedStatement) statement);
             onStatement.accept(statement);
             if (Thread.currentThread().isInterrupted()) throw new java.util.concurrent.CancellationException("导出已取消");
@@ -242,7 +260,7 @@ public class ExportService {
             try (ResultSet rs = binder == null
                     ? statement.executeQuery(sql)
                     : ((java.sql.PreparedStatement) statement).executeQuery()) {
-                truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget);
+                truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget, rowLimit);
             }
             long elapsed = (System.nanoTime() - started) / 1_000_000;
             audit.onConnection(actor, "SQL_EXPORT", connectionId, auditDetail);
@@ -251,19 +269,23 @@ public class ExportService {
         } catch (Exception e) {
             Files.deleteIfExists(file);
             long elapsed = (System.nanoTime() - started) / 1_000_000;
-            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "FAILED", elapsed, abbreviate(e.getMessage()), actor);
+            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "FAILED", elapsed, binder == null ? abbreviate(e.getMessage()) : "参数导出失败（参数值不记录）", actor);
             throw e;
         }
     }
 
     private boolean write(ResultSet rs, String format, OutputStream output, DatabaseDialect dialect, List<String> targetTableParts) throws Exception {
+        return write(rs, format, output, dialect, targetTableParts, EXPORT_MAX_ROWS);
+    }
+
+    private boolean write(ResultSet rs, String format, OutputStream output, DatabaseDialect dialect, List<String> targetTableParts, int rowLimit) throws Exception {
         return switch (format) {
-            case "json" -> writeJson(rs, output);
-            case "csv" -> writeCsv(rs, output);
-            case "sql" -> writeSql(rs, output, dialect, targetTableParts);
-            case "xml" -> writeXml(rs, output);
-            case "markdown" -> writeMarkdown(rs, output);
-            case "xlsx" -> writeXlsx(rs, output);
+            case "json" -> writeJson(rs, output, rowLimit);
+            case "csv" -> writeCsv(rs, output, rowLimit);
+            case "sql" -> writeSql(rs, output, dialect, targetTableParts, rowLimit);
+            case "xml" -> writeXml(rs, output, rowLimit);
+            case "markdown" -> writeMarkdown(rs, output, rowLimit);
+            case "xlsx" -> writeXlsx(rs, output, rowLimit);
             default -> throw new IllegalArgumentException("不支持的导出格式：" + format);
         };
     }
@@ -274,7 +296,7 @@ public class ExportService {
                 : connections.open(connectionId, schemaName);
     }
 
-    private boolean writeJson(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeJson(ResultSet rs, OutputStream output, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         try (JsonGenerator json = mapper.getFactory().createGenerator(output)) {
             json.writeStartObject();
@@ -283,7 +305,7 @@ public class ExportService {
             json.writeEndArray();
             json.writeArrayFieldStart("rows");
             int rows = 0;
-            while (rows < EXPORT_MAX_ROWS && rs.next()) {
+            while (rows < rowLimit && rs.next()) {
                 json.writeStartArray();
                 for (int index = 1; index <= metadata.getColumnCount(); index++) json.writeObject(exportValue(rs.getObject(index)));
                 json.writeEndArray();
@@ -292,13 +314,13 @@ public class ExportService {
             boolean truncated = rs.next();
             json.writeEndArray();
             json.writeBooleanField("truncated", truncated);
-            json.writeNumberField("maxRows", EXPORT_MAX_ROWS);
+            json.writeNumberField("maxRows", rowLimit);
             json.writeEndObject();
             return truncated;
         }
     }
 
-    private boolean writeCsv(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeCsv(ResultSet rs, OutputStream output, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
         writer.write('\uFEFF');
@@ -307,7 +329,7 @@ public class ExportService {
         writer.write(String.join(",", header));
         writer.newLine();
         int rows = 0;
-        while (rows < EXPORT_MAX_ROWS && rs.next()) {
+        while (rows < rowLimit && rs.next()) {
             List<String> values = new ArrayList<>();
             for (int index = 1; index <= metadata.getColumnCount(); index++) values.add(csvValue(exportValue(rs.getObject(index))));
             writer.write(String.join(",", values));
@@ -328,7 +350,7 @@ public class ExportService {
      *
      * <p>数值列右对齐，和界面结果表格的规矩一致 —— 贴出去之后才对得上位、能比较大小。</p>
      */
-    private boolean writeMarkdown(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeMarkdown(ResultSet rs, OutputStream output, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
         int columnCount = metadata.getColumnCount();
@@ -343,7 +365,7 @@ public class ExportService {
         writer.write("| " + String.join(" | ", alignment) + " |");
         writer.newLine();
         int rows = 0;
-        while (rows < EXPORT_MAX_ROWS && rs.next()) {
+        while (rows < rowLimit && rs.next()) {
             List<String> values = new ArrayList<>();
             for (int index = 1; index <= columnCount; index++) values.add(markdownValue(exportValue(rs.getObject(index))));
             writer.write("| " + String.join(" | ", values) + " |");
@@ -370,7 +392,7 @@ public class ExportService {
                 .replace("\r", "<br>");
     }
 
-    private boolean writeSql(ResultSet rs, OutputStream output, DatabaseDialect dialect, List<String> requestedTargetTableParts) throws Exception {
+    private boolean writeSql(ResultSet rs, OutputStream output, DatabaseDialect dialect, List<String> requestedTargetTableParts, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
         List<String> targetTableParts = requestedTargetTableParts;
@@ -388,7 +410,7 @@ public class ExportService {
         String targetTable = targetTableParts.stream().map(dialect::quoteIdentifier).collect(Collectors.joining("."));
         List<String> columns = uniqueColumnNames(metadata).stream().map(dialect::quoteIdentifier).toList();
         int rows = 0;
-        while (rows < EXPORT_MAX_ROWS && rs.next()) {
+        while (rows < rowLimit && rs.next()) {
             List<String> values = new ArrayList<>();
             for (int index = 1; index <= metadata.getColumnCount(); index++) {
                 values.add(dialect.scriptLiteral(sqlExportValue(rs, metadata, index)));
@@ -399,7 +421,7 @@ public class ExportService {
         }
         if (rows == 0) writer.write("-- 查询结果为空，未生成 INSERT 语句。\n");
         boolean truncated = rs.next();
-        if (truncated) writer.write("-- 结果已在 " + EXPORT_MAX_ROWS + " 行处截断。\n");
+        if (truncated) writer.write("-- 结果已在 " + rowLimit + " 行处截断。\n");
         writer.flush();
         return truncated;
     }
@@ -410,7 +432,7 @@ public class ExportService {
      * <p>相对 CSV 的意义在于类型不会被 Excel 重新猜一遍：文本列不会被解释成日期或科学
      * 计数法。数值仍按数值写出，这样在 Excel 里能直接求和排序。</p>
      */
-    private boolean writeXlsx(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeXlsx(ResultSet rs, OutputStream output, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         int columnCount = metadata.getColumnCount();
         try (XlsxWriter workbook = new XlsxWriter(output, "查询结果")) {
@@ -418,7 +440,7 @@ public class ExportService {
             for (int index = 1; index <= columnCount; index++) header[index - 1] = metadata.getColumnLabel(index);
             workbook.row(header);
             int rows = 0;
-            while (rows < EXPORT_MAX_ROWS && rs.next()) {
+            while (rows < rowLimit && rs.next()) {
                 Object[] cells = new Object[columnCount];
                 for (int index = 1; index <= columnCount; index++) cells[index - 1] = xlsxValue(rs.getObject(index));
                 workbook.row(cells);
@@ -453,12 +475,12 @@ public class ExportService {
         return digits.toString().length() > 15;
     }
 
-    private boolean writeXml(ResultSet rs, OutputStream output) throws Exception {
+    private boolean writeXml(ResultSet rs, OutputStream output, int rowLimit) throws Exception {
         ResultSetMetaData metadata = rs.getMetaData();
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8));
         writer.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<result>\n  <rows>\n");
         int rows = 0;
-        while (rows < EXPORT_MAX_ROWS && rs.next()) {
+        while (rows < rowLimit && rs.next()) {
             writer.write("    <row>\n");
             for (int index = 1; index <= metadata.getColumnCount(); index++) {
                 writer.write("      <column name=\"" + xmlValue(metadata.getColumnLabel(index)) + "\">" + xmlValue(exportValue(rs.getObject(index))) + "</column>\n");
@@ -467,7 +489,7 @@ public class ExportService {
             rows++;
         }
         boolean truncated = rs.next();
-        writer.write("  </rows>\n  <truncated>" + truncated + "</truncated>\n  <maxRows>" + EXPORT_MAX_ROWS + "</maxRows>\n</result>\n");
+        writer.write("  </rows>\n  <truncated>" + truncated + "</truncated>\n  <maxRows>" + rowLimit + "</maxRows>\n</result>\n");
         writer.flush();
         return truncated;
     }

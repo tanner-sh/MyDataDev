@@ -21,6 +21,14 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  oceanbase-compatibility:
+    name: OceanBase MySQL 真实回归
+    uses: ./.github/workflows/oceanbase-compatibility.yml
+
+  dameng-compatibility:
+    name: 达梦真实回归
+    uses: ./.github/workflows/dameng-compatibility.yml
+
   database-compatibility:
     name: MySQL 与 PostgreSQL 真实回归
     runs-on: ubuntu-24.04
@@ -388,6 +396,8 @@ jobs:
     # 检查当成通过。这里必须真跑一次，并判失败。
     if: always()
     needs:
+      - oceanbase-compatibility
+      - dameng-compatibility
       - database-compatibility
       - mariadb-compatibility
       - sqlserver-compatibility

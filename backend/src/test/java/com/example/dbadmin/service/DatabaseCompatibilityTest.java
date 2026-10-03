@@ -37,7 +37,7 @@ import static org.mockito.Mockito.*;
  */
 @Timeout(value = 3, unit = TimeUnit.MINUTES, threadMode = Timeout.ThreadMode.SEPARATE_THREAD)
 class DatabaseCompatibilityTest {
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void metadataPaginationConflictAndCsvExport(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80) + ", " + f.decimal("amount", 20, 2));
@@ -63,7 +63,7 @@ class DatabaseCompatibilityTest {
      * Oracle 上不成立，也不是产品能修的 —— 与其把断言放宽成两者都接受（那就等于不测），
      * 不如明确排除并写清原因。
      */
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "dm", "mysql", "mariadb", "postgresql", "sqlserver"})
     void nullEmptyStringAndEscapedTextRemainDistinct(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 200));
@@ -73,13 +73,14 @@ class DatabaseCompatibilityTest {
                 var page = f.edits.table(1L, f.schema, table, null, 10);
                 assertThat(page.rows().get(0).get(f.col("name"))).isEqualTo(previous);
                 assertThat(f.edits.commit(f.change(table, previous, next, page.rowKeyTokens().get(0)), "ci").affectedRows()).isEqualTo(1);
-                assertThat(f.scalar("SELECT name FROM " + f.q(table))).isEqualTo(next);
-                previous = next;
+                Object stored = "".equals(next) && !f.flavor.distinguishesEmptyString() ? null : next;
+                assertThat(f.scalar("SELECT name FROM " + f.q(table))).isEqualTo(stored);
+                previous = stored;
             }
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void sqlExportRoundTripsPrecisionTimestampBinaryAndText(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String columns = f.pk("id") + ", " + f.decimal("amount", 30, 8) + ", " + f.timestamp("happened", 6)
@@ -110,7 +111,7 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void failedGridBatchRollsBackEarlierChanges(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.varchar("name", 80));
@@ -133,7 +134,7 @@ class DatabaseCompatibilityTest {
      * 结束 —— 用例就此挂住（第一次跑时白等到作业上限被取消）。阻塞在 SQL Server 上是正确行为，
      * 不是产品问题；要在那边验证同一件事得改成断言「读被阻塞」，那是另一条用例。
      */
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "oracle"})
     void manualTransactionsCommitAndRollbackAfterFailure(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.id("amount"));
@@ -163,7 +164,7 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "sqlserver", "oracle"})
     void manualTransactionsRejectCommitAndDdlBeforeExecutingAnyStatement(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.table(f.pk("id") + ", " + f.id("amount"));
@@ -190,11 +191,7 @@ class DatabaseCompatibilityTest {
         }
     }
 
-    /**
-     * SQL Server 不在此列：它的方言把 tableDesign 声明为 false（能力矩阵里明确不支持表设计），
-     * 服务端会直接拒绝，这里跑它等于断言一个产品不提供的功能。
-     */
-    @ParameterizedTest @ValueSource(strings = {"mysql", "mariadb", "postgresql", "oracle"})
+    @ParameterizedTest @ValueSource(strings = {"oceanbase-mysql", "oceanbase-oracle", "dm", "mysql", "mariadb", "postgresql", "oracle", "sqlserver"})
     void tableLifecycleAndDesignExecuteAgainstRealMetadata(String type) throws Exception {
         try (Fixture f = new Fixture(type)) {
             String table = f.reserveTable(), renamed = f.reserveTable(), index = "idx_" + table;
@@ -252,6 +249,9 @@ class DatabaseCompatibilityTest {
     }
 
     static final Map<String, Flavor> FLAVORS = Map.of(
+            "oceanbase-mysql", new Flavor("OB_MYSQL", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
+            "oceanbase-oracle", new Flavor("OB_ORACLE", "NUMBER(19)", "VARCHAR2", "NUMBER", "TIMESTAMP", "RAW", false),
+            "dm", new Flavor("DM", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "mysql", new Flavor("MYSQL", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "mariadb", new Flavor("MARIADB", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", true),
             "postgresql", new Flavor("POSTGRES", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "BYTEA", true),
@@ -280,7 +280,9 @@ class DatabaseCompatibilityTest {
 
         Fixture(String type) throws Exception {
             this.type = type;
-            this.flavor = FLAVORS.get(type);
+            Flavor configured = FLAVORS.get(type);
+            this.flavor = "dm".equals(type) && "2".equals(System.getenv("TEST_DM_COMPATIBLE_MODE"))
+                    ? new Flavor("DM", "BIGINT", "VARCHAR", "DECIMAL", "TIMESTAMP", "VARBINARY", false) : configured;
             assertThat(flavor).as("未登记的数据库类型 %s", type).isNotNull();
             String prefix = flavor.envPrefix();
             String url = System.getenv("TEST_" + prefix + "_URL");
@@ -301,13 +303,20 @@ class DatabaseCompatibilityTest {
             edits = new DataEditService(metadata, connections, audit, dialects, properties,
                     new TableCursorCodec(mapper, crypto), new RowLocatorCodec(mapper, crypto), guard);
             jdbc = DriverManager.getConnection(url, user, password);
+            if ("dm".equals(type) && System.getenv("TEST_DM_COMPATIBLE_MODE") != null) {
+                try (var statement = jdbc.createStatement(); var rows = statement.executeQuery("SELECT CASE WHEN '' IS NULL THEN 2 ELSE 0 END FROM DUAL")) {
+                    assertThat(rows.next()).isTrue();
+                    assertThat(rows.getString(1)).isEqualTo(System.getenv("TEST_DM_COMPATIBLE_MODE"));
+                }
+            }
             // schema/catalog 语义各家不同：MySQL 系用当前 catalog，PostgreSQL 是 public，
             // SQL Server 是 dbo，Oracle 则以登录用户为 schema（字典里存的是大写）。
             schema = switch (type) {
-                case "mysql", "mariadb" -> jdbc.getCatalog();
+                case "mysql", "mariadb", "oceanbase-mysql" -> jdbc.getCatalog();
+                case "oceanbase-oracle" -> dialect.currentSchema(jdbc);
                 case "postgresql" -> "public";
                 case "sqlserver" -> "dbo";
-                case "oracle" -> jdbc.getMetaData().getUserName().toUpperCase(java.util.Locale.ROOT);
+                case "oracle", "dm" -> jdbc.getMetaData().getUserName().toUpperCase(java.util.Locale.ROOT);
                 default -> throw new IllegalStateException("未登记的 schema 语义：" + type);
             };
         }
@@ -350,7 +359,7 @@ class DatabaseCompatibilityTest {
          * 问题，真实的 Oracle 库里标识符本来就是大写的，服务端如实返回库里报的名字才对。
          * 用例里凡是按列名取值或构造改动的地方都过这一层。</p>
          */
-        String col(String name) { return type.equals("oracle") ? name.toUpperCase(java.util.Locale.ROOT) : name; }
+        String col(String name) { return (type.equals("oracle") || type.equals("dm") || type.equals("oceanbase-oracle")) ? name.toUpperCase(java.util.Locale.ROOT) : name; }
         /**
          * 用例自己写的 SQL 里的字符串字面量。
          *
