@@ -133,6 +133,57 @@ async function auditLayout(label) {
   check(`布局不变量 — ${label}`, violations.length === 0, formatViolations(violations));
 }
 
+async function openPaletteFrom(selector) {
+  const focused = await page.evaluate(`(() => {
+    const trigger = document.querySelector(${JSON.stringify(selector)});
+    if (!trigger) return false;
+    trigger.focus();
+    window.__paletteTrigger = trigger;
+    window.__paletteDraft = document.querySelector('.cm-content')?.textContent;
+    window.__paletteResults = document.querySelector('.sql-results-pane')?.textContent;
+    const selection = window.getSelection();
+    const offset = () => {
+      if (!selection?.anchorNode || !trigger.contains(selection.anchorNode)) return null;
+      const range = document.createRange();
+      range.selectNodeContents(trigger);
+      range.setEnd(selection.anchorNode, selection.anchorOffset);
+      return range.toString().length;
+    };
+    window.__paletteCaret = offset();
+    return document.activeElement === trigger;
+  })()`);
+  const modifiers = process.platform === 'darwin' ? 4 : 2;
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'k', code: 'KeyK', modifiers });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'k', code: 'KeyK', modifiers });
+  await page.sleep(1200);
+  return focused;
+}
+
+async function cancelPaletteAndCheck(label, focused) {
+  const searchFocused = await page.evaluate(`document.activeElement?.getAttribute('aria-label') === '搜索命令'`);
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+  await page.sleep(500);
+  const state = await page.evaluate(`(() => {
+    const trigger = window.__paletteTrigger;
+    const selection = window.getSelection();
+    let caret = null;
+    if (selection?.anchorNode && trigger?.contains(selection.anchorNode)) {
+      const range = document.createRange(); range.selectNodeContents(trigger);
+      range.setEnd(selection.anchorNode, selection.anchorOffset); caret = range.toString().length;
+    }
+    return {
+      closed: !document.querySelector('.command-palette-modal'),
+      returned: document.activeElement === trigger,
+      draftUnchanged: document.querySelector('.cm-content')?.textContent === window.__paletteDraft,
+      resultUnchanged: document.querySelector('.sql-results-pane')?.textContent === window.__paletteResults,
+      caretUnchanged: window.__paletteCaret === null || caret === window.__paletteCaret
+    };
+  })()`);
+  check(`命令面板取消后恢复 ${label} 焦点且保留草稿和光标`, focused && searchFocused
+    && Object.values(state).every(Boolean), JSON.stringify(state));
+}
+
 /**
  * 起一个无头 Chrome，输出写进 chrome.log。
  *
@@ -794,12 +845,7 @@ try {
     })()
   `);
   await page.sleep(800);
-  await page.evaluate(`
-    (() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true }));
-    })()
-  `);
-  await page.sleep(1500);
+  const firstPaletteFocus = await openPaletteFrom(SERVE ? '.editable-cell-display[tabindex="0"]' : '.app-header button');
   const palette = await page.evaluate(`
     (() => {
       const modal = document.querySelector('.command-palette-modal');
@@ -815,9 +861,8 @@ try {
   check('命令面板列出了命令', (palette.commands || 0) > 0 && palette.hasManagement === true);
   if (palette.open) await page.shot('04-命令面板');
   if (SERVE) {
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
-    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
-    await page.sleep(800);
+    await cancelPaletteAndCheck('首次懒加载的表格单元格', firstPaletteFocus);
+    await cancelPaletteAndCheck('表格工具栏', await openPaletteFrom('.table-workspace .workspace-toolbar button:not([disabled])'));
     await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
     await page.sleep(1800);
     const draft = 'select 1 as draft_survives_reload;';
@@ -828,6 +873,7 @@ try {
     await page.send('Input.insertText', { text: draft });
     await page.sleep(1000);
     check('SQL 草稿实际写入编辑器', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
+    await cancelPaletteAndCheck('SQL 编辑器', await openPaletteFrom('.cm-content'));
     await page.send('Page.reload');
     await page.sleep(5000);
     check('刷新后恢复 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
@@ -1342,6 +1388,7 @@ try {
         && contrast.samples.some(sample => sample.name === '活动行注释')
         && contrast.failures.length === 0, JSON.stringify(contrast));
       if (SHOT_DIR) writeFileSync(path.join(SHOT_DIR, `contrast-${theme}.json`), JSON.stringify(contrast, null, 2));
+      await cancelPaletteAndCheck(`${theme} SQL 编辑器`, await openPaletteFrom('.cm-content'));
       for (const width of [1440, 1100, 860, 640]) {
         await page.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
         await page.sleep(700);

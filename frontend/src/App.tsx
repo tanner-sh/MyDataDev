@@ -244,6 +244,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const commandPaletteTriggerRef = useRef<HTMLElement | null>(null);
+  const commandPaletteFocusFrameRef = useRef<number | undefined>(undefined);
+  const closeCommandPalette = useStableEvent(() => {
+    setCommandPaletteOpen(false);
+    const trigger = commandPaletteTriggerRef.current;
+    commandPaletteTriggerRef.current = null;
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+    commandPaletteFocusFrameRef.current = requestAnimationFrame(() => {
+      commandPaletteFocusFrameRef.current = undefined;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    });
+  });
+  useEffect(() => () => {
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+  }, []);
   const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => readRecentCommandIds());
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [transactionState, setTransactionState] = useState<SqlTransactionState>(IDLE_SQL_TRANSACTION);
@@ -2105,7 +2120,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     if (shortcut.kind === 'open-command-palette') {
       // 命令面板在任何界面下都该开得起来 —— 它本身就是「我不知道这个功能在哪」的出口。
       event.preventDefault();
-      setCommandPaletteOpen((current) => !current);
+      if (commandPaletteOpen) closeCommandPalette();
+      else {
+        if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+        commandPaletteTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setCommandPaletteOpen(true);
+      }
       return;
     }
     if (shortcut.kind === 'open-object-search') {
@@ -3022,6 +3042,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }, [compactLayout, connections, layoutPreferences, selected]);
 
   const runPaletteAction = useStableEvent((action: PaletteAction) => {
+    setCommandPaletteOpen(false);
+    commandPaletteTriggerRef.current = null;
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
     setRecentCommandIds((current) => {
       const next = rememberCommand(current, action.id);
       writeRecentCommandIds(next);
@@ -3850,7 +3873,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             open
             actions={paletteActions}
             recentIds={recentCommandIds}
-            onClose={() => setCommandPaletteOpen(false)}
+            onClose={closeCommandPalette}
             onRun={runPaletteAction}
           />
         </Suspense>
