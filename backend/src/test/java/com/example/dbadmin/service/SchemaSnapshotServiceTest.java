@@ -118,6 +118,26 @@ class SchemaSnapshotServiceTest {
     }
 
     @Test
+    void simultaneousManualAndScheduledCapturesInsertOneUnchangedSnapshot() throws Exception {
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+        var ready = new java.util.concurrent.CountDownLatch(8);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var futures = new java.util.ArrayList<java.util.concurrent.Future<com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse>>();
+        try {
+            for (int i = 0; i < 8; i++) {
+                String actor = i % 2 == 0 ? "scheduler" : "manual";
+                futures.add(executor.submit(() -> { ready.countDown(); start.await(); return service.capture(1, "PUBLIC", actor, actor); }));
+            }
+            assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); start.countDown();
+            var results = new java.util.ArrayList<com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse>();
+            for (var future : futures) results.add(future.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertThat(results.stream().filter(com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse::changed).count()).isEqualTo(1);
+            assertThat(results.stream().map(result -> result.snapshot().id()).distinct().count()).isEqualTo(1);
+            assertThat(service.timeline(1, "PUBLIC", 50)).hasSize(1);
+        } finally { start.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test
     void aChangedSchemaAddsANewSnapshotToTheTimeline() throws Exception {
         service.capture(1L, "PUBLIC", "基线", "tanner");
         currentSchema.add(table("refunds", column("id", "BIGINT")));
