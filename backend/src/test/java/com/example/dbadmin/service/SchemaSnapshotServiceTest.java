@@ -186,7 +186,22 @@ class SchemaSnapshotServiceTest {
                 org.assertj.core.api.Assertions.tuple("refunds", SchemaComparison.STATUS_ONLY_IN_TARGET),
                 org.assertj.core.api.Assertions.tuple("customers", SchemaComparison.STATUS_ONLY_IN_SOURCE));
         var changed = drift.tables().stream().filter(t -> t.tableName().equals("orders")).findFirst().orElseThrow();
-        assertThat(changed.items()).extracting("name").contains("channel");
+        assertThat(changed.items()).extracting("name", "change").contains(org.assertj.core.api.Assertions.tuple("channel", "ADDED"));
+        var added = changed.items().stream().filter(item -> item.name().equals("channel")).findFirst().orElseThrow();
+        assertThat(added.source()).isNull(); assertThat(added.target()).contains("VARCHAR");
+    }
+
+    @Test
+    void columnAndIndexChangesFollowBeforeToAfterDirection() throws Exception {
+        var baseline = service.capture(1, "PUBLIC", "before", "tester");
+        currentSchema.replaceAll(detail -> detail.name().equals("orders") ? new ObjectDetail(null, "orders", "TABLE",
+                List.of(column("id", "VARCHAR"), column("channel", "VARCHAR")),
+                List.of(new com.example.dbadmin.dto.ApiDtos.IndexInfo("new_index", "channel", false, 1)), List.of("id"), "PK", "v2") : detail);
+        var next = service.capture(1, "PUBLIC", "after", "tester");
+        var items = service.drift(baseline.snapshot().id(), next.snapshot().id(), "tester").tables().stream().filter(table -> table.tableName().equals("orders")).findFirst().orElseThrow().items();
+        assertThat(items).extracting("name", "change").contains(org.assertj.core.api.Assertions.tuple("channel", "ADDED"), org.assertj.core.api.Assertions.tuple("amount", "REMOVED"), org.assertj.core.api.Assertions.tuple("new_index", "ADDED"));
+        var type = items.stream().filter(item -> item.name().equals("id")).findFirst().orElseThrow();
+        assertThat(type.source()).contains("BIGINT"); assertThat(type.target()).contains("VARCHAR");
     }
 
     @Test

@@ -202,7 +202,12 @@ public class SchemaSnapshotService {
                 removed++;
                 tables.add(new SchemaDriftTable(from.name(), SchemaComparison.STATUS_ONLY_IN_SOURCE, List.of()));
             } else {
-                List<SchemaDiffItem> items = SchemaComparison.compare(from, to);
+                List<SchemaDiffItem> items = SchemaComparison.compare(from, to).stream()
+                        .map(item -> new SchemaDiffItem(item.category(), item.name(),
+                                SchemaComparison.CHANGE_ADDED.equals(item.change()) ? SchemaComparison.CHANGE_REMOVED
+                                        : SchemaComparison.CHANGE_REMOVED.equals(item.change()) ? SchemaComparison.CHANGE_ADDED : item.change(),
+                                item.source(), item.target()))
+                        .toList();
                 if (items.isEmpty()) {
                     identical++;
                 } else {
