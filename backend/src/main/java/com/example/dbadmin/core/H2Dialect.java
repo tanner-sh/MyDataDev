@@ -12,11 +12,15 @@ public class H2Dialect extends DefaultDialect {
         return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
     }
 
-    /** H2 2.x 认 PostgreSQL 那套 ON CONFLICT，直接复用它的写法。 */
+    /** H2 only supports the DO NOTHING subset; UPSERT uses its native MERGE. */
     private final PostgreSqlDialect conflictStyles = new PostgreSqlDialect();
 
     @Override
     public ImportConflictStyle importConflictStyle(String mode, List<String> columns, List<String> keyColumns) {
+        if ("UPSERT".equalsIgnoreCase(mode)) {
+            if (keyColumns.isEmpty()) return null;
+            return new ImportConflictStyle("MERGE INTO", "", "KEY (" + String.join(", ", keyColumns.stream().map(this::quoteIdentifier).toList()) + ") VALUES");
+        }
         return conflictStyles.importConflictStyle(mode, columns, keyColumns);
     }
 

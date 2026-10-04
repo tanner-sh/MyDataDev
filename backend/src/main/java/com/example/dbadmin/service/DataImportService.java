@@ -249,7 +249,7 @@ public class DataImportService {
                         "第 " + (rows + 2) + " 行有 " + row.size() + " 个字段，与表头的 " + columns.size() + " 列不一致。"
                 );
             }
-            if (inBatch == 0) writer.write(style.insertKeyword() + " " + qualified + " (" + columnList + ") VALUES\n");
+            if (inBatch == 0) writer.write(style.insertKeyword() + " " + qualified + " (" + columnList + ") " + style.valuesKeyword() + "\n");
             else writer.write(",\n");
             writer.write("  (");
             for (int index = 0; index < row.size(); index++) {

@@ -129,7 +129,10 @@ public interface DatabaseDialect {
      * @param insertKeyword 语句开头，通常是 {@code INSERT INTO}
      * @param conflictClause 值列表之后的子句，可能为空
      */
-    record ImportConflictStyle(String insertKeyword, String conflictClause) {
+    record ImportConflictStyle(String insertKeyword, String conflictClause, String valuesKeyword) {
+        public ImportConflictStyle(String insertKeyword, String conflictClause) {
+            this(insertKeyword, conflictClause, "VALUES");
+        }
         public static ImportConflictStyle plain() {
             return new ImportConflictStyle("INSERT INTO", "");
         }
