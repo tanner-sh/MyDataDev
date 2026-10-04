@@ -285,6 +285,14 @@ public class SqlFileExecutionService {
 
     public SqlFileExecutionResponse start(long id, String productionConfirmation, String actor,
                                            String transactionMode, String endOfFileAction) throws Exception {
+        // Share the lifecycle monitor with update/delete/closePool until the job is queued.
+        synchronized (connections) {
+            return startLocked(id, productionConfirmation, actor, transactionMode, endOfFileAction);
+        }
+    }
+
+    private SqlFileExecutionResponse startLocked(long id, String productionConfirmation, String actor,
+                                                String transactionMode, String endOfFileAction) throws Exception {
         String mode = transactionMode == null ? "BATCH" : transactionMode.toUpperCase(Locale.ROOT);
         String ending = endOfFileAction == null ? ("SCRIPT".equals(mode) ? "ROLLBACK" : "COMMIT") : endOfFileAction.toUpperCase(Locale.ROOT);
         if (!Set.of("BATCH", "SCRIPT").contains(mode) || !Set.of("COMMIT", "ROLLBACK").contains(ending)) {

@@ -75,6 +75,18 @@ public class ConnectionService {
         this.statementClassifier = statementClassifier;
     }
 
+    private com.example.dbadmin.repo.SqlFileExecutionRepository sqlFiles;
+
+    @Autowired
+    void setSqlFiles(com.example.dbadmin.repo.SqlFileExecutionRepository sqlFiles) { this.sqlFiles = sqlFiles; }
+
+    private void requireNoSqlFile(long id) {
+        if (sqlFiles != null && sqlFiles.countRunningByConnection(id) > 0) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_SQL_FILE_ACTIVE",
+                    "该连接有排队或正在执行的 SQL 文件任务，请等待任务结束后再修改、删除或关闭连接池。");
+        }
+    }
+
     public List<ConnectionResponse> list() {
         return repository.findAll().stream().map(this::toResponse).toList();
     }
@@ -86,7 +98,8 @@ public class ConnectionService {
         return toResponse(repository.findById(id).orElseThrow());
     }
 
-    public ConnectionResponse update(long id, ConnectionRequest request, String actor) {
+    public synchronized ConnectionResponse update(long id, ConnectionRequest request, String actor) {
+        requireNoSqlFile(id);
         DbConnection old = require(id);
         if (backupTasks.countRunningByConnectionId(id) > 0) {
             throw new IllegalStateException("该连接有正在执行的备份任务，请等待备份完成后再修改连接。");
@@ -105,7 +118,8 @@ public class ConnectionService {
         return toResponse(repository.findById(id).orElseThrow());
     }
 
-    public void delete(long id, String actor) {
+    public synchronized void delete(long id, String actor) {
+        requireNoSqlFile(id);
         DbConnection c = require(id);
         int refs = backupTasks.countByConnectionId(id);
         if (refs > 0) {
@@ -142,7 +156,8 @@ public class ConnectionService {
      * <p>手动事务开着时拒绝 —— 事务正握着池里的一条连接，关掉池等于把它连同未提交的改动
      * 一起扔掉，而调用方以为事务还在。</p>
      */
-    public void closePool(long id, String actor) {
+    public synchronized void closePool(long id, String actor) {
+        requireNoSqlFile(id);
         DbConnection connection = require(id);
         requireNoOpenTransaction(id, "关闭连接池");
         evictConnection(id);
