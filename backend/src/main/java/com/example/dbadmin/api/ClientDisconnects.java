@@ -25,9 +25,11 @@ public final class ClientDisconnects {
     };
     /** 往客户端 socket 写数据的帧：出现它就说明失败发生在「发给浏览器」这一段。 */
     private static final String[] SOCKET_WRITE_FRAMES = {
-            "org.apache.tomcat.util.net.",
-            "sun.nio.ch.SocketDispatcher",
-            "sun.nio.ch.SocketChannelImpl"
+            "org.apache.tomcat.util.net.NioChannel",
+            "org.apache.tomcat.util.net.SocketWrapperBase",
+            "org.apache.tomcat.util.net.NioEndpoint$NioSocketWrapper",
+            "org.apache.catalina.connector.OutputBuffer",
+            "org.apache.coyote.http11.Http11OutputBuffer"
     };
 
     private ClientDisconnects() {
@@ -57,7 +59,8 @@ public final class ClientDisconnects {
     private static boolean writesToClientSocket(Throwable error) {
         for (StackTraceElement frame : error.getStackTrace()) {
             for (String prefix : SOCKET_WRITE_FRAMES) {
-                if (frame.getClassName().startsWith(prefix)) return true;
+                String method = frame.getMethodName();
+                if (frame.getClassName().startsWith(prefix) && (method.equals("write") || method.equals("doWrite") || method.equals("realWriteBytes"))) return true;
             }
         }
         return false;

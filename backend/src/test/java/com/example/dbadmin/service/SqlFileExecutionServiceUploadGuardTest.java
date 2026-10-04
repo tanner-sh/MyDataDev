@@ -60,6 +60,17 @@ class SqlFileExecutionServiceUploadGuardTest {
     }
 
     @Test
+    void generatedSqlOverflowReturnsAnExplicitErrorAndReleasesStagingResources() {
+        properties.getSqlFile().setMaxUploadBytes(10);
+        var failure = uploadWith(0, out -> { out.write("12345678901"); return "rows=1"; });
+        assertThat(failure).isInstanceOf(com.example.dbadmin.api.ApiProblemException.class);
+        var response = new com.example.dbadmin.api.ApiExceptionHandler().problem((com.example.dbadmin.api.ApiProblemException) failure);
+        assertThat(response.getStatusCode().value()).isEqualTo(413);
+        assertThat(response.getBody()).containsEntry("code", "SQL_FILE_TOO_LARGE");
+        assertThat(listFiles()).isEmpty(); assertThat(uploadGuard.tryAcquire()).isTrue();
+    }
+
+    @Test
     void generatedScriptsShareTheUploadConcurrencyLimit() {
         // 名额被另一次上传占着。
         assertThat(uploadGuard.tryAcquire()).isTrue();

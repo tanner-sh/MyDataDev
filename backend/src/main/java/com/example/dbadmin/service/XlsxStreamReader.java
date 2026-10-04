@@ -61,6 +61,7 @@ final class XlsxStreamReader implements ImportRowSource {
             zip = new ZipFile(tempFile.toFile());
         } catch (Exception error) {
             Files.deleteIfExists(tempFile);
+            if (error instanceof java.util.zip.ZipException) throw new IllegalArgumentException("Excel 文件格式无效，请选择有效的 .xlsx 文件。", error);
             throw error;
         }
         try {

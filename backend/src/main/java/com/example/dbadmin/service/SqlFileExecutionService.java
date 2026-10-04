@@ -275,7 +275,7 @@ public class SqlFileExecutionService {
 
         private void grow(int length) throws IOException {
             written += length;
-            if (written > maximum) throw new IOException("生成的 SQL 脚本超过允许大小。");
+            if (written > maximum) throw new ApiProblemException(HttpStatus.PAYLOAD_TOO_LARGE, "SQL_FILE_TOO_LARGE", "生成的 SQL 脚本超过允许大小。");
         }
     }
 

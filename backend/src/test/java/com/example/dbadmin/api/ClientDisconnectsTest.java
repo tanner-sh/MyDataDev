@@ -33,7 +33,7 @@ class ClientDisconnectsTest {
     void findsTheDisconnectThroughAWrappingException() {
         IOException brokenPipe = new IOException("Broken pipe");
         brokenPipe.setStackTrace(new StackTraceElement[]{
-                new StackTraceElement("sun.nio.ch.SocketChannelImpl", "write", "SocketChannelImpl.java", 542)
+                new StackTraceElement("org.apache.catalina.connector.OutputBuffer", "realWriteBytes", "OutputBuffer.java", 542)
         });
 
         assertThat(ClientDisconnects.isClientGone(new IllegalStateException("包了一层", brokenPipe))).isTrue();
@@ -49,6 +49,20 @@ class ClientDisconnectsTest {
                 new StackTraceElement("com.example.dbadmin.service.BackupService", "verifyHistory", "BackupService.java", 1)
         });
 
+        assertThat(ClientDisconnects.isClientGone(error)).isFalse();
+    }
+
+    @Test
+    void ordinaryTomcatDispatchAndApplicationSocketFramesAreNotClientDisconnects() {
+        var error = new IOException("disk full");
+        error.setStackTrace(new StackTraceElement[]{
+            new StackTraceElement("com.example.dbadmin.service.SqlFileExecutionService", "uploadScript", "SqlFileExecutionService.java", 1),
+            new StackTraceElement("org.apache.tomcat.util.net.SocketProcessorBase", "run", "SocketProcessorBase.java", 1),
+            new StackTraceElement("org.apache.tomcat.util.net.NioEndpoint$SocketProcessor", "doRun", "NioEndpoint.java", 1)
+        });
+        assertThat(ClientDisconnects.isClientGone(error)).isFalse();
+        assertThat(new ApiExceptionHandler().io(error).getStatusCode().value()).isEqualTo(500);
+        error.setStackTrace(new StackTraceElement[]{new StackTraceElement("sun.nio.ch.SocketChannelImpl", "write", "SocketChannelImpl.java", 1)});
         assertThat(ClientDisconnects.isClientGone(error)).isFalse();
     }
 
