@@ -3,7 +3,7 @@
 # 独立部署时必须收紧或补齐的部分，数据目录仍相对于 JAR 的工作目录。
 server:
   shutdown: graceful
-  forward-headers-strategy: framework
+  forward-headers-strategy: none
   servlet:
     session:
       timeout: ${APP_AUTH_SESSION_TIMEOUT:8h}

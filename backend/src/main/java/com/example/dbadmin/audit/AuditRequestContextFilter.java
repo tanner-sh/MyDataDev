@@ -28,8 +28,8 @@ public class AuditRequestContextFilter extends OncePerRequestFilter {
         String requestId = supplied != null && SAFE_REQUEST_ID.matcher(supplied).matches()
                 ? supplied : UUID.randomUUID().toString();
         AuditRequestContext.set(new AuditRequestContext(
-                request.getRemoteAddr(),
-                request.getHeader("X-Forwarded-For"),
+                request.getAttribute(com.example.dbadmin.config.TrustedForwardedHeaders.PEER) instanceof String peer ? peer : request.getRemoteAddr(),
+                request.getAttribute(com.example.dbadmin.config.TrustedForwardedHeaders.DECLARED_FOR) instanceof String forwarded ? (forwarded.isEmpty() ? null : forwarded) : request.getHeader("X-Forwarded-For"),
                 request.getHeader("User-Agent"),
                 requestId
         ));
