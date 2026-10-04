@@ -7,8 +7,8 @@
   --border: #d8dee8;
   --border-subtle: #e8edf3;
   --text: #172033;
-  --text-secondary: #667085;
-  --primary: #2f74e8;
+  --text-secondary: #596579;
+  --primary: #2769d3;
   --primary-soft: #eaf2ff;
   --success: #17834b;
   --warning: #b76508;
@@ -78,7 +78,7 @@
   --border: #2c3645;
   --border-subtle: #222b38;
   --text: #e6eaf0;
-  --text-secondary: #98a4b5;
+  --text-secondary: #adb8c8;
   --primary: #69a1ff;
   --primary-soft: #162946;
   --success: #4fbd83;
@@ -88,7 +88,7 @@
   --code-keyword: #79b8ff;
   --code-string: #7ee2a8;
   --code-number: #ffab70;
-  --code-comment: #8b98a9;
+  --code-comment: #b5c1d2;
   --code-operator: #b8c2cf;
   --code-function: #c8a5ff;
   --code-type: #ffc879;

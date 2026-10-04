@@ -344,7 +344,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     // 这四个值必须和 styles.css 的令牌一致：borderRadius 对 --radius-md，fontSize 对
     // --text-md。之前 antd 用 7、手写 CSS 用 6/8/9，两套尺度在同一个界面上打架。
-    token: { colorPrimary: '#2f74e8', borderRadius: 8, controlHeight: 34, fontSize: 13 }
+    token: {
+      colorPrimary: '#2769d3',
+      colorTextSecondary: layoutPreferences.themeMode === 'dark' ? '#adb8c8' : '#596579',
+      colorTextDescription: layoutPreferences.themeMode === 'dark' ? '#adb8c8' : '#596579',
+      borderRadius: 8, controlHeight: 34, fontSize: 13
+    },
+    components: {
+      Tabs: {
+        itemSelectedColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        itemHoverColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        itemActiveColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        inkBarColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3'
+      }
+    }
   }), [layoutPreferences.themeMode]);
 
   useEffect(() => {

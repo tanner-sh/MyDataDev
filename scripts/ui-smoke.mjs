@@ -38,6 +38,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, op
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { AUDIT_SOURCE, applyBaseline, formatViolations } from './layout-audit.mjs';
+import { WORKBENCH_CONTRAST_SOURCE } from './workbench-contrast.mjs';
 
 const CHROME = process.env.CHROME_PATH
   || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -1325,6 +1326,22 @@ try {
       if (AUTH) await loginInBrowser(page);
       check(`偏好里的 ${theme} 主题真的落到了页面上`,
         await page.evaluate(`document.querySelector('.app-shell')?.dataset.theme === '${theme}'`));
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+      await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+      const selectAllModifier = process.platform === 'darwin' ? 4 : 2;
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: selectAllModifier });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: selectAllModifier });
+      await page.send('Input.insertText', { text: '-- contrast_probe\nselect 1;' });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Home', code: 'Home', modifiers: selectAllModifier });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Home', code: 'Home', modifiers: selectAllModifier });
+      await page.sleep(500);
+      const contrast = await page.evaluate(WORKBENCH_CONTRAST_SOURCE);
+      check(`${theme} 执行按钮、辅助信息和活动行注释对比度至少 4.5:1`,
+        contrast.samples.some(sample => sample.name === '执行按钮')
+        && contrast.samples.some(sample => sample.name === '连接和 Schema')
+        && contrast.samples.some(sample => sample.name === '活动行注释')
+        && contrast.failures.length === 0, JSON.stringify(contrast));
+      if (SHOT_DIR) writeFileSync(path.join(SHOT_DIR, `contrast-${theme}.json`), JSON.stringify(contrast, null, 2));
       for (const width of [1440, 1100, 860, 640]) {
         await page.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
         await page.sleep(700);
