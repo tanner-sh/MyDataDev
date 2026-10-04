@@ -70,6 +70,7 @@ public class McpScriptTools {
                 guard.requireQueryAllowed(connection, kind, productionConfirmation);
                 boolean unscoped = classifier.requiresUnscopedMutationConfirmation(unit.sql());
                 if (sqlServer && !SqlScriptSyntax.leadingSql(unit.sql()).matches("(?is)(?:CREATE(?:\\s+OR\\s+ALTER)?|ALTER)\\s+(?:PROC(?:EDURE)?|FUNCTION|TRIGGER)\\b.*")) {
+                    unscoped |= classifier.requiresSqlServerBatchConfirmation(unit.sql());
                     unscoped |= splitter.split(unit.sql(), "plain").stream()
                             .anyMatch(part -> classifier.requiresUnscopedMutationConfirmation(part.sql()));
                 }

@@ -46,6 +46,10 @@ class McpScriptToolsTest {
         when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
         assertThatThrownBy(() -> tools.executeScript(1, "SELECT 1; DELETE FROM t;\nGO", "BATCH", "COMMIT", null, false))
                 .hasMessageContaining("unscopedMutationConfirmed");
+        for (String sql : List.of("SELECT 1\nUPDATE dbo.t SET v='bad'\nGO", "SELECT 1\nDELETE FROM dbo.t\nGO", "SELECT * FROM other WHERE id=1\nDELETE FROM dbo.t\nGO")) {
+            assertThatThrownBy(() -> tools.executeScript(1, sql, "BATCH", "COMMIT", null, false)).hasMessageContaining("unscopedMutationConfirmed");
+        }
+        assertThat(new SqlStatementClassifier().requiresSqlServerBatchConfirmation("SELECT 'DELETE FROM t', [UPDATE] FROM t -- UPDATE t" )).isFalse();
         verifyNoInteractions(files);
     }
 
