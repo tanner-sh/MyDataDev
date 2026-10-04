@@ -27,6 +27,11 @@ public final class ReadOnlyQueryScope implements AutoCloseable {
 
     public static ReadOnlyQueryScope begin(Connection connection, boolean enforce) throws Exception {
         if (!enforce) return new ReadOnlyQueryScope(connection, false, true, false, false);
+        var metadata = connection.getMetaData();
+        if (metadata != null && !metadata.supportsTransactions()) {
+            // ClickHouse has no rollback transaction. SQL validation and DB privileges remain mandatory.
+            return new ReadOnlyQueryScope(connection, false, true, false, false);
+        }
         boolean autoCommit = connection.getAutoCommit();
         boolean readOnly = false;
         boolean readOnlyKnown = true;

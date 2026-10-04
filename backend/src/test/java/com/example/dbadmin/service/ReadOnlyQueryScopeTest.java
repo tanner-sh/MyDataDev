@@ -15,6 +15,18 @@ import static org.mockito.Mockito.when;
 
 class ReadOnlyQueryScopeTest {
     @Test
+    void doesNotInvokeUnsupportedTransactionsOnClickHouseLikeDrivers() throws Exception {
+        Connection connection = mock(Connection.class);
+        var metadata = mock(java.sql.DatabaseMetaData.class);
+        when(connection.getMetaData()).thenReturn(metadata);
+        when(metadata.supportsTransactions()).thenReturn(false);
+        try (var scope = ReadOnlyQueryScope.begin(connection, true)) { }
+        org.mockito.Mockito.verify(connection, org.mockito.Mockito.never()).setAutoCommit(false);
+        org.mockito.Mockito.verify(connection, org.mockito.Mockito.never()).rollback();
+        org.mockito.Mockito.verify(connection, org.mockito.Mockito.never()).commit();
+    }
+
+    @Test
     void doesNotProbeWritableConnections() throws Exception {
         Connection connection = mock(Connection.class);
 
