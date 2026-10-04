@@ -217,7 +217,7 @@ public class ExportService {
             String format, String actor, String productionConfirmation, String schemaName,
             List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement) throws Exception {
         return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation, schemaName, targetTableParts,
-                auditDetail, onStatement, EXPORT_MAX_ROWS);
+                auditDetail, onStatement, EXPORT_MAX_ROWS, false);
     }
 
     public PreparedExport prepareParameterized(com.example.dbadmin.dto.ApiDtos.ExportRequest request, String actor,
@@ -228,12 +228,13 @@ public class ExportService {
         String sql = requireSingleQuery(parsed.sql());
         return prepareInternal(request.connectionId(), sql, statement -> SqlParameters.bind(statement, parsed, request.parameters()),
                 request.format(), actor, confirmation, request.schemaName(), request.targetTableParts(), abbreviate(request.sql()), onStatement,
-                request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS);
+                request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS, true);
     }
 
     private PreparedExport prepareInternal(long connectionId, String sql, DataEditService.StatementBinder binder,
             String format, String actor, String productionConfirmation, String schemaName,
-            List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement, int rowLimit) throws Exception {
+            List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement, int rowLimit,
+            boolean redactFailure) throws Exception {
         String normalizedFormat = normalizeFormat(format);
         List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
@@ -269,7 +270,7 @@ public class ExportService {
         } catch (Exception e) {
             Files.deleteIfExists(file);
             long elapsed = (System.nanoTime() - started) / 1_000_000;
-            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "FAILED", elapsed, binder == null ? abbreviate(e.getMessage()) : "参数导出失败（参数值不记录）", actor);
+            history.insert(connectionId, sql, "EXPORT_" + normalizedFormat.toUpperCase(Locale.ROOT), "FAILED", elapsed, redactFailure ? "参数导出失败（参数值不记录）" : abbreviate(e.getMessage()), actor);
             throw e;
         }
     }

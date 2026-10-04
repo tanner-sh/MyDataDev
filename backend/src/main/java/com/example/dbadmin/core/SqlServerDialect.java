@@ -226,9 +226,11 @@ public class SqlServerDialect extends DefaultDialect {
                 while (rs.next()) {
                     ColumnInfo old = originals.get(rs.getString("name"));
                     if (old == null) continue;
-                    String base = rs.getString("base_type").toLowerCase(Locale.ROOT);
+                    // hierarchyid / geometry / geography 这类 CLR 类型的 system_type_id 不是合法的类型号，TYPE_NAME 返回 NULL。
+                    String baseType = rs.getString("base_type");
+                    String base = baseType == null ? "" : baseType.toLowerCase(Locale.ROOT);
                     String type = old.type();
-                    if (rs.getInt("user_type_id") != rs.getInt("system_type_id")) type = old.type();
+                    if (base.isEmpty() || rs.getInt("user_type_id") != rs.getInt("system_type_id")) type = old.type();
                     else if (java.util.Set.of("decimal", "numeric").contains(base)) type = base + "(" + rs.getInt("precision") + "," + rs.getInt("scale") + ")";
                     else if (java.util.Set.of("datetime2", "datetimeoffset", "time").contains(base)) type = base + "(" + rs.getInt("scale") + ")";
                     else if (rs.getInt("max_length") == -1 && java.util.Set.of("varchar", "nvarchar", "varbinary").contains(base)) type = base + "(max)";

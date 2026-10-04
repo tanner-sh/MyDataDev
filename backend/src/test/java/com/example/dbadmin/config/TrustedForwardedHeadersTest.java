@@ -21,4 +21,22 @@ class TrustedForwardedHeadersTest {
             assertThat(http.getAttribute(TrustedForwardedHeaders.PEER)).isEqualTo("127.0.0.1");
         });
     }
+    @Test void stripsPortAppendedByTrustedProxy() throws Exception {
+        for (String[] sample : new String[][] {{"203.0.113.5:51234", "203.0.113.5"}, {"[2001:db8::7]:443", "2001:db8::7"}}) {
+            var request = new MockHttpServletRequest(); request.setRemoteAddr("127.0.0.1"); request.addHeader("X-Forwarded-For", sample[0]);
+            new TrustedForwardedHeaders(List.of("127.0.0.1")).doFilter(request, new MockHttpServletResponse(), (r,s) ->
+                assertThat(((jakarta.servlet.http.HttpServletRequest) r).getRemoteAddr()).isEqualTo(sample[1]));
+        }
+    }
+    @Test void malformedHopFromTrustedProxyFallsBackToPeerInsteadOfFailing() throws Exception {
+        for (String hop : List.of("dead", "1.2.3.4.5:6", "unknown")) {
+            var request = new MockHttpServletRequest(); request.setRemoteAddr("127.0.0.1"); request.addHeader("X-Forwarded-For", hop);
+            var reached = new boolean[1];
+            new TrustedForwardedHeaders(List.of("127.0.0.1")).doFilter(request, new MockHttpServletResponse(), (r,s) -> {
+                reached[0] = true;
+                assertThat(((jakarta.servlet.http.HttpServletRequest) r).getRemoteAddr()).isEqualTo("127.0.0.1");
+            });
+            assertThat(reached[0]).isTrue();
+        }
+    }
 }

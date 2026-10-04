@@ -43,6 +43,8 @@ public class ConnectionService {
      * only reachable through this service, so eviction on update and delete
      * covers every writer.</p>
      */
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ConnectionService.class);
+    private final java.util.Set<Long> oceanBaseUnverified = ConcurrentHashMap.newKeySet();
     private final Map<Long, DbConnection> cachedConnections = new ConcurrentHashMap<>();
     private final Map<Long, String> cachedPasswords = new ConcurrentHashMap<>();
     /** 解密后的隧道参数；只缓存真的启用了隧道的连接。 */
@@ -238,7 +240,13 @@ public class ConnectionService {
         if (schemaName == null || schemaName.isBlank()) schemaName = configured.defaultSchema();
         Connection connection = dataSources.open(configured, password(id), sshSpec(id));
         try {
-            com.example.dbadmin.core.DatabaseServerInfo.validateOceanBase(connection, configured.dbType());
+            // 验证不了的连接只警告一次，之后不再每次借出都多跑两条注定失败的字典查询；改连接配置时重新验证。
+            if (!oceanBaseUnverified.contains(id)) {
+                var info = com.example.dbadmin.core.DatabaseServerInfo.validateOceanBase(connection, configured.dbType());
+                if (info != null && info.typeMatches() == null && oceanBaseUnverified.add(id)) {
+                    log.warn("连接 {}（{}）：{}", id, configured.name(), String.join(" ", info.warnings()));
+                }
+            }
         } catch (Exception error) {
             try { connection.close(); } catch (Exception closeError) { error.addSuppressed(closeError); }
             throw error;
@@ -349,6 +357,7 @@ public class ConnectionService {
         cachedConnections.remove(id);
         cachedPasswords.remove(id);
         cachedSshSpecs.remove(id);
+        oceanBaseUnverified.remove(id);
         dataSources.evict(id);
     }
 

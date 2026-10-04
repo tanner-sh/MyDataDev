@@ -49,11 +49,16 @@ public record DatabaseServerInfo(String product, String version, String driver, 
         return new DatabaseServerInfo("OceanBase", version, driver, tenant[0], tenant[1], mode, matches, List.copyOf(warnings));
     }
 
-    public static void validateOceanBase(Connection connection, String type) throws SQLException {
-        if (!needsOceanBaseCheck(type)) return;
+    /**
+     * 只拦「确认不一致」：读不到 DBA_OB_TENANTS 的最小权限账号验证不了模式，那是警告而不是错误，
+     * 返回的 warnings 交给调用方提示。
+     */
+    public static DatabaseServerInfo validateOceanBase(Connection connection, String type) throws SQLException {
+        if (!needsOceanBaseCheck(type)) return null;
         var info = inspect(connection, type);
-        if (!Boolean.TRUE.equals(info.typeMatches())) {
+        if (Boolean.FALSE.equals(info.typeMatches())) {
             throw new SQLException(String.join(" ", info.warnings()));
         }
+        return info;
     }
 }

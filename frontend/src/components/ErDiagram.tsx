@@ -32,13 +32,18 @@ export const ErDiagram = memo(function ErDiagram({
   const [limit, setLimit] = useState(60);
   const [highlighted, setHighlighted] = useState<string>();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 只有点了刷新/重试的那一次请求才绕过缓存；之后改上限或切 Schema 不该再清一遍整条连接的元数据缓存。
+  const refreshedRevision = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError('');
     const params = new URLSearchParams({ limit: String(limit) });
-    if (revision > 0) params.set('refresh', 'true');
+    if (revision !== refreshedRevision.current) {
+      refreshedRevision.current = revision;
+      params.set('refresh', 'true');
+    }
     if (schemaName) params.set('schemaName', schemaName);
     api<SchemaDiagram>(`/metadata/${connectionId}/diagram?${params}`)
       .then((result) => {
