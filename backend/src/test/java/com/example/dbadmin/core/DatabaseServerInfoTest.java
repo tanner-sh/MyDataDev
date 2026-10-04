@@ -41,7 +41,18 @@ class DatabaseServerInfoTest {
         var info = DatabaseServerInfo.inspect(connection, "oceanbase-mysql");
         assertThat(info.typeMatches()).isNull();
         assertThat(info.tenantName()).isNull();
-        assertThatThrownBy(() -> DatabaseServerInfo.validateOceanBase(connection, "oceanbase-mysql")).hasMessageContaining("无法验证");
+        var validated = DatabaseServerInfo.validateOceanBase(connection, "oceanbase-mysql");
+        assertThat(validated.warnings()).anyMatch(w -> w.contains("无法验证"));
+    }
+    @Test void confirmedMismatchStillBlocks() throws Exception {
+        var connection = connection();
+        var statement = mock(Statement.class);
+        var result = mock(ResultSet.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenReturn(result);
+        when(result.next()).thenReturn(true, false);
+        when(result.getString(3)).thenReturn("MYSQL");
+        assertThatThrownBy(() -> DatabaseServerInfo.validateOceanBase(connection, "oceanbase-oracle")).hasMessageContaining("不一致");
     }
     @Test void otherDatabasesDoNotReadOceanBaseCatalogs() throws Exception {
         var connection = connection();

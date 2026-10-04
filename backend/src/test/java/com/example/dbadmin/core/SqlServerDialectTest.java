@@ -51,4 +51,22 @@ class SqlServerDialectTest {
         var changed = new com.example.dbadmin.dto.ApiDtos.ColumnDesign("id", "INT", null, false, null, "id", false, null, false);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> dialect.alterColumnSql("[dbo].[t]", "id", original, changed)).hasMessageContaining("IDENTITY");
     }
+
+    @Test
+    void enrichColumnsKeepsClrTypesWhoseBaseTypeNameIsNull() throws Exception {
+        var connection = org.mockito.Mockito.mock(java.sql.Connection.class);
+        var statement = org.mockito.Mockito.mock(java.sql.PreparedStatement.class);
+        var rs = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+        org.mockito.Mockito.when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString())).thenReturn(statement);
+        org.mockito.Mockito.when(statement.executeQuery()).thenReturn(rs);
+        org.mockito.Mockito.when(rs.next()).thenReturn(true, false);
+        org.mockito.Mockito.when(rs.getString("name")).thenReturn("node");
+        org.mockito.Mockito.when(rs.getString("base_type")).thenReturn(null);
+        org.mockito.Mockito.when(rs.getInt("user_type_id")).thenReturn(128);
+        org.mockito.Mockito.when(rs.getInt("system_type_id")).thenReturn(240);
+        var column = new com.example.dbadmin.dto.ApiDtos.ColumnInfo("node", "hierarchyid", 892, true, null, 1, null);
+
+        assertThat(dialect.enrichColumns(connection, "dbo", "org", java.util.List.of(column)))
+                .singleElement().satisfies(result -> assertThat(result.type()).isEqualTo("hierarchyid"));
+    }
 }

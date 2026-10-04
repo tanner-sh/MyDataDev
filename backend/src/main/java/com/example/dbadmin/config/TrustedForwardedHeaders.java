@@ -27,6 +27,14 @@ public final class TrustedForwardedHeaders extends OncePerRequestFilter {
     private boolean trusted(String address) {
         return proxies.stream().anyMatch(proxy -> proxy.matches(address));
     }
+    /** 有些代理（如 Azure Application Gateway）写的是 ip:port 或 [v6]:port。 */
+    private static String stripPort(String hop) {
+        if (hop.startsWith("[")) {
+            int end = hop.indexOf(']');
+            return end > 0 ? hop.substring(1, end) : hop;
+        }
+        return hop.matches("\\d{1,3}(\\.\\d{1,3}){3}:\\d+") ? hop.substring(0, hop.indexOf(':')) : hop;
+    }
     @Override protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
         request.setAttribute(PEER, request.getRemoteAddr());
         String declared = request.getHeader("X-Forwarded-For");
@@ -36,10 +44,13 @@ public final class TrustedForwardedHeaders extends OncePerRequestFilter {
         if (declared != null) {
             String[] hops = declared.split(",");
             for (int i = hops.length - 1; i >= 0; i--) {
-                String hop = hops[i].trim();
+                String hop = stripPort(hops[i].trim());
                 if (!hop.matches("[0-9a-fA-F:.]+")) break;
+                boolean proxy;
+                // 通过了字符检查也未必是 IP 字面量，IpAddressMatcher 对这种值直接抛异常；当作链条到此为止。
+                try { proxy = trusted(hop); } catch (IllegalArgumentException malformed) { break; }
                 client = hop;
-                if (!trusted(hop)) break;
+                if (!proxy) break;
             }
         }
         String address = client;
