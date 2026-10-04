@@ -561,14 +561,22 @@ public class SqlFileExecutionService {
                     "SQL 文件执行完成，共成功 " + success[0] + " 条语句。");
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; statements=" + success[0]);
         } catch (StatementFailure failure) {
-            jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", failure.index, success[0], queryRows[0], failure.index,
-                    preview(failure.sql), safeMessage(failure.getCause()));
-            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
+            if (cancellationRequested(id)) {
+                jobs.markTerminal(id, "CANCELLED", "CANCELLED", failure.index, success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
+            } else {
+                jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", failure.index, success[0], queryRows[0], failure.index,
+                        preview(failure.sql), safeMessage(failure.getCause()));
+                audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
+            }
         } catch (CancelledException ignored) {
             jobs.markTerminal(id, "CANCELLED", "CANCELLED", current[0], success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
         } catch (Exception error) {
-            jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", current[0], success[0], queryRows[0], null, null, safeMessage(error));
-            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + safeMessage(error));
+            if (cancellationRequested(id)) {
+                jobs.markTerminal(id, "CANCELLED", "CANCELLED", current[0], success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
+            } else {
+                jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", current[0], success[0], queryRows[0], null, null, safeMessage(error));
+                audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + safeMessage(error));
+            }
         } finally {
             runningStatements.remove(id);
             analyzedSources.remove(id);
@@ -576,6 +584,10 @@ public class SqlFileExecutionService {
             if (job.sessionChanged()) connections.resetRemoteSession(job.connectionId());
             deleteFileQuietly(job);
         }
+    }
+
+    private boolean cancellationRequested(long id) {
+        return Thread.currentThread().isInterrupted() || jobs.findById(id).map(SqlFileExecution::cancelRequested).orElse(false);
     }
 
     private void executeScriptJob(long id) {
