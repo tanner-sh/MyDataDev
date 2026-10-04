@@ -34,7 +34,7 @@ const CHANGE_COLORS: Record<DataDiffChange, string> = {
 export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultConnectionId, onOpenInSqlTab }: {
   connections: Connection[];
   defaultConnectionId?: number;
-  onOpenInSqlTab: (sql: string, title: string) => void;
+  onOpenInSqlTab: (sql: string, title: string, target: { connectionId: number; schemaName?: string }) => void;
 }) {
   const [form, setForm] = useState<DataDiffForm>({ ...EMPTY_DATA_DIFF_FORM, sourceConnectionId: defaultConnectionId });
   const [result, setResult] = useState<DataDiffResponse | null>(null);
@@ -221,7 +221,7 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
                   size="small"
                   type="primary"
                   icon={<ExportOutlined />}
-                  onClick={() => onOpenInSqlTab(script, `数据同步 ${result.targetTable}`)}
+                  onClick={() => onOpenInSqlTab(script, `数据同步 ${result.targetTable}`, result.target)}
                 >
                   写入 SQL 工作台
                 </Button>

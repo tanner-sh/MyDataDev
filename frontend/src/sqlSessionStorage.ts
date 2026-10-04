@@ -8,6 +8,7 @@ const STORAGE_PREFIX = 'db-admin:sql-session:v2:';
 type SessionStorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
 type StoredSqlTab = {
+  executionSchema?: string;
   parameters?: SqlParameterDefinition[];
   id: string;
   title: string;
@@ -53,6 +54,7 @@ export function writeSqlSession(
     title: tab.title,
     sql: tab.sql,
     dirty: tab.dirty,
+    executionSchema: tab.executionSchema,
     ...(tab.parameters ? { parameters: tab.parameters } : {})
   }));
   if (storedTabs.length === 0) return false;
@@ -86,6 +88,7 @@ export function normalizeSqlSession(value: unknown): SqlSession | undefined {
         : `查询 ${tabs.length + 1}`,
       sql: candidate.sql,
       dirty: candidate.dirty === true,
+      executionSchema: typeof candidate.executionSchema === 'string' ? candidate.executionSchema : undefined,
       ...(candidate.parameters ? { parameters: normalizeParameterDefinitions(candidate.parameters) } : {}),
       results: [],
       message: ''

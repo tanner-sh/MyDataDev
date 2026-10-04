@@ -325,7 +325,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     [objects]
   );
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
-  const activeSqlSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
+  const activeSqlSchema = resolveSqlExecutionSchema(sqlTabs.find(tab => tab.id === activeSqlTabId)?.executionSchema ?? metadataQuery.schema, metadata);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -1152,14 +1152,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   /** 在新标签页里打开一段 SQL，保留当前标签的草稿。 */
-  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[]) {
+  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[], executionSchema?: string) {
     if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
       toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
       return;
     }
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
-    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true, parameters };
+    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true, parameters, executionSchema };
     setSqlTabs((tabs) => [...tabs, tab]);
     setActiveSqlTabId(tab.id);
     setMode('sql');
@@ -2844,10 +2844,18 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
   const openManagement = useStableEvent((section: ManagementSection) =>
     setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions)));
-  const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
-    // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
+  const openSchemaDiffScript = useStableEvent((sql: string, title: string, target?: { connectionId: number; schemaName?: string }) => {
+    const connection = target ? connections.find(item => item.id === target.connectionId) : selected;
+    if (!connection) { showInfo('目标连接不可用，请重新对比。'); return; }
+    if (connection.id !== selected?.id) {
+      selectConnection(connection, () => {
+        setActiveDrawer(null);
+        openSqlInNewTab(sql, title, undefined, target?.schemaName);
+      });
+      return;
+    }
     setActiveDrawer(null);
-    openSqlInNewTab(sql, title);
+    openSqlInNewTab(sql, title, undefined, target?.schemaName);
   });
   const openAiSqlEvent = useStableEvent((sql: string, title: string) => openSqlInNewTab(sql, title));
   const requestProductionConfirmationEvent = useStableEvent((action: string) => requestProductionConfirmation(action));
