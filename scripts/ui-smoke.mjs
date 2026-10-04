@@ -1341,6 +1341,25 @@ try {
         `);
         if (drawerOpen) {
           await page.sleep(1200);
+          if (width <= 860) {
+            const navigation = await page.evaluate(`(() => {
+              const nav = document.querySelector('.management-nav');
+              if (!nav) return { present: false };
+              const items = [...nav.querySelectorAll('.management-nav-item')];
+              const boxes = items.map(item => item.getBoundingClientRect());
+              return {
+                present: true,
+                fitsText: items.every(item => item.scrollWidth <= item.clientWidth + 1),
+                separate: boxes.every((box, index) => index === 0 || box.left >= boxes[index - 1].right - 1),
+                oneRow: boxes.every(box => Math.abs(box.top - boxes[0].top) <= 1),
+                bounded: nav.getBoundingClientRect().right <= window.innerWidth + 1,
+                canScroll: nav.scrollWidth > nav.clientWidth
+              };
+            })()`);
+            check(`${theme} / ${width}px 管理导航文字完整、无重叠且可横向滚动`,
+              navigation.present && navigation.fitsText && navigation.separate && navigation.oneRow
+              && navigation.bounded && navigation.canScroll, JSON.stringify(navigation));
+          }
           await auditLayout(`${theme} / ${width}px 管理抽屉`);
           await page.shot(`12-${theme}-${width}-管理抽屉`);
           await page.evaluate(`document.querySelector('.ant-drawer-close')?.click()`);

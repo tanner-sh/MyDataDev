@@ -5136,10 +5136,12 @@ body.is-resizing-column * {
 @media (max-width: 860px) {
   .management-shell {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .management-nav {
     flex-direction: row;
+    min-width: 0;
     gap: var(--space-2);
     overflow-x: auto;
     padding-inline-end: 0;
@@ -5150,6 +5152,7 @@ body.is-resizing-column * {
 
   /* 横成一条时组标题会把行撑乱，退回平铺 —— 一行里的顺序本来就还带着分组。 */
   .management-nav-group {
+    flex: none;
     flex-direction: row;
     gap: 2px;
   }
@@ -5160,6 +5163,7 @@ body.is-resizing-column * {
 
   .management-nav-item {
     flex: none;
+    white-space: nowrap;
   }
 }
 
