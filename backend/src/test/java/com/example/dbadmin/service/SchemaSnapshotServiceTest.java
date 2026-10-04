@@ -118,6 +118,26 @@ class SchemaSnapshotServiceTest {
     }
 
     @Test
+    void simultaneousManualAndScheduledCapturesInsertOneUnchangedSnapshot() throws Exception {
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(8);
+        var ready = new java.util.concurrent.CountDownLatch(8);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var futures = new java.util.ArrayList<java.util.concurrent.Future<com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse>>();
+        try {
+            for (int i = 0; i < 8; i++) {
+                String actor = i % 2 == 0 ? "scheduler" : "manual";
+                futures.add(executor.submit(() -> { ready.countDown(); start.await(); return service.capture(1, "PUBLIC", actor, actor); }));
+            }
+            assertThat(ready.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue(); start.countDown();
+            var results = new java.util.ArrayList<com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse>();
+            for (var future : futures) results.add(future.get(10, java.util.concurrent.TimeUnit.SECONDS));
+            assertThat(results.stream().filter(com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse::changed).count()).isEqualTo(1);
+            assertThat(results.stream().map(result -> result.snapshot().id()).distinct().count()).isEqualTo(1);
+            assertThat(service.timeline(1, "PUBLIC", 50)).hasSize(1);
+        } finally { start.countDown(); executor.shutdownNow(); }
+    }
+
+    @Test
     void aChangedSchemaAddsANewSnapshotToTheTimeline() throws Exception {
         service.capture(1L, "PUBLIC", "基线", "tanner");
         currentSchema.add(table("refunds", column("id", "BIGINT")));
@@ -166,7 +186,22 @@ class SchemaSnapshotServiceTest {
                 org.assertj.core.api.Assertions.tuple("refunds", SchemaComparison.STATUS_ONLY_IN_TARGET),
                 org.assertj.core.api.Assertions.tuple("customers", SchemaComparison.STATUS_ONLY_IN_SOURCE));
         var changed = drift.tables().stream().filter(t -> t.tableName().equals("orders")).findFirst().orElseThrow();
-        assertThat(changed.items()).extracting("name").contains("channel");
+        assertThat(changed.items()).extracting("name", "change").contains(org.assertj.core.api.Assertions.tuple("channel", "ADDED"));
+        var added = changed.items().stream().filter(item -> item.name().equals("channel")).findFirst().orElseThrow();
+        assertThat(added.source()).isNull(); assertThat(added.target()).contains("VARCHAR");
+    }
+
+    @Test
+    void columnAndIndexChangesFollowBeforeToAfterDirection() throws Exception {
+        var baseline = service.capture(1, "PUBLIC", "before", "tester");
+        currentSchema.replaceAll(detail -> detail.name().equals("orders") ? new ObjectDetail(null, "orders", "TABLE",
+                List.of(column("id", "VARCHAR"), column("channel", "VARCHAR")),
+                List.of(new com.example.dbadmin.dto.ApiDtos.IndexInfo("new_index", "channel", false, 1)), List.of("id"), "PK", "v2") : detail);
+        var next = service.capture(1, "PUBLIC", "after", "tester");
+        var items = service.drift(baseline.snapshot().id(), next.snapshot().id(), "tester").tables().stream().filter(table -> table.tableName().equals("orders")).findFirst().orElseThrow().items();
+        assertThat(items).extracting("name", "change").contains(org.assertj.core.api.Assertions.tuple("channel", "ADDED"), org.assertj.core.api.Assertions.tuple("amount", "REMOVED"), org.assertj.core.api.Assertions.tuple("new_index", "ADDED"));
+        var type = items.stream().filter(item -> item.name().equals("id")).findFirst().orElseThrow();
+        assertThat(type.source()).contains("BIGINT"); assertThat(type.target()).contains("VARCHAR");
     }
 
     @Test

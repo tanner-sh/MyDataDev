@@ -83,7 +83,6 @@ public class AuditController {
                 // 截断必须让浏览器端能看见：CSV 本身没地方说「后面还有」。
                 .header("X-Audit-Export-Rows", Integer.toString(export.rows()))
                 .header("X-Audit-Export-Capped", Boolean.toString(export.capped()))
-                .header(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "X-Audit-Export-Rows, X-Audit-Export-Capped")
                 .body(export.content());
     }
 

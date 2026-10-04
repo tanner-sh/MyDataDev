@@ -43,6 +43,11 @@ public class SchemaDiagramService {
     }
 
     public SchemaDiagram build(long connectionId, String schemaName, Integer requestedLimit) throws Exception {
+        return build(connectionId, schemaName, requestedLimit, false);
+    }
+
+    public SchemaDiagram build(long connectionId, String schemaName, Integer requestedLimit, boolean refresh) throws Exception {
+        if (refresh) metadata.invalidateConnection(connectionId);
         int limit = Math.min(Math.max(requestedLimit == null ? DEFAULT_TABLE_LIMIT : requestedLimit, 1), MAX_TABLE_LIMIT);
         // 多取一页判断有没有被截断：只按 limit 取的话，恰好等于上限时分不出「正好这么多」和「还有更多」。
         MetadataResponse inspection = metadata.inspect(connectionId, schemaName, null, 0, Math.min(limit + 1, 500), false);

@@ -8,7 +8,6 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -39,7 +38,7 @@ public class RestoreJobRepository {
                       file_format, source_db_type, target_connection_id, target_db_type, conflict_mode,
                       namespace_mapping, status, phase, progress_current, progress_total, message, actor)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, Statement.RETURN_GENERATED_KEYS);
+                    """, new String[]{"id"});
             ps.setString(1, job.sourceKind());
             ps.setLong(2, job.sourceId());
             ps.setString(3, job.sourceName());

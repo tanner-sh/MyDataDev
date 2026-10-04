@@ -56,6 +56,15 @@ public class WebConfig implements WebMvcConfigurer {
         return registration;
     }
 
+    @Bean
+    public FilterRegistrationBean<TrustedForwardedHeaders> trustedForwardedHeaders(org.springframework.core.env.Environment environment) {
+        String strategy = environment.getProperty("server.forward-headers-strategy", "none");
+        if (!"none".equalsIgnoreCase(strategy)) throw new IllegalStateException("请使用 server.forward-headers-strategy=none 和 app.trusted-proxies，避免代理头绕过来源校验。");
+        var registration = new FilterRegistrationBean<>(new TrustedForwardedHeaders(properties.getTrustedProxies()));
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 1);
+        return registration;
+    }
+
     @Override
     public void configureAsyncSupport(AsyncSupportConfigurer configurer) {
         configurer.setTaskExecutor(mvcStreamingExecutor());
@@ -87,6 +96,8 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns(properties.getCors().getAllowedOriginPatterns().toArray(String[]::new))
                 .allowedMethods("*")
                 .allowedHeaders("*")
+                .exposedHeaders("X-Export-Truncated", "X-Export-Row-Limit", "Content-Disposition", "X-Request-ID",
+                        "X-Audit-Export-Rows", "X-Audit-Export-Capped")
                 .allowCredentials(true);
     }
 

@@ -82,3 +82,10 @@ describe('SQL session storage', () => {
     expect(writeSqlSession(null, [tab('a')], 'a', storage)).toBe(false);
   });
 });
+
+ describe('migration namespace persistence', () => {
+  it('retains an explicit target schema when restoring its connection session', () => {
+    const session = normalizeSqlSession({version: 1, activeTabId: 'migration', tabs: [{id: 'migration', sql: 'UPDATE B.T SET V=1', executionSchema: 'TARGET', dirty: true}]});
+    expect(session?.tabs[0].executionSchema).toBe('TARGET');
+  });
+});

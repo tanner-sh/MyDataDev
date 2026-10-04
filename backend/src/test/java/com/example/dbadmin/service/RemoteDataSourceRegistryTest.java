@@ -15,6 +15,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RemoteDataSourceRegistryTest {
     @Test
+    void boundedPoolTimeoutIsRetryableAndRecoversAfterRelease() throws Exception {
+        var properties = new AppProperties(); properties.getRemotePool().setMaximumPoolSize(2); properties.getRemotePool().setConnectionTimeoutMs(1000);
+        var registry = new RemoteDataSourceRegistry(properties, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        var target = connection(1L, "jdbc:h2:mem:pool-exhaustion-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        try {
+            try (var first = registry.open(target, ""); var second = registry.open(target, "")) {
+                assertThatThrownBy(() -> registry.open(target, "")).isInstanceOf(PoolCapacityException.class).satisfies(error -> {
+                    var response = new com.example.dbadmin.api.ApiExceptionHandler().sql((java.sql.SQLException) error);
+                    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(response.getBody()).containsEntry("code", "TARGET_POOL_EXHAUSTED").containsEntry("retryable", true);
+                    assertThat(response.getBody().get("sqlState")).isNull();
+                });
+            }
+            try (var recovered = registry.open(target, "")) { assertThat(recovered.isValid(1)).isTrue(); }
+        } finally { registry.close(); }
+    }
+
+    @Test
     void diagnosticsReportCompletedStagesWithoutLeakingDriverCredentials() throws Exception {
         RemoteDataSourceRegistry registry = new RemoteDataSourceRegistry();
         try {

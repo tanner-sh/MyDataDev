@@ -57,6 +57,21 @@ class ConnectionServiceTransactionGuardTest {
         );
     }
 
+    @Test
+    void queuedSqlFilePreventsChangingTargetAndReadOnlyPolicy() {
+        var files = mock(com.example.dbadmin.repo.SqlFileExecutionRepository.class);
+        service.setSqlFiles(files);
+        when(files.countRunningByConnection(7)).thenReturn(1);
+        assertThatThrownBy(() -> service.update(7, request(), "admin")).isInstanceOf(ApiProblemException.class).hasMessageContaining("排队");
+        assertThatThrownBy(() -> service.delete(7, "admin")).isInstanceOf(ApiProblemException.class);
+        assertThatThrownBy(() -> service.closePool(7, "admin")).isInstanceOf(ApiProblemException.class);
+        verify(repository, never()).update(anyLong(), org.mockito.ArgumentMatchers.any());
+        verify(repository, never()).delete(anyLong());
+        when(files.countRunningByConnection(7)).thenReturn(0);
+        service.delete(7, "admin");
+        verify(repository).delete(7);
+    }
+
     private void openTransaction() {
         transactions.open(7, mock(Connection.class), "public", "admin", null);
     }

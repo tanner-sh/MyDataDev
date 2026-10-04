@@ -20,6 +20,23 @@ import static org.mockito.Mockito.when;
 /** ER 图的数据装配：真实 JDBC 元数据，覆盖复合外键、自引用与图外引用。 */
 class SchemaDiagramServiceTest {
     @Test
+    void explicitRefreshSeesExternalDdlInsteadOfCachedDiagram() throws Exception {
+        String url = "jdbc:h2:mem:er-refresh-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (var c = DriverManager.getConnection(url)) { c.createStatement().execute("CREATE TABLE ORIGINAL(ID INT PRIMARY KEY)"); }
+        var connections = mock(ConnectionService.class);
+        when(connections.open(1)).thenAnswer(i -> DriverManager.getConnection(url));
+        when(connections.require(1)).thenReturn(new DbConnection(1, "fixture", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        var metadata = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        var diagrams = new SchemaDiagramService(metadata);
+        assertThat(diagrams.build(1, "PUBLIC", 60).tables()).hasSize(1);
+        try (var c = DriverManager.getConnection(url)) { c.createStatement().execute("CREATE TABLE AFTER_OPEN(ID INT PRIMARY KEY, PARENT_ID INT REFERENCES ORIGINAL(ID))"); }
+        assertThat(diagrams.build(1, "PUBLIC", 60).tables()).hasSize(1);
+        var refreshed = diagrams.build(1, "PUBLIC", 60, true);
+        assertThat(refreshed.tables()).extracting(DiagramTable::name).containsExactlyInAnyOrder("ORIGINAL", "AFTER_OPEN");
+        assertThat(refreshed.relations()).hasSize(1);
+    }
+
+    @Test
     void collectsKeyColumnsAndForeignKeysForTheSchema() throws Exception {
         SchemaDiagram diagram = diagram("""
                 CREATE TABLE countries(id BIGINT PRIMARY KEY, code VARCHAR(2), name VARCHAR(80));

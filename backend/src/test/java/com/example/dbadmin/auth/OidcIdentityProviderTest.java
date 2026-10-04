@@ -18,17 +18,19 @@ import static org.mockito.Mockito.when;
 
 class OidcIdentityProviderTest {
     @Test
-    void provisionsBySubjectAndMapsRoleAndLocalGroups() {
+    void provisionsBySubjectAndMapsRoleAndLocalGroups() throws Exception {
         DriverManagerDataSource dataSource = new DriverManagerDataSource(
                 "jdbc:h2:mem:oidc-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
         new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(dataSource);
         JdbcTemplate jdbc = new JdbcTemplate(dataSource);
         UserAccountRepository users = new UserAccountRepository(jdbc);
         AppProperties properties = new AppProperties();
+        properties.getAuth().getOidc().setIssuerUri("https://issuer-a.example");
         properties.getAuth().getOidc().setAdminGroups(java.util.List.of("db-admins"));
         properties.getAuth().getOidc().setGroupMappings(Map.of("finance", "财务组"));
         OidcIdentityProvider provider = new OidcIdentityProvider(users, properties);
         OidcUser principal = mock(OidcUser.class);
+        when(principal.getIssuer()).thenReturn(new java.net.URL("https://issuer-a.example"));
         when(principal.getSubject()).thenReturn("stable-subject-7");
         when(principal.getClaims()).thenReturn(Map.of(
                 "preferred_username", "Alice", "name", "Alice Chen", "groups", java.util.List.of("db-admins", "finance")));
@@ -39,6 +41,15 @@ class OidcIdentityProviderTest {
         assertThat(first.userId()).isEqualTo(second.userId());
         assertThat(second.role()).isEqualTo("ADMIN");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM app_user", Integer.class)).isEqualTo(1);
+        properties.getAuth().getOidc().setIssuerUri("https://issuer-b.example");
+        when(principal.getIssuer()).thenReturn(new java.net.URL("https://issuer-b.example"));
+        WebIdentity otherIssuer = provider.login(principal).orElseThrow();
+        assertThat(otherIssuer.userId()).isNotEqualTo(first.userId());
+        assertThat(provider.refresh(first)).isEmpty();
+        assertThat(provider.refresh(otherIssuer)).isPresent();
+        users.insert("OIDC", "legacy-sub", "legacy", "legacy", null, "ADMIN", true);
+        when(principal.getSubject()).thenReturn("legacy-sub");
+        assertThat(provider.login(principal).orElseThrow().userId()).isNotEqualTo(users.findByProviderSubject("OIDC", "legacy-sub").orElseThrow().id());
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM app_user_group_member member
                 JOIN app_user_group user_group ON user_group.id = member.group_id

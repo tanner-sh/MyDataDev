@@ -19,6 +19,27 @@ class AiAgentCoordinatorTest {
     private static final ObjectProvider<MeterRegistry> NO_METRICS = mock(ObjectProvider.class);
 
     @Test
+    void queuedCancellationCompletesImmediatelyWithoutWaitingForRunningWorker() throws Exception {
+        var properties = new AppProperties(); properties.getAiAgent().setWorkerThreads(1); properties.getAiAgent().setQueueCapacity(20); properties.getAiAgent().setMaxConcurrentPerUser(1);
+        var coordinator = new AiAgentCoordinator(properties, NO_METRICS);
+        var started = new CountDownLatch(1); var unblock = new CountDownLatch(1); var callback = new CountDownLatch(1); var ran = new AtomicBoolean();
+        try {
+            coordinator.submit("blocker", id -> { started.countDown(); try { unblock.await(); } catch (InterruptedException error) { Thread.currentThread().interrupt(); } });
+            assertThat(started.await(3, TimeUnit.SECONDS)).isTrue();
+            String queued = coordinator.submit("owner", id -> ran.set(true), callback::countDown);
+            assertThat(coordinator.cancel(queued, "intruder")).isFalse();
+            assertThat(callback.getCount()).isEqualTo(1);
+            assertThat(coordinator.cancel(queued, "owner")).isTrue();
+            assertThat(callback.await(1, TimeUnit.SECONDS)).isTrue();
+            assertThat(coordinator.cancel(queued, "owner")).isFalse();
+            // Its per-user reservation and bounded queue slot are immediately available again.
+            String replacement = coordinator.submit("owner", id -> ran.set(true), () -> {});
+            assertThat(coordinator.cancel(replacement, "owner")).isTrue();
+            assertThat(ran).isFalse();
+        } finally { unblock.countDown(); coordinator.close(); }
+    }
+
+    @Test
     void limitsPerUserConcurrencyAndInterruptsTheRunningRequest() throws Exception {
         AppProperties properties = new AppProperties();
         properties.getAiAgent().setWorkerThreads(1);

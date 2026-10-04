@@ -28,6 +28,7 @@ export const ErDiagram = memo(function ErDiagram({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [zoom, setZoom] = useState(1);
+  const [revision, setRevision] = useState(0);
   const [limit, setLimit] = useState(60);
   const [highlighted, setHighlighted] = useState<string>();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -37,6 +38,7 @@ export const ErDiagram = memo(function ErDiagram({
     setLoading(true);
     setError('');
     const params = new URLSearchParams({ limit: String(limit) });
+    if (revision > 0) params.set('refresh', 'true');
     if (schemaName) params.set('schemaName', schemaName);
     api<SchemaDiagram>(`/metadata/${connectionId}/diagram?${params}`)
       .then((result) => {
@@ -51,14 +53,14 @@ export const ErDiagram = memo(function ErDiagram({
     return () => {
       cancelled = true;
     };
-  }, [connectionId, schemaName, limit]);
+  }, [connectionId, schemaName, limit, revision]);
 
   const model = useMemo(() => (diagram ? buildErModel(diagram) : undefined), [diagram]);
 
   if (loading && !model) return <PanelLoading text="正在读取表结构与外键" />;
-  if (error) return <Alert type="error" showIcon message={error} />;
+  if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />;
   if (!model || model.nodes.length === 0) {
-    return <PanelEmpty title="没有可绘制的表" description="这个 Schema 里没有表，或当前账号看不到它们。" />;
+    return <Space direction="vertical"><PanelEmpty title="没有可绘制的表" description="这个 Schema 里没有表，或当前账号看不到它们。" /><Button loading={loading} onClick={() => setRevision(value => value + 1)}>重新读取结构</Button></Space>;
   }
 
   const isolated = model.nodes.length - model.connectedTables;
@@ -107,7 +109,7 @@ export const ErDiagram = memo(function ErDiagram({
             />
           </Tooltip>
           <Tooltip title="重新读取结构">
-            <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => setLimit((value) => value)} />
+            <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => setRevision(value => value + 1)} />
           </Tooltip>
         </Space>
       </header>

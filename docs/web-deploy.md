@@ -98,7 +98,8 @@ server {
         proxy_pass http://127.0.0.1:8080;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header Forwarded "";
         proxy_set_header X-Forwarded-Proto $scheme;
         # SQL 执行、备份与恢复都是长请求；MCP、后台任务进度（/api/restores/operations/stream）
         # 与 AI 回答（/api/ai/sql/*/stream）是流式响应，proxy_buffering off 对它们是必需的，
@@ -230,3 +231,5 @@ node scripts/build-web-bundle.mjs
 ```
 
 产物输出到仓库根目录的 `release-assets/`。脚本会先校验 `backend/pom.xml`、`frontend/package.json`、`desktop/package.json` 三处版本号一致，再执行前端构建和 `mvn -Pweb -DskipTests clean package`，并确认前端确实被打进了 JAR 的 `static/`。
+
+代理头默认不受信任。反向代理部署必须保持 `server.forward-headers-strategy=none`，并将 `APP_TRUSTED_PROXIES` 设置为实际代理 IP/CIDR（例如本机 Nginx 为 `127.0.0.1,::1`），不要配置所有地址。代理必须覆写 Host/Proto/For 头；应用从链尾识别客户端，审计同时保留 TCP 对端和声明的来源。

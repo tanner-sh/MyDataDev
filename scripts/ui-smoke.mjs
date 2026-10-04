@@ -38,6 +38,7 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, op
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { AUDIT_SOURCE, applyBaseline, formatViolations } from './layout-audit.mjs';
+import { WORKBENCH_CONTRAST_SOURCE } from './workbench-contrast.mjs';
 
 const CHROME = process.env.CHROME_PATH
   || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -130,6 +131,57 @@ async function auditLayout(label) {
   // 日志里只留摘要（每条规则举一个例子），整份清单写进截图目录 —— 一处样式问题会牵连一整列
   // 单元格，几十条同样的违规刷在日志里只会把别的失败埋掉，而查的时候要的是那份完整清单。
   check(`布局不变量 — ${label}`, violations.length === 0, formatViolations(violations));
+}
+
+async function openPaletteFrom(selector) {
+  const focused = await page.evaluate(`(() => {
+    const trigger = document.querySelector(${JSON.stringify(selector)});
+    if (!trigger) return false;
+    trigger.focus();
+    window.__paletteTrigger = trigger;
+    window.__paletteDraft = document.querySelector('.cm-content')?.textContent;
+    window.__paletteResults = document.querySelector('.sql-results-pane')?.textContent;
+    const selection = window.getSelection();
+    const offset = () => {
+      if (!selection?.anchorNode || !trigger.contains(selection.anchorNode)) return null;
+      const range = document.createRange();
+      range.selectNodeContents(trigger);
+      range.setEnd(selection.anchorNode, selection.anchorOffset);
+      return range.toString().length;
+    };
+    window.__paletteCaret = offset();
+    return document.activeElement === trigger;
+  })()`);
+  const modifiers = process.platform === 'darwin' ? 4 : 2;
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'k', code: 'KeyK', modifiers });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'k', code: 'KeyK', modifiers });
+  await page.sleep(1200);
+  return focused;
+}
+
+async function cancelPaletteAndCheck(label, focused) {
+  const searchFocused = await page.evaluate(`document.activeElement?.getAttribute('aria-label') === '搜索命令'`);
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+  await page.sleep(500);
+  const state = await page.evaluate(`(() => {
+    const trigger = window.__paletteTrigger;
+    const selection = window.getSelection();
+    let caret = null;
+    if (selection?.anchorNode && trigger?.contains(selection.anchorNode)) {
+      const range = document.createRange(); range.selectNodeContents(trigger);
+      range.setEnd(selection.anchorNode, selection.anchorOffset); caret = range.toString().length;
+    }
+    return {
+      closed: !document.querySelector('.command-palette-modal'),
+      returned: document.activeElement === trigger,
+      draftUnchanged: document.querySelector('.cm-content')?.textContent === window.__paletteDraft,
+      resultUnchanged: document.querySelector('.sql-results-pane')?.textContent === window.__paletteResults,
+      caretUnchanged: window.__paletteCaret === null || caret === window.__paletteCaret
+    };
+  })()`);
+  check(`命令面板取消后恢复 ${label} 焦点且保留草稿和光标`, focused && searchFocused
+    && Object.values(state).every(Boolean), JSON.stringify(state));
 }
 
 /**
@@ -793,12 +845,7 @@ try {
     })()
   `);
   await page.sleep(800);
-  await page.evaluate(`
-    (() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', ctrlKey: true, bubbles: true }));
-    })()
-  `);
-  await page.sleep(1500);
+  const firstPaletteFocus = await openPaletteFrom(SERVE ? '.editable-cell-display[tabindex="0"]' : '.app-header button');
   const palette = await page.evaluate(`
     (() => {
       const modal = document.querySelector('.command-palette-modal');
@@ -814,9 +861,8 @@ try {
   check('命令面板列出了命令', (palette.commands || 0) > 0 && palette.hasManagement === true);
   if (palette.open) await page.shot('04-命令面板');
   if (SERVE) {
-    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape' });
-    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
-    await page.sleep(800);
+    await cancelPaletteAndCheck('首次懒加载的表格单元格', firstPaletteFocus);
+    await cancelPaletteAndCheck('表格工具栏', await openPaletteFrom('.table-workspace .workspace-toolbar button:not([disabled])'));
     await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
     await page.sleep(1800);
     const draft = 'select 1 as draft_survives_reload;';
@@ -827,6 +873,7 @@ try {
     await page.send('Input.insertText', { text: draft });
     await page.sleep(1000);
     check('SQL 草稿实际写入编辑器', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
+    await cancelPaletteAndCheck('SQL 编辑器', await openPaletteFrom('.cm-content'));
     await page.send('Page.reload');
     await page.sleep(5000);
     check('刷新后恢复 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
@@ -1325,6 +1372,23 @@ try {
       if (AUTH) await loginInBrowser(page);
       check(`偏好里的 ${theme} 主题真的落到了页面上`,
         await page.evaluate(`document.querySelector('.app-shell')?.dataset.theme === '${theme}'`));
+      await page.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+      await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+      const selectAllModifier = process.platform === 'darwin' ? 4 : 2;
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: selectAllModifier });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: selectAllModifier });
+      await page.send('Input.insertText', { text: '-- contrast_probe\nselect 1;' });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Home', code: 'Home', modifiers: selectAllModifier });
+      await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Home', code: 'Home', modifiers: selectAllModifier });
+      await page.sleep(500);
+      const contrast = await page.evaluate(WORKBENCH_CONTRAST_SOURCE);
+      check(`${theme} 执行按钮、辅助信息和活动行注释对比度至少 4.5:1`,
+        contrast.samples.some(sample => sample.name === '执行按钮')
+        && contrast.samples.some(sample => sample.name === '连接和 Schema')
+        && contrast.samples.some(sample => sample.name === '活动行注释')
+        && contrast.failures.length === 0, JSON.stringify(contrast));
+      if (SHOT_DIR) writeFileSync(path.join(SHOT_DIR, `contrast-${theme}.json`), JSON.stringify(contrast, null, 2));
+      await cancelPaletteAndCheck(`${theme} SQL 编辑器`, await openPaletteFrom('.cm-content'));
       for (const width of [1440, 1100, 860, 640]) {
         await page.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
         await page.sleep(700);
@@ -1341,6 +1405,25 @@ try {
         `);
         if (drawerOpen) {
           await page.sleep(1200);
+          if (width <= 860) {
+            const navigation = await page.evaluate(`(() => {
+              const nav = document.querySelector('.management-nav');
+              if (!nav) return { present: false };
+              const items = [...nav.querySelectorAll('.management-nav-item')];
+              const boxes = items.map(item => item.getBoundingClientRect());
+              return {
+                present: true,
+                fitsText: items.every(item => item.scrollWidth <= item.clientWidth + 1),
+                separate: boxes.every((box, index) => index === 0 || box.left >= boxes[index - 1].right - 1),
+                oneRow: boxes.every(box => Math.abs(box.top - boxes[0].top) <= 1),
+                bounded: nav.getBoundingClientRect().right <= window.innerWidth + 1,
+                canScroll: nav.scrollWidth > nav.clientWidth
+              };
+            })()`);
+            check(`${theme} / ${width}px 管理导航文字完整、无重叠且可横向滚动`,
+              navigation.present && navigation.fitsText && navigation.separate && navigation.oneRow
+              && navigation.bounded && navigation.canScroll, JSON.stringify(navigation));
+          }
           await auditLayout(`${theme} / ${width}px 管理抽屉`);
           await page.shot(`12-${theme}-${width}-管理抽屉`);
           await page.evaluate(`document.querySelector('.ant-drawer-close')?.click()`);

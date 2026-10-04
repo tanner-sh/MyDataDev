@@ -107,7 +107,7 @@ public class AiSettingsController {
         return glossary.gaps(id);
     }
 
-    @DeleteMapping("/connections/{id}/glossary/gaps")
+    @DeleteMapping(value = "/connections/{id}/glossary/gaps", consumes = "application/json")
     public List<AiGlossaryGapResponse> dismissGlossaryGaps(
             @PathVariable long id,
             @Valid @RequestBody AiGlossaryGapDismissRequest request,

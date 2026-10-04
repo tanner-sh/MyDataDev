@@ -42,7 +42,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
   defaultConnectionId?: number;
   /** AI 可用性快照；目标连接未授权时不显示风险解读入口。 */
   aiStatus?: AiStatus;
-  onOpenInSqlTab: (sql: string, title: string) => void;
+  onOpenInSqlTab: (sql: string, title: string, target: { connectionId: number; schemaName?: string }) => void;
 }) {
   const [form, setForm] = useState<SchemaDiffForm>({ ...EMPTY_SCHEMA_DIFF_FORM, sourceConnectionId: defaultConnectionId });
   const [result, setResult] = useState<SchemaDiffResponse | null>(null);
@@ -189,7 +189,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
             <Checkbox checked={showIdentical} onChange={(event) => setShowIdentical(event.target.checked)}>
               显示一致的表
             </Checkbox>
-            <Button icon={<ExportOutlined />} disabled={!script} onClick={() => onOpenInSqlTab(script, '结构同步')}>
+            <Button icon={<ExportOutlined />} disabled={!script} onClick={() => onOpenInSqlTab(script, '结构同步', result!.target)}>
               在 SQL 工作台打开
             </Button>
             <Button icon={<CopyOutlined />} disabled={!script} onClick={copyScript}>复制脚本</Button>

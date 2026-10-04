@@ -26,6 +26,9 @@ public class AppProperties {
     private final Maintenance maintenance = new Maintenance();
     private final RemotePool remotePool = new RemotePool();
     private final Ssh ssh = new Ssh();
+    private List<String> trustedProxies = new ArrayList<>();
+    public List<String> getTrustedProxies() { return trustedProxies; }
+    public void setTrustedProxies(List<String> value) { trustedProxies = value == null ? List.of() : List.copyOf(value); }
     private final Cors cors = new Cors();
     private final Mcp mcp = new Mcp();
     private final AiAgent aiAgent = new AiAgent();

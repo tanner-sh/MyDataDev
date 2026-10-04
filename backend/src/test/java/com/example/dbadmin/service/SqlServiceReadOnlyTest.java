@@ -43,6 +43,18 @@ class SqlServiceReadOnlyTest {
     }
 
     @Test
+    void marksSingleClippedTextAndClobAsTruncatedEvenWithoutAnExtraRow() throws Exception {
+        var service = service(database(), true);
+        for (String expression : java.util.List.of("'abcdefghijklmnop'", "CAST('abcdefghijklmnop' AS CLOB)")) {
+            var result = service.executeReadOnly(1, "SELECT " + expression + " AS text_value", null, 3, "mcp:test", new SqlQueryLimits(3, 3, 100, 1000, 6, 5));
+            assertThat(result.rows()).hasSize(1);
+            assertThat(result.rows().get(0).get(0).toString()).hasSize(6);
+            assertThat(result.truncated()).isTrue();
+            assertThat(result.truncationReason()).isEqualTo("text_limit");
+        }
+    }
+
+    @Test
     void queriesWritableConnectionsButStillRejectsMutationsAndMultipleStatements() throws Exception {
         String url = database();
         SqlService writable = service(url, false);

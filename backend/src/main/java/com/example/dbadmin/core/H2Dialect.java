@@ -12,12 +12,28 @@ public class H2Dialect extends DefaultDialect {
         return identifier == null ? null : identifier.toUpperCase(Locale.ROOT);
     }
 
-    /** H2 2.x 认 PostgreSQL 那套 ON CONFLICT，直接复用它的写法。 */
+    /** H2 only supports the DO NOTHING subset; UPSERT uses its native MERGE. */
     private final PostgreSqlDialect conflictStyles = new PostgreSqlDialect();
 
     @Override
     public ImportConflictStyle importConflictStyle(String mode, List<String> columns, List<String> keyColumns) {
+        if ("UPSERT".equalsIgnoreCase(mode)) {
+            if (keyColumns.isEmpty()) return null;
+            return new ImportConflictStyle("MERGE INTO", "", "KEY (" + String.join(", ", keyColumns.stream().map(this::quoteIdentifier).toList()) + ") VALUES");
+        }
         return conflictStyles.importConflictStyle(mode, columns, keyColumns);
+    }
+
+    @Override
+    public java.util.Optional<String> backupIndexName(java.sql.Connection connection, String schema, String table, String index) throws Exception {
+        // PK_NAME is a constraint name, not the internal index name returned by JDBC.
+        try (var query = connection.prepareStatement("SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_TYPE='PRIMARY KEY' AND INDEX_NAME=?")) {
+            query.setString(1, schema == null || schema.isBlank() ? connection.getSchema() : schema);
+            query.setString(2, table);
+            query.setString(3, index);
+            try (var rows = query.executeQuery()) { if (rows.next()) return java.util.Optional.empty(); }
+        }
+        return java.util.Optional.of(index);
     }
 
     @Override

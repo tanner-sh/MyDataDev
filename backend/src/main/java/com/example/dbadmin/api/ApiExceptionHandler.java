@@ -56,6 +56,12 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(SQLException.class)
     public ResponseEntity<Map<String, Object>> sql(SQLException e) {
+        if (e instanceof com.example.dbadmin.service.PoolCapacityException) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("ok", false); body.put("code", "TARGET_POOL_EXHAUSTED"); body.put("message", e.getMessage());
+            body.put("sqlState", e.getSQLState()); body.put("retryable", true);
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header("Retry-After", "1").body(body);
+        }
         String sqlState = String.valueOf(e.getSQLState());
         // SQLState class 08 is "connection exception": the target database could
         // not be reached, which is not the caller's mistake.
@@ -126,6 +132,33 @@ public class ApiExceptionHandler {
         if (!ClientDisconnects.isClientGone(e)) return generic(e);
         log.debug("客户端已断开，放弃这次响应", e);
         return null;
+    }
+
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> responseStatus(org.springframework.web.server.ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode()).headers(e.getHeaders()).body(Map.of(
+                "ok", false, "code", "HTTP_" + e.getStatusCode().value(),
+                "message", e.getReason() == null ? "请求被拒绝。" : e.getReason()));
+    }
+
+    @ExceptionHandler({org.springframework.http.converter.HttpMessageNotReadableException.class,
+            org.springframework.web.bind.MissingServletRequestParameterException.class,
+            org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+            org.springframework.web.multipart.support.MissingServletRequestPartException.class})
+    public ResponseEntity<Map<String, Object>> malformedRequest(Exception e) {
+        return ResponseEntity.badRequest().body(Map.of("ok", false, "code", "BAD_REQUEST", "message", "请求内容或参数格式不正确，请检查后重试。"));
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> unsupportedMedia(org.springframework.web.HttpMediaTypeNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).headers(e.getHeaders())
+                .body(Map.of("ok", false, "code", "UNSUPPORTED_MEDIA_TYPE", "message", "请求的内容类型不受支持。"));
+    }
+
+    @ExceptionHandler(org.springframework.web.HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<Map<String, Object>> unsupportedMethod(org.springframework.web.HttpRequestMethodNotSupportedException e) {
+        return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED).headers(e.getHeaders())
+                .body(Map.of("ok", false, "code", "METHOD_NOT_ALLOWED", "message", "请求方法不受支持。"));
     }
 
     @ExceptionHandler(Exception.class)

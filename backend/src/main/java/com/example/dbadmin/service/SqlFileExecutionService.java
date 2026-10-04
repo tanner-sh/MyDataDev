@@ -275,7 +275,7 @@ public class SqlFileExecutionService {
 
         private void grow(int length) throws IOException {
             written += length;
-            if (written > maximum) throw new IOException("生成的 SQL 脚本超过允许大小。");
+            if (written > maximum) throw new ApiProblemException(HttpStatus.PAYLOAD_TOO_LARGE, "SQL_FILE_TOO_LARGE", "生成的 SQL 脚本超过允许大小。");
         }
     }
 
@@ -285,6 +285,14 @@ public class SqlFileExecutionService {
 
     public SqlFileExecutionResponse start(long id, String productionConfirmation, String actor,
                                            String transactionMode, String endOfFileAction) throws Exception {
+        // Share the lifecycle monitor with update/delete/closePool until the job is queued.
+        synchronized (connections) {
+            return startLocked(id, productionConfirmation, actor, transactionMode, endOfFileAction);
+        }
+    }
+
+    private SqlFileExecutionResponse startLocked(long id, String productionConfirmation, String actor,
+                                                String transactionMode, String endOfFileAction) throws Exception {
         String mode = transactionMode == null ? "BATCH" : transactionMode.toUpperCase(Locale.ROOT);
         String ending = endOfFileAction == null ? ("SCRIPT".equals(mode) ? "ROLLBACK" : "COMMIT") : endOfFileAction.toUpperCase(Locale.ROOT);
         if (!Set.of("BATCH", "SCRIPT").contains(mode) || !Set.of("COMMIT", "ROLLBACK").contains(ending)) {
@@ -425,7 +433,9 @@ public class SqlFileExecutionService {
         SqlFileStatementReader.read(path, charset, job.targetDbType(), properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
             ensureNotCancelled(job.id());
             // GO batches may contain multiple ordinary SQL statements; PL/SQL bodies must remain opaque.
-            var parts = job.targetDbType().equalsIgnoreCase("sqlserver") ? scriptSplitter.split(sql)
+            boolean sqlServer = Set.of("sqlserver", "sql-server", "mssql").contains(job.targetDbType().toLowerCase(Locale.ROOT));
+            boolean routine = SqlScriptSyntax.leadingSql(sql).matches("(?is)(?:CREATE(?:\\s+OR\\s+ALTER)?|ALTER)\\s+(?:PROC(?:EDURE)?|FUNCTION|TRIGGER)\\b.*");
+            var parts = sqlServer && !routine ? scriptSplitter.split(sql, "plain")
                     : java.util.List.of(new SqlScriptSplitter.StatementSegment(sql, 0, sql.length()));
             if (parts.stream().anyMatch(part -> SqlScriptSyntax.transaction(part.sql()) != SqlScriptSyntax.Transaction.NONE)) counts[5]++;
             if (SqlScriptSyntax.opaqueBlock(sql)) { counts[6]++; flags[0] = true; flags[1] = true; }
@@ -551,14 +561,22 @@ public class SqlFileExecutionService {
                     "SQL 文件执行完成，共成功 " + success[0] + " 条语句。");
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; statements=" + success[0]);
         } catch (StatementFailure failure) {
-            jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", failure.index, success[0], queryRows[0], failure.index,
-                    preview(failure.sql), safeMessage(failure.getCause()));
-            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
+            if (cancellationRequested(id)) {
+                jobs.markTerminal(id, "CANCELLED", "CANCELLED", failure.index, success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
+            } else {
+                jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", failure.index, success[0], queryRows[0], failure.index,
+                        preview(failure.sql), safeMessage(failure.getCause()));
+                audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; statement=" + failure.index + "; " + safeMessage(failure.getCause()));
+            }
         } catch (CancelledException ignored) {
             jobs.markTerminal(id, "CANCELLED", "CANCELLED", current[0], success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
         } catch (Exception error) {
-            jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", current[0], success[0], queryRows[0], null, null, safeMessage(error));
-            audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + safeMessage(error));
+            if (cancellationRequested(id)) {
+                jobs.markTerminal(id, "CANCELLED", "CANCELLED", current[0], success[0], queryRows[0], null, null, "SQL 文件执行已取消。");
+            } else {
+                jobs.markTerminal(id, "FAILED", "EXECUTION_FAILED", current[0], success[0], queryRows[0], null, null, safeMessage(error));
+                audit.onConnection(job.actor(), "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + safeMessage(error));
+            }
         } finally {
             runningStatements.remove(id);
             analyzedSources.remove(id);
@@ -566,6 +584,10 @@ public class SqlFileExecutionService {
             if (job.sessionChanged()) connections.resetRemoteSession(job.connectionId());
             deleteFileQuietly(job);
         }
+    }
+
+    private boolean cancellationRequested(long id) {
+        return Thread.currentThread().isInterrupted() || jobs.findById(id).map(SqlFileExecution::cancelRequested).orElse(false);
     }
 
     private void executeScriptJob(long id) {

@@ -58,7 +58,6 @@ export const CommandPalette = memo(function CommandPalette({
   function activate(id: string) {
     const action = byId.get(id);
     if (!action || action.disabledReason) return;
-    onClose();
     onRun(action);
   }
 
@@ -85,6 +84,7 @@ export const CommandPalette = memo(function CommandPalette({
       width={640}
       rootClassName="command-palette-modal"
       onCancel={onClose}
+      focusTriggerAfterClose={false}
       destroyOnHidden
     >
       <Input

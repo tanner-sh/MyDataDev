@@ -44,23 +44,22 @@ public class AiAgentCoordinator {
         }
     }
 
-    public String submit(String ownerKey, Consumer<String> task) {
+    public String submit(String ownerKey, Consumer<String> task) { return submit(ownerKey, task, () -> {}); }
+
+    public String submit(String ownerKey, Consumer<String> task, Runnable queuedCancellation) {
         if (!reserve(ownerKey)) {
             throw busy("当前账号同时运行的 AI 请求已达到上限，请等待已有请求结束。");
         }
         String requestId = UUID.randomUUID().toString();
-        Handle handle = new Handle(ownerKey);
+        Handle handle = new Handle(ownerKey, queuedCancellation);
         handles.put(requestId, handle);
         try {
-            executor.execute(() -> {
-                try {
-                    handle.begin();
-                    task.accept(requestId);
-                } finally {
-                    handles.remove(requestId, handle);
-                    release(ownerKey);
-                }
-            });
+            Runnable work = () -> {
+                try { if (handle.begin()) task.accept(requestId); }
+                finally { if (handles.remove(requestId, handle)) release(ownerKey); }
+            };
+            handle.queuedWork = work;
+            executor.execute(work);
             return requestId;
         } catch (RejectedExecutionException e) {
             handles.remove(requestId, handle);
@@ -85,7 +84,9 @@ public class AiAgentCoordinator {
 
     public boolean cancel(String requestId, String ownerKey) {
         Handle handle = handles.get(requestId);
-        return handle != null && handle.ownerKey.equals(ownerKey) && handle.cancel();
+        if (handle == null || !handle.ownerKey.equals(ownerKey) || !handle.cancel()) return false;
+        if (handle.queuedWork != null && executor.remove(handle.queuedWork) && handles.remove(requestId, handle)) release(ownerKey);
+        return true;
     }
 
     public static void checkCancelled() {
@@ -125,18 +126,22 @@ public class AiAgentCoordinator {
         private final String ownerKey;
         private final AtomicBoolean cancelled = new AtomicBoolean();
         private volatile Thread worker;
+        private volatile Runnable queuedWork;
+        private final Runnable queuedCancellation;
 
-        private Handle(String ownerKey) { this.ownerKey = ownerKey; }
+        private Handle(String ownerKey, Runnable queuedCancellation) { this.ownerKey = ownerKey; this.queuedCancellation = queuedCancellation; }
 
-        void begin() {
+        synchronized boolean begin() {
+            if (cancelled.get()) return false;
             worker = Thread.currentThread();
-            if (cancelled.get()) worker.interrupt();
+            return true;
         }
 
-        boolean cancel() {
+        synchronized boolean cancel() {
             if (!cancelled.compareAndSet(false, true)) return false;
             Thread current = worker;
             if (current != null) current.interrupt();
+            else queuedCancellation.run();
             return true;
         }
     }

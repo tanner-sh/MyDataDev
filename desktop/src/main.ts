@@ -15,6 +15,7 @@ import {
 import { BackendManager, requestBackendShutdown, waitForHealthyBackend } from './backend.js';
 import { bundledBackendPaths, resolveDesktopPaths, type DesktopPaths } from './paths.js';
 import { loadOrCreateDesktopSecret } from './secret-store.js';
+import { quitAfterWindowConsent, quitWindowGate } from './quit.js';
 import {
   parseLatestRelease,
   RELEASES_URL,
@@ -50,6 +51,7 @@ let backend: BackendManager | undefined;
 let desktopPaths: DesktopPaths;
 let controlToken = process.env.MYDATADEV_DESKTOP_CONTROL_TOKEN || '';
 let quitting = false;
+let closingForQuit = false;
 let quitStarted = false;
 
 const shouldStart = !started && app.requestSingleInstanceLock();
@@ -86,7 +88,7 @@ function createWindow() {
   });
   mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('close', (event) => {
-    if (quitting) return;
+    if (quitting || closingForQuit) return;
     event.preventDefault();
     if (trayAvailable) mainWindow?.hide();
     else mainWindow?.minimize();
@@ -163,9 +165,25 @@ async function requestQuit(confirmActive: boolean) {
       return;
     }
   }
-  quitting = true;
-  await stopBackend();
-  app.quit();
+  const window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  closingForQuit = true;
+  try {
+    await quitAfterWindowConsent(window && quitWindowGate(window), () => dialog.showMessageBoxSync(window!, {
+      type: 'warning',
+      title: '仍有未保存的工作',
+      message: '页面中有未保存的修改或尚未结束的事务。',
+      detail: '退出后未保存的修改会丢失，未提交的事务将回滚。是否仍然退出？',
+      buttons: ['继续使用', '退出'],
+      defaultId: 0,
+      cancelId: 0
+    }) === 1, async () => {
+      quitting = true;
+      await stopBackend();
+    }, () => app.quit());
+  } finally {
+    closingForQuit = false;
+    if (!quitting) quitStarted = false;
+  }
 }
 
 async function startBackend() {

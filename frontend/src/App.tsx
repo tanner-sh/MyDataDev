@@ -244,6 +244,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [tableRowCount, setTableRowCount] = useState<TableRowCountState>(IDLE_TABLE_ROW_COUNT);
   const [objectSearchOpen, setObjectSearchOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const commandPaletteTriggerRef = useRef<HTMLElement | null>(null);
+  const commandPaletteFocusFrameRef = useRef<number | undefined>(undefined);
+  const closeCommandPalette = useStableEvent(() => {
+    setCommandPaletteOpen(false);
+    const trigger = commandPaletteTriggerRef.current;
+    commandPaletteTriggerRef.current = null;
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+    commandPaletteFocusFrameRef.current = requestAnimationFrame(() => {
+      commandPaletteFocusFrameRef.current = undefined;
+      if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+    });
+  });
+  useEffect(() => () => {
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+  }, []);
   const [recentCommandIds, setRecentCommandIds] = useState<string[]>(() => readRecentCommandIds());
   const [snippetsOpen, setSnippetsOpen] = useState(false);
   const [transactionState, setTransactionState] = useState<SqlTransactionState>(IDLE_SQL_TRANSACTION);
@@ -325,7 +340,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     [objects]
   );
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
-  const activeSqlSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
+  const activeSqlSchema = resolveSqlExecutionSchema(sqlTabs.find(tab => tab.id === activeSqlTabId)?.executionSchema ?? metadataQuery.schema, metadata);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -344,7 +359,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     algorithm: layoutPreferences.themeMode === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
     // 这四个值必须和 styles.css 的令牌一致：borderRadius 对 --radius-md，fontSize 对
     // --text-md。之前 antd 用 7、手写 CSS 用 6/8/9，两套尺度在同一个界面上打架。
-    token: { colorPrimary: '#2f74e8', borderRadius: 8, controlHeight: 34, fontSize: 13 }
+    token: {
+      colorPrimary: '#2769d3',
+      colorTextSecondary: layoutPreferences.themeMode === 'dark' ? '#adb8c8' : '#596579',
+      colorTextDescription: layoutPreferences.themeMode === 'dark' ? '#adb8c8' : '#596579',
+      borderRadius: 8, controlHeight: 34, fontSize: 13
+    },
+    components: {
+      Tabs: {
+        itemSelectedColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        itemHoverColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        itemActiveColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3',
+        inkBarColor: layoutPreferences.themeMode === 'dark' ? '#69a1ff' : '#2769d3'
+      }
+    }
   }), [layoutPreferences.themeMode]);
 
   useEffect(() => {
@@ -1152,14 +1180,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   /** 在新标签页里打开一段 SQL，保留当前标签的草稿。 */
-  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[]) {
+  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[], executionSchema?: string) {
     if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
       toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
       return;
     }
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
-    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true, parameters };
+    const tab: SqlTab = { ...createSqlTab(nextIndex), title: title.slice(0, 80), sql, dirty: true, parameters, executionSchema };
     setSqlTabs((tabs) => [...tabs, tab]);
     setActiveSqlTabId(tab.id);
     setMode('sql');
@@ -2092,7 +2120,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     if (shortcut.kind === 'open-command-palette') {
       // 命令面板在任何界面下都该开得起来 —— 它本身就是「我不知道这个功能在哪」的出口。
       event.preventDefault();
-      setCommandPaletteOpen((current) => !current);
+      if (commandPaletteOpen) closeCommandPalette();
+      else {
+        if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
+        commandPaletteTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setCommandPaletteOpen(true);
+      }
       return;
     }
     if (shortcut.kind === 'open-object-search') {
@@ -2844,10 +2877,18 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
   const openManagement = useStableEvent((section: ManagementSection) =>
     setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions)));
-  const openSchemaDiffScript = useStableEvent((sql: string, title: string) => {
-    // 生成的 DDL 不在对比面板里执行：送进 SQL 工作台才会经过生产确认与审计。
+  const openSchemaDiffScript = useStableEvent((sql: string, title: string, target?: { connectionId: number; schemaName?: string }) => {
+    const connection = target ? connections.find(item => item.id === target.connectionId) : selected;
+    if (!connection) { showInfo('目标连接不可用，请重新对比。'); return; }
+    if (connection.id !== selected?.id) {
+      selectConnection(connection, () => {
+        setActiveDrawer(null);
+        openSqlInNewTab(sql, title, undefined, target?.schemaName);
+      });
+      return;
+    }
     setActiveDrawer(null);
-    openSqlInNewTab(sql, title);
+    openSqlInNewTab(sql, title, undefined, target?.schemaName);
   });
   const openAiSqlEvent = useStableEvent((sql: string, title: string) => openSqlInNewTab(sql, title));
   const requestProductionConfirmationEvent = useStableEvent((action: string) => requestProductionConfirmation(action));
@@ -3001,6 +3042,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }, [compactLayout, connections, layoutPreferences, selected]);
 
   const runPaletteAction = useStableEvent((action: PaletteAction) => {
+    setCommandPaletteOpen(false);
+    commandPaletteTriggerRef.current = null;
+    if (commandPaletteFocusFrameRef.current !== undefined) cancelAnimationFrame(commandPaletteFocusFrameRef.current);
     setRecentCommandIds((current) => {
       const next = rememberCommand(current, action.id);
       writeRecentCommandIds(next);
@@ -3829,7 +3873,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             open
             actions={paletteActions}
             recentIds={recentCommandIds}
-            onClose={() => setCommandPaletteOpen(false)}
+            onClose={closeCommandPalette}
             onRun={runPaletteAction}
           />
         </Suspense>

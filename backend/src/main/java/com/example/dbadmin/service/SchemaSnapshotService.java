@@ -67,6 +67,7 @@ public class SchemaSnapshotService {
             "TABLE_DESIGN", "TABLE_CREATE", "TABLE_ALTER", "TABLE_DROP", "TABLE_TRUNCATE",
             "TABLE_RENAME", "SQL_FILE_START", "SCHEMA_DIFF");
 
+    private final Object[] captureLocks = java.util.stream.IntStream.range(0, 64).mapToObj(ignored -> new Object()).toArray();
     private final ConnectionService connections;
     private final MetadataService metadata;
     private final SchemaSnapshotRepository repository;
@@ -98,6 +99,13 @@ public class SchemaSnapshotService {
             throws Exception {
         connections.require(connectionId);
         String schema = resolveSchema(connectionId, schemaName);
+        int stripe = Math.floorMod(java.util.Objects.hash(connectionId, schema), captureLocks.length);
+        // Keep reading the source and checking/inserting the latest snapshot in temporal order.
+        synchronized (captureLocks[stripe]) { return captureLocked(connectionId, schema, label, actor); }
+    }
+
+    private SchemaSnapshotCaptureResponse captureLocked(long connectionId, String schema, String label, String actor)
+            throws Exception {
         List<String> warnings = new ArrayList<>();
         List<String> tables = listTables(connectionId, schema);
         if (tables.size() > MAX_TABLES) {
@@ -194,7 +202,12 @@ public class SchemaSnapshotService {
                 removed++;
                 tables.add(new SchemaDriftTable(from.name(), SchemaComparison.STATUS_ONLY_IN_SOURCE, List.of()));
             } else {
-                List<SchemaDiffItem> items = SchemaComparison.compare(from, to);
+                List<SchemaDiffItem> items = SchemaComparison.compare(from, to).stream()
+                        .map(item -> new SchemaDiffItem(item.category(), item.name(),
+                                SchemaComparison.CHANGE_ADDED.equals(item.change()) ? SchemaComparison.CHANGE_REMOVED
+                                        : SchemaComparison.CHANGE_REMOVED.equals(item.change()) ? SchemaComparison.CHANGE_ADDED : item.change(),
+                                item.source(), item.target()))
+                        .toList();
                 if (items.isEmpty()) {
                     identical++;
                 } else {

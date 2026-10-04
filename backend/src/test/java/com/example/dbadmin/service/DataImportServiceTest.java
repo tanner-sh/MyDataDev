@@ -227,6 +227,28 @@ class DataImportServiceTest {
     }
 
     @Test
+    void h2UpsertGeneratedScriptActuallyUpdatesAndInsertsOnH2() throws Exception {
+        for (String mode : java.util.List.of("", ";MODE=PostgreSQL")) {
+            try (var connection = java.sql.DriverManager.getConnection("jdbc:h2:mem:import-" + java.util.UUID.randomUUID() + mode)) {
+                connection.createStatement().execute("CREATE TABLE T(ID INT PRIMARY KEY, NAME VARCHAR(40))");
+                connection.createStatement().execute("INSERT INTO T VALUES(1, 'old')");
+                var dialect = new com.example.dbadmin.core.H2Dialect();
+                var style = dialect.importConflictStyle("UPSERT", java.util.List.of("ID", "NAME"), java.util.List.of("ID"));
+                var out = new java.io.StringWriter();
+                try (var reader = new CsvStreamReader(new java.io.StringReader("ID,NAME\n1,new\n2,added\n"))) {
+                    DataImportService.convert(reader, out, dialect, "PUBLIC", "T", new java.util.LinkedHashSet<>(java.util.List.of("ID", "NAME")), "upsert.csv", style);
+                }
+                for (var sql : new SqlScriptSplitter().split(out.toString(), "h2")) connection.createStatement().execute(sql.sql());
+                try (var rows = connection.createStatement().executeQuery("SELECT ID,NAME FROM T ORDER BY ID")) {
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getString(2)).isEqualTo("new");
+                    assertThat(rows.next()).isTrue(); assertThat(rows.getString(2)).isEqualTo("added");
+                    assertThat(rows.next()).isFalse();
+                }
+            }
+        }
+    }
+
+    @Test
     void putsTheConflictClauseAtTheEndOfEachStatement() throws Exception {
         java.io.StringWriter out = new java.io.StringWriter();
         try (CsvStreamReader reader = new CsvStreamReader(new java.io.StringReader("id,name\n1,A\n"))) {

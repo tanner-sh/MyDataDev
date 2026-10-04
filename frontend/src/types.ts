@@ -476,6 +476,8 @@ export type ConnectionSshForm = {
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = {
+  /** Generated migration scripts keep their target namespace. */
+  executionSchema?: string;
   parameters?: import('./sqlParameters').SqlParameterDefinition[];
   id: string;
   title: string;

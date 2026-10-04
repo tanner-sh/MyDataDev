@@ -167,6 +167,19 @@ public class SqlStatementClassifier {
         return false;
     }
 
+    /** T-SQL does not require statement separators; later writes are ambiguous and require explicit consent. */
+    public boolean requiresSqlServerBatchConfirmation(String sql) {
+        if (requiresUnscopedMutationConfirmation(sql)) return true;
+        List<Token> all = tokens(sql, true);
+        Operation leading = all.isEmpty() ? null : operation(all);
+        for (int i = 0; i < all.size(); i++) {
+            Token token = all.get(i);
+            if (UNSCOPED_MUTATIONS.contains(token.word()) && token.depth() == 0
+                    && (leading == null || i != leading.index())) return true;
+        }
+        return false;
+    }
+
     private boolean hasScopingWhere(List<Token> tokens, int statementIndex, int group) {
         for (int index = statementIndex + 1; index < tokens.size(); index++) {
             Token token = tokens.get(index);

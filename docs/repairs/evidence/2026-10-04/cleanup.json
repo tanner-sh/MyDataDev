@@ -1,0 +1,273 @@
+{
+  "startedAt": "2026-10-04T13:24:12.750832+00:00",
+  "status": "COMPLETE",
+  "scope": "2026-10-03 comprehensive QA, 2026-10-04 supplemental QA and reported-defect repair regression",
+  "containersRemoved": [
+    {
+      "id": "a7ed93a726410e1b48306cc43033e6e4447b841ffaa00a7cce96b13b09d3f876",
+      "name": "qa-scale-transfer-e2c5a434af"
+    },
+    {
+      "id": "dc0b6511c8d303045579357f41117f3031d536c27c6964bb925ac8d9aaca9fe7",
+      "name": "mydatadev-qa-pg-commit-1"
+    },
+    {
+      "id": "ac37bcca1b2d0051f8885d0ceab95940f95f55215bba87c98f1efc6d82df942a",
+      "name": "mydatadev-qa-rpm-fedora43-x64"
+    },
+    {
+      "id": "d11a69d64273f4beed960f4ca4c3e2da2529694c0f8abc4052c59f2a5046d37d",
+      "name": "mydatadev-qa-rpm-fedora43"
+    },
+    {
+      "id": "1a300ee65333282b917a338d1592dc601ab67809743720a91f263f0c01ee0628",
+      "name": "mydatadev-qa-pg-locks-9758d59b5d"
+    },
+    {
+      "id": "77a10d3be302976a309827973921ef63af4a7fc947c6f143e988832557af1893",
+      "name": "mydatadev-qa-pg-locks-8e8ebd5328"
+    },
+    {
+      "id": "0980183b07a4f3c079446a0907043ca55376d3d35b3751591e24099585309341",
+      "name": "mydatadev-qa-pg-locks-b9d498f669"
+    },
+    {
+      "id": "a2ae29fae2efe9d96ec6cd80874e16f23d58c83a916291d0d2c2d63a4928b5ae",
+      "name": "mydatadev-qa-scale-e727b0e6"
+    },
+    {
+      "id": "3f2e984e009ed733620482369cc9ae8691c77d8919139d3394bdbfaeb1fa8305",
+      "name": "mydatadev-qa-scale-e86704b5"
+    },
+    {
+      "id": "5e20ebcc166e28b5b146dd96e7fc0c7c46f157822c08c9f06af27809e9f5c484",
+      "name": "mydatadev-qa-soak-9eea1947"
+    },
+    {
+      "id": "464da9cc33504e3d4612d7086286c1a554118a039cf04286a1e6e62ca35110ef",
+      "name": "mydatadev-qa-nfs-20261004-012ed9ac-real-volume"
+    },
+    {
+      "id": "18286d92a6435fb0ceaec0a63ecc2a80946026de82d706abcd1ef8998f25b217",
+      "name": "mydatadev-qa-nfs-20261004-012ed9ac-real"
+    },
+    {
+      "id": "6c1f5768eb3235073d8865ac4677c9edd6754cd79f7bca0c4a726717807eb157",
+      "name": "mydatadev-qa-nfs-20261004-012ed9ac"
+    },
+    {
+      "id": "1090821c7437886caee92ff8c5a06446ff3d8f5fec5f984ac2d5aeca75c518b5",
+      "name": "mydatadev-qa-ssh-smb-86a3c7c0"
+    },
+    {
+      "id": "4f505a4a18d24e51be6568f02512c09fd9390cd67137b738403bc98821c01f9e",
+      "name": "mydatadev-qa-sftp-20261004-d138a7"
+    },
+    {
+      "id": "fbd8a4b24c3b57f6bc95520ac41c844d25ebc5877ab76634b4958436cbacf9c7",
+      "name": "mydatadev-qa-sftp-20261004-bbc633"
+    },
+    {
+      "id": "303f6dd29ff9286f304cbff317c205cdf870adc9a37032b2c27203a83f69350e",
+      "name": "qa-135246-oceanbase"
+    },
+    {
+      "id": "96dfcea3f76ee7819284cb6c2376d90c50afb7724e06717366bb5e320ef3e222",
+      "name": "qa-135246-mysql-fault"
+    },
+    {
+      "id": "a927550928accd7335aabe18754f0e6a70625d7ab8cbea23c9672066638541cc",
+      "name": "qa-135246-clickhouse"
+    },
+    {
+      "id": "8fbfc7d314c6eb9012f711680e506636267498adf92ea04803002a7f2ddc8f9e",
+      "name": "qa-135246-dm2"
+    },
+    {
+      "id": "6d5f795d7c49e79b19d486bf685591eeff217e212b1c79e0b79e3550aa9b4e10",
+      "name": "qa-135246-sqlserver"
+    },
+    {
+      "id": "2dfba667a51747eea462c77121a512557f1df18b749068149dac61f1ed537c31",
+      "name": "qa-135246-dm0"
+    },
+    {
+      "id": "1f38824790a7ea59ce2b5aff2b9186cc3b42c577b25e781650ec6cbbd2ba12b3",
+      "name": "qa-135246-oracle"
+    },
+    {
+      "id": "400b2667794d08a17f145850d4a2ae98e4ccbcbf63b68d6d3b86a1f0155499ed",
+      "name": "qa-135246-mariadb"
+    },
+    {
+      "id": "895ea681733cc44bdd2e588ae2c1c1f64e36c9d0071fe49cb5448b1e18027315",
+      "name": "qa-135246-mysql"
+    },
+    {
+      "id": "ab4e724469b8b6a0d58f00ce82a8a2467ffbe3b4604c53230b002e0b8f6e2aaf",
+      "name": "qa-135246-postgres"
+    }
+  ],
+  "volumesRemoved": [
+    "11951b597a7b3ad0b1b01f2dccece3da782156f15bd6d2023085e974d1d42b61",
+    "26418710cec6c33cab49521cdf85a5e975e0613c1ec98a3cc74ca863508c9b52",
+    "6810722e906f00cda64f639c5a47610b202b13782351de7c6ba147e68479e301",
+    "74bbe5f13d71b4919c90cbe9d0ac0a2463b0ac0fee412852d0bdec3ae8364593",
+    "7ae9d743fa420d6929c9d7a23fa70d3320b04e466a49cebcfac3a9e63498d997",
+    "8fb82b864b2cd0fe390565d0def50951ac63b071e0e9a1ad1ce91090f9973d83",
+    "af829e3cf4625f458d856189b7023d1547a07543080030ca83d8496fe08a20ea",
+    "b5eef836626caf38ca9914a77e12762731a231faba200cf24b5cfbf1a906dcb0",
+    "ba6129f6043dd166a60873948d24230442b50f3ee69d2e7b39f73f2b0f26e022",
+    "bf850711cdf33fbf3548e0bcb7412d7c1334964798ef576c5fd3aad7a594cb23",
+    "bff4df2c8c6c8ec60402a78af8bc50cbe990139e8190f18e17942ffe9f4d7322",
+    "ca37a4e60052325a9587e204125faf917b2665616d2fac3a618e7e0f2a43d03e",
+    "cd8f714a074cefa8ea4d94a4806d816f987ac53506443c0e470885fee2f16445",
+    "mydatadev-qa-nfs-export-25913f16"
+  ],
+  "imagesRemoved": [
+    {
+      "id": "sha256:1a6ab3f5345eb6dbe04a1349529caabdb0ab09293a09590fad07b2246bfa4b54",
+      "tags": [
+        "postgres:16"
+      ]
+    },
+    {
+      "id": "sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42",
+      "tags": [
+        "fedora:43"
+      ]
+    },
+    {
+      "id": "sha256:150eb2a903ea4d9612199b1a7a1bb46202c852a5b8723d9eddac46fa93587ddf",
+      "tags": [
+        "mydatadev-qa-unfs3:20261004-b12623"
+      ]
+    },
+    {
+      "id": "sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6",
+      "tags": [
+        "alpine:latest"
+      ]
+    },
+    {
+      "id": "sha256:31086a6900c21c479c2bcd942b6a28c53b17a51f4e9b9eb8eafcc596adfcd2e3",
+      "tags": [
+        "oceanbase/oceanbase-ce@sha256:31086a6900c21c479c2bcd942b6a28c53b17a51f4e9b9eb8eafcc596adfcd2e3"
+      ]
+    },
+    {
+      "id": "sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242",
+      "tags": [
+        "mysql:8.4"
+      ]
+    },
+    {
+      "id": "sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77",
+      "tags": [
+        "clickhouse/clickhouse-server:25.8"
+      ]
+    },
+    {
+      "id": "sha256:d8dfa0b3332e5d83f5fd1f3b7bcfa44f4aa5dfe78bfd54c49b2fd24cf199d8ff",
+      "tags": [
+        "dm8_single:dm8_20241022_rev244896_x86_rh6_64"
+      ]
+    },
+    {
+      "id": "sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090",
+      "tags": [
+        "mcr.microsoft.com/mssql/server:2022-latest"
+      ]
+    },
+    {
+      "id": "sha256:f5ff19033860d662c821cb04eb10483fa94f14f78eae252d054291ea07028093",
+      "tags": [
+        "gvenzl/oracle-free:23-slim-faststart"
+      ]
+    },
+    {
+      "id": "sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6",
+      "tags": [
+        "mariadb:11.4"
+      ]
+    }
+  ],
+  "networksRemoved": [
+    "mydatadev-qa-rpm-fedora43"
+  ],
+  "pathsRemoved": [
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-qa-2026-10-03-135246-9d7299b-skw9c68u",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-qa-2026-10-03-135209-9d7299b-2fr281cj",
+    "/Users/tanner/Applications/MyDataDev 测试 135246",
+    "/Users/tanner/Applications/MyDataDev QA x64 20261004",
+    "/Users/tanner/Applications/MyDataDev QA Firefox",
+    "/tmp/mydatadev-fix-frontend.log",
+    "/tmp/mydatadev-repair-native-verified.log",
+    "/tmp/mydatadev-repair-desktop-20261004",
+    "/tmp/mydatadev-repair-desktop-fixture.py",
+    "/tmp/mydatadev-repair-api.log",
+    "/tmp/mydatadev-fix-package.log",
+    "/tmp/mydatadev-fix-desktop.log",
+    "/tmp/mydatadev-repair-desktop-fixture.log",
+    "/tmp/mydatadev-repair-ui-final-20261004",
+    "/tmp/mydatadev-repair-api-harness",
+    "/tmp/mydatadev-fix-compile.log",
+    "/tmp/mydatadev-focus.patch",
+    "/tmp/mydatadev-repair-api-final.log",
+    "/tmp/mydatadev-repair-ui-20261004",
+    "/tmp/mydatadev-repair-native.log",
+    "/tmp/mydatadev-repair-native-final3.log",
+    "/tmp/mydatadev-repair-desktop-fixture-final.log",
+    "/tmp/mydatadev-repair-desktop-final-20261004",
+    "/tmp/mydatadev-repair-desktop-fixture-final.py",
+    "/tmp/mydatadev-fix-backend.log",
+    "/tmp/mydatadev-fix-fronttests.log",
+    "/tmp/mydatadev-repair-ui-final.log",
+    "/tmp/mydatadev-repair-api-20261004",
+    "/tmp/mydatadev-repair-ui.log",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-8rC17i",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-9QAfj6",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-rLuPGZ",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-GvW8NR",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-01kC7U",
+    "/var/folders/yv/t5hm6h4s729f_9vt0n2_4mwr0000gn/T/mydatadev-secret-x4PK3g"
+  ],
+  "reportDataFilesRemoved": [
+    "docs/test-reports/2026-10-03-135246-9d7299b/desktop-gui/exports/desktop-qa.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-primary-repro-1/AUTO.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-primary-repro-1/NAMED.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-primary-repro-1/COMPOSITE.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-2/filtered-export.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-matrix-1/actual-backup.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-matrix-2/actual-backup.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-1/filtered-export.sql",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/backup-matrix-3/actual-backup.sql",
+    "docs/test-reports/2026-10-03-135246-9d7299b/desktop-gui/exports/desktop-precision.xlsx",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/io-queue-1/roundtrip.xlsx",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-2/filtered-export.xlsx",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/io-queue-2/roundtrip.xlsx",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-1/filtered-export.xlsx",
+    "docs/test-reports/2026-10-03-135246-9d7299b/desktop-gui/exports/desktop-precision.csv",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-2/filtered-export.csv",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/audit-faults-1/filtered-audit.csv",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/ui-cua-live-2/api-verification/actual-ui-scheduled.csv",
+    "docs/test-reports/2026-10-04-all-feasible-9d7299b/data-matrix-1/filtered-export.csv"
+  ],
+  "errors": [],
+  "pathAllocatedBytesBeforeRemoval": 16464011264,
+  "ownedProcessesBeforeRemoval": [],
+  "mountedImagesBeforeRemoval": [],
+  "verification": {
+    "ownedContainersRemaining": 0,
+    "ownedVolumesRemaining": 0,
+    "ownedPathsRemaining": 0,
+    "ownedReportDataFilesRemaining": 0,
+    "unrelatedContainersPreserved": 7,
+    "preexistingDatabaseFilesUnchanged": 3,
+    "reportsAndRepairEvidencePreserved": true,
+    "preexistingSeptember7E2eNetworkPreserved": true,
+    "ownedImagesRemaining": 0,
+    "ownedNetworksRemaining": 0
+  },
+  "finishedAt": "2026-10-04T13:24:26.136048+00:00"
+}

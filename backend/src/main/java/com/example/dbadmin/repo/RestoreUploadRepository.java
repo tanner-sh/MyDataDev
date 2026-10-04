@@ -8,7 +8,6 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -35,7 +34,7 @@ public class RestoreUploadRepository {
                     INSERT INTO restore_upload(original_name, file_path, file_size, checksum_sha256, file_format,
                                                source_db_type, owner_user_id, expires_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, Statement.RETURN_GENERATED_KEYS);
+                    """, new String[]{"id"});
             ps.setString(1, upload.originalName());
             ps.setString(2, upload.filePath());
             ps.setLong(3, upload.fileSize());

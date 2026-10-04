@@ -8,7 +8,6 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
 import java.sql.PreparedStatement;
-import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -50,7 +49,7 @@ public class StorageProfileRepository {
                       sftp_auth_mode, encrypted_private_key, encrypted_private_key_passphrase, server_fingerprint,
                       skip_server_verification, enabled)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, Statement.RETURN_GENERATED_KEYS);
+                    """, new String[]{"id"});
             bind(statement, profile);
             return statement;
         }, keys);

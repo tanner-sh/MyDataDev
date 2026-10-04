@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 
 import java.sql.Blob;
+import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -677,7 +678,7 @@ public class SqlService {
             var columns = ResultColumnSourceResolver.resolve(result.columns(), rs.getMetaData(), sql,
                     dbConnection.dbType(), connectionId, namespace, dialect);
             return new SqlResult(columns, result.rows(), result.affectedRows(), result.elapsedMs(), result.resultSet(),
-                    result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit());
+                    result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit(), result.truncationReason());
         } catch (Exception ignored) {
             return result;
         }
@@ -896,11 +897,14 @@ public class SqlService {
         List<List<Object>> rows = new ArrayList<>();
         long textChars = 0;
         boolean payloadLimitReached = false;
+        boolean cellTextTruncated = false;
         while (rows.size() < effectiveMaxRows && rs.next()) {
             List<Object> row = new ArrayList<>(columnCount);
             for (int index = 1; index <= columnCount; index++) {
                 int remainingText = (int) Math.min(cellTextBudget, Math.max(0, textBudget - textChars));
-                Object value = serializableValue(rs, metadata, index, remainingText);
+                CellValue cell = readCellWithTruncation(rs, metadata, index, remainingText);
+                Object value = cell.value();
+                cellTextTruncated |= cell.truncated();
                 row.add(value);
                 if (value instanceof CharSequence text) textChars += text.length();
             }
@@ -910,7 +914,8 @@ public class SqlService {
                 break;
             }
         }
-        boolean truncated = payloadLimitReached || rs.next();
+        boolean moreRows = rs.next();
+        boolean truncated = cellTextTruncated || payloadLimitReached || moreRows;
         return new SqlResult(
                 columns,
                 rows,
@@ -920,7 +925,8 @@ public class SqlService {
                 effectiveMaxRows,
                 truncated,
                 null,
-                ResultSetSourceResolver.resolve(metadata, dialect)
+                ResultSetSourceResolver.resolve(metadata, dialect), null,
+                cellTextTruncated || payloadLimitReached ? "text_limit" : moreRows ? (effectiveMaxRows < maxRows ? "cell_limit" : "row_limit") : "none"
         );
     }
 
@@ -974,6 +980,23 @@ public class SqlService {
             return description == null ? null : CellSerializer.truncate(description, "", maxTextChars);
         }
         return serializableValue(rs.getObject(index), maxTextChars);
+    }
+
+    private record CellValue(Object value, boolean truncated) { }
+
+    private CellValue readCellWithTruncation(ResultSet rs, ResultSetMetaData metadata, int index, int limit) throws Exception {
+        int type = metadata.getColumnType(index);
+        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(type)) {
+            String text = binaryDescription(rs, index);
+            return new CellValue(text == null ? null : CellSerializer.truncate(text, "", limit), text != null && text.length() > limit);
+        }
+        Object raw = rs.getObject(index);
+        boolean clipped = false;
+        if (raw instanceof Clob clob) clipped = clob.length() > Math.min(MAX_CLOB_WINDOW_CHARS, Math.max(0, limit));
+        else if (raw != null && (!(raw instanceof Number) || raw instanceof Long || raw instanceof java.math.BigInteger || raw instanceof java.math.BigDecimal)) {
+            clipped = !(raw instanceof Boolean) && CellSerializer.text(raw).length() > limit;
+        }
+        return new CellValue(serializableValue(raw, limit), clipped);
     }
 
     private String binaryDescription(ResultSet rs, int index) throws Exception {

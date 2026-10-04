@@ -89,6 +89,37 @@ class SqlFileScriptExecutionTest {
         assertThat(target.queryForObject("SELECT COUNT(*) FROM t", Integer.class)).isZero();
     }
 
+    @Test void sqlServerProcedureIsOneCompleteGoUnitWithoutOracleSlash() throws Exception {
+        when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
+        long id = upload("CREATE PROCEDURE dbo.qa_proc AS BEGIN SELECT 1; SELECT 2; END\nGO\n");
+        assertThat(service.get(id).status()).isEqualTo("READY");
+        assertThat(service.get(id).statementTotal()).isEqualTo(1);
+        assertThat(service.get(id).ddlCount()).isEqualTo(1);
+        assertThat(service.get(id).transaction().controlCount()).isZero();
+    }
+
+    @Test void jdbcCancellationExceptionFinishesAsCancelledAndStopsFollowingUnits() throws Exception {
+        when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
+        long id = upload("SELECT 1\nGO\nINSERT INTO t VALUES(7)\nGO\n");
+        when(connections.open(1)).thenAnswer(i -> {
+            var real = target.getDataSource().getConnection();
+            return java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class[]{java.sql.Connection.class}, (proxy, method, args) -> {
+                try {
+                    if (method.getName().equals("createStatement")) {
+                        var statement = real.createStatement();
+                        return java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(), new Class[]{java.sql.Statement.class}, (p,m,a) -> {
+                            if (m.getName().equals("execute")) { service.cancel(id, "tester"); throw new java.sql.SQLException("查询被取消", "HY008"); }
+                            try { return m.invoke(statement,a); } catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+                        });
+                    }
+                    return method.invoke(real,args);
+                } catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+            });
+        });
+        assertThat(service.start(id, null, "tester").status()).isEqualTo("CANCELLED");
+        assertThat(target.queryForObject("SELECT COUNT(*) FROM t", Integer.class)).isZero();
+    }
+
     @Test void opaqueStatementInBatchCannotBeDowngradedToOrdinaryWrite() throws Exception {
         when(connections.require(1)).thenReturn(new DbConnection(1L, "test", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
         long id = upload("INSERT INTO t VALUES(1); EXEC dangerous_procedure;\nGO\n");

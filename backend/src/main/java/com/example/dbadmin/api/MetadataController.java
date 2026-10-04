@@ -153,10 +153,11 @@ public class MetadataController {
     public SchemaDiagram diagram(
             @PathVariable long connectionId,
             @RequestParam(required = false) String schemaName,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(defaultValue = "false") boolean refresh
     ) throws Exception {
         view(connectionId);
-        return diagrams.build(connectionId, schemaName, limit);
+        return diagrams.build(connectionId, schemaName, limit, refresh);
     }
 
     @PostMapping("/{connectionId}/objects/design/preview")

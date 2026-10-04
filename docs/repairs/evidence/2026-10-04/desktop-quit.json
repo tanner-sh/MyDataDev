@@ -1,0 +1,7 @@
+{
+  "cancelQuitBackendHealthy": true,
+  "independentUncommittedCount": 0,
+  "confirmedQuitProcessesExited": true,
+  "uncommittedRowsAfterExit": 0,
+  "originalTransactionCountViaUI": 1
+}

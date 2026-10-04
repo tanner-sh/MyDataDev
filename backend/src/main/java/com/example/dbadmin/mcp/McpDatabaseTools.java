@@ -390,9 +390,9 @@ public class McpDatabaseTools {
         }
         boolean truncated = result.truncated() || cellTruncated || textTruncated;
         String reason = "none";
-        if (textTruncated) reason = "text_limit";
+        if (textTruncated || "text_limit".equals(result.truncationReason())) reason = "text_limit";
         else if (cellTruncated) reason = "cell_limit";
-        else if (result.truncated()) reason = "row_limit";
+        else if (result.truncated()) reason = result.truncationReason() == null ? "row_limit" : result.truncationReason();
         var columns = result.columns().stream().map(column -> new McpDtos.QueryColumnView(column.key(), column.label(), column.typeName())).toList();
         return new QueryResult(columns, rows, result.elapsedMs(), result.maxRows(), truncated, reason);
     }

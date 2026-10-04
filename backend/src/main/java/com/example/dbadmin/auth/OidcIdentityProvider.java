@@ -19,7 +19,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
-/** 标准 OIDC 身份落库：provider + sub 是稳定关联键，用户名变化不会创建重复账号。 */
+/** 标准 OIDC 身份落库：issuer + sub 是稳定关联键，用户名变化不会创建重复账号。 */
 @Component
 @DependsOnDatabaseInitialization
 public class OidcIdentityProvider implements WebIdentityProvider {
@@ -64,14 +64,19 @@ public class OidcIdentityProvider implements WebIdentityProvider {
         if (!PROVIDER.equalsIgnoreCase(identity.provider())) return Optional.empty();
         return repository.findById(identity.userId()).filter(UserAccount::enabled)
                 .filter(account -> PROVIDER.equalsIgnoreCase(account.provider()))
+                .filter(account -> account.subject() != null && account.subject().startsWith(issuerPrefix(oidc.getIssuerUri())))
                 .filter(account -> account.authVersion() == identity.authVersion())
                 .map(UserAccount::identity);
     }
 
     @Transactional
     public Optional<WebIdentity> login(OidcUser oidcUser) {
-        String subject = trim(oidcUser.getSubject());
-        if (subject == null) throw new IllegalArgumentException("OIDC 身份缺少 sub 声明");
+        String rawSubject = trim(oidcUser.getSubject());
+        if (rawSubject == null) throw new IllegalArgumentException("OIDC 身份缺少 sub 声明");
+        String issuer = oidcUser.getIssuer() == null ? null : oidcUser.getIssuer().toExternalForm();
+        if (issuer == null || !issuer.equals(oidc.getIssuerUri())) throw new IllegalArgumentException("OIDC issuer 与配置不一致");
+        // Legacy sub-only accounts have no proven issuer: never inherit their grants automatically.
+        String subject = issuerPrefix(issuer) + hash(rawSubject);
         Optional<UserAccount> existing = repository.findByProviderSubject(PROVIDER, subject);
         if (existing.isPresent() && !existing.get().enabled()) return Optional.empty();
 
@@ -141,6 +146,17 @@ public class OidcIdentityProvider implements WebIdentityProvider {
         if (value == null) return null;
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String issuerPrefix(String issuer) {
+        if (issuer == null || issuer.isBlank()) return "unconfigured-issuer:";
+        return "iss1:" + hash(issuer) + ":";
+    }
+
+    private static String hash(String value) {
+        try {
+            return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception impossible) { throw new IllegalStateException(impossible); }
     }
 
     private static String shortHash(String value) {
