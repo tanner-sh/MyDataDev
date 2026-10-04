@@ -67,6 +67,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_SNIPPET_UPDATE: { label: '修改 SQL 片段', category: 'sql' },
   SQL_SNIPPET_DELETE: { label: '删除 SQL 片段', category: 'sql' },
   SESSION_KILL: { label: '终止数据库会话', category: 'connection', dangerous: true },
+  RESTORE_COMMIT_UNKNOWN: { label: '恢复提交结果未知', category: 'restore', dangerous: true },
   RESTORE_SUCCESS: { label: '恢复任务完成', category: 'restore' },
   MCP_TOOL_CALL: { label: 'MCP 工具调用', category: 'mcp' },
   // 诊断已并入 AI SQL 助手对话，不再写这个动作码；保留中文名是因为历史记录里还有。

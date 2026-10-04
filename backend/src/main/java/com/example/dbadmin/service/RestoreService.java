@@ -317,7 +317,11 @@ public class RestoreService {
         if (process != null) process.destroyForcibly();
         // The permit stays with the worker until it actually stops; its finally
         // block releases it and clears the cancellation marker.
-        jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(job.progressCurrent()), job.progressTotal(), "恢复已取消。", null, Instant.now());
+        if ("QUEUED".equals(job.status())) {
+            jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(job.progressCurrent()), job.progressTotal(), "恢复已取消。", null, Instant.now());
+        } else {
+            jobs.updateProgress(id, "RUNNING", "CANCELLING", value(job.progressCurrent()), job.progressTotal(), "正在取消，等待数据库确认最终结果。", null, null);
+        }
         audit.onConnection(actor, "RESTORE_CANCEL", job.targetConnectionId(), "restore:" + job.sourceName(), "job=" + id);
         return get(id);
     }
@@ -337,10 +341,14 @@ public class RestoreService {
             verifyUnchanged(Path.of(job.sourceFilePath()), job.sourceChecksum(), verifiedSources.get(id));
             if ("SQL".equals(job.fileFormat())) runSql(job);
             else runNative(job, toolPath, extraArgs);
-            ensureNotCancelled(id);
             jobs.updateProgress(id, "SUCCESS", "COMPLETED", job.progressTotal() == null ? 0 : job.progressTotal(),
                     job.progressTotal(), "恢复完成。", null, Instant.now());
             audit.onConnection(job.actor(), "RESTORE_SUCCESS", job.targetConnectionId(), "restore:" + job.sourceName(), "job=" + id);
+        } catch (CommitOutcomeUnknownException unknown) {
+            RestoreJob latest = jobs.findById(id).orElse(job);
+            String message = "恢复提交结果未知：数据库可能已经提交。请先独立核对目标数据，确认前不要重新执行恢复。";
+            jobs.updateProgress(id, "FAILED", "UNKNOWN", value(latest.progressCurrent()), latest.progressTotal(), message, null, Instant.now());
+            audit.onConnection(job.actor(), "RESTORE_COMMIT_UNKNOWN", job.targetConnectionId(), "restore:" + job.sourceName(), message);
         } catch (CancelledException cancelled) {
             RestoreJob latest = jobs.findById(id).orElse(job);
             jobs.updateProgress(id, "CANCELLED", "CANCELLED", value(latest.progressCurrent()), latest.progressTotal(), "恢复已取消。", null, Instant.now());
@@ -391,7 +399,9 @@ public class RestoreService {
                         }
                     });
                 }
-                connection.commit();
+                ensureNotCancelled(job.id());
+                try { connection.commit(); }
+                catch (Exception error) { throw new CommitOutcomeUnknownException(error); }
                 jobs.updateProgress(job.id(), "RUNNING", "FINALIZING", current[0], job.progressTotal(),
                         "SQL 恢复语句执行完成，正在收尾。", null, null);
             } catch (Exception error) {
@@ -399,6 +409,10 @@ public class RestoreService {
                 throw error;
             }
         }
+    }
+
+    static final class CommitOutcomeUnknownException extends Exception {
+        CommitOutcomeUnknownException(Throwable cause) { super("恢复提交结果未知，请核对目标数据后再决定是否重试。", cause); }
     }
 
     private boolean ddlMayImplicitlyCommit(String dbType) {
