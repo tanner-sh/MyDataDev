@@ -26,7 +26,7 @@ public class NfsBackupStorage implements BackupStorage {
         String path = StoragePaths.remotePath(connection, ".mydatadev-test-" + UUID.randomUUID(), "/");
         Nfs3 nfs = client(connection);
         Nfs3File file = nfs.newFile(path);
-        file.getParentFile().mkdirs();
+        ensureDirectory(file.getParentFile());
         try (OutputStream output = new NfsFileOutputStream(file)) { output.write(marker); }
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         try (InputStream input = new NfsFileInputStream(file)) { input.transferTo(output); }
@@ -40,7 +40,7 @@ public class NfsBackupStorage implements BackupStorage {
         String targetPath = StoragePaths.remotePath(connection, objectKey, "/");
         Nfs3File target = nfs.newFile(targetPath);
         Nfs3File temporary = nfs.newFile(StoragePaths.temporary(targetPath));
-        target.getParentFile().mkdirs();
+        ensureDirectory(target.getParentFile());
         try (InputStream input = StoragePaths.progressInput(source, progress); OutputStream output = new NfsFileOutputStream(temporary)) {
             input.transferTo(output);
         } catch (Exception error) {
@@ -74,6 +74,20 @@ public class NfsBackupStorage implements BackupStorage {
     public void delete(StorageConnection connection, String objectKey) throws Exception {
         Nfs3File file = client(connection).newFile(StoragePaths.remotePath(connection, objectKey, "/"));
         if (file.exists()) file.delete();
+    }
+
+    static void ensureDirectory(Nfs3File directory) throws java.io.IOException {
+        if (directory.exists()) {
+            if (!directory.isDirectory()) throw new java.io.IOException("NFS 备份父路径已存在但不是目录。");
+            return;
+        }
+        try { directory.mkdirs(); }
+        catch (java.io.IOException error) {
+            // Another upload can create the same parent after our existence check.
+            if (directory.exists() && directory.isDirectory()) return;
+            throw error;
+        }
+        if (!directory.isDirectory()) throw new java.io.IOException("NFS 备份目录创建失败。");
     }
 
     private Nfs3 client(StorageConnection connection) throws Exception {
