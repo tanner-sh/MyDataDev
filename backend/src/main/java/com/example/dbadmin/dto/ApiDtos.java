@@ -661,7 +661,10 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable, ResultEditInfo edit) {
+    public record SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable, ResultEditInfo edit, String truncationReason) {
+        public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated, SqlPageInfo page, ResultSourceTable sourceTable, ResultEditInfo edit) {
+            this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, page, sourceTable, edit, truncated ? "row_limit" : "none");
+        }
         public SqlResult(List<ResultColumn> columns, List<List<Object>> rows, int affectedRows, long elapsedMs, boolean resultSet, int maxRows, boolean truncated) {
             this(columns, rows, affectedRows, elapsedMs, resultSet, maxRows, truncated, null, null, null);
         }
