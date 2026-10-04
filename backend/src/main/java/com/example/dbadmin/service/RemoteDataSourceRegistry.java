@@ -87,6 +87,12 @@ public class RemoteDataSourceRegistry {
         if (dataSource == null) dataSource = install(connection.id(), createEntry(connection, password, ssh, fingerprint));
         try {
             return dataSource.getConnection();
+        } catch (java.sql.SQLTransientConnectionException error) {
+            var pool = dataSource.getHikariPoolMXBean();
+            if (pool != null && pool.getActiveConnections() >= dataSource.getMaximumPoolSize()) {
+                throw new PoolCapacityException(error);
+            }
+            throw error;
         } finally {
             release(connection.id(), dataSource);
         }

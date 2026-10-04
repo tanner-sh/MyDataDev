@@ -56,6 +56,12 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(SQLException.class)
     public ResponseEntity<Map<String, Object>> sql(SQLException e) {
+        if (e instanceof com.example.dbadmin.service.PoolCapacityException) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("ok", false); body.put("code", "TARGET_POOL_EXHAUSTED"); body.put("message", e.getMessage());
+            body.put("sqlState", e.getSQLState()); body.put("retryable", true);
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).header("Retry-After", "1").body(body);
+        }
         String sqlState = String.valueOf(e.getSQLState());
         // SQLState class 08 is "connection exception": the target database could
         // not be reached, which is not the caller's mistake.
