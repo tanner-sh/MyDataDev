@@ -433,7 +433,9 @@ public class SqlFileExecutionService {
         SqlFileStatementReader.read(path, charset, job.targetDbType(), properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
             ensureNotCancelled(job.id());
             // GO batches may contain multiple ordinary SQL statements; PL/SQL bodies must remain opaque.
-            var parts = job.targetDbType().equalsIgnoreCase("sqlserver") ? scriptSplitter.split(sql)
+            boolean sqlServer = Set.of("sqlserver", "sql-server", "mssql").contains(job.targetDbType().toLowerCase(Locale.ROOT));
+            boolean routine = SqlScriptSyntax.leadingSql(sql).matches("(?is)(?:CREATE(?:\\s+OR\\s+ALTER)?|ALTER)\\s+(?:PROC(?:EDURE)?|FUNCTION|TRIGGER)\\b.*");
+            var parts = sqlServer && !routine ? scriptSplitter.split(sql, "plain")
                     : java.util.List.of(new SqlScriptSplitter.StatementSegment(sql, 0, sql.length()));
             if (parts.stream().anyMatch(part -> SqlScriptSyntax.transaction(part.sql()) != SqlScriptSyntax.Transaction.NONE)) counts[5]++;
             if (SqlScriptSyntax.opaqueBlock(sql)) { counts[6]++; flags[0] = true; flags[1] = true; }

@@ -89,6 +89,15 @@ class SqlFileScriptExecutionTest {
         assertThat(target.queryForObject("SELECT COUNT(*) FROM t", Integer.class)).isZero();
     }
 
+    @Test void sqlServerProcedureIsOneCompleteGoUnitWithoutOracleSlash() throws Exception {
+        when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
+        long id = upload("CREATE PROCEDURE dbo.qa_proc AS BEGIN SELECT 1; SELECT 2; END\nGO\n");
+        assertThat(service.get(id).status()).isEqualTo("READY");
+        assertThat(service.get(id).statementTotal()).isEqualTo(1);
+        assertThat(service.get(id).ddlCount()).isEqualTo(1);
+        assertThat(service.get(id).transaction().controlCount()).isZero();
+    }
+
     @Test void opaqueStatementInBatchCannotBeDowngradedToOrdinaryWrite() throws Exception {
         when(connections.require(1)).thenReturn(new DbConnection(1L, "test", "sqlserver", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
         long id = upload("INSERT INTO t VALUES(1); EXEC dangerous_procedure;\nGO\n");
