@@ -123,7 +123,11 @@ public class AiSqlAgentService {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     conversations.fail(turn);
+                    cancelled(emitter);
                 }
+            }, () -> {
+                conversations.fail(turn);
+                cancelled(emitter);
             });
             try {
                 send(emitter, "session", Map.of("requestId", requestId, "conversationId", turn.id()));
