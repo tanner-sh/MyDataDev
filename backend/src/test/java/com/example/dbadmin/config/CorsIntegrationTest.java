@@ -57,6 +57,14 @@ class CorsIntegrationTest {
     }
 
     @Test
+    void exposesExportWarningsAndFileNamesToCredentialedBrowserRequests() throws Exception {
+        mvc.perform(get("/api/auth/status").header(HttpHeaders.ORIGIN, "https://db.example.com"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true"))
+                .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS, "X-Export-Truncated, X-Export-Row-Limit, Content-Disposition, X-Request-ID, X-Audit-Export-Rows, X-Audit-Export-Capped"));
+    }
+
+    @Test
     void rejectsOriginsThatAreNotConfigured() throws Exception {
         preflight("https://attacker.example.net")
                 .andExpect(status().isForbidden())

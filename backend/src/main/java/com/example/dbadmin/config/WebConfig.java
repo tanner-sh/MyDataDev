@@ -96,6 +96,8 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns(properties.getCors().getAllowedOriginPatterns().toArray(String[]::new))
                 .allowedMethods("*")
                 .allowedHeaders("*")
+                .exposedHeaders("X-Export-Truncated", "X-Export-Row-Limit", "Content-Disposition", "X-Request-ID",
+                        "X-Audit-Export-Rows", "X-Audit-Export-Capped")
                 .allowCredentials(true);
     }
 
