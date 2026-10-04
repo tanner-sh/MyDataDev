@@ -20,6 +20,13 @@ class ApiExceptionHandlerTest {
     private final ApiExceptionHandler handler = new ApiExceptionHandler();
 
     @Test
+    void preservesForbiddenDesktopControlStatus() {
+        var response = handler.responseStatus(new org.springframework.web.server.ResponseStatusException(HttpStatus.FORBIDDEN, "无效的桌面令牌"));
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody()).containsEntry("code", "HTTP_403").doesNotContainKey("traceId");
+    }
+
+    @Test
     void hidesRawDetailOfUnexpectedFailuresBehindATraceableCode() {
         ResponseEntity<Map<String, Object>> response =
                 handler.generic(new NullPointerException("jdbc:mysql://10.0.0.7:3306/secret"));

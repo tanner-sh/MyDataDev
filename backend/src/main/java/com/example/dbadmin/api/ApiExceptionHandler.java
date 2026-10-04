@@ -128,6 +128,13 @@ public class ApiExceptionHandler {
         return null;
     }
 
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> responseStatus(org.springframework.web.server.ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode()).headers(e.getHeaders()).body(Map.of(
+                "ok", false, "code", "HTTP_" + e.getStatusCode().value(),
+                "message", e.getReason() == null ? "请求被拒绝。" : e.getReason()));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> generic(Exception e) {
         // Unexpected failures used to be returned verbatim and never logged,
