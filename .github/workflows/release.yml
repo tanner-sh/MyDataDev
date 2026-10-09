@@ -136,7 +136,7 @@ jobs:
       # release-assets/，而 release 作业随后会给这些文件签发来源证明 —— tag 一旦被改指向，证明就会替被改过的
       # 文件背书。升级由 Dependabot 提 PR（它认得行尾的版本注释）。
       - name: 生成 SBOM（依赖清单）
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           path: ${{ steps.sbom.outputs.input }}
           format: spdx-json
