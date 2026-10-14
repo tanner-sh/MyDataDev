@@ -1165,7 +1165,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
    */
   function followRelation(target: RelationTarget, value: unknown) {
     if (!canJumpToRelation(value)) return;
-    openSqlInNewTab(relationJumpSql(target, value), `关联 ${target.tableName}`);
+    openSqlInNewTab(relationJumpSql(target, value, selected?.dbType), `关联 ${target.tableName}`);
   }
 
   function openRelationTarget(relation: ObjectRelation, direction: 'imported' | 'exported') {
@@ -2376,9 +2376,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     try {
       const detail = await objectDetailRequest(connectionId, object, options.refresh);
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
-      resources.ensure({ key: documentKey, connectionId, kind: 'object', object, detail, dirty: false });
-      setActiveObjectDetail(detail);
-      setActiveObjectTarget(detail);
+      // 服务端回的是规范名（Oracle 上从 SQL 里点进来的小写名会变成大写），文档键要跟着活动对象换，
+      // 否则 objectDocumentKey 与任何文档都对不上，对象面板一个都不渲染。
+      const target: ObjectDetail = { ...detail, schemaName: detail.schemaName || object.schemaName };
+      resources.rekey(documentKey, { key: resourceDocumentKey(connectionId, 'object', target.schemaName, target.name), connectionId, kind: 'object', object: target, detail: target, dirty: false });
+      setActiveObjectDetail(target);
+      setActiveObjectTarget(target);
       updateObjectDesignDirty(false);
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {

@@ -6,6 +6,7 @@
  * 可点的路径。
  */
 
+import { quoteQualifiedTable } from './queryResultExport';
 import type { ObjectRelation } from './types';
 
 /** 一条外键在某个方向上的落点。 */
@@ -69,19 +70,17 @@ export function sqlLiteral(value: unknown): string {
   return `'${text.split("'").join("''")}'`;
 }
 
-function quote(identifier: string): string {
-  return `"${identifier.replace(/"/g, '""')}"`;
-}
-
 /**
  * 生成「跳到关联记录」的查询。
  *
  * 用 SQL 而不是直接打开表数据，是因为表数据工作区没有按任意列筛选的入口；生成的语句也让
  * 用户看得见自己将要执行什么。
+ *
+ * 引号按方言来：MySQL 系默认把双引号当字符串字面量，写成 "db"."t" 直接报语法错误。
  */
-export function relationJumpSql(target: RelationTarget, value: unknown): string {
-  const table = target.schemaName ? `${quote(target.schemaName)}.${quote(target.tableName)}` : quote(target.tableName);
-  return `SELECT * FROM ${table} WHERE ${quote(target.columnName)} = ${sqlLiteral(value)}`;
+export function relationJumpSql(target: RelationTarget, value: unknown, dbType?: string): string {
+  const table = quoteQualifiedTable(target.schemaName ? [target.schemaName, target.tableName] : [target.tableName], dbType);
+  return `SELECT * FROM ${table} WHERE ${quoteQualifiedTable([target.columnName], dbType)} = ${sqlLiteral(value)}`;
 }
 
 /** 外键值为空时没有可跳的目标。 */

@@ -78,6 +78,11 @@ describe('relationJumpSql', () => {
     expect(relationJumpSql({ tableName: 'we"ird', columnName: 'id', sourceColumnName: 'x' }, 1))
       .toContain('"we""ird"');
   });
+
+  it('quotes with backticks on MySQL, where double quotes are string literals', () => {
+    expect(relationJumpSql({ schemaName: 'shop', tableName: 'users', columnName: 'id', sourceColumnName: 'uid' }, 7, 'mysql'))
+      .toBe('SELECT * FROM `shop`.`users` WHERE `id` = 7');
+  });
 });
 
 describe('canJumpToRelation / relationJumpTooltip', () => {

@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { MAX_RESOURCE_DOCUMENTS, updateDocument, type ResourceDocument, type TableSnapshot } from '../resourceWorkspaces';
+import { MAX_RESOURCE_DOCUMENTS, rekeyDocument, updateDocument, type ResourceDocument, type TableSnapshot } from '../resourceWorkspaces';
 
 export function useResourceWorkspaces() {
   const [documents, setDocuments] = useState<ResourceDocument[]>([]);
@@ -13,6 +13,10 @@ export function useResourceWorkspaces() {
     if (!items.some(item => item.key === key && item.dirty !== dirty)) return items;
     return items.map(item => item.key === key ? { ...item, dirty } : item);
   }), []);
+  const rekey = (fromKey: string, document: ResourceDocument) => {
+    if (fromKey !== document.key) snapshots.current.delete(fromKey);
+    setDocuments(items => rekeyDocument(items, fromKey, document));
+  };
   const close = (key: string) => { snapshots.current.delete(key); setDocuments(items => items.filter(item => item.key !== key)); };
-  return { documents, snapshots, ensure, markDirty, close };
+  return { documents, snapshots, ensure, rekey, markDirty, close };
 }
