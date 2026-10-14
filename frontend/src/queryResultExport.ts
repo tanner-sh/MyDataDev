@@ -16,21 +16,6 @@ const OMITTED_VALUE = /^<(?:BLOB|BINARY)\s/i;
 const TRUNCATED_VALUE = /<(?:CLOB\s*已截断|文本已截断)[^>]*>$/;
 const COPY_FORMAT_KEY = 'mydatadev.result-copy-format';
 
-/**
- * 把未加引号的标识符折成库里实际存的形态，与后端 {@code DatabaseDialect.foldUnquotedIdentifier} 同一套规则。
- *
- * <p>INSERT 生成时目标表名一律加引号，而加了引号的名字在 Oracle / PostgreSQL 上是大小写敏感的：
- * 用户写 {@code select * from sim_assetsprop}，Oracle 存的是 {@code SIM_ASSETSPROP}，原样加引号
- * 生成的 {@code INSERT INTO "sim_assetsprop"} 执行就是 ORA-00942。加了引号的名字不折 —— 那是用户
- * 明确写下的大小写。</p>
- */
-export function foldUnquotedIdentifier(value: string, dbType?: string): string {
-  const normalized = dbType?.toLowerCase() || '';
-  if (['oracle', 'oceanbase-oracle', 'dm', 'dameng', 'h2'].includes(normalized)) return value.toUpperCase();
-  if (normalized === 'postgresql') return value.toLowerCase();
-  return value;
-}
-
 export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null, dbType?: string): string[] | undefined {
   if (!sql?.trim()) return validTargetParts(sourceTable?.nameParts);
   const tokens = tokenizeSql(sql).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
@@ -51,7 +36,7 @@ export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlRe
     && token.kind === 'identifier'
     && ['WITH', 'JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'MINUS'].includes(token.value.toUpperCase()));
   if (topLevelComplexKeyword) return undefined;
-  return validTargetParts(references[0].parts.map((part) => part.quoteStyle === 'none' ? foldUnquotedIdentifier(part.value, dbType) : part.value));
+  return validTargetParts(references[0].parts.map((part) => foldUnquotedIdentifier(part.value, part.quoteStyle, dbType)));
 }
 
 export function parseQualifiedTableName(input: string, dbType?: string): string[] | undefined {
@@ -62,7 +47,7 @@ export function parseQualifiedTableName(input: string, dbType?: string): string[
     const token = tokens[index];
     if (index % 2 === 0) {
       if (token.kind !== 'identifier' || !token.closed || !token.value.trim()) return undefined;
-      parts.push(token.quoteStyle === 'none' ? foldUnquotedIdentifier(token.value, dbType) : token.value);
+      parts.push(foldUnquotedIdentifier(token.value, token.quoteStyle, dbType));
     } else if (token.kind !== 'symbol' || token.text !== '.') {
       return undefined;
     }
@@ -282,6 +267,21 @@ function displayValue(value: unknown): string {
 
 function xmlValue(value: string): string {
   return value.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;').split("'").join('&apos;');
+}
+
+/**
+ * 把未加引号的标识符折成库里实际存的形态，与后端 {@code DatabaseDialect.foldUnquotedIdentifier} 同一套规则。
+ *
+ * <p>生成的 INSERT 会给表名加引号，而加了引号就是按原样大小写匹配：用户写
+ * {@code select * from sim_assetsprop}，Oracle 存的是 {@code SIM_ASSETSPROP}，原样引成
+ * {@code "sim_assetsprop"} 就是 ORA-00942。加了引号的名字不折 —— 那是用户明确写下的大小写。</p>
+ */
+function foldUnquotedIdentifier(value: string, quoteStyle: SqlQuoteStyle, dbType?: string): string {
+  if (quoteStyle !== 'none') return value;
+  const normalized = dbType?.toLowerCase() || '';
+  if (['oracle', 'oceanbase-oracle', 'dm', 'dameng', 'h2'].includes(normalized)) return value.toUpperCase();
+  if (normalized === 'postgresql') return value.toLowerCase();
+  return value;
 }
 
 function quoteStyleForDb(dbType?: string): SqlQuoteStyle {
