@@ -599,7 +599,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         okText: '继续导出',
         cancelText: '取消',
         onOk: () => {
-          const parts = parseQualifiedTableName(input);
+          const parts = parseQualifiedTableName(input, selected?.dbType);
           if (!parts) {
             toastApi.error('请输入有效的表名，例如 public.users 或 "My Schema"."User"');
             return Promise.reject(new Error('目标表格式无效'));
@@ -1165,7 +1165,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
    */
   function followRelation(target: RelationTarget, value: unknown) {
     if (!canJumpToRelation(value)) return;
-    openSqlInNewTab(relationJumpSql(target, value), `关联 ${target.tableName}`);
+    openSqlInNewTab(relationJumpSql(target, value, selected?.dbType), `关联 ${target.tableName}`);
   }
 
   function openRelationTarget(relation: ObjectRelation, direction: 'imported' | 'exported') {
@@ -1786,7 +1786,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       if (selected.environment === 'prod' && !productionConfirmation) return;
       let targetTableParts: string[] | undefined;
       if (format === 'sql') {
-        targetTableParts = inferSqlTargetParts(target.sql);
+        targetTableParts = inferSqlTargetParts(target.sql, undefined, selected.dbType);
         if (targetTableParts?.length === 1 && activeSqlSchema) targetTableParts = [activeSqlSchema, ...targetTableParts];
         if (!targetTableParts) {
           targetTableParts = await requestSqlExportTarget();
@@ -2376,9 +2376,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     try {
       const detail = await objectDetailRequest(connectionId, object, options.refresh);
       if (requestId !== objectDetailRequestSeqRef.current || selectedIdRef.current !== connectionId) return;
-      resources.ensure({ key: documentKey, connectionId, kind: 'object', object, detail, dirty: false });
-      setActiveObjectDetail(detail);
-      setActiveObjectTarget(detail);
+      // 服务端回的是规范名（Oracle 上从 SQL 里点进来的小写名会变成大写），文档键要跟着活动对象换，
+      // 否则 objectDocumentKey 与任何文档都对不上，对象面板一个都不渲染。
+      const target: ObjectDetail = { ...detail, schemaName: detail.schemaName || object.schemaName };
+      resources.rekey(documentKey, { key: resourceDocumentKey(connectionId, 'object', target.schemaName, target.name), connectionId, kind: 'object', object: target, detail: target, dirty: false });
+      setActiveObjectDetail(target);
+      setActiveObjectTarget(target);
       updateObjectDesignDirty(false);
       setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${detail.name}` });
     } catch (e) {

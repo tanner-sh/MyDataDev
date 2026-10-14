@@ -16,7 +16,22 @@ const OMITTED_VALUE = /^<(?:BLOB|BINARY)\s/i;
 const TRUNCATED_VALUE = /<(?:CLOB\s*已截断|文本已截断)[^>]*>$/;
 const COPY_FORMAT_KEY = 'mydatadev.result-copy-format';
 
-export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null): string[] | undefined {
+/**
+ * 把未加引号的标识符折成库里实际存的形态，与后端 {@code DatabaseDialect.foldUnquotedIdentifier} 同一套规则。
+ *
+ * <p>INSERT 生成时目标表名一律加引号，而加了引号的名字在 Oracle / PostgreSQL 上是大小写敏感的：
+ * 用户写 {@code select * from sim_assetsprop}，Oracle 存的是 {@code SIM_ASSETSPROP}，原样加引号
+ * 生成的 {@code INSERT INTO "sim_assetsprop"} 执行就是 ORA-00942。加了引号的名字不折 —— 那是用户
+ * 明确写下的大小写。</p>
+ */
+export function foldUnquotedIdentifier(value: string, dbType?: string): string {
+  const normalized = dbType?.toLowerCase() || '';
+  if (['oracle', 'oceanbase-oracle', 'dm', 'dameng', 'h2'].includes(normalized)) return value.toUpperCase();
+  if (normalized === 'postgresql') return value.toLowerCase();
+  return value;
+}
+
+export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null, dbType?: string): string[] | undefined {
   if (!sql?.trim()) return validTargetParts(sourceTable?.nameParts);
   const tokens = tokenizeSql(sql).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
   const firstIdentifier = tokens.find((token) => token.kind === 'identifier');
@@ -36,10 +51,10 @@ export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlRe
     && token.kind === 'identifier'
     && ['WITH', 'JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'MINUS'].includes(token.value.toUpperCase()));
   if (topLevelComplexKeyword) return undefined;
-  return validTargetParts(references[0].parts.map((part) => part.value));
+  return validTargetParts(references[0].parts.map((part) => part.quoteStyle === 'none' ? foldUnquotedIdentifier(part.value, dbType) : part.value));
 }
 
-export function parseQualifiedTableName(input: string): string[] | undefined {
+export function parseQualifiedTableName(input: string, dbType?: string): string[] | undefined {
   const tokens = tokenizeSql(input).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
   if (tokens.length === 0 || tokens.length > 5) return undefined;
   const parts: string[] = [];
@@ -47,7 +62,7 @@ export function parseQualifiedTableName(input: string): string[] | undefined {
     const token = tokens[index];
     if (index % 2 === 0) {
       if (token.kind !== 'identifier' || !token.closed || !token.value.trim()) return undefined;
-      parts.push(token.value);
+      parts.push(token.quoteStyle === 'none' ? foldUnquotedIdentifier(token.value, dbType) : token.value);
     } else if (token.kind !== 'symbol' || token.text !== '.') {
       return undefined;
     }

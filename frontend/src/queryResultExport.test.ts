@@ -23,6 +23,15 @@ describe('query result target table', () => {
     expect(parseQualifiedTableName('[dbo].[Order]')).toEqual(['dbo', 'Order']);
     expect(parseQualifiedTableName('users where true')).toBeUndefined();
   });
+
+  it('folds unquoted target names the way the database stores them', () => {
+    expect(inferSqlTargetParts('select * from sim_assetsprop', undefined, 'oracle')).toEqual(['SIM_ASSETSPROP']);
+    expect(inferSqlTargetParts('select * from App.Users', undefined, 'postgresql')).toEqual(['app', 'users']);
+    expect(inferSqlTargetParts('select * from "Mixed"', undefined, 'oracle')).toEqual(['Mixed']);
+    expect(inferSqlTargetParts('select * from Users', undefined, 'mysql')).toEqual(['Users']);
+    expect(parseQualifiedTableName('fbip81.sim_assetsprop', 'dm')).toEqual(['FBIP81', 'SIM_ASSETSPROP']);
+    expect(parseQualifiedTableName('"My Schema".users', 'oracle')).toEqual(['My Schema', 'USERS']);
+  });
 });
 
 describe('query result serialization', () => {
