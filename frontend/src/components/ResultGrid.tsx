@@ -746,8 +746,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   }, [rows, scrollY, selectedRowKeySet, viewportRef]);
 
   const inferredTargetParts = useMemo(
-    () => inferSqlTargetParts(sourceSql, result?.sourceTable),
-    [result?.sourceTable, sourceSql]
+    () => inferSqlTargetParts(sourceSql, result?.sourceTable, dbType),
+    [dbType, result?.sourceTable, sourceSql]
   );
 
   const requireTarget = (action: (parts: string[]) => void) => {
@@ -1103,7 +1103,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
           pendingTargetActionRef.current = null;
         }}
         onOk={() => {
-          const parts = parseQualifiedTableName(targetDraft);
+          const parts = parseQualifiedTableName(targetDraft, dbType);
           if (!parts) {
             void messageApi.error('请输入有效的表名，例如 public.users 或 "My Schema"."User"');
             return;

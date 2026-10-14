@@ -14,6 +14,18 @@ describe('query result target table', () => {
     expect(inferSqlTargetParts('select * from (select * from users) q')).toBeUndefined();
   });
 
+  it('folds unquoted names the way the database stores them', () => {
+    expect(inferSqlTargetParts('select * from sim_assetsprop', undefined, 'oracle')).toEqual(['SIM_ASSETSPROP']);
+    expect(inferSqlTargetParts('select * from fba."sim_Prop"', undefined, 'dm')).toEqual(['FBA', 'sim_Prop']);
+    expect(inferSqlTargetParts('select * from App.Users', undefined, 'postgresql')).toEqual(['app', 'users']);
+    expect(inferSqlTargetParts('select * from App.Users', undefined, 'mysql')).toEqual(['App', 'Users']);
+    expect(parseQualifiedTableName('fba.sim_assetsprop', 'oracle')).toEqual(['FBA', 'SIM_ASSETSPROP']);
+    expect(serializeCopiedRows('sql', columns, [[1, 'a']], {
+      dbType: 'oracle',
+      targetTableParts: inferSqlTargetParts('select * from sim_assetsprop', undefined, 'oracle')
+    })).toBe(`INSERT INTO "SIM_ASSETSPROP" ("id", "name") VALUES (1, 'a');\n`);
+  });
+
   it('falls back to JDBC source metadata when SQL text is unavailable', () => {
     expect(inferSqlTargetParts(undefined, { nameParts: ['public', 'users'] })).toEqual(['public', 'users']);
   });
