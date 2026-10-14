@@ -42,7 +42,8 @@ spring:
         enabled: true
         protocol: STREAMABLE
         name: mydatadev-database
-        version: 0.1.0
+        # 构建时由 Maven 资源过滤替换为 pom 版本，客户端据此判断后端是哪一版。
+        version: '@project.version@'
         type: SYNC
         instructions: >-
           Provides query-only access to explicitly authorized database connections.
