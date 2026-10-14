@@ -69,6 +69,48 @@ class SqlScriptParserTest {
         assertThat(new SqlStatementClassifier().classify(units.get(0).sql())).isEqualTo(SqlStatementClassifier.Kind.UNKNOWN);
     }
 
+    @Test void keepsMySqlRoutineBodiesWholeWithoutDelimiter() {
+        String procedure = """
+                CREATE DEFINER=`root`@`%` PROCEDURE p_log(IN msg VARCHAR(200))
+                BEGIN
+                  DECLARE n INT DEFAULT 0;
+                  IF msg IS NULL THEN SET msg = 'a;b'; END IF;
+                  CASE n WHEN 0 THEN SET n = 1; ELSE SET n = 2; END CASE;
+                  lbl: WHILE n < 3 DO SET n = n + 1; END WHILE lbl;
+                  SELECT CASE WHEN n > 1 THEN 'x' END || CASE WHEN n > 2 THEN 'y' END INTO msg;
+                  INSERT INTO t_log(msg) VALUES (msg);
+                END""";
+        for (String dbType : new String[]{"mysql", "mariadb", "oceanbase-mysql"}) {
+            assertThat(splitter.split(procedure, dbType)).extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(procedure);
+            assertThat(splitter.split(procedure + ";\nSELECT 2;", dbType)).hasSize(2);
+        }
+        assertThat(splitter.split("CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW BEGIN SET NEW.a = 1; END; SELECT 1", "mysql")).hasSize(2);
+        assertThat(splitter.split("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO BEGIN DELETE FROM t WHERE id < 0; END", "mysql")).hasSize(1);
+        assertThat(splitter.split("BEGIN NOT ATOMIC SELECT 1; SELECT 2; END; SELECT 3", "mariadb")).hasSize(2);
+        assertThat(splitter.split("CREATE TRIGGER tr AFTER INSERT ON t BEGIN UPDATE t SET a = 1; END; SELECT 1", "sqlite")).hasSize(2);
+    }
+    @Test void mySqlTransactionsAndExpressionsStillSplitOnSemicolons() {
+        assertThat(splitter.split("BEGIN; UPDATE t SET a = 1; COMMIT;", "mysql")).hasSize(3);
+        assertThat(splitter.split("SELECT CASE WHEN a THEN 1 END FROM t; SELECT 2", "mysql")).hasSize(2);
+        assertThat(splitter.split("CREATE FUNCTION f() RETURNS INT RETURN 1; SELECT f()", "mysql")).hasSize(2);
+        assertThat(splitter.split("CREATE TABLE `begin` (`end` INT); SELECT 1", "mysql")).hasSize(2);
+        assertThat(splitter.split("DELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; END$$\nDELIMITER ;\nSELECT 2;", "mysql")).hasSize(2);
+    }
+    @Test void keepsOceanBaseOracleAnonymousBlockWhole() {
+        String block = """
+                DECLARE
+                  V_EXISTS NUMBER;
+                BEGIN
+                  SELECT COUNT(*) INTO V_EXISTS FROM ALL_TABLES WHERE OWNER = 'YY_FBIP_ETL' AND
+                TABLE_NAME = 'YS_VIS_CH_QUOT_BOND_SHC_VAL_01';
+                  IF V_EXISTS = 0 THEN
+                    EXECUTE IMMEDIATE 'CREATE TABLE YY_FBIP_ETL.YS_VIS_CH_QUOT_BOND_SHC_VAL_01
+                AS SELECT CAST(NULL AS VARCHAR2(32)) AS CH_RUN_ID, s.* FROM
+                YY_FBIP_DATACENTER.BOND_DR_VALUATIONS s WHERE 1 = 0';
+                  END IF;
+                END;""";
+        assertThat(splitter.split(block + "\n/\n", "oceanbase-oracle")).extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(block);
+    }
     @Test void rejectsUnterminatedStringsBeforeAnyExecution() {
         assertThatThrownBy(() -> splitter.split("select 1; select 'bad", "oracle")).hasMessageContaining("未闭合").hasMessageContaining("行");
     }

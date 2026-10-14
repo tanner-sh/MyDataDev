@@ -1,6 +1,6 @@
 # SQL 脚本与文件事务
 
-SQL 窗口、文件任务和 MCP 共用流式执行单元解析器。Oracle / OceanBase Oracle 的 PL/SQL 过程、函数、包、触发器和匿名块保持完整；独占行 `/` 只分隔、不发送给 JDBC，也不重复执行上一条语句。注释、UTF BOM、引号和过程体内分号不改变执行边界。MySQL `DELIMITER`、PostgreSQL dollar quote、SQL Server `GO` 保持支持，`GO n` 尚不支持。
+SQL 窗口、文件任务和 MCP 共用流式执行单元解析器。Oracle / OceanBase Oracle 的 PL/SQL 过程、函数、包、触发器和匿名块保持完整；独占行 `/` 只分隔、不发送给 JDBC，也不重复执行上一条语句。注释、UTF BOM、引号和过程体内分号不改变执行边界。MySQL / MariaDB / OceanBase MySQL 的 `CREATE PROCEDURE|FUNCTION|TRIGGER|EVENT`（含 `DEFINER`）与 MariaDB 的 `BEGIN NOT ATOMIC`、SQLite 的 `CREATE TRIGGER`，`BEGIN … END` 块内的分号同样不切分，单条执行与 MCP `db_execute` 不必再写 `DELIMITER`；顶层的 `BEGIN;` 仍是开事务，照常按分号切分。MySQL `DELIMITER`、PostgreSQL dollar quote、SQL Server `GO` 保持支持，`GO n` 尚不支持。
 
 ## 文件执行
 

@@ -195,8 +195,19 @@
             <build>
                 <finalName>mydatadev-web</finalName>
                 <resources>
+                    <!-- 重定义 resources 会盖掉父 POM 的配置，这里照它补回 application*.yml 的 @…@ 过滤（MCP serverInfo 版本号靠它）。 -->
                     <resource>
                         <directory>src/main/resources</directory>
+                        <filtering>true</filtering>
+                        <includes>
+                            <include>**/application*.yml</include>
+                        </includes>
+                    </resource>
+                    <resource>
+                        <directory>src/main/resources</directory>
+                        <excludes>
+                            <exclude>**/application*.yml</exclude>
+                        </excludes>
                     </resource>
                     <resource>
                         <directory>../frontend/dist</directory>
@@ -214,8 +225,19 @@
             <build>
                 <finalName>mydatadev-backend</finalName>
                 <resources>
+                    <!-- 重定义 resources 会盖掉父 POM 的配置，这里照它补回 application*.yml 的 @…@ 过滤（MCP serverInfo 版本号靠它）。 -->
                     <resource>
                         <directory>src/main/resources</directory>
+                        <filtering>true</filtering>
+                        <includes>
+                            <include>**/application*.yml</include>
+                        </includes>
+                    </resource>
+                    <resource>
+                        <directory>src/main/resources</directory>
+                        <excludes>
+                            <exclude>**/application*.yml</exclude>
+                        </excludes>
                     </resource>
                     <resource>
                         <directory>../frontend/dist</directory>
