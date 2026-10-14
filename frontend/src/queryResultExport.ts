@@ -16,7 +16,7 @@ const OMITTED_VALUE = /^<(?:BLOB|BINARY)\s/i;
 const TRUNCATED_VALUE = /<(?:CLOB\s*已截断|文本已截断)[^>]*>$/;
 const COPY_FORMAT_KEY = 'mydatadev.result-copy-format';
 
-export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null): string[] | undefined {
+export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlResultSourceTable | null, dbType?: string): string[] | undefined {
   if (!sql?.trim()) return validTargetParts(sourceTable?.nameParts);
   const tokens = tokenizeSql(sql).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
   const firstIdentifier = tokens.find((token) => token.kind === 'identifier');
@@ -36,10 +36,10 @@ export function inferSqlTargetParts(sql: string | undefined, sourceTable?: SqlRe
     && token.kind === 'identifier'
     && ['WITH', 'JOIN', 'UNION', 'INTERSECT', 'EXCEPT', 'MINUS'].includes(token.value.toUpperCase()));
   if (topLevelComplexKeyword) return undefined;
-  return validTargetParts(references[0].parts.map((part) => part.value));
+  return validTargetParts(references[0].parts.map((part) => foldUnquotedIdentifier(part.value, part.quoteStyle, dbType)));
 }
 
-export function parseQualifiedTableName(input: string): string[] | undefined {
+export function parseQualifiedTableName(input: string, dbType?: string): string[] | undefined {
   const tokens = tokenizeSql(input).filter((token) => token.kind !== 'whitespace' && token.kind !== 'comment');
   if (tokens.length === 0 || tokens.length > 5) return undefined;
   const parts: string[] = [];
@@ -47,7 +47,7 @@ export function parseQualifiedTableName(input: string): string[] | undefined {
     const token = tokens[index];
     if (index % 2 === 0) {
       if (token.kind !== 'identifier' || !token.closed || !token.value.trim()) return undefined;
-      parts.push(token.value);
+      parts.push(foldUnquotedIdentifier(token.value, token.quoteStyle, dbType));
     } else if (token.kind !== 'symbol' || token.text !== '.') {
       return undefined;
     }
@@ -267,6 +267,21 @@ function displayValue(value: unknown): string {
 
 function xmlValue(value: string): string {
   return value.split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;').split("'").join('&apos;');
+}
+
+/**
+ * 把未加引号的标识符折成库里实际存的形态，与后端 {@code DatabaseDialect.foldUnquotedIdentifier} 同一套规则。
+ *
+ * <p>生成的 INSERT 会给表名加引号，而加了引号就是按原样大小写匹配：用户写
+ * {@code select * from sim_assetsprop}，Oracle 存的是 {@code SIM_ASSETSPROP}，原样引成
+ * {@code "sim_assetsprop"} 就是 ORA-00942。加了引号的名字不折 —— 那是用户明确写下的大小写。</p>
+ */
+function foldUnquotedIdentifier(value: string, quoteStyle: SqlQuoteStyle, dbType?: string): string {
+  if (quoteStyle !== 'none') return value;
+  const normalized = dbType?.toLowerCase() || '';
+  if (['oracle', 'oceanbase-oracle', 'dm', 'dameng', 'h2'].includes(normalized)) return value.toUpperCase();
+  if (normalized === 'postgresql') return value.toLowerCase();
+  return value;
 }
 
 function quoteStyleForDb(dbType?: string): SqlQuoteStyle {

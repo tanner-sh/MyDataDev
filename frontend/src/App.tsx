@@ -599,7 +599,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         okText: '继续导出',
         cancelText: '取消',
         onOk: () => {
-          const parts = parseQualifiedTableName(input);
+          const parts = parseQualifiedTableName(input, selected?.dbType);
           if (!parts) {
             toastApi.error('请输入有效的表名，例如 public.users 或 "My Schema"."User"');
             return Promise.reject(new Error('目标表格式无效'));
@@ -1786,7 +1786,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       if (selected.environment === 'prod' && !productionConfirmation) return;
       let targetTableParts: string[] | undefined;
       if (format === 'sql') {
-        targetTableParts = inferSqlTargetParts(target.sql);
+        targetTableParts = inferSqlTargetParts(target.sql, undefined, selected.dbType);
         if (targetTableParts?.length === 1 && activeSqlSchema) targetTableParts = [activeSqlSchema, ...targetTableParts];
         if (!targetTableParts) {
           targetTableParts = await requestSqlExportTarget();
