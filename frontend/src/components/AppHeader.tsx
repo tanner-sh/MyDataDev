@@ -1,4 +1,4 @@
-import { Badge, Button, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Badge, Button, Dropdown, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import {
   CloudServerOutlined,
   DatabaseOutlined,
@@ -15,7 +15,7 @@ import {
 } from '@ant-design/icons';
 import type { Connection } from '../types';
 import { dbTypeLabel, environmentLabel } from '../utils';
-import { backgroundTaskLabel, type BackgroundTaskSummary } from '../backgroundTasks';
+import { backgroundTaskDestinations, backgroundTaskLabel, type BackgroundTaskKind, type BackgroundTaskSummary } from '../backgroundTasks';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { memo, useMemo } from 'react';
 import { authenticatedDisplayName, authenticatedUsername, isAuthenticationEnabled, logout } from '../auth';
@@ -35,8 +35,8 @@ type AppHeaderProps = {
   onRefreshConnections: () => void;
   /** 打开管理抽屉（默认落在连接管理）。 */
   onOpenManagement: () => void;
-  /** 后台任务徽标：直接落到备份分区。 */
-  onOpenBackups: () => void;
+  /** 根据运行中的任务类型打开对应页面。 */
+  onOpenBackgroundTasks: (kind: BackgroundTaskKind) => void;
   onToggleTheme: () => void;
 };
 
@@ -52,7 +52,7 @@ export const AppHeader = memo(function AppHeader({
   onSelectConnection,
   onRefreshConnections,
   onOpenManagement,
-  onOpenBackups,
+  onOpenBackgroundTasks,
   onToggleTheme
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
@@ -67,6 +67,8 @@ export const AppHeader = memo(function AppHeader({
       })
       .map(({ connection }) => ({ value: connection.id, label: connection.name, connection }));
   }, [connections, favoriteConnectionIds, selected?.id]);
+
+  const taskDestinations = backgroundTaskDestinations(backgroundTasks);
 
   return (
     <header className="app-header">
@@ -128,17 +130,28 @@ export const AppHeader = memo(function AppHeader({
       <Space size={4} className="app-header-actions">
         {backgroundTasks.total > 0 && (
           <Tooltip title={`${backgroundTaskLabel(backgroundTasks)}，点击查看`}>
-            <Badge count={backgroundTasks.total} size="small" offset={[-4, 4]}>
-              <Button
-                type="text"
-                className="header-background-tasks"
-                icon={<SyncOutlined spin />}
-                aria-label={backgroundTaskLabel(backgroundTasks)}
-                onClick={onOpenBackups}
-              >
-                后台任务
-              </Button>
-            </Badge>
+            <Dropdown
+              disabled={taskDestinations.length < 2}
+              trigger={['click']}
+              menu={{ items: taskDestinations, onClick: ({ key }) => {
+                const destination = taskDestinations.find(item => item.key === key);
+                if (destination) onOpenBackgroundTasks(destination.key);
+              } }}
+            >
+              <Badge count={backgroundTasks.total} size="small" offset={[-4, 4]}>
+                <Button
+                  type="text"
+                  className="header-background-tasks"
+                  icon={<SyncOutlined spin />}
+                  aria-label={backgroundTaskLabel(backgroundTasks)}
+                  onClick={() => {
+                    if (taskDestinations.length === 1) onOpenBackgroundTasks(taskDestinations[0].key);
+                  }}
+                >
+                  后台任务
+                </Button>
+              </Badge>
+            </Dropdown>
           </Tooltip>
         )}
         <Tooltip title="刷新连接">

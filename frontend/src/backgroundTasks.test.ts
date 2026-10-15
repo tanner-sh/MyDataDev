@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   backgroundTaskCompletionMessage,
+  backgroundTaskDestinations,
   backgroundTaskLabel,
   EMPTY_BACKGROUND_TASK_SUMMARY,
   sameBackgroundTaskSummary,
@@ -51,5 +52,28 @@ describe('backgroundTaskCompletionMessage', () => {
   it('stays quiet when nothing finished', () => {
     expect(backgroundTaskCompletionMessage(summary(0, 0, 0), summary(1, 0, 0))).toBeUndefined();
     expect(backgroundTaskCompletionMessage(summary(1, 0, 0), summary(1, 0, 0))).toBeUndefined();
+  });
+});
+
+describe('backgroundTaskDestinations', () => {
+  it.each(['backups', 'restores', 'sqlFiles', 'exports'] as const)('offers the actual task kind for %s', kind => {
+    const destinations = backgroundTaskDestinations({ ...EMPTY_BACKGROUND_TASK_SUMMARY, [kind]: 1, total: 1 });
+    expect(destinations).toHaveLength(1);
+    expect(destinations[0].key).toBe(kind);
+  });
+
+  it('keeps all running kinds accessible when exports and other jobs coexist', () => {
+    expect(backgroundTaskDestinations({ backups: 2, restores: 1, sqlFiles: 3, exports: 1, total: 7 })).toEqual([
+      { key: 'backups', label: '2 个备份任务' },
+      { key: 'restores', label: '1 个恢复任务' },
+      { key: 'exports', label: '1 个导出任务' },
+      { key: 'sqlFiles', label: '3 个 SQL 文件任务' }
+    ]);
+  });
+
+  it('omits completed jobs and tolerates older summaries without exports', () => {
+    expect(backgroundTaskDestinations(EMPTY_BACKGROUND_TASK_SUMMARY)).toEqual([]);
+    expect(backgroundTaskDestinations({ backups: 0, restores: 0, sqlFiles: 1, total: 1 }))
+      .toEqual([{ key: 'sqlFiles', label: '1 个 SQL 文件任务' }]);
   });
 });
