@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildMcpClientGuides,
+  antigravityMcpConfig,
   claudeCodeJsonConfig,
   claudeDesktopConfig,
   codexStaticHeaderTomlConfig,
@@ -34,6 +35,22 @@ describe('MCP client configuration generators', () => {
     expect(JSON.parse(genericMcpConfig(ENDPOINT, CREDENTIAL))).toMatchObject({
       mcpServers: { mydatadev: { type: 'streamable-http', url: ENDPOINT } }
     });
+  });
+
+  it.each([undefined, CREDENTIAL])('generates only Antigravity-supported remote fields with credential %s', credential => {
+    const endpoint = 'https://example.internal/mcp?name="analytics"';
+    const expected = {
+      mcpServers: {
+        mydatadev: {
+          serverUrl: endpoint,
+          headers: { Authorization: `Bearer ${credential || '<AGENT_API_KEY>'}` }
+        }
+      }
+    };
+    expect(JSON.parse(antigravityMcpConfig(endpoint, credential))).toEqual(expected);
+    const guide = buildMcpClientGuides(endpoint, credential).find(item => item.id === 'antigravity');
+    expect(guide?.label).toBe('Antigravity IDE');
+    expect(JSON.parse(guide!.snippets[0].content)).toEqual(expected);
   });
 
   it('uses an stdio bridge for Claude Desktop and permits trusted private HTTP endpoints', () => {
