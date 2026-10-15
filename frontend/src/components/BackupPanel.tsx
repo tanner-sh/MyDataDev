@@ -69,6 +69,8 @@ const TARGET_PAGE_SIZE = 30;
 const HISTORY_PAGE_SIZE = 20;
 
 export type BackupPanelProps = {
+  activeTab: string;
+  onTabChange: (tab: string) => void;
   connections: Connection[];
   backups: BackupTask[];
   taskPage: number;
@@ -111,7 +113,7 @@ type BackupTaskEditorValues = BackupScheduleFields & {
 };
 
 export function BackupPanel(props: BackupPanelProps) {
-  const [activeTab, setActiveTab] = useState('tasks');
+  const { activeTab, onTabChange: setActiveTab } = props;
   const [restoreHistory, setRestoreHistory] = useState<BackupHistory | null>(null);
   const [nativeTools, setNativeTools] = useState<NativeToolStatus[]>([]);
   const [nativeToolsLoading, setNativeToolsLoading] = useState(false);

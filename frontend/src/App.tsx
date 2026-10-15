@@ -1,3 +1,4 @@
+import type { BackgroundTaskKind } from './backgroundTasks';
 import { resolveLiveCapabilities, type CapabilityReport, type ConnectionCapabilityReport } from './databaseCapabilities';
 import { useSqlParameters } from './components/useSqlParameters';
 import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValues } from './sqlParameters';
@@ -234,6 +235,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   // 管理类面板全部收进一个带左侧导航的抽屉。之前是 6 个头部入口通向 5 个互斥的抽屉，
   // 从「备份」跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
   const [archivePanelOpen, setArchivePanelOpen] = useState(false);
+  const [backupActiveTab, setBackupActiveTab] = useState('tasks');
   const [activeDrawer, setActiveDrawer] = useState<ManagementSection | null>(null);
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
@@ -2703,6 +2705,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
     const requestId = ++backupEditorRequestSeqRef.current;
     setBackupEditorRequest({ requestId, target });
+    setBackupActiveTab('tasks');
     setActiveDrawer('backups');
   }
 
@@ -2876,10 +2879,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
-  // 后台任务徽标点开直接落到备份分区，而不是让用户再从导航里找一次。
-  const openBackupsFromHeader = useStableEvent(() => openManagement('backups'));
-  const openManagement = useStableEvent((section: ManagementSection) =>
-    setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions)));
+  const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
+    if (kind === 'sqlFiles') {
+      setActiveDrawer(null);
+      openSqlFileTasks(selected?.id);
+    } else if (kind === 'exports') {
+      openManagement('scheduled-exports');
+    } else {
+      openManagement('backups');
+      setBackupActiveTab(kind === 'restores' ? 'restore' : 'history');
+    }
+  });
+  const openManagement = useStableEvent((section: ManagementSection) => {
+    if (section === 'backups') setBackupActiveTab('tasks');
+    setActiveDrawer(resolveManagementSection(section, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions));
+  });
   const openSchemaDiffScript = useStableEvent((sql: string, title: string, target?: { connectionId: number; schemaName?: string }) => {
     const connection = target ? connections.find(item => item.id === target.connectionId) : selected;
     if (!connection) { showInfo('目标连接不可用，请重新对比。'); return; }
@@ -3361,7 +3375,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           onSelectConnection={selectConnectionFromHeader}
           onRefreshConnections={refreshConnectionsFromHeader}
           onOpenManagement={openManagementFromHeader}
-          onOpenBackups={() => backgroundTasks.exports ? setActiveDrawer('scheduled-exports') : openBackupsFromHeader()}
+          onOpenBackgroundTasks={openBackgroundTasksFromHeader}
           onToggleTheme={toggleThemeFromHeader}
         />
 
@@ -3567,7 +3581,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                         className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
                         aria-current={activeDrawer === section.key ? 'page' : undefined}
                         disabled={!available}
-                        onClick={() => setActiveDrawer(section.key)}
+                        onClick={() => openManagement(section.key)}
                       >
                         {section.label}
                       </button>
@@ -3621,6 +3635,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 <header className="management-section-header"><Text strong>备份与恢复</Text></header>
                 <Suspense fallback={<PanelLoading text="正在加载备份管理…" />}>
                   <BackupPanel
+                    activeTab={backupActiveTab}
+                    onTabChange={setBackupActiveTab}
                     connections={connections}
                     backups={backups}
                     taskPage={backupTaskPage}

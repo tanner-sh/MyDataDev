@@ -24,7 +24,7 @@ MCP 可以在没有 Agent 时保持开启，但此时没有任何有效 API Key�
 MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接入帮助会使用当前部署的实际 MCP URL，提供：
 
 - 当前服务状态、可用 Agent 数量和五步接入流程。
-- Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI 和通用 Streamable HTTP 配置，并明确区分全局与项目级范围。
+- Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI、Antigravity IDE 和通用 Streamable HTTP 配置，并明确区分全局与项目级范围。
 - macOS zsh、Linux bash 与 Windows PowerShell 的密钥环境变量示例。
 - 安全边界、可用工具清单和 401、503、网络、授权等常见问题处理。
 
@@ -133,6 +133,7 @@ app:
 | Claude Desktop | `claude_desktop_config.json` | 不支持按代码项目自动切换 | 私网静态 Bearer 使用 `mcp-remote` 桥接，配置对整个应用可见 |
 | Cursor | `~/.cursor/mcp.json` | `<项目根目录>/.cursor/mcp.json` | 桌面进程必须能够读取配置中引用的环境变量 |
 | Gemini CLI | `~/.gemini/settings.json` 或 `--scope user` | `<项目根目录>/.gemini/settings.json` | 项目配置中不要提交真实 Key |
+| Antigravity IDE | 在 MCP Servers → Manage MCP Servers → View raw config 打开实际配置（当前文档为 `~/.gemini/config/mcp_config.json`） | 支持工作区配置的版本使用 `.agents/mcp_config.json` | 使用专用 `serverUrl`、`headers` 模板，不包含 `httpUrl`、`trust` 或 `type` |
 
 ### Codex 静态 http_headers
 
@@ -195,3 +196,20 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 调整结果上限时应同时评估目标数据库负载、后端堆内存和 agent 上下文大小。
 
 脚本模式、结束策略、失败和取消语义见 [SQL 脚本与文件事务](sql-script-transactions.md)。
+
+### Antigravity IDE 配置格式
+
+在客户端配置页选择 **Antigravity IDE**，将生成的 `mydatadev` 条目合并到实际配置的 `mcpServers` 中：
+
+```json
+{
+  "mcpServers": {
+    "mydatadev": {
+      "serverUrl": "https://your-mydatadev-host/mcp",
+      "headers": { "Authorization": "Bearer <AGENT_API_KEY>" }
+    }
+  }
+}
+```
+
+替换服务地址和 Agent API Key 后保存并重新加载 MCP Servers。Gemini CLI 的 `httpUrl`、`trust` 不适用于 Antigravity；两者应分别使用各自模板。配置路径可能随客户端版本变化，以 IDE 的 **View raw config** 打开的文件为准。参见 [Antigravity 官方 MCP 文档](https://antigravity.google/docs/mcp)。

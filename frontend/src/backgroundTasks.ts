@@ -48,6 +48,15 @@ const KIND_PHRASES = [
   { key: 'sqlFiles', phrase: (count: number) => `${count} 个 SQL 文件任务` }
 ] as const;
 
+export type BackgroundTaskKind = typeof KIND_PHRASES[number]['key'];
+
+/** Only offer destinations that currently have running jobs. */
+export function backgroundTaskDestinations(summary: BackgroundTaskSummary) {
+  return KIND_PHRASES
+    .filter(kind => (summary[kind.key] || 0) > 0)
+    .map(kind => ({ key: kind.key, label: kind.phrase(summary[kind.key] || 0) }));
+}
+
 /** Tooltip text for the header indicator, e.g. "2 个备份任务、1 个 SQL 文件任务进行中". */
 export function backgroundTaskLabel(summary: BackgroundTaskSummary) {
   const parts = KIND_PHRASES

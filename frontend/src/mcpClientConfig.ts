@@ -2,7 +2,7 @@ export const MCP_SERVER_NAME = 'mydatadev';
 export const MCP_TOKEN_ENV_VAR = 'MYDATADEV_MCP_TOKEN';
 export const MCP_CREDENTIAL_PLACEHOLDER = '<AGENT_API_KEY>';
 
-export type McpClientId = 'codex' | 'claude-code' | 'claude-desktop' | 'cursor' | 'gemini' | 'generic';
+export type McpClientId = 'codex' | 'claude-code' | 'claude-desktop' | 'cursor' | 'gemini' | 'antigravity' | 'generic';
 
 export type McpConfigSnippet = {
   id: string;
@@ -131,6 +131,18 @@ export function geminiMcpConfig(endpoint: string, credential?: string) {
         httpUrl: endpoint,
         headers: { Authorization: `Bearer ${credentialOrPlaceholder(credential)}` },
         trust: false
+      }
+    }
+  });
+}
+
+/** Antigravity remote configuration: https://antigravity.google/docs/mcp */
+export function antigravityMcpConfig(endpoint: string, credential?: string) {
+  return json({
+    mcpServers: {
+      [MCP_SERVER_NAME]: {
+        serverUrl: endpoint,
+        headers: { Authorization: `Bearer ${credentialOrPlaceholder(credential)}` }
       }
     }
   });
@@ -331,6 +343,37 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
         { id: 'gemini-json', title: '全局 / 项目级：settings.json 内容', language: 'json', content: geminiMcpConfig(endpoint, credential) }
       ],
       verify: ['运行 gemini mcp list 检查连接。', '进入 Gemini CLI 后运行 /mcp list，确认工具已经发现。']
+    },
+    {
+      id: 'antigravity',
+      label: 'Antigravity IDE',
+      summary: 'Antigravity 使用 serverUrl 连接远程 MCP；请复制本页专用配置。',
+      scopes: [
+        {
+          id: 'global',
+          availability: 'supported',
+          location: 'MCP Servers > Manage MCP Servers > View raw config',
+          description: '在 IDE 中打开实际使用的 mcp_config.json；当前文档的全局路径为 ~/.gemini/config/mcp_config.json，其他版本请以 IDE 打开的文件为准。',
+          recommended: true
+        },
+        {
+          id: 'project',
+          availability: 'client-dependent',
+          location: '<项目根目录>/.agents/mcp_config.json',
+          description: '当前文档支持工作区配置；请确认所用版本支持此路径。包含真实 Key 的文件不要提交到 Git。'
+        }
+      ],
+      notes: [
+        '将 mydatadev 条目合并到现有 mcpServers 中，保留其他服务配置。',
+        'Antigravity 使用 serverUrl 和 headers，不使用 Gemini CLI 的 httpUrl、trust，也不需要 type 字段。',
+        credential
+          ? '当前配置已包含刚生成的 Agent API Key，请保存到个人配置。'
+          : '将 <AGENT_API_KEY> 替换为 MyDataDev 创建 Agent 时生成的 API Key。'
+      ],
+      snippets: [
+        { id: 'antigravity-json', title: 'Antigravity：mcp_config.json 内容', language: 'json', content: antigravityMcpConfig(endpoint, credential) }
+      ],
+      verify: ['保存配置后，在 MCP Servers 中重新加载，确认 mydatadev 已连接。', '让 Agent 使用 mydatadev 列出可用数据库连接。']
     },
     {
       id: 'generic',
