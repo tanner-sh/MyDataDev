@@ -539,6 +539,7 @@ export function McpSettingsPanel() {
 
 function LimitsForm() {
   const fields: Array<{ name: keyof McpLimits; label: string; max: number }> = [
+    { name: 'maxScriptsPerConnection', label: '同连接脚本并发上限', max: 16 },
     { name: 'defaultQueryRows', label: '查询默认行数', max: 5_000 },
     { name: 'maxQueryRows', label: '查询最大行数', max: 5_000 },
     { name: 'maxResultCells', label: '结果单元格上限', max: 200_000 },
@@ -555,7 +556,7 @@ function LimitsForm() {
   return (
     <div className="mcp-limit-grid">
       {fields.map((field) => (
-        <Form.Item key={field.name} name={field.name} label={field.label} rules={[{ required: true }]}>
+        <Form.Item key={field.name} name={field.name} label={field.label} extra={field.name === 'maxScriptsPerConnection' ? '默认 1，保存立即生效；所有 Agent 与 SQL 文件任务共享。计入排队任务，实际同时运行数还受全局工作线程数限制（默认 2）。调低不会中断已有任务。' : undefined} rules={[{ required: true }]}>
           <InputNumber min={1} max={field.max} precision={0} style={{ width: '100%' }} />
         </Form.Item>
       ))}

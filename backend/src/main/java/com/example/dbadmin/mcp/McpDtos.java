@@ -13,6 +13,8 @@ public final class McpDtos {
     private McpDtos() {
     }
 
+    public record ScriptJobPage(List<ScriptJobResult> items, int page, int pageSize, boolean hasMore) { }
+
     public record ScriptJobResult(long taskId, long connectionId, String status, String phase,
                                   @Schema(nullable = true) Long statementTotal, long executedCount,
                                   @Schema(nullable = true) Long failedStatementIndex,

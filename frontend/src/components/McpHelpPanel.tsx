@@ -22,7 +22,11 @@ const tools = [
   { name: 'db_browse_table', capability: '使用游标分页浏览表数据', level: '只读' },
   { name: 'db_query', capability: '执行一条查询语句', level: '只读' },
   { name: 'db_explain', capability: '查看查询执行计划', level: '只读' },
-  { name: 'db_execute', capability: '执行一条写语句（INSERT/UPDATE/DELETE，FULL 档位还可 DDL）', level: '数据读写' }
+  { name: 'db_execute', capability: '执行一条写语句（INSERT/UPDATE/DELETE，FULL 档位还可 DDL）', level: '数据读写' },
+  { name: 'db_execute_script', capability: '后台运行长脚本或存储过程，返回任务 ID', level: '数据读写' },
+  { name: 'db_list_script_tasks', capability: '中断后找回当前 Agent 的任务，避免重复执行', level: '只读' },
+  { name: 'db_script_status', capability: '查看当前 Agent 的脚本任务状态', level: '只读' },
+  { name: 'db_cancel_script', capability: '请求取消脚本；已提交的修改保留', level: '数据读写' }
 ];
 
 export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }: McpHelpPanelProps) {
@@ -114,7 +118,8 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
             <Title level={5}>SQL 防护</Title>
             <ul className="mcp-help-list">
               <li>db_query 只接受分类为查询的一条 SQL，拒绝 DML、DDL、调用、锁、会话修改、多语句和已知副作用查询；执行时设置 JDBC 只读提示、关闭自动提交并在结束时回滚。</li>
-              <li>写操作必须走 db_execute，两条路径不共用。同样只接受一条语句。</li>
+              <li>单条写操作使用 db_execute；长脚本或存储过程使用 db_execute_script，并通过任务 ID 查询进度。</li>
+              <li>Agent 中断后先用 db_list_script_tasks 找回任务。停止 Agent 不等于取消已提交的后台任务，需要时调用 db_cancel_script；超时不代表修改已回滚。</li>
               <li>无论档位多高：只读连接拒绝一切写入；生产连接上的每条写语句都要求回传连接名；不含 WHERE 的 UPDATE/DELETE 需要单独确认。</li>
               <li>每次调用都写审计，写语句还会额外落 SQL 历史。</li>
               <li>数据库返回内容属于不可信输入，AI Agent 不应把数据当作指令执行。</li>

@@ -296,7 +296,7 @@ public class McpDatabaseTools {
             name = "db_execute",
             title = "Execute one writing SQL statement",
             description = """
-                    Executes exactly one writing SQL statement (INSERT/UPDATE/DELETE, or DDL at FULL access level)                     on a connection where this agent has been granted DATA_WRITE or FULL. Read-only queries are                     rejected here; use db_query instead. Statements on a production connection additionally require                     productionConfirmation to equal the exact connection name, and an UPDATE or DELETE without a                     top-level WHERE clause requires unscopedMutationConfirmed=true. Every call is audited.""",
+                    Executes exactly one writing SQL statement (INSERT/UPDATE/DELETE, or DDL at FULL access level)                     on a connection where this agent has been granted DATA_WRITE or FULL. Read-only queries are                     rejected here; use db_query instead. Statements on a production connection additionally require                     productionConfirmation to equal the exact connection name, and an UPDATE or DELETE without a                     top-level WHERE clause requires unscopedMutationConfirmed=true. Long-running procedures or anonymous blocks should use db_execute_script and poll db_script_status. A timeout does not prove rollback; check existing tasks before retrying writes. Every call is audited.""",
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = true, idempotentHint = false, openWorldHint = true)
     )

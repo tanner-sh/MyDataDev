@@ -55,6 +55,6 @@ class McpApiKeyRegistryTest {
 
     private McpRuntimeConfig.Settings settings() {
         return new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
-                20_000, 100_000, 30, 100, 500, 100, 500, 30);
+                20_000, 100_000, 30, 100, 500, 100, 500, 30, 1);
     }
 }

@@ -41,6 +41,19 @@ public class BackgroundTaskControl {
         }
     }
 
+    /** Scripts share a live limit across agents; other heavy task types retain their own gate. */
+    public boolean tryAcquireScript(long connectionId, String operationKey, int limit) {
+        synchronized (connectionOwners) {
+            Set<String> owners = connectionOwners.computeIfAbsent(connectionId, ignored -> new HashSet<>());
+            if (owners.contains(operationKey)) return true;
+            // Raising script concurrency must not also admit scripts alongside a backup or restore.
+            if (owners.stream().anyMatch(key -> !key.startsWith("sql-file:"))) return false;
+            if (owners.size() >= Math.max(1, limit)) return false;
+            owners.add(operationKey);
+            return true;
+        }
+    }
+
     /**
      * Releases the connection permit only.
      *

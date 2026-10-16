@@ -62,19 +62,22 @@ class McpWebConfigurationIntegrationTest {
                                     "maxMetadataPageSize":200,
                                     "tablePageSize":50,
                                     "maxTablePageSize":100,
-                                    "sessionTtlMinutes":120
+                                    "sessionTtlMinutes":120,
+                                    "maxScriptsPerConnection":2
                                   }
                                 }
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.allowedOrigins[0]").value("https://agent.example"))
-                .andExpect(jsonPath("$.limits.maxQueryRows").value(400));
+                .andExpect(jsonPath("$.limits.maxQueryRows").value(400))
+                .andExpect(jsonPath("$.limits.maxScriptsPerConnection").value(2));
 
         mvc.perform(put("/api/mcp/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"enabled\":false}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.enabled").value(false));
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.limits.maxScriptsPerConnection").value(2));
 
         mvc.perform(put("/api/mcp/status")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -180,7 +183,8 @@ class McpWebConfigurationIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"enabled\":false}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.enabled").value(false));
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.limits.maxScriptsPerConnection").value(2));
 
         initialize(secondCredential).andExpect(status().isServiceUnavailable());
     }

@@ -81,6 +81,25 @@ class ConnectionServiceNamespaceTest {
     }
 
     @Test
+    void discardingOneSessionDoesNotInterruptAnotherBorrowerOrCloseThePool() throws Exception {
+        try (Connection other = service.open(CONNECTION_ID)) {
+            Connection changed = service.open(CONNECTION_ID, "REPORTING");
+            java.sql.Connection physical = changed.unwrap(org.h2.jdbc.JdbcConnection.class);
+            service.discardOnClose(changed);
+            changed.close();
+            assertThat(changed.isClosed()).isTrue();
+            assertThat(dataSources.size()).isEqualTo(1);
+            try (var rows = other.createStatement().executeQuery("SELECT 1")) {
+                assertThat(rows.next()).isTrue();
+            }
+            try (Connection fresh = service.open(CONNECTION_ID)) {
+                assertThat(fresh.getSchema()).isEqualTo("PUBLIC");
+                assertThat(fresh.unwrap(org.h2.jdbc.JdbcConnection.class)).isNotSameAs(physical);
+            }
+        }
+    }
+
+    @Test
     void restoresTheSchemaBeforeReturningTheConnectionToThePool() throws Exception {
         try (Connection scoped = service.open(CONNECTION_ID, "REPORTING")) {
             assertThat(scoped.getSchema()).isEqualTo("REPORTING");
@@ -151,7 +170,7 @@ class ConnectionServiceNamespaceTest {
         when(driver.getSchema()).thenThrow(new AbstractMethodError("Unimplemented method: getSchema()"));
         doThrow(new AbstractMethodError("Unimplemented method: getSchema()")).when(driver).setSchema(anyString());
         RemoteDataSourceRegistry registry = mock(RemoteDataSourceRegistry.class);
-        when(registry.open(any(), any(), any())).thenReturn(driver);
+        when(registry.open(any(), any(), any())).thenReturn(BorrowedConnection.wrap(driver, mock(com.zaxxer.hikari.HikariDataSource.class)));
         ConnectionService overDriver = serviceOver(registry);
 
         assertThatThrownBy(() -> overDriver.open(CONNECTION_ID, "REPORTING"))

@@ -172,7 +172,7 @@ const ERROR_CODE_MESSAGES: Record<string, string> = {
   SQL_FILE_QUEUE_FULL: 'SQL 文件执行队列已满，请稍后重试。',
   SQL_FILE_NOT_READY: 'SQL 文件尚未完成解析或状态已变化，请重新选择文件。',
   SQL_FILE_EXPIRED: 'SQL 文件已过期，请重新选择文件。',
-  SQL_FILE_ALREADY_RUNNING: '该连接已有 SQL 文件任务正在执行。'
+  SQL_FILE_ALREADY_RUNNING: '该连接的脚本任务已达到并发上限，请等待完成后重试。'
 };
 
 /**

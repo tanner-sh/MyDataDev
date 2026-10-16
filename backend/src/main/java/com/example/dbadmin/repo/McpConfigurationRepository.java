@@ -39,7 +39,7 @@ public class McpConfigurationRepository {
                 rs.getInt("max_metadata_page_size"),
                 rs.getInt("table_page_size"),
                 rs.getInt("max_table_page_size"),
-                rs.getInt("session_ttl_minutes")
+                rs.getInt("session_ttl_minutes"), rs.getInt("max_scripts_per_connection")
         ));
         return rows.stream().findFirst();
     }
@@ -50,13 +50,13 @@ public class McpConfigurationRepository {
                     id, enabled, default_query_rows, max_query_rows, max_result_cells,
                     max_result_text_chars, max_cell_text_chars, max_sql_chars, query_timeout_seconds,
                     metadata_page_size, max_metadata_page_size, table_page_size,
-                    max_table_page_size, session_ttl_minutes
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    max_table_page_size, session_ttl_minutes, max_scripts_per_connection
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 settings.enabled(), settings.defaultQueryRows(), settings.maxQueryRows(), settings.maxResultCells(),
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(), settings.queryTimeoutSeconds(),
                 settings.metadataPageSize(), settings.maxMetadataPageSize(), settings.tablePageSize(),
-                settings.maxTablePageSize(), settings.sessionTtlMinutes());
+                settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection());
     }
 
     public void updateSettings(Settings settings) {
@@ -65,14 +65,14 @@ public class McpConfigurationRepository {
                     enabled = ?, default_query_rows = ?, max_query_rows = ?, max_result_cells = ?,
                     max_result_text_chars = ?, max_cell_text_chars = ?, max_sql_chars = ?,
                     query_timeout_seconds = ?, metadata_page_size = ?, max_metadata_page_size = ?,
-                    table_page_size = ?, max_table_page_size = ?, session_ttl_minutes = ?,
+                    table_page_size = ?, max_table_page_size = ?, session_ttl_minutes = ?, max_scripts_per_connection = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
                 """,
                 settings.enabled(), settings.defaultQueryRows(), settings.maxQueryRows(), settings.maxResultCells(),
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(), settings.queryTimeoutSeconds(),
                 settings.metadataPageSize(), settings.maxMetadataPageSize(), settings.tablePageSize(),
-                settings.maxTablePageSize(), settings.sessionTtlMinutes());
+                settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection());
     }
 
     public void replaceOrigins(Set<String> origins) {

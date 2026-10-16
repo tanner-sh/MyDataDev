@@ -45,6 +45,13 @@ public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        // A servlet redispatch completes the same authenticated request. Revalidating its
+        // expired session after SSE headers were sent caused sendError() on a committed response.
+        if (isAsyncDispatch(request) && request.getAttribute(AUTHENTICATED_REQUEST) instanceof McpAgentPrincipal original) {
+            authenticate(original);
+            chain.doFilter(request, response);
+            return;
+        }
         McpRuntimeConfig config = configuration.snapshot();
         if (!config.settings().enabled()) {
             metrics.counter("dbadmin.mcp.security.denied", "reason", "disabled").increment();
@@ -75,12 +82,8 @@ public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        var authentication = UsernamePasswordAuthenticationToken.authenticated(
-                principal,
-                null,
-                List.of(new SimpleGrantedAuthority("ROLE_MCP_AGENT"))
-        );
-        SecurityContextHolder.getContext().setAuthentication(authentication);
+        request.setAttribute(AUTHENTICATED_REQUEST, principal);
+        authenticate(principal);
         chain.doFilter(request, response);
 
         String responseSessionId = trimToNull(response.getHeader(SESSION_HEADER));
@@ -90,6 +93,13 @@ public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
         if ("DELETE".equalsIgnoreCase(request.getMethod()) && requestSessionId != null && response.getStatus() < 400) {
             sessions.remove(requestSessionId, principal.id());
         }
+    }
+
+    private static final String AUTHENTICATED_REQUEST = McpApiKeyAuthenticationFilter.class.getName() + ".principal";
+
+    private void authenticate(McpAgentPrincipal principal) {
+        SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(
+                principal, null, List.of(new SimpleGrantedAuthority("ROLE_MCP_AGENT"))));
     }
 
     private String bearerCredential(String authorization) {
