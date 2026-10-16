@@ -19,6 +19,20 @@ import java.util.concurrent.TimeUnit;
 public class SqlFileExecutionCoordinator {
     private final Map<Long, BackgroundJobHandle> handles = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
+    private final ThreadPoolExecutor cancellations = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS,
+            new ArrayBlockingQueue<>(128), task -> {
+                Thread thread = new Thread(task, "dbadmin-script-cancel"); thread.setDaemon(true); return thread;
+            }, new ThreadPoolExecutor.AbortPolicy());
+
+    public void cancelStatement(java.sql.Statement statement) {
+        cancellations.execute(() -> {
+            try { statement.cancel(); }
+            catch (Exception error) {
+                org.slf4j.LoggerFactory.getLogger(SqlFileExecutionCoordinator.class).warn("后台脚本取消请求失败", error);
+            }
+        });
+    }
+
 
     @Autowired
     public SqlFileExecutionCoordinator(AppProperties properties, ObjectProvider<MeterRegistry> meterRegistry) {
@@ -88,5 +102,5 @@ public class SqlFileExecutionCoordinator {
     }
 
     @PreDestroy
-    public void close() { executor.shutdownNow(); }
+    public void close() { executor.shutdownNow(); cancellations.shutdownNow(); }
 }

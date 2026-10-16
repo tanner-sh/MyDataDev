@@ -135,7 +135,8 @@ public class McpConfigurationService {
                 limits.defaultQueryRows(), limits.maxQueryRows(), limits.maxResultCells(),
                 limits.maxResultTextChars(), limits.maxCellTextChars(), limits.maxSqlChars(),
                 limits.queryTimeoutSeconds(), limits.metadataPageSize(), limits.maxMetadataPageSize(),
-                limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes()
+                limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes(),
+                limits.maxScriptsPerConnection() == null ? old.maxScriptsPerConnection() : limits.maxScriptsPerConnection()
         );
         validateSettings(updated);
         Set<String> origins = normalizeOrigins(request.allowedOrigins());
@@ -153,7 +154,7 @@ public class McpConfigurationService {
         Settings updated = new Settings(
                 enabled, old.defaultQueryRows(), old.maxQueryRows(), old.maxResultCells(), old.maxResultTextChars(),
                 old.maxCellTextChars(), old.maxSqlChars(), old.queryTimeoutSeconds(), old.metadataPageSize(),
-                old.maxMetadataPageSize(), old.tablePageSize(), old.maxTablePageSize(), old.sessionTtlMinutes()
+                old.maxMetadataPageSize(), old.tablePageSize(), old.maxTablePageSize(), old.sessionTtlMinutes(), old.maxScriptsPerConnection()
         );
         transactions.executeWithoutResult(ignored -> repository.updateSettings(updated));
         reload();
@@ -294,6 +295,7 @@ public class McpConfigurationService {
     }
 
     private void validateSettings(Settings settings) {
+        between(settings.maxScriptsPerConnection(), 1, 16, "同连接脚本并发上限");
         positive(settings.defaultQueryRows(), "查询默认行数");
         between(settings.maxQueryRows(), 1, MAX_QUERY_ROWS, "查询最大行数");
         if (settings.defaultQueryRows() > settings.maxQueryRows()) throw new IllegalArgumentException("查询默认行数不能大于最大行数");
@@ -325,7 +327,7 @@ public class McpConfigurationService {
                 source.isEnabled(), source.getDefaultQueryRows(), source.getMaxQueryRows(), source.getMaxResultCells(),
                 source.getMaxResultTextChars(), source.getMaxCellTextChars(), source.getMaxSqlChars(),
                 source.getQueryTimeoutSeconds(), source.getMetadataPageSize(), source.getMaxMetadataPageSize(),
-                source.getTablePageSize(), source.getMaxTablePageSize(), source.getSessionTtlMinutes()
+                source.getTablePageSize(), source.getMaxTablePageSize(), source.getSessionTtlMinutes(), 1
         );
     }
 
@@ -334,7 +336,7 @@ public class McpConfigurationService {
                 settings.defaultQueryRows(), settings.maxQueryRows(), settings.maxResultCells(),
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(),
                 settings.queryTimeoutSeconds(), settings.metadataPageSize(), settings.maxMetadataPageSize(),
-                settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes()
+                settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection()
         );
     }
 

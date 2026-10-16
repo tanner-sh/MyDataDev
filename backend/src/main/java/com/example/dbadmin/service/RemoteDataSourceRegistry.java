@@ -86,7 +86,7 @@ public class RemoteDataSourceRegistry {
         // 让其他连接的借还全部排队。代价是可能有两个线程同时建池，由 install 收拾多余的那个。
         if (dataSource == null) dataSource = install(connection.id(), createEntry(connection, password, ssh, fingerprint));
         try {
-            return dataSource.getConnection();
+            return BorrowedConnection.wrap(dataSource.getConnection(), dataSource);
         } catch (java.sql.SQLTransientConnectionException error) {
             var pool = dataSource.getHikariPoolMXBean();
             if (pool != null && pool.getActiveConnections() >= dataSource.getMaximumPoolSize()) {

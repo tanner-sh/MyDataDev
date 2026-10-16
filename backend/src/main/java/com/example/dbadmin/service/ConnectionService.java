@@ -260,7 +260,10 @@ public class ConnectionService {
             String original = NamespaceScopedConnection.readNamespace(connection, dialect);
             dialect.activateNamespace(connection, schemaName);
             Connection scoped = NamespaceScopedConnection.wrap(
-                    connection, dialect, original, () -> dataSources.evict(id)
+                    connection, dialect, original, () -> {
+                        try { BorrowedConnection.discardOnClose(connection); }
+                        catch (java.sql.SQLException error) { throw new IllegalStateException("无法淘汰受影响的数据库连接", error); }
+                    }
             );
             handedOut = true;
             return scoped;
@@ -273,7 +276,9 @@ public class ConnectionService {
         } finally {
             // 借出的连接只有两个去处：包好交给调用方，或者还回池里。收尾只写在 catch (Exception) 里时，
             // 驱动抛出的 Error 会让它两头都不去 —— 每失败一次漏一条，直到连接池被借空。
-            if (!handedOut) closeQuietly(connection);
+            if (!handedOut) {
+                try { BorrowedConnection.discardOnClose(connection); } finally { closeQuietly(connection); }
+            }
         }
     }
 
@@ -345,8 +350,8 @@ public class ConnectionService {
         return dataSources.openNativeAccess(connection.jdbcUrl(), sshSpec(id));
     }
 
-    void resetRemoteSession(long id) {
-        dataSources.evict(id);
+    void discardOnClose(Connection connection) throws java.sql.SQLException {
+        BorrowedConnection.discardOnClose(connection);
     }
 
     /**

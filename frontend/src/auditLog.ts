@@ -43,6 +43,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_FILE_UPLOAD: { label: '上传 SQL 文件', category: 'file' },
   MCP_DB_EXECUTE_SCRIPT: { label: 'MCP 执行脚本', category: 'mcp' },
   MCP_DB_EXECUTE_SCRIPT_FAILED: { label: 'MCP 脚本提交失败', category: 'mcp' },
+  MCP_DB_LIST_SCRIPT_TASKS: { label: 'MCP 查看脚本任务列表', category: 'mcp' },
   MCP_DB_SCRIPT_STATUS: { label: 'MCP 查询脚本任务', category: 'mcp' },
   MCP_SCRIPT_UPLOAD: { label: 'MCP 上传脚本', category: 'mcp' },
   SQL_FILE_CANCELLED: { label: 'SQL 文件执行取消', category: 'file' },

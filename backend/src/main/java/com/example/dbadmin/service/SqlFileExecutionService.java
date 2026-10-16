@@ -83,6 +83,13 @@ public class SqlFileExecutionService {
         this.uploadGuard = uploadGuard;
     }
 
+    private java.util.function.IntSupplier scriptConcurrencyLimit = () -> 1;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setMcpConfiguration(com.example.dbadmin.mcp.McpConfigurationService configuration) {
+        scriptConcurrencyLimit = () -> configuration.snapshot().settings().maxScriptsPerConnection();
+    }
+
     @PostConstruct
     public void recoverInterruptedJobs() {
         var interrupted = jobs.findActive();
@@ -318,14 +325,15 @@ public class SqlFileExecutionService {
         boolean mutation = job.mutationCount() + job.ddlCount() + job.unknownCount() > 0;
         if (mutation || "SCRIPT".equals(mode)) guard.requireMutationAllowed(connection, productionConfirmation);
         else guard.requireQueryAllowed(connection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
-        if (jobs.countRunningByConnection(connection.id()) > 0) {
-            throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_ALREADY_RUNNING", "该连接已有 SQL 文件任务正在执行。");
+        int scriptLimit = scriptConcurrencyLimit.getAsInt();
+        if (jobs.countRunningByConnection(connection.id()) >= scriptLimit) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_ALREADY_RUNNING", "该连接的脚本任务已达到并发上限（" + scriptLimit + "），请等待完成后重试。");
         }
         String operationKey = sqlFileOperationKey(id);
-        if (!taskControl.tryAcquire(connection.id(), operationKey)) {
+        if (!taskControl.tryAcquireScript(connection.id(), operationKey, scriptLimit)) {
             throw new ApiProblemException(HttpStatus.CONFLICT, "CONNECTION_BACKGROUND_BUSY", "该连接已有后台重任务正在执行，请等待完成后重试。");
         }
-        if (!(transactionMode == null && endOfFileAction == null ? jobs.queue(id) : jobs.queue(id, mode, ending))) {
+        if (!jobs.queue(id, mode, ending, scriptLimit)) {
             taskControl.releaseCompleted(connection.id(), operationKey);
             throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_NOT_READY", "SQL 文件任务状态已发生变化。");
         }
@@ -351,7 +359,7 @@ public class SqlFileExecutionService {
         jobs.requestCancel(id);
         taskControl.requestCancel(sqlFileOperationKey(id));
         Statement statement = runningStatements.get(id);
-        if (statement != null) try { statement.cancel(); } catch (Exception ignored) { }
+        if (statement != null) coordinator.cancelStatement(statement);
         if ("READY".equals(require(id).status())) {
             jobs.markTerminal(id, "CANCELLED", "CANCELLED", job.statementCurrent(), job.successCount(), job.queryRowCount(),
                     null, null, "SQL 文件任务已取消。");
@@ -368,6 +376,16 @@ public class SqlFileExecutionService {
                 writer -> { writer.write(sql); return "source=MCP"; }, actor, "MCP_SCRIPT_UPLOAD", "script", true);
         if (!"READY".equals(job.status())) return job;
         return start(job.id(), productionConfirmation, actor, mode, ending);
+    }
+
+    public SqlFileExecutionPage ownedScripts(long connectionId, String actor, boolean activeOnly, int page, int pageSize) {
+        if (page < 0 || pageSize < 1 || pageSize > 100 || (long) page * pageSize > 1_000_000) {
+            throw new IllegalArgumentException("任务分页参数无效：page 从 0 开始，pageSize 为 1–100。");
+        }
+        var rows = jobs.findOwnedPage(connectionId, actor, activeOnly, pageSize + 1, (long) page * pageSize);
+        boolean hasMore = rows.size() > pageSize;
+        if (hasMore) rows = rows.subList(0, pageSize);
+        return new SqlFileExecutionPage(rows.stream().map(this::response).toList(), page, pageSize, hasMore);
     }
 
     public SqlFileExecutionResponse ownedScript(long id, String actor) {
@@ -470,6 +488,7 @@ public class SqlFileExecutionService {
             DbConnection target = connections.require(job.connectionId());
             DatabaseDialect dialect = dialects.dialectFor(target);
             try (Connection connection = connections.open(job.connectionId())) {
+                if (job.sessionChanged()) connections.discardOnClose(connection);
                 connection.setAutoCommit(false);
                 long[] pending = {0};
                 long[] lastProgressNanos = {0};
@@ -581,7 +600,7 @@ public class SqlFileExecutionService {
             runningStatements.remove(id);
             analyzedSources.remove(id);
             if (job.metadataChanged()) metadata.invalidateConnection(job.connectionId());
-            if (job.sessionChanged()) connections.resetRemoteSession(job.connectionId());
+
             deleteFileQuietly(job);
         }
     }
@@ -609,6 +628,7 @@ public class SqlFileExecutionService {
             connections.requireNoManualTransaction(job.connectionId());
             try (Connection connection = connections.open(job.connectionId());
                  SqlScriptTransaction tx = new SqlScriptTransaction(connection, persist)) {
+                if (job.sessionChanged()) connections.discardOnClose(connection);
                 scope[0] = tx;
                 try (Statement statement = connection.createStatement()) {
                     runningStatements.put(id, statement);
@@ -658,7 +678,7 @@ public class SqlFileExecutionService {
         } finally {
             runningStatements.remove(id);
             if (job.metadataChanged()) metadata.invalidateConnection(job.connectionId());
-            if (job.sessionChanged()) connections.resetRemoteSession(job.connectionId());
+
             deleteFileQuietly(job);
         }
     }

@@ -338,6 +338,8 @@ node scripts/build-web-bundle.mjs
 | `app.restore.*` / `app.sql-file.*` | 恢复上传、远端恢复缓存与大 SQL 文件任务限制。 |
 | `app.mcp.*` | MCP 初次初始化的开关、资源限制和兼容配置。 |
 
+在 **MCP 设置 → Origin 与资源限制 → 高级资源限制** 中可调整「同连接脚本并发上限」（1–16，默认 1），保存后立即生效并持久化，无需重启。该上限由同一 `connectionId` 下所有 Agent 和 SQL 文件任务共享，计入排队及运行中的任务；达到上限的新提交会被拒绝。调低不会取消已有任务，需等待任务数降至新上限以下才可继续提交。每份脚本内部仍按顺序执行，实际同时运行的脚本总数还受 `app.background-tasks.sql-file-worker-threads` 限制（默认 2）；备份、恢复的原有并发限制保持不变。
+
 请勿将真实数据库密码、Agent API Key 或主密钥文件提交到 Git。`secrets` 必须限制为服务账号可读，并与元数据库分开保存一份安全备份。跨主机部署 MCP 时应使用 HTTPS，并避免将 `/mcp` 或未加固的 Web API 直接暴露到公网。
 
 <details>

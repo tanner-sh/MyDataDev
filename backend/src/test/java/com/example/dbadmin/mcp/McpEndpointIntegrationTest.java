@@ -30,11 +30,50 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "app.mcp.agents[0].connection-ids[0]=999"
 })
 @AutoConfigureMockMvc
+@org.springframework.context.annotation.Import(McpEndpointIntegrationTest.ProbeConfig.class)
 class McpEndpointIntegrationTest {
     private static final String AUTHORIZATION = "Bearer integration-agent.integration-secret";
 
     @Autowired
     private MockMvc mvc;
+
+    @org.springframework.boot.test.context.TestConfiguration
+    static class ProbeConfig {
+        @org.springframework.context.annotation.Bean CancellationProbe cancellationProbe() { return new CancellationProbe(); }
+    }
+    public static class CancellationProbe {
+        final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch cancelled = new java.util.concurrent.CountDownLatch(1);
+        @org.springaicommunity.mcp.annotation.McpTool(name = "test_cancellation_probe", description = "Test cancellation context")
+        public String run() throws Exception {
+            try (var watch = com.example.dbadmin.service.RequestCancellation.onCancel(cancelled::countDown)) {
+                entered.countDown();
+                return cancelled.await(5, java.util.concurrent.TimeUnit.SECONDS) ? "cancelled" : "missed";
+            }
+        }
+    }
+    @Autowired private CancellationProbe probe;
+
+    @Test void cancellationTraversesTheRealSdkToolInvocation() throws Exception {
+        var initialized = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content(initializeRequest())).andReturn());
+        String session = initialized.getResponse().getHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try {
+            var result = executor.submit(() -> complete(mvc.perform(post("/mcp")
+                    .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION).header(McpApiKeyAuthenticationFilter.SESSION_HEADER, session)
+                    .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                    .content("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tools/call\",\"params\":{\"name\":\"test_cancellation_probe\",\"arguments\":{}}}")).andReturn()));
+            assertThat(probe.entered.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                    .header(McpApiKeyAuthenticationFilter.SESSION_HEADER, session)
+                    .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                    .content("{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":42}}"))
+                    .andExpect(status().isAccepted());
+            assertThat(result.get(10, java.util.concurrent.TimeUnit.SECONDS).getResponse().getContentAsString()).contains("cancelled").doesNotContain("missed");
+        } finally { executor.shutdownNow(); }
+    }
 
     @Test
     void protectsEndpointAndPublishesReadOnlyToolCatalog() throws Exception {
@@ -84,6 +123,7 @@ class McpEndpointIntegrationTest {
                 .contains("db_execute_script")
                 .contains("db_script_status")
                 .contains("db_cancel_script")
+                .contains("db_list_script_tasks")
                 .contains("\"readOnlyHint\":true")
                 .doesNotContain("db_update")
                 .doesNotContain("db_delete");

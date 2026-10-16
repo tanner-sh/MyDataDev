@@ -14,6 +14,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class SqlFileExecutionRepositoryTest {
     @Test
+    void admitsConfiguredConcurrencyAndFiltersRecoveryTasksByOwner() {
+        JdbcTemplate jdbc = database();
+        var repository = new SqlFileExecutionRepository(jdbc);
+        long first = repository.insert(job("first.sql"));
+        long second = repository.insert(job("second.sql"));
+        long third = repository.insert(job("third.sql"));
+        jdbc.update("UPDATE sql_file_execution SET status='READY', actor='mcp:one'");
+        jdbc.update("UPDATE sql_file_execution SET actor='mcp:two' WHERE id=?", third);
+        assertThat(repository.queue(first, "BATCH", "COMMIT", 2)).isTrue();
+        assertThat(repository.queue(second, "BATCH", "COMMIT", 2)).isTrue();
+        assertThat(repository.queue(third, "BATCH", "COMMIT", 2)).isFalse();
+        assertThat(repository.findOwnedPage(1, "mcp:one", true, 10, 0)).extracting(SqlFileExecution::id)
+                .containsExactly(second, first);
+        jdbc.update("UPDATE sql_file_execution SET status='SUCCESS' WHERE id=?", first);
+        assertThat(repository.findOwnedPage(1, "mcp:one", true, 10, 0)).hasSize(1);
+        assertThat(repository.findOwnedPage(1, "mcp:one", false, 10, 0)).hasSize(2);
+        assertThat(repository.findOwnedPage(2, "mcp:one", false, 10, 0)).isEmpty();
+    }
+
+    @Test
     void extractsIdentityKeyAndQueuesOnlyOneTaskPerConnection() {
         JdbcTemplate jdbc = database();
         SqlFileExecutionRepository repository = new SqlFileExecutionRepository(jdbc);

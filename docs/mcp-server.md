@@ -170,6 +170,7 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 | `db_explain` | 获取一条查询的执行计划 |
 | `db_execute` | 执行一个完整写入单元，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
 | `db_execute_script` | 按指定事务策略后台执行 SQL 文本，返回 taskId |
+| `db_list_script_tasks` | 按连接分页找回当前 agent 的任务，默认只列活动任务；`activeOnly=false` 包含已完成与失败任务 |
 | `db_script_status` | 查询当前 agent 创建的脚本任务状态 |
 | `db_cancel_script` | 请求取消当前 agent 的脚本任务，已提交内容保留 |
 
@@ -213,3 +214,11 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 ```
 
 替换服务地址和 Agent API Key 后保存并重新加载 MCP Servers。Gemini CLI 的 `httpUrl`、`trust` 不适用于 Antigravity；两者应分别使用各自模板。配置路径可能随客户端版本变化，以 IDE 的 **View raw config** 打开的文件为准。参见 [Antigravity 官方 MCP 文档](https://antigravity.google/docs/mcp)。
+
+### 中断与长任务恢复
+
+长时间运行的存储过程或匿名块应使用 `db_execute_script`，保留返回的 `taskId`，通过 `db_script_status` 查询进度；不要用反复执行写语句来探测是否完成。
+
+Agent 中断或丢失任务 ID 后，先调用 `db_list_script_tasks(connectionId, activeOnly=false)` 查看当前身份的历史任务，再决定是否续跑。该工具的 `page` 从 0 开始，`pageSize` 默认 20，最大 100。任务列表、查询和取消均受当前 Agent 身份及连接授权约束。
+
+服务端处理 `notifications/cancelled` 时，只取消同一 Agent、同一 MCP 会话、同一请求 ID 的在途调用。同步查询/写操作会请求 JDBC 取消；取消通知到达脚本提交期间时也会请求取消该脚本。后台任务已经成功提交并返回后，停止 Agent 不会自动撤销任务，需显式调用 `db_cancel_script(taskId)`。取消接口快速返回请求结果，任务要等数据库调用实际退出、回滚收尾后才释放并发名额；驱动响应取消的速度因数据库而异。超时或断线不代表已提交的修改被回滚，不应自动重跑写操作。

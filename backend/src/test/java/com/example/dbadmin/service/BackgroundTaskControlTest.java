@@ -9,6 +9,32 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class BackgroundTaskControlTest {
     @Test
+    void scriptLimitCanBeRaisedAndLoweredWithoutReleasingActiveTasks() {
+        BackgroundTaskControl control = new BackgroundTaskControl(new AppProperties());
+        assertThat(control.tryAcquireScript(7, "sql-file:1", 1)).isTrue();
+        assertThat(control.tryAcquireScript(7, "sql-file:2", 1)).isFalse();
+        assertThat(control.tryAcquireScript(7, "sql-file:2", 2)).isTrue();
+        assertThat(control.tryAcquireScript(7, "sql-file:3", 2)).isFalse();
+        assertThat(control.tryAcquireScript(8, "sql-file:4", 1)).isTrue();
+        control.requestCancel("sql-file:1");
+        assertThat(control.tryAcquireScript(7, "sql-file:3", 2)).isFalse();
+        control.releaseCompleted(7, "sql-file:1");
+        assertThat(control.tryAcquireScript(7, "sql-file:3", 1)).isFalse();
+        control.releaseCompleted(7, "sql-file:2");
+        assertThat(control.tryAcquireScript(7, "sql-file:3", 1)).isTrue();
+    }
+
+    @Test
+    void raisingScriptLimitDoesNotBypassOtherHeavyTasks() {
+        BackgroundTaskControl control = new BackgroundTaskControl(new AppProperties());
+        assertThat(control.tryAcquire(7, "restore:1")).isTrue();
+        assertThat(control.tryAcquireScript(7, "sql-file:1", 2)).isFalse();
+        control.releaseCompleted(7, "restore:1");
+        assertThat(control.tryAcquireScript(7, "sql-file:1", 2)).isTrue();
+        assertThat(control.tryAcquire(7, "backup:1")).isFalse();
+    }
+
+    @Test
     void sharesOnePermitAcrossBackgroundTaskTypesForTheSameConnection() {
         BackgroundTaskControl control = new BackgroundTaskControl(new AppProperties());
 

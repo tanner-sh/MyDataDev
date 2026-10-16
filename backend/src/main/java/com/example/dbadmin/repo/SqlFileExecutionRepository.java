@@ -78,6 +78,12 @@ public class SqlFileExecutionRepository {
                 : jdbc.query("SELECT * FROM sql_file_execution WHERE connection_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", mapper, connectionId, limit, offset);
     }
 
+    public List<SqlFileExecution> findOwnedPage(long connectionId, String actor, boolean activeOnly, int limit, long offset) {
+        String active = activeOnly ? " AND status IN ('ANALYZING','READY','QUEUED','RUNNING')" : "";
+        return jdbc.query("SELECT * FROM sql_file_execution WHERE connection_id=? AND actor=?" + active
+                + " ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?", mapper, connectionId, actor, limit, offset);
+    }
+
     public List<SqlFileExecution> findActive() {
         return jdbc.query("SELECT * FROM sql_file_execution WHERE status IN ('ANALYZING','QUEUED','RUNNING')", mapper);
     }
@@ -117,15 +123,17 @@ public class SqlFileExecutionRepository {
                 """, commits, rollbacks, lastCommit, outcome, startLine, endLine, id);
     }
 
-    public boolean queue(long id, String mode, String endOfFileAction) {
+    public boolean queue(long id, String mode, String endOfFileAction) { return queue(id, mode, endOfFileAction, 1); }
+
+    public boolean queue(long id, String mode, String endOfFileAction, int limit) {
         return jdbc.update("""
                 UPDATE sql_file_execution job SET status='QUEUED', phase='QUEUED', transaction_mode=?, end_of_file_action=?, message='任务已进入执行队列。'
-                WHERE job.id=? AND job.status='READY' AND NOT EXISTS (
-                  SELECT 1 FROM sql_file_execution active
+                WHERE job.id=? AND job.status='READY' AND (
+                  SELECT COUNT(*) FROM sql_file_execution active
                   WHERE active.connection_id=job.connection_id AND active.id<>job.id
                     AND active.status IN ('QUEUED','RUNNING')
-                )
-                """, mode, endOfFileAction, id) == 1;
+                ) < ?
+                """, mode, endOfFileAction, id, Math.max(1, limit)) == 1;
     }
 
     public int countRunningByConnection(long connectionId) {

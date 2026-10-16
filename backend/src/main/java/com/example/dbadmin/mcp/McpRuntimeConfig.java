@@ -28,7 +28,8 @@ public record McpRuntimeConfig(
             int maxMetadataPageSize,
             int tablePageSize,
             int maxTablePageSize,
-            int sessionTtlMinutes
+            int sessionTtlMinutes,
+            int maxScriptsPerConnection
     ) {
     }
 

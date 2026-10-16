@@ -52,7 +52,8 @@ public class SecurityConfig {
 
     @Bean
     @Order(1)
-    SecurityFilterChain mcpSecurity(HttpSecurity http, McpApiKeyAuthenticationFilter apiKeyFilter) throws Exception {
+    SecurityFilterChain mcpSecurity(HttpSecurity http, McpApiKeyAuthenticationFilter apiKeyFilter,
+            com.fasterxml.jackson.databind.ObjectMapper mapper, com.example.dbadmin.mcp.McpCancellationRegistry cancellations) throws Exception {
         return http
                 .securityMatcher("/mcp")
                 .csrf(AbstractHttpConfigurer::disable)
@@ -64,6 +65,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("MCP_AGENT"))
                 .addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new com.example.dbadmin.mcp.McpCancellationFilter(mapper, cancellations), McpApiKeyAuthenticationFilter.class)
                 .build();
     }
 

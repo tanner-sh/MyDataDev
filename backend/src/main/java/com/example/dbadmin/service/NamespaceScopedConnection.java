@@ -24,7 +24,7 @@ import java.util.Objects;
  * 「MCP 不带 namespace 的查询继承了 UI 上一次选的 schema」。</p>
  *
  * <p>还原发生在委托 {@code close()} 之前；只有在确实无法还原时（驱动不报告命名空间，或
- * 还原语句本身失败）才回退到淘汰整个连接池，因为留一条脏连接在池里比重建池危险得多。
+ * 还原语句本身失败）才淘汰本次借出的连接，不影响池中其他调用。
  * 读和切都交给方言（{@link DatabaseDialect#currentNamespace} / {@code activateNamespace}），
  * 与借出时切换用的是同一套机制 —— 有的驱动根本不实现 JDBC 的 getSchema/setSchema。</p>
  */
@@ -81,11 +81,12 @@ final class NamespaceScopedConnection implements InvocationHandler {
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         if (!isClose(method)) return call(method, args);
-        boolean restored = restore();
-        Object result = call(method, args);
-        // 连接已经归还，此时淘汰连接池才不会与正在关闭的连接互相等待。
-        if (!restored) onUnrestorable.run();
-        return result;
+        try {
+            if (!delegate.isClosed() && !restore()) onUnrestorable.run();
+        } finally {
+            call(method, args);
+        }
+        return null;
     }
 
     private Object call(Method method, Object[] args) throws Throwable {
@@ -106,7 +107,7 @@ final class NamespaceScopedConnection implements InvocationHandler {
             if (Objects.equals(current, original)) return true;
             if (original == null) {
                 // 借出时驱动没有报告命名空间，没有可写回的目标值。
-                log.warn("无法还原池化连接的{}：借出时未知，当前为 {}，将淘汰该连接池", label(dialect), current);
+                log.warn("无法还原池化连接的{}：借出时未知，当前为 {}，将淘汰该连接", label(dialect), current);
                 return false;
             }
             dialect.activateNamespace(delegate, original);
@@ -114,7 +115,7 @@ final class NamespaceScopedConnection implements InvocationHandler {
         } catch (SQLException | RuntimeException | AbstractMethodError error) {
             // 不论卡在哪一步都只返回 false：后面那次委托 close() 必须照常执行，
             // 否则这条连接既不回池也不关闭，一直占着池的名额。
-            log.warn("还原池化连接的{}失败，将淘汰该连接池", label(dialect), error);
+            log.warn("还原池化连接的{}失败，将淘汰该连接", label(dialect), error);
             return false;
         }
     }

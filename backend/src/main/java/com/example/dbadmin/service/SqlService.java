@@ -133,18 +133,21 @@ public class SqlService {
                 unscopedMutationConfirmed
         );
         boolean metadataMutation = changesMetadata(executionSql);
-        boolean sessionMutation = classifier.changesSession(executionSql);
+        boolean sessionMutation = classifier.changesSession(executionSql) || SqlScriptSyntax.opaqueBlock(executionSql);
         int maxRows = normalizeMaxRows(requestedMaxRows);
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, parsed != null || dbConnection.readonly());
-             Statement statement = parsed == null ? connection.createStatement() : connection.prepareStatement(executionSql)) {
+             Statement statement = parsed == null ? connection.createStatement() : connection.prepareStatement(executionSql);
+             var cancellation = RequestCancellation.watch(statement)) {
+            if (sessionMutation) connections.discardOnClose(connection);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
             statement.setMaxRows(maxRows + 1);
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
                 if (parsed != null) SqlParameters.bind((java.sql.PreparedStatement) statement, parsed, parameters);
+                RequestCancellation.check();
                 boolean hasResult = parsed == null ? statement.execute(executionSql) : ((java.sql.PreparedStatement) statement).execute();
                 audit.onConnection(actor, "SQL_EXECUTE", connectionId, abbreviate(sql));
                 if (!hasResult) {
@@ -174,7 +177,6 @@ public class SqlService {
             // reporting an error. Any attempted DDL makes cached metadata
             // unsafe, regardless of the JDBC outcome.
             if (metadataMutation) metadata.invalidateConnection(connectionId);
-            if (sessionMutation) connections.resetRemoteSession(connectionId);
         }
     }
 
@@ -201,10 +203,12 @@ public class SqlService {
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
-             Statement statement = connection.createStatement()) {
+             Statement statement = connection.createStatement();
+             var cancellation = RequestCancellation.watch(statement)) {
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 200), limits.timeoutSeconds());
             statement.setMaxRows(maxRows + 1);
+            RequestCancellation.check();
             boolean hasResult = statement.execute(executionSql);
             if (!hasResult) {
                 throw new IllegalArgumentException("MCP 查询没有返回结果集，已拒绝该语句");
@@ -308,6 +312,7 @@ public class SqlService {
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, dbConnection.readonly());
              SqlScriptTransaction tx = scriptMode ? new SqlScriptTransaction(connection, () -> { }) : null;
              Statement jdbc = connection.createStatement()) {
+            if (sessionChanged) connections.discardOnClose(connection);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
             dialect.configureReadStatement(connection, jdbc, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
             String registeredId = executions.register(executionId, connectionId, jdbc);
@@ -392,7 +397,6 @@ public class SqlService {
             throw e;
         } finally {
             if (metadataChanged) metadata.invalidateConnection(connectionId);
-            if (sessionChanged) connections.resetRemoteSession(connectionId);
         }
     }
 

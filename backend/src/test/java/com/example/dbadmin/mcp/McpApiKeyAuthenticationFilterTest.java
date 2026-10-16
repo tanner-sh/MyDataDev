@@ -24,6 +24,29 @@ class McpApiKeyAuthenticationFilterTest {
     }
 
     @Test
+    void asyncCompletionReusesAuthenticationEvenAfterTheSessionHasDisappeared() throws Exception {
+        var filter = filter();
+        var request = authorizedRequest("agent-a.secret-a");
+        var response = new MockHttpServletResponse();
+        filter.doFilter(request, response, new MockFilterChain());
+        SecurityContextHolder.clearContext();
+        request.setDispatcherType(jakarta.servlet.DispatcherType.ASYNC);
+        request.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "expired-session");
+        response.setCommitted(true);
+        var chain = new MockFilterChain();
+        filter.doFilter(request, response, chain);
+        assertThat(chain.getRequest()).isSameAs(request);
+        assertThat(SecurityContextHolder.getContext().getAuthentication().getPrincipal())
+                .isInstanceOf(McpAgentPrincipal.class);
+        // A NEW request cannot reuse a missing/expired session.
+        var fresh = authorizedRequest("agent-a.secret-a");
+        fresh.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "expired-session");
+        var rejected = new MockHttpServletResponse();
+        filter.doFilter(fresh, rejected, new MockFilterChain());
+        assertThat(rejected.getStatus()).isEqualTo(403);
+    }
+
+    @Test
     void rejectsMissingCredentialAndUntrustedOrigin() throws Exception {
         McpApiKeyAuthenticationFilter filter = filter();
 
@@ -72,7 +95,7 @@ class McpApiKeyAuthenticationFilterTest {
         McpRuntimeConfig.Agent agentB = agent(2L, "agent-b", "secret-b", 2L);
         when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(
                 new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
-                        20_000, 100_000, 30, 100, 500, 100, 500, 30),
+                        20_000, 100_000, 30, 100, 500, 100, 500, 30, 1),
                 Set.of("https://trusted.example"),
                 Map.of(agentA.agentId(), agentA, agentB.agentId(), agentB)
         ));

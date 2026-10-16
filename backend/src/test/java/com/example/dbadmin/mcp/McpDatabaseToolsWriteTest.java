@@ -194,6 +194,6 @@ class McpDatabaseToolsWriteTest {
     }
 
     private McpRuntimeConfig.Settings settings() {
-        return new McpRuntimeConfig.Settings(true, 100, 1_000, 200_000, 1_000_000, 10_000, 100_000, 30, 50, 200, 50, 200, 60);
+        return new McpRuntimeConfig.Settings(true, 100, 1_000, 200_000, 1_000_000, 10_000, 100_000, 30, 50, 200, 50, 200, 60, 1);
     }
 }

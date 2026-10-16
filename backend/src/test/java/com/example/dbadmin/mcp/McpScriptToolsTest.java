@@ -19,7 +19,7 @@ class McpScriptToolsTest {
     @BeforeEach void setup() {
         when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "oracle", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
         var config = mock(McpConfigurationService.class);
-        when(config.snapshot()).thenReturn(new McpRuntimeConfig(new McpRuntimeConfig.Settings(true, 100, 1000, 200000, 1000000, 10000, 100000, 30, 50, 200, 50, 200, 60), Set.of(), Map.of()));
+        when(config.snapshot()).thenReturn(new McpRuntimeConfig(new McpRuntimeConfig.Settings(true, 100, 1000, 200000, 1000000, 10000, 100000, 30, 50, 200, 50, 200, 60, 1), Set.of(), Map.of()));
         tools = new McpScriptTools(new McpAccessService(connections), config, files, new SqlScriptSplitter(), new SqlStatementClassifier(),
                 new ExecutionGuard(), mock(SqlTransactionRegistry.class), mock(AuditRepository.class));
     }
@@ -51,6 +51,16 @@ class McpScriptToolsTest {
         }
         assertThat(new SqlStatementClassifier().requiresSqlServerBatchConfirmation("SELECT 'DELETE FROM t', [UPDATE] FROM t -- UPDATE t" )).isFalse();
         verifyNoInteractions(files);
+    }
+
+    @Test void recoveryListChecksAuthorizationAndUsesOnlyTheCurrentActor() {
+        authenticate(McpAccessLevel.READ_ONLY);
+        var page = new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionPage(List.of(), 0, 20, false);
+        when(files.ownedScripts(1, "mcp:agent", true, 0, 20)).thenReturn(page);
+        assertThat(tools.list(1, null, null, null).items()).isEmpty();
+        verify(files).ownedScripts(1, "mcp:agent", true, 0, 20);
+        assertThatThrownBy(() -> tools.list(2, false, 0, 20)).hasMessageContaining("未获授权");
+        verify(files, never()).ownedScripts(eq(2L), anyString(), anyBoolean(), anyInt(), anyInt());
     }
 
     @Test void statusAndCancelAlwaysCheckOwnership() {
