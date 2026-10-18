@@ -6,6 +6,30 @@
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-10-18
+
+### 修复
+
+- 修复 MCP 结构化结果丢失值为 null 的字段：Spring AI 自带的序列化配置会把 `structuredContent` 里的 null 字段整键删掉，而输出 schema 声明它们必有，严格校验的客户端因此拒收整个结果。`db_execute_script` 成功时每次都会报「Structured content does not match the tool's output schema」，拿不到 `taskId`，`db_script_status` / `db_cancel_script` / `db_list_script_tasks` 随之无法使用；其他带可空字段的工具同样受影响。
+- Oracle / OceanBase Oracle 脚本中两个 PL/SQL 单元之间漏写独占行 `/` 时，后一条 `CREATE` 会被并进前一条语句，部分库只建出前一个对象却返回成功。现在 `END;` 之后紧跟 `CREATE` 会让整份脚本在执行前被拒绝并指出行号。
+- MCP 脚本提交撞到同连接并发上限时，报错列出本 Agent 在该连接上进行中的 `taskId` 与进度；被拒的任务标记为失败，不再以「就绪」状态混在活动任务列表里。
+- `db_execute` 的语句超时不再固定为全局 60 秒，改由 MCP 设置中的「写操作超时」决定。
+
+### 新增
+
+- Oracle 系「语句成功但对象编译失败」现在可见：`db_execute` 与后台脚本（含界面的 SQL 文件任务）在 `CREATE … PROCEDURE/FUNCTION/PACKAGE/TRIGGER/TYPE` 或 `ALTER … COMPILE` 之后回查 `ALL_ERRORS`，结果中新增 `compilationErrors`，SQL 文件抽屉显示明细。脚本照 SQL*Plus 的习惯继续执行，同一脚本里后来修好的对象不会再被报出。
+- MCP 设置新增「写操作超时」（`db_execute`，默认 60 秒，上限 300 秒）。
+- MCP 工具报错统一为 `[错误码] 中文说明`，如 `PRODUCTION_CONFIRMATION_REQUIRED`、`SQL_FILE_ALREADY_RUNNING`、`SQL_TIMEOUT`、`CONNECTION_UNAVAILABLE`、`SQL_ERROR`（带 SQLState 与厂商错误码）、`CANCELLED`，并附带可执行的处理建议；连接池取不到连接不会再被误报为语句超时。
+- `db_script_status` 新增 `waitSeconds`（最多 60 秒），在服务端等到任务结束再返回；脚本结果新增开始/结束时间、耗时与当前语句序号。
+- `db_query` 新增 `offset` 参数与 `nextOffset` 返回值，结果被截断时可以续取下一页。
+- 新增 `db_list_schema_objects` 与 `db_get_schema_object`：列出存储过程、函数、触发器、序列与视图及其 VALID / INVALID 状态，查看源码、参数与编译错误。
+- `db_list_connections` 返回同连接脚本并发上限与当前排队/运行中的脚本数；MCP 服务说明不再自称只读。
+
+### 升级注意
+
+- 启动时通过 Flyway V24、V25 为本地元数据库新增「写操作超时」（已有安装默认 60 秒，与原行为一致）和 SQL 文件任务的编译错误字段。已验证从 0.7.4 升级时登录、连接密码解密、SQL 历史、片段与审计全部保留。升级前请备份数据目录及主密钥；迁移后若需降级，应恢复升级前备份。
+- MCP 工具的报错文本开头多了 `[错误码]` 前缀，部分返回体新增字段；只读取报错内容的客户端不受影响，按报错全文精确匹配的脚本需要调整。
+
 ## [0.7.6] - 2026-10-16
 
 ### 新增
