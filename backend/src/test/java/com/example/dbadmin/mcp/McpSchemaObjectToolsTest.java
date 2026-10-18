@@ -57,7 +57,7 @@ class McpSchemaObjectToolsTest {
     @Test
     void returnsCompilationErrorsOnlyForInvalidObjectsAndCapsTheSource() throws Exception {
         var bad = summary("SP_BAD", "INVALID");
-        when(objects.detail(1L, "key-SP_BAD", false)).thenReturn(detail(bad, "CREATE OR REPLACE PROCEDURE SP_BAD AS BEGIN X; END;"));
+        when(objects.detail(1L, "key-SP_BAD", true)).thenReturn(detail(bad, "CREATE OR REPLACE PROCEDURE SP_BAD AS BEGIN X; END;"));
         when(objects.compilationErrors(1L, bad)).thenReturn(List.of(new CompilationError(1, 40, "PLS-00201: identifier 'X' must be declared")));
         var view = tools.get(1L, "key-SP_BAD");
         assertThat(view.compilationErrors()).containsExactly("ETL.SP_BAD（PROCEDURE） 第 1 行第 40 列：PLS-00201: identifier 'X' must be declared");
@@ -67,7 +67,7 @@ class McpSchemaObjectToolsTest {
         assertThat(view.parameters()).extracting(McpDtos.SchemaObjectParameterView::name).containsExactly("P_DATE");
 
         var ok = summary("SP_OK", "VALID");
-        when(objects.detail(1L, "key-SP_OK", false)).thenReturn(detail(ok, "short"));
+        when(objects.detail(1L, "key-SP_OK", true)).thenReturn(detail(ok, "short"));
         assertThat(tools.get(1L, "key-SP_OK").compilationErrors()).isEmpty();
         verify(objects, never()).compilationErrors(anyLong(), org.mockito.ArgumentMatchers.eq(ok));
     }

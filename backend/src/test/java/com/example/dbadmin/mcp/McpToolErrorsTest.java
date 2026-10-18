@@ -36,6 +36,17 @@ class McpToolErrorsTest {
 
         assertThat(McpToolErrors.isTimeout(new SQLException("canceling statement due to statement timeout", "57014"))).isTrue();
         assertThat(McpToolErrors.isTimeout(new SQLException("ORA-00942: table or view does not exist", "42000", 942))).isFalse();
+        assertThat(McpToolErrors.isTimeout(new SQLException("ORA-00600: internal error code, arguments: -4012, Timeout", "HY000", 600))).isTrue();
+    }
+
+    @Test
+    void poolExhaustionIsAConnectionProblemNotAStatementTimeout() {
+        var pool = McpToolErrors.translate(new java.sql.SQLTransientConnectionException(
+                "remote-33 - Connection is not available, request timed out after 10000ms."), McpToolErrors.Channel.EXECUTE, 60);
+        assertThat(pool.code()).isEqualTo("CONNECTION_UNAVAILABLE");
+        assertThat(pool).hasMessageContaining("可能根本没有发出").hasMessageNotContaining("已请求数据库取消");
+        assertThat(McpToolErrors.translate(new SQLException("Connection is closed", "08003"), McpToolErrors.Channel.QUERY, 30).code())
+                .isEqualTo("CONNECTION_UNAVAILABLE");
     }
 
     @Test

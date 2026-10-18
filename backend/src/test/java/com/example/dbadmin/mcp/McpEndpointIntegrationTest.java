@@ -176,6 +176,8 @@ class McpEndpointIntegrationTest {
 
         // 校验实际发布的 schema，避免工具成功返回后又被客户端因 null 拒绝。
         String catalog = toolList.getResponse().getContentAsString();
+        // 结构化结果保留 null 之后，工具目录本身不该因此冒出 "description":null 之类的键。
+        assertThat(catalog).doesNotContain(":null");
         String json = catalog.lines().filter(line -> line.startsWith("data:"))
                 .map(line -> line.substring(5).trim()).findFirst().orElse(catalog);
         JsonNode tools = new ObjectMapper().readTree(json).path("result").path("tools");

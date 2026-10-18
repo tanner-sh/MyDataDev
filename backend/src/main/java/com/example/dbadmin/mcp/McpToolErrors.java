@@ -40,6 +40,10 @@ final class McpToolErrors {
         if (isCancelled(error)) {
             code = "CANCELLED";
             message = "请求已取消，数据库侧的语句已请求中止。";
+        } else if (isConnectionUnavailable(error)) {
+            code = "CONNECTION_UNAVAILABLE";
+            message = "无法取得或保持数据库连接，语句可能根本没有发出。只读调用可以稍后直接重试；写操作请先用 db_query 核对结果"
+                    + "（后台脚本用 db_list_script_tasks 查看任务真实状态）再决定是否重试。数据库原文：" + rootMessage(error);
         } else if (isTimeout(error)) {
             code = SQL_TIMEOUT;
             message = (timeoutSeconds > 0 ? "语句执行超过 " + timeoutSeconds + " 秒" : "语句执行超时") + "，已请求数据库取消该语句。" + channel.timeoutHint
@@ -69,7 +73,9 @@ final class McpToolErrors {
 
     /**
      * 超时的样子各家不同：标准驱动抛 {@link SQLTimeoutException}；PostgreSQL 是 SQLState 57014；
-     * Oracle 系驱动常以 ORA-01013（厂商码 1013）报出被中止的调用。
+     * Oracle 系驱动常以 ORA-01013（厂商码 1013）报出被中止的调用，OceanBase 的服务端超时是内部错误码 -4012。
+     * 只认这些明确的信号：连接池「request timed out」之类的连接问题由 {@link #isConnectionUnavailable} 先接走，
+     * 把它报成「语句超时、已请求取消」会让调用方以为语句跑过。
      */
     static boolean isTimeout(Throwable error) {
         for (Throwable current = error; current != null; current = current.getCause()) {
@@ -77,8 +83,18 @@ final class McpToolErrors {
             if (current instanceof SQLException sql && !"HY008".equals(sql.getSQLState())) {
                 if ("57014".equals(sql.getSQLState()) || sql.getErrorCode() == 1013) return true;
                 String text = sql.getMessage() == null ? "" : sql.getMessage().toLowerCase(Locale.ROOT);
-                if (text.contains("timeout") || text.contains("timed out")) return true;
+                if (text.matches("(?s).*(?:-4012\\b|statement timeout|query timeout|timeout.*cancel|cancel.*timeout).*")) return true;
             }
+            if (current == current.getCause()) break;
+        }
+        return false;
+    }
+
+    /** 取不到连接（池满、超时）或连接中途断开：SQLState 08 类、JDBC 的连接异常类型。 */
+    static boolean isConnectionUnavailable(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof java.sql.SQLTransientConnectionException || current instanceof java.sql.SQLNonTransientConnectionException) return true;
+            if (current instanceof SQLException sql && sql.getSQLState() != null && sql.getSQLState().startsWith("08")) return true;
             if (current == current.getCause()) break;
         }
         return false;

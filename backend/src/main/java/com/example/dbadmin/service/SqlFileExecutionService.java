@@ -37,9 +37,7 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.HexFormat;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -812,11 +810,9 @@ public class SqlFileExecutionService {
      * 否则调用方只能自己去翻 ALL_ERRORS —— 部署 78 个过程时那就是 78 次核对。
      */
     private final class CompilationCollector {
-        private static final int MAX_LINES = 200;
         private final long id;
         private final DatabaseDialect dialect;
-        private final List<String> lines = new ArrayList<>();
-        private final Set<String> objects = new LinkedHashSet<>();
+        private final CompilationErrorLog log = new CompilationErrorLog(200);
 
         CompilationCollector(long id, DatabaseDialect dialect) {
             this.id = id;
@@ -828,19 +824,12 @@ public class SqlFileExecutionService {
             var target = CompilationDiagnostics.target(sql);
             if (target.isEmpty()) return;
             var errors = CompilationDiagnostics.read(connection, dialect, sql, null, properties.getSql().getTimeoutSeconds());
-            if (errors.isEmpty()) return;
-            objects.add(target.get().label());
-            for (var error : errors) {
-                if (lines.size() >= MAX_LINES) break;
-                lines.add(CompilationDiagnostics.describe(target.get(), error).replaceAll("[\\r\\n]+", " "));
-            }
-            try { jobs.updateCompilationErrors(id, String.join("\n", lines)); } catch (Exception ignored) { }
+            if (!log.record(target.get(), errors)) return;
+            List<String> lines = log.lines();
+            try { jobs.updateCompilationErrors(id, lines.isEmpty() ? null : String.join("\n", lines)); } catch (Exception ignored) { }
         }
 
-        String summary() {
-            return objects.isEmpty() ? "" : "其中 " + objects.size() + " 个对象编译失败（INVALID）：" + String.join("、", objects)
-                    + "；明细见 compilationErrors。";
-        }
+        String summary() { return log.summary(); }
     }
 
     private static final class CancelledException extends RuntimeException { }

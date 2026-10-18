@@ -77,7 +77,8 @@ public class McpSchemaObjectTools {
     ) {
         return audited("db_get_schema_object", connectionId, () -> {
             access.requireConnection(connectionId);
-            SchemaObjectDetail detail = objects.detail(connectionId, objectKey, false);
+            // 强制刷新这一个对象：库里直接改过的对象，缓存里的状态可能还是 VALID，那就不会去取编译错误。
+            SchemaObjectDetail detail = objects.detail(connectionId, objectKey, true);
             SchemaObjectSummary object = detail.object();
             List<String> errors = isInvalid(object.status()) ? objects.compilationErrors(connectionId, object).stream()
                     .map(error -> CompilationDiagnostics.describe(new CompilationDiagnostics.Target(object.schemaName(), object.name(),
