@@ -40,6 +40,7 @@ class McpEndpointIntegrationTest {
     @org.springframework.boot.test.context.TestConfiguration
     static class ProbeConfig {
         @org.springframework.context.annotation.Bean CancellationProbe cancellationProbe() { return new CancellationProbe(); }
+        @org.springframework.context.annotation.Bean ScriptProbe scriptProbe() { return new ScriptProbe(); }
     }
     public static class CancellationProbe {
         final java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
@@ -53,6 +54,48 @@ class McpEndpointIntegrationTest {
         }
     }
     @Autowired private CancellationProbe probe;
+    /** 与 db_execute_script 同形的返回值，失败定位字段全为 null —— 正是脚本成功时的样子。 */
+    public static class ScriptProbe {
+        @org.springaicommunity.mcp.annotation.McpTool(name = "test_script_probe", description = "Test structured null fields", generateOutputSchema = true)
+        public McpDtos.ScriptJobResult run() {
+            return new McpDtos.ScriptJobResult(1, 999, "SUCCEEDED", "DONE", 3L, 3, null, "SCRIPT", "COMMIT", "COMMITTED", 1, 0, null, null, null, "");
+        }
+    }
+
+    @Test void structuredContentKeepsNullFieldsDeclaredRequiredByTheOutputSchema() throws Exception {
+        var initialized = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content(initializeRequest())).andReturn());
+        String session = initialized.getResponse().getHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER);
+        JsonNode list = rpc(session, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}");
+        JsonNode schema = null;
+        for (JsonNode tool : list.path("result").path("tools")) {
+            if (tool.path("name").asText().equals("test_script_probe")) schema = tool.path("outputSchema");
+        }
+        assertThat(schema).isNotNull();
+        JsonNode call = rpc(session, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"test_script_probe\",\"arguments\":{}}}");
+        // 协议对象本身仍省略 null（不应出现 "error":null 之类的键）。
+        assertThat(call.has("error")).isFalse();
+        JsonNode structured = call.path("result").path("structuredContent");
+        assertThat(structured.path("taskId").asLong()).isEqualTo(1);
+        for (JsonNode required : schema.path("required")) {
+            assertThat(structured.has(required.asText())).as("structuredContent 缺少必有字段 " + required.asText()).isTrue();
+        }
+        for (String field : new String[]{"failedStatementIndex", "lastCommitIndex", "failedStartLine", "failedEndLine"}) {
+            assertThat(structured.get(field).isNull()).isTrue();
+            assertThat(schema.path("properties").path(field).path("type").toString()).contains("\"null\"");
+        }
+    }
+
+    private JsonNode rpc(String session, String body) throws Exception {
+        String out = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .header(McpApiKeyAuthenticationFilter.SESSION_HEADER, session)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content(body)).andReturn()).getResponse().getContentAsString();
+        String json = out.lines().filter(line -> line.startsWith("data:"))
+                .map(line -> line.substring(5).trim()).findFirst().orElse(out);
+        return new ObjectMapper().readTree(json);
+    }
 
     @Test void cancellationTraversesTheRealSdkToolInvocation() throws Exception {
         var initialized = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)

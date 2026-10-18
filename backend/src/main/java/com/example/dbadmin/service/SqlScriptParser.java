@@ -110,6 +110,13 @@ final class SqlScriptParser {
                     advance(line);
                     return;
                 }
+                // PL/SQL 块只在独占行 / 或文件末尾结束。上一块漏了 / 时，下一条 CREATE 会被并进同一个执行单元，
+                // 有的库只编译前一个对象就返回成功，后一个对象悄无声息地没建。例程正文里不可能出现顶层 CREATE，
+                // 所以 END; 之后紧跟的 CREATE 一定是漏写了分隔符：宁可整份脚本在执行前被拒，也不要静默少建一个对象。
+                if (oracle && oracleBlock && trimmed.matches("(?is)CREATE\\b.*")
+                        && codeTail.toString().stripTrailing().matches("(?is).*\\bEND(?:\\s+[\\p{L}\\p{N}_$#\"]+)?\\s*;")) {
+                    throw failure("上一个 PL/SQL 块缺少独占行 /，下一条 CREATE 会被并入同一条语句而不会单独执行");
+                }
             }
 
             if (!blockDetected && cleanState() && !statementStarted && trimmed.matches("(?i)(PROMPT|SPOOL|WHENEVER|SET SERVEROUTPUT|@@?)\\b.*")) {

@@ -375,7 +375,19 @@ public class SqlFileExecutionService {
         var job = uploadScript(connectionId, "mcp-script.sql", sql.getBytes(StandardCharsets.UTF_8).length,
                 writer -> { writer.write(sql); return "source=MCP"; }, actor, "MCP_SCRIPT_UPLOAD", "script", true);
         if (!"READY".equals(job.status())) return job;
-        return start(job.id(), productionConfirmation, actor, mode, ending);
+        try {
+            return start(job.id(), productionConfirmation, actor, mode, ending);
+        } catch (Exception error) {
+            // 没启动起来的脚本不会再有人去点「执行」：留在 READY 会让它在 db_list_script_tasks 里
+            // 一直显示成进行中的任务，调用方据此去等、去取消一个根本不会跑的任务。
+            SqlFileExecution draft = require(job.id());
+            if ("READY".equals(draft.status())) {
+                jobs.markTerminal(draft.id(), "FAILED", "NOT_STARTED", 0, 0, 0, null, null,
+                        "脚本未启动：" + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+                deleteFileQuietly(draft);
+            }
+            throw error;
+        }
     }
 
     public SqlFileExecutionPage ownedScripts(long connectionId, String actor, boolean activeOnly, int page, int pageSize) {

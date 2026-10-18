@@ -70,6 +70,29 @@ class McpScriptToolsTest {
         assertThatThrownBy(() -> tools.cancel(10)).hasMessageContaining("不属于");
         verify(files, never()).cancel(anyLong(), anyString());
     }
+    @Test void concurrencyRejectionNamesTheAgentsOwnRunningTasks() throws Exception {
+        authenticate(McpAccessLevel.FULL);
+        var busy = new com.example.dbadmin.api.ApiProblemException(org.springframework.http.HttpStatus.CONFLICT,
+                "SQL_FILE_ALREADY_RUNNING", "该连接的脚本任务已达到并发上限（1），请等待完成后重试。");
+        when(files.submitScript(eq(1L), anyString(), eq("mcp:agent"), any(), anyString(), anyString())).thenThrow(busy);
+        var running = job(42, "RUNNING", 3, 6L);
+        var ready = job(43, "READY", 0, null);
+        when(files.ownedScripts(1, "mcp:agent", true, 0, 20))
+                .thenReturn(new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionPage(List.of(running, ready), 0, 20, false));
+        assertThatThrownBy(() -> tools.executeScript(1, "INSERT INTO t VALUES(1);", "BATCH", "COMMIT", null, false))
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .hasMessageContaining("并发上限").hasMessageContaining("taskId=42（RUNNING，已执行 3/6）").hasMessageContaining("没有执行");
+
+        when(files.ownedScripts(1, "mcp:agent", true, 0, 20))
+                .thenReturn(new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionPage(List.of(), 0, 20, false));
+        assertThatThrownBy(() -> tools.executeScript(1, "INSERT INTO t VALUES(1);", "BATCH", "COMMIT", null, false))
+                .hasMessageContaining("不是本 agent 的脚本任务");
+    }
+    private static com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse job(long id, String status, long success, Long total) {
+        return new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse(id, 1, "target", "oracle", "mcp-script.sql", 10, "abc", "UTF-8",
+                status, "EXECUTING", 10, total, success, 0, 1, 0, 0, success, 0, null, null, "", false, false, false,
+                Instant.now(), null, null, Instant.now(), com.example.dbadmin.model.SqlFileTransaction.defaults());
+    }
     private void execute(String sql, boolean confirmed) throws Exception { tools.executeScript(1, sql, "SCRIPT", "ROLLBACK", null, confirmed); }
     private void authenticate(McpAccessLevel level) {
         SecurityContextHolder.getContext().setAuthentication(UsernamePasswordAuthenticationToken.authenticated(

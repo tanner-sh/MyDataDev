@@ -217,7 +217,11 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 
 ### 中断与长任务恢复
 
-长时间运行的存储过程或匿名块应使用 `db_execute_script`，保留返回的 `taskId`，通过 `db_script_status` 查询进度；不要用反复执行写语句来探测是否完成。
+长时间运行的存储过程或匿名块应使用 `db_execute_script`，保留返回的 `taskId`，通过 `db_script_status` 查询进度；不要用反复执行写语句来探测是否完成。`executedCount == statementTotal` 即脚本的每条语句都已执行。
+
+Oracle / OceanBase Oracle 脚本里的 PL/SQL 单元（`DECLARE`/`BEGIN` 匿名块，`CREATE PROCEDURE/FUNCTION/PACKAGE/TRIGGER/TYPE`）以 `END;` 加独占一行的 `/` 结束，文件最后一个单元可以省略 `/`。两个单元之间漏写 `/` 时，后一条 `CREATE` 会被并进前一条语句发给数据库，部分库只建出前一个对象却返回成功；因此遇到 `END;` 之后紧跟 `CREATE` 的情况，整份脚本会在执行前被拒绝并指出行号。匿名块里的 `EXCEPTION WHEN OTHERS THEN NULL` 会吞掉块内的任何错误，工具看到的是一次成功的执行 —— 排查「执行了但库里没变化」时先检查这一点。
+
+同一连接的脚本任务数达到上限（MCP 设置里的「同连接脚本并发上限」，默认 1）时提交会被拒绝，脚本不会执行；报错里会列出当前 Agent 在该连接上进行中的 `taskId`，没有列出时说明占用者是其他 Agent 或界面任务。
 
 Agent 中断或丢失任务 ID 后，先调用 `db_list_script_tasks(connectionId, activeOnly=false)` 查看当前身份的历史任务，再决定是否续跑。该工具的 `page` 从 0 开始，`pageSize` 默认 20，最大 100。任务列表、查询和取消均受当前 Agent 身份及连接授权约束。
 
