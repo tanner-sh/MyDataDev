@@ -165,16 +165,22 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 | `db_search_objects` | 分页搜索表和视图 |
 | `db_describe_object` | 查看列、主键、索引和外键关系 |
 | `db_get_object_ddl` | 获取表或视图的可用 DDL |
+| `db_list_schema_objects` | 分页列出存储过程、函数、触发器、序列、视图与物化视图，带数据库报告的状态（Oracle 为 VALID / INVALID），可用 `statusFilter=INVALID` 只看坏对象 |
+| `db_get_schema_object` | 查看一个对象的源码、参数与编译错误 |
 | `db_browse_table` | 使用不透明 cursor 分页浏览表数据，不返回编辑 token |
-| `db_query` | 执行一条只读查询 |
+| `db_query` | 执行一条只读查询；截断时返回 `nextOffset`，带 `offset` 再调一次取下一页 |
 | `db_explain` | 获取一条查询的执行计划 |
 | `db_execute` | 执行一个完整写入单元，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
 | `db_execute_script` | 按指定事务策略后台执行 SQL 文本，返回 taskId |
 | `db_list_script_tasks` | 按连接分页找回当前 agent 的任务，默认只列活动任务；`activeOnly=false` 包含已完成与失败任务 |
-| `db_script_status` | 查询当前 agent 创建的脚本任务状态 |
+| `db_script_status` | 查询当前 agent 创建的脚本任务状态；`waitSeconds`（最多 60）在服务端等到任务结束再返回 |
 | `db_cancel_script` | 请求取消当前 agent 的脚本任务，已提交内容保留 |
 
-`db_list_connections` 会返回当前 agent 在每条连接上的档位，agent 据此知道自己能做什么。
+`db_list_connections` 会返回当前 agent 在每条连接上的档位，agent 据此知道自己能做什么；同时返回同连接脚本并发上限与当前排队/运行中的脚本数。
+
+工具报错一律以 `[错误码]` 开头，例如 `[PRODUCTION_CONFIRMATION_REQUIRED]`、`[UNSCOPED_MUTATION_CONFIRMATION_REQUIRED]`、`[SQL_FILE_ALREADY_RUNNING]`、`[SQL_TIMEOUT]`、`[SQL_ERROR]`、`[INVALID_REQUEST]`、`[CANCELLED]`，agent 据此决定补参数重试、换后台脚本，还是修改 SQL。`SQL_ERROR` 带数据库的 SQLState 与厂商错误码。
+
+Oracle / OceanBase Oracle 上，`CREATE OR REPLACE` 或 `ALTER … COMPILE` 编译失败时语句本身仍然成功，对象以 INVALID 状态留在库里。`db_execute` 与 `db_execute_script` 会在这类语句之后回查 `ALL_ERRORS`，把错误放进结果的 `compilationErrors`（脚本照 SQL*Plus 的习惯继续执行后续语句）；读不到字典表时视为没有编译错误。
 
 除 `db_execute`、`db_execute_script`、`db_cancel_script` 外的所有工具都发布 `readOnlyHint: true` 和 `destructiveHint: false`；这三个写操作工具发布 `readOnlyHint: false` 和 `destructiveHint: true`，客户端可以据此对它单独要求人工批准。数据库返回的对象名、注释、DDL、数据和错误均属于不可信输入，agent 不应把这些内容当作指令执行。
 
@@ -185,7 +191,7 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 - 查询默认 100 行、最多 500 行。
 - 单次结果最多 20,000 个单元格。
 - 单次结果文本总量最多 1,000,000 字符，单个文本值最多 20,000 字符。
-- SQL 最多 200,000 字符，查询超时 30 秒。
+- SQL 最多 200,000 字符；查询超时（`db_query`、`db_explain`）默认 30 秒，写操作超时（`db_execute`）默认 60 秒，两者都可在 MCP 设置里调整，上限 300 秒。后台脚本的单条语句超时由 `app.sql-file.statement-timeout-seconds` 决定（默认 7200 秒）。
 - 元数据分页最大 200 项，表数据分页最大 100 行。
 - MCP session 归属记录默认保留 120 分钟并在访问时续期。
 
@@ -217,7 +223,11 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 
 ### 中断与长任务恢复
 
-长时间运行的存储过程或匿名块应使用 `db_execute_script`，保留返回的 `taskId`，通过 `db_script_status` 查询进度；不要用反复执行写语句来探测是否完成。
+长时间运行的存储过程或匿名块应使用 `db_execute_script`，保留返回的 `taskId`，通过 `db_script_status` 查询进度；不要用反复执行写语句来探测是否完成。`executedCount == statementTotal` 即脚本的每条语句都已执行。
+
+Oracle / OceanBase Oracle 脚本里的 PL/SQL 单元（`DECLARE`/`BEGIN` 匿名块，`CREATE PROCEDURE/FUNCTION/PACKAGE/TRIGGER/TYPE`）以 `END;` 加独占一行的 `/` 结束，文件最后一个单元可以省略 `/`。两个单元之间漏写 `/` 时，后一条 `CREATE` 会被并进前一条语句发给数据库，部分库只建出前一个对象却返回成功；因此遇到 `END;` 之后紧跟 `CREATE` 的情况，整份脚本会在执行前被拒绝并指出行号。匿名块里的 `EXCEPTION WHEN OTHERS THEN NULL` 会吞掉块内的任何错误，工具看到的是一次成功的执行 —— 排查「执行了但库里没变化」时先检查这一点。
+
+同一连接的脚本任务数达到上限（MCP 设置里的「同连接脚本并发上限」，默认 1）时提交会被拒绝，脚本不会执行；报错里会列出当前 Agent 在该连接上进行中的 `taskId`，没有列出时说明占用者是其他 Agent 或界面任务。
 
 Agent 中断或丢失任务 ID 后，先调用 `db_list_script_tasks(connectionId, activeOnly=false)` 查看当前身份的历史任务，再决定是否续跑。该工具的 `page` 从 0 开始，`pageSize` 默认 20，最大 100。任务列表、查询和取消均受当前 Agent 身份及连接授权约束。
 

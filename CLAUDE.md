@@ -88,7 +88,11 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 `config/SecurityConfig` 有两条过滤链：`/mcp` 要求 `ROLE_MCP_AGENT`（由 `McpApiKeyAuthenticationFilter` 按 Agent API Key 认证，无状态）；其余请求按运行 profile 的认证模式处理。数据库密码使用系统托管主密钥加密后存 H2；默认文件为 `./secrets/mydatadev-master.key`，桌面正式版则由 Electron 经标准输入一次性交付。丢失或替换密钥会导致已有密文无法解密；旧环境变量安装通过 `crypto-key adopt` 一次性接管。
 
-MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `listConnections`、`listNamespaces`、`searchObjects`、`describeObject`、`getObjectDdl`、`browseTable`、`query`、`explain`；写工具只有 `db_execute` 一个，它复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少。
+MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `db_list_connections`、`db_list_namespaces`、`db_search_objects`、`db_describe_object`、`db_get_object_ddl`、`db_list_schema_objects`、`db_get_schema_object`、`db_browse_table`、`db_query`、`db_explain`，以及脚本任务的 `db_script_status` / `db_list_script_tasks`；写工具是 `db_execute`（复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少）和 `db_execute_script` / `db_cancel_script`（复用 SQL 文件任务）。三条约定：
+
+- **结构化结果里的 null 必须原样输出**（`McpJsonConfiguration`）。Spring AI 自带的 `mcpServerObjectMapper` 用 `NON_NULL`，而 Jackson 这个开关同样作用于 Map 条目 —— 工具返回值转成 `structuredContent` 后可空字段整键消失，输出 schema 却声明它们必有，严格校验的客户端会拒收整个结果（`db_execute_script` 因此拿不到 taskId）。`McpEndpointIntegrationTest` 经真实 SDK 守着这条。
+- **报错一律 `[CODE] 中文说明`**（`McpToolErrors`）。SDK 只取异常根因的 message，所以翻译后的异常不能挂 cause。超时单独成码（`SQL_TIMEOUT`），并按通道给出建议：查询走「查询超时」，`db_execute` 走 MCP 设置里的「写操作超时」（`executeTimeoutSeconds`，不是全局 `app.sql.timeout-seconds`）。
+- **Oracle 系「语句成功但对象 INVALID」要回报**（`CompilationDiagnostics`）。`db_execute`、后台脚本（两种事务模式）与例程编辑器共用这份判定：从语句头认出 `CREATE … PROCEDURE/FUNCTION/PACKAGE/TRIGGER/TYPE` 或 `ALTER … COMPILE` 建的对象，再查方言的 `compilationErrorsSql`。脚本照 SQL*Plus 的习惯继续往下跑，错误进 `sql_file_execution.compilation_errors`；读不到字典表就当没有错误。
 
 应用自己调模型的那一侧在 `service/ai`（配置与连接共享策略）与 `service/ai/llm`（Provider 抽象，Claude 官方 SDK + OpenAI 兼容协议两个实现）。AI 能拿到哪条连接的什么内容由 `AiSettingsService.requireEnabled()` 与 `requireSharedConnection()` 两道闸门决定，默认档位是「不参与 AI」；方案与推进节奏见 `docs/ai-assistant.md`。前端对应的纯逻辑在 `src/aiSettings.ts`、`src/aiSuggestion.ts`、`src/aiChat.ts`、`src/sqlSuggestion.ts`、`src/aiResultPreview.ts`，界面是 `AiSettingsPanel`（管理抽屉，含连接共享策略、业务词典与 token 用量）、`AiAssistantPanel`（单轮回答抽屉：结果解读、数据字典、同步脚本审阅）与 `AiSqlChatPanel`（多轮 Agent 抽屉：生成、报错诊断、结果复盘、执行计划解读）。
 

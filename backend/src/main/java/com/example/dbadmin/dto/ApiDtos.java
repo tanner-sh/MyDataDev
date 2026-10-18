@@ -744,8 +744,13 @@ public final class ApiDtos {
             Instant startedAt,
             Instant finishedAt,
             Instant createdAt,
-            com.example.dbadmin.model.SqlFileTransaction transaction
+            com.example.dbadmin.model.SqlFileTransaction transaction,
+            /** 语句成功但对象编译失败（Oracle 系 INVALID）的明细，每条一行。 */
+            List<String> compilationErrors
     ) {
+        public SqlFileExecutionResponse {
+            compilationErrors = compilationErrors == null ? List.of() : List.copyOf(compilationErrors);
+        }
     }
 
     public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {

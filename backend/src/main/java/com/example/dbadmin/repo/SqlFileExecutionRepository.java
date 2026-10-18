@@ -31,7 +31,8 @@ public class SqlFileExecutionRepository {
             new SqlFileTransaction(rs.getString("transaction_mode"), rs.getString("end_of_file_action"),
                     rs.getLong("transaction_control_count"), rs.getLong("opaque_count"), rs.getLong("commit_count"),
                     rs.getLong("rollback_count"), rs.getObject("last_commit_index", Long.class), rs.getString("transaction_outcome"),
-                    rs.getObject("failed_start_line", Integer.class), rs.getObject("failed_end_line", Integer.class))
+                    rs.getObject("failed_start_line", Integer.class), rs.getObject("failed_end_line", Integer.class)),
+            rs.getString("compilation_errors")
     );
 
     public SqlFileExecutionRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -134,6 +135,10 @@ public class SqlFileExecutionRepository {
                     AND active.status IN ('QUEUED','RUNNING')
                 ) < ?
                 """, mode, endOfFileAction, id, Math.max(1, limit)) == 1;
+    }
+
+    public void updateCompilationErrors(long id, String errors) {
+        jdbc.update("UPDATE sql_file_execution SET compilation_errors=? WHERE id=?", errors, id);
     }
 
     public int countRunningByConnection(long connectionId) {

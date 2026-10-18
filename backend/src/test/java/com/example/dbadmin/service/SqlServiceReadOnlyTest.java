@@ -77,8 +77,36 @@ class SqlServiceReadOnlyTest {
         }
     }
 
+    @Test
+    void offsetContinuesATruncatedResultAndDropsTheOracleRowNumberColumn() throws Exception {
+        String url = database();
+        SqlService h2 = service(url, true);
+        var second = h2.executeReadOnly(1L, "select id from users order by id", null, 2, 2, "mcp:test", LIMITS);
+        assertThat(second.rows()).extracting(row -> row.get(0)).containsExactly(3);
+        assertThat(second.truncated()).isFalse();
+
+        // Oracle 系用 ROWNUM 包装分页，会在最后多一列行号；它不能出现在交给 Agent 的结果里。
+        String oracleUrl = database(";MODE=Oracle");
+        SqlService oracle = service(oracleUrl, true, "oracle");
+        var page = oracle.executeReadOnly(1L, "select id, name from users order by id", null, 1, 1, "mcp:test",
+                new SqlQueryLimits(1, 3, 100, 1000, 100, 5));
+        assertThat(page.columns()).extracting(column -> column.label().toUpperCase()).containsExactly("ID", "NAME");
+        assertThat(page.rows()).hasSize(1);
+        assertThat(page.rows().get(0)).containsExactly(2, "ghijklmn");
+        assertThat(page.truncated()).isTrue();
+
+        assertThatThrownBy(() -> h2.executeReadOnly(1L, "select id from users order by id limit 1", null, 2, 1, "mcp:test", LIMITS))
+                .hasMessageContaining("offset");
+        assertThatThrownBy(() -> h2.executeReadOnly(1L, "select id from users", null, 2, -1, "mcp:test", LIMITS))
+                .hasMessageContaining("offset");
+    }
+
     private String database() throws Exception {
-        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        return database("");
+    }
+
+    private String database(String mode) throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1" + mode;
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("create table users(id int primary key, name varchar(40))");
             connection.createStatement().execute("insert into users values (1, 'abcdefgh'), (2, 'ghijklmn'), (3, 'third-row')");
@@ -87,6 +115,10 @@ class SqlServiceReadOnlyTest {
     }
 
     private SqlService service(String url, boolean readonly) throws Exception {
+        return service(url, readonly, "h2");
+    }
+
+    private SqlService service(String url, boolean readonly, String dbType) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.open(anyLong(), anyString())).thenAnswer(invocation -> {
@@ -95,7 +127,7 @@ class SqlServiceReadOnlyTest {
             return connection;
         });
         when(connections.require(anyLong())).thenReturn(new DbConnection(
-                1L, "h2", "h2", url, "sa", "", "dev", readonly, Instant.now(), Instant.now()
+                1L, "h2", dbType, url, "sa", "", "dev", readonly, Instant.now(), Instant.now()
         ));
         AppProperties properties = new AppProperties();
         properties.getSql().setTimeoutSeconds(10);

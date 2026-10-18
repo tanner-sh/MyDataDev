@@ -34,7 +34,8 @@ public final class McpAdminDtos {
             int tablePageSize,
             int maxTablePageSize,
             int sessionTtlMinutes,
-            Integer maxScriptsPerConnection
+            Integer maxScriptsPerConnection,
+            Integer executeTimeoutSeconds
     ) {
     }
 

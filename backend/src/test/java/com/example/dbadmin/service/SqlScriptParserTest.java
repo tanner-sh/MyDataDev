@@ -111,6 +111,27 @@ class SqlScriptParserTest {
                 END;""";
         assertThat(splitter.split(block + "\n/\n", "oceanbase-oracle")).extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(block);
     }
+    @Test void anonymousBlockWithExceptionHandlerIsOneUnitWithOrWithoutSlash() {
+        String block = "DECLARE V VARCHAR2(200);\nBEGIN\n  YY_FBIP_ETL.SP_X(V, NULL);\nEXCEPTION WHEN OTHERS THEN NULL;\nEND;";
+        for (String script : new String[]{block, block + "\n", block + "\n/", block + "\n/\n"}) {
+            assertThat(splitter.split(script, "oceanbase-oracle")).extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(block);
+        }
+    }
+    @Test void lastProcedureRunsWhateverTheFileEndingLooksLike() {
+        String first = "CREATE OR REPLACE PROCEDURE A.P1 AS\nBEGIN\n  NULL;\nEXCEPTION WHEN OTHERS THEN RAISE;\nEND P1;";
+        String last = "CREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;";
+        for (String ending : new String[]{"", "\n", "\n/", "\n/\n"}) {
+            assertThat(splitter.split(first + "\n/\n" + last + ending, "oceanbase-oracle"))
+                    .extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(first, last);
+        }
+    }
+    @Test void missingSlashBeforeNextCreateIsRejectedInsteadOfMergingTwoObjects() {
+        String script = "CREATE OR REPLACE PROCEDURE A.P1 AS\nBEGIN\n  NULL;\nEND P1;\n-- next\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
+        assertThatThrownBy(() -> splitter.split(script, "oceanbase-oracle")).hasMessageContaining("第 6 行").hasMessageContaining("缺少独占行 /");
+        // 例程正文里的 CREATE 只会出现在字符串或注释里，不能被当成漏写分隔符。
+        assertThat(splitter.split("BEGIN\n  NULL;\nEXECUTE IMMEDIATE '\nCREATE TABLE T (A NUMBER)';\nEND;\n/", "oracle")).hasSize(1);
+        assertThat(splitter.split("BEGIN\n  NULL;\n/*\nCREATE TABLE T (A NUMBER);\n*/\nEND;\n/", "oracle")).hasSize(1);
+    }
     @Test void rejectsUnterminatedStringsBeforeAnyExecution() {
         assertThatThrownBy(() -> splitter.split("select 1; select 'bad", "oracle")).hasMessageContaining("未闭合").hasMessageContaining("行");
     }

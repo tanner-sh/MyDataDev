@@ -23,7 +23,15 @@ public final class McpDtos {
                                   @Schema(nullable = true) Long lastCommitIndex,
                                   @Schema(nullable = true) Integer failedStartLine,
                                   @Schema(nullable = true) Integer failedEndLine,
-                                  String message) { }
+                                  String message,
+                                  /** 正在执行（或最后执行到）的语句序号，从 1 开始。 */
+                                  long currentStatementIndex,
+                                  @Schema(nullable = true) String startedAt,
+                                  @Schema(nullable = true) String finishedAt,
+                                  /** 已运行时长；未开始为 null，进行中按当前时间计。 */
+                                  @Schema(nullable = true) Long elapsedMs,
+                                  /** 语句成功但对象编译失败（Oracle 系 INVALID）的明细。 */
+                                  List<String> compilationErrors) { }
 
     public record ConnectionView(
             long connectionId,
@@ -34,7 +42,11 @@ public final class McpDtos {
             boolean tableBrowse,
             boolean explain,
             /** 本 agent 在这条连接上的档位：READ_ONLY / DATA_WRITE / FULL。 */
-            String accessLevel
+            String accessLevel,
+            /** 同连接后台脚本并发上限（所有 agent 与界面 SQL 文件任务共享）。 */
+            int scriptConcurrencyLimit,
+            /** 该连接上排队或运行中的脚本任务数；等于上限时 db_execute_script 会被拒绝。 */
+            int activeScriptTasks
     ) {
     }
 
@@ -86,6 +98,48 @@ public final class McpDtos {
     public record ObjectDdl(String ddl, String source) {
     }
 
+    /** status 是数据库报告的原文（Oracle 为 VALID / INVALID），不报状态的库为 null。 */
+    public record SchemaObjectView(
+            String objectKey,
+            @Schema(nullable = true) String schemaName,
+            String name,
+            @Schema(nullable = true) String displayName,
+            String kind,
+            @Schema(nullable = true) String subtype,
+            @Schema(nullable = true) String status
+    ) {
+    }
+
+    public record SchemaObjectPageView(
+            List<SchemaObjectView> items,
+            int page,
+            int pageSize,
+            boolean hasMore,
+            boolean totalExact,
+            int total
+    ) {
+    }
+
+    public record SchemaObjectParameterView(
+            int position,
+            @Schema(nullable = true) String name,
+            @Schema(nullable = true) String mode,
+            @Schema(nullable = true) String typeName,
+            boolean nullable
+    ) {
+    }
+
+    public record SchemaObjectSourceView(
+            SchemaObjectView object,
+            @Schema(nullable = true) String source,
+            boolean sourceAvailable,
+            @Schema(nullable = true) String sourceUnavailableReason,
+            boolean sourceTruncated,
+            List<SchemaObjectParameterView> parameters,
+            List<String> compilationErrors
+    ) {
+    }
+
     public record TableColumnView(String name, String typeName, boolean nullable, boolean truncated) {
     }
 
@@ -110,7 +164,9 @@ public final class McpDtos {
             long elapsedMs,
             List<QueryColumnView> columns,
             List<List<Object>> rows,
-            boolean truncated
+            boolean truncated,
+            /** 语句成功但对象编译失败（Oracle 系 INVALID）的明细；为空表示没有，或这条语句不建例程类对象。 */
+            List<String> compilationErrors
     ) {
     }
 
@@ -120,7 +176,11 @@ public final class McpDtos {
             long elapsedMs,
             int maxRows,
             boolean truncated,
-            @Schema(nullable = true) String truncatedReason
+            @Schema(nullable = true) String truncatedReason,
+            /** 本页从第几行开始（0 起）。 */
+            int offset,
+            /** 因行数或单元格上限截断时，用它作 offset 取下一页；没有更多或无法续取时为 null。 */
+            @Schema(nullable = true) Integer nextOffset
     ) {
     }
 }
