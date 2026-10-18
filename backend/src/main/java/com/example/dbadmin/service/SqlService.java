@@ -93,7 +93,32 @@ public class SqlService {
     }
 
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed) throws Exception {
-        return executeBound(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed, null);
+        return executeBound(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed, null, null);
+    }
+
+    /** MCP 的 db_execute 走这里：超时由 MCP 设置决定，其余（生产确认、审计、历史、缓存失效）与界面同一条路。 */
+    public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation,
+                             String schemaName, boolean unscopedMutationConfirmed, int timeoutSeconds) throws Exception {
+        return executeBound(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed,
+                null, Math.max(1, timeoutSeconds));
+    }
+
+    /**
+     * 刚执行完的那条语句如果建/重编译了例程类对象，去字典表里取它的编译错误。
+     *
+     * <p>换一条连接查也拿得到：DDL 已经自动提交，字典表对所有会话可见。没写 schema 的对象落在
+     * {@code schemaName}（执行时激活的那个）或登录用户名下，这里按同样的顺序解析。</p>
+     */
+    public List<com.example.dbadmin.dto.ApiDtos.CompilationError> compilationErrors(long connectionId, String schemaName, String sql) {
+        try {
+            DatabaseDialect dialect = dialectRegistry.dialectFor(connections.require(connectionId));
+            if (dialect.compilationErrorsSql() == null || CompilationDiagnostics.target(sql).isEmpty()) return List.of();
+            try (Connection connection = openConnection(connectionId, schemaName)) {
+                return CompilationDiagnostics.read(connection, dialect, sql, schemaName, properties.getSql().getTimeoutSeconds());
+            }
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     public SqlResult executeParameterized(com.example.dbadmin.dto.ApiDtos.SqlParameterizedRequest request, String actor, String productionConfirmation) throws Exception {
@@ -114,12 +139,12 @@ public class SqlService {
             }
         }
         return executeBound(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation,
-                request.schemaName(), false, request.parameters());
+                request.schemaName(), false, request.parameters(), null);
     }
 
     private SqlResult executeBound(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId,
             String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed,
-            Map<String, com.example.dbadmin.dto.ApiDtos.SqlParameter> parameters) throws Exception {
+            Map<String, com.example.dbadmin.dto.ApiDtos.SqlParameter> parameters, Integer timeoutSeconds) throws Exception {
         SqlParameters.Parsed parsed = parameters == null ? null : SqlParameters.parse(sql, connections.require(connectionId).dbType());
         String executionSql = singleStatement(connectionId, parsed == null ? sql : parsed.sql(), "单条执行");
         if (parsed != null && !classifier.isParameterizedSelectQuery(executionSql)) throw new IllegalArgumentException("参数化执行只支持单条 SELECT 查询。");
@@ -142,7 +167,8 @@ public class SqlService {
              var cancellation = RequestCancellation.watch(statement)) {
             if (sessionMutation) connections.discardOnClose(connection);
             DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-            dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
+            dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 500),
+                    timeoutSeconds == null ? properties.getSql().getTimeoutSeconds() : timeoutSeconds);
             statement.setMaxRows(maxRows + 1);
             String registeredId = executions.register(executionId, connectionId, statement);
             try {
@@ -194,22 +220,56 @@ public class SqlService {
             String actor,
             SqlQueryLimits limits
     ) throws Exception {
+        return executeReadOnly(connectionId, sql, schemaName, requestedMaxRows, null, actor, limits);
+    }
+
+    /**
+     * 同上，带 {@code offset} 时用方言的分页包装跳过前面的行。
+     *
+     * <p>机器调用方拿到截断的结果时只有两条路：调大 maxRows（受上限约束）或改写 SQL。前者走不通时它往往
+     * 会把截断后的那一部分当成全量，得出「缺了几列」这种错误结论；给它一个能接着取的偏移量，比让它猜好。</p>
+     */
+    public SqlResult executeReadOnly(
+            long connectionId,
+            String sql,
+            String schemaName,
+            Integer requestedMaxRows,
+            Integer requestedOffset,
+            String actor,
+            SqlQueryLimits limits
+    ) throws Exception {
         String executionSql = singleStatement(connectionId, sql, "MCP 查询");
         if (classifier.classify(executionSql) != SqlStatementClassifier.Kind.QUERY) {
             throw new IllegalArgumentException("MCP 只允许执行单条只读查询");
         }
         DbConnection dbConnection = connections.require(connectionId);
+        DatabaseDialect pagingDialect = dialectRegistry.dialectFor(dbConnection);
         int maxRows = limits.normalizeRows(requestedMaxRows);
+        int offset = requestedOffset == null ? 0 : requestedOffset;
+        int maxOffset = Math.max(properties.getSql().getMaxPageOffset(), 0);
+        if (offset < 0 || offset > maxOffset) throw new IllegalArgumentException("offset 必须在 0 到 " + maxOffset + " 之间。");
+        String runSql = executionSql;
+        String helperColumn = null;
+        if (offset > 0) {
+            if (!classifier.isAutomaticallyPageable(executionSql)
+                    || (classifier.isCommonTableExpression(executionSql) && !pagingDialect.supportsCteResultPushdown())) {
+                throw new IllegalArgumentException("offset 只支持未自带分页子句的单条 SELECT；请在 SQL 里自行分页，或去掉 offset。");
+            }
+            // 与结果分页同一条包装路径：先过 EmbeddableSql，原文末尾停在行注释里时分页子句才不会落进注释。
+            runSql = pagingDialect.pageQuery(
+                    SqlResultPushdown.apply(EmbeddableSql.of(executionSql), List.of(), null, null, pagingDialect).sql(), maxRows + 1, offset);
+            helperColumn = pagingDialect.paginationHelperColumn();
+        }
         long started = System.nanoTime();
         try (Connection connection = openConnection(connectionId, schemaName);
              ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
              Statement statement = connection.createStatement();
              var cancellation = RequestCancellation.watch(statement)) {
-            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            DatabaseDialect dialect = pagingDialect;
             dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 200), limits.timeoutSeconds());
             statement.setMaxRows(maxRows + 1);
             RequestCancellation.check();
-            boolean hasResult = statement.execute(executionSql);
+            boolean hasResult = statement.execute(runSql);
             if (!hasResult) {
                 throw new IllegalArgumentException("MCP 查询没有返回结果集，已拒绝该语句");
             }
@@ -223,8 +283,8 @@ public class SqlService {
                         limits.maxCellTextChars(),
                         dialect
                 );
-                audit.onConnection(actor, "MCP_SQL_QUERY", connectionId, "read-only query");
-                result = withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
+                audit.onConnection(actor, "MCP_SQL_QUERY", connectionId, offset > 0 ? "read-only query; offset=" + offset : "read-only query");
+                result = withoutHelperColumn(withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect), helperColumn);
                 history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
                 return result;
             }
@@ -932,6 +992,16 @@ public class SqlService {
                 ResultSetSourceResolver.resolve(metadata, dialect), null,
                 cellTextTruncated || payloadLimitReached ? "text_limit" : moreRows ? (effectiveMaxRows < maxRows ? "cell_limit" : "row_limit") : "none"
         );
+    }
+
+    /** Oracle 的 ROWNUM 分页会在最后多出一列行号，它不属于用户的结果。 */
+    private static SqlResult withoutHelperColumn(SqlResult result, String helperColumn) {
+        int last = result.columns().size() - 1;
+        if (helperColumn == null || last < 0 || !helperColumn.equalsIgnoreCase(result.columns().get(last).label())) return result;
+        // 单元格可以是 SQL NULL，所以不能用 List.copyOf。
+        List<List<Object>> rows = result.rows().stream().map(row -> row.size() > last ? (List<Object>) new ArrayList<>(row.subList(0, last)) : row).toList();
+        return new SqlResult(result.columns().subList(0, last), rows, result.affectedRows(), result.elapsedMs(), result.resultSet(),
+                result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit(), result.truncationReason());
     }
 
     int sqlTimeoutSeconds() {

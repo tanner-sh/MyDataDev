@@ -27,7 +27,7 @@ class McpConfigurationServiceTest {
     void rejectsInvalidScriptConcurrencyWithoutPersisting(int limit) {
         McpConfigurationRepository repository = mock(McpConfigurationRepository.class);
         Settings persisted = new Settings(false, 100, 500, 20_000, 1_000_000,
-                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1);
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60);
         when(repository.findSettings()).thenReturn(Optional.of(persisted));
         when(repository.findAgents()).thenReturn(List.of());
         when(repository.findOrigins()).thenReturn(Set.of());
@@ -37,7 +37,7 @@ class McpConfigurationServiceTest {
                 mock(AuditRepository.class), new AppProperties(), manager);
         service.initialize();
         var limits = new com.example.dbadmin.dto.McpAdminDtos.McpLimits(100, 500, 20_000, 1_000_000,
-                20_000, 200_000, 30, 50, 200, 50, 100, 120, limit);
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, limit, 60);
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.updateConfig(
                 new com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest(List.of(), limits), "admin"))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("同连接脚本并发上限");
@@ -46,11 +46,41 @@ class McpConfigurationServiceTest {
     }
 
     @Test
+    void executeTimeoutIsValidatedAndOlderClientsThatOmitItKeepTheStoredValue() {
+        McpConfigurationRepository repository = mock(McpConfigurationRepository.class);
+        Settings persisted = new Settings(false, 100, 500, 20_000, 1_000_000,
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 90);
+        when(repository.findSettings()).thenReturn(Optional.of(persisted));
+        when(repository.findAgents()).thenReturn(List.of());
+        when(repository.findOrigins()).thenReturn(Set.of());
+        PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
+        when(manager.getTransaction(any(TransactionDefinition.class))).thenReturn(mock(TransactionStatus.class));
+        McpConfigurationService service = new McpConfigurationService(repository, mock(ConnectionService.class),
+                mock(AuditRepository.class), new AppProperties(), manager);
+        service.initialize();
+        for (int invalid : new int[]{0, 301}) {
+            var limits = new com.example.dbadmin.dto.McpAdminDtos.McpLimits(100, 500, 20_000, 1_000_000,
+                    20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, invalid);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.updateConfig(
+                    new com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest(List.of(), limits), "admin"))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("写操作超时");
+        }
+        verify(repository, never()).updateSettings(any());
+
+        var omitted = new com.example.dbadmin.dto.McpAdminDtos.McpLimits(100, 500, 20_000, 1_000_000,
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, null);
+        service.updateConfig(new com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest(List.of(), omitted), "admin");
+        var saved = org.mockito.ArgumentCaptor.forClass(Settings.class);
+        verify(repository).updateSettings(saved.capture());
+        assertThat(saved.getValue().executeTimeoutSeconds()).isEqualTo(90);
+    }
+
+    @Test
     void keepsPersistedDisabledStatusWhenNewInstallDefaultIsEnabled() {
         McpConfigurationRepository repository = mock(McpConfigurationRepository.class);
         Settings persisted = new Settings(
                 false, 100, 500, 20_000, 1_000_000,
-                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60
         );
         when(repository.findSettings()).thenReturn(Optional.of(persisted));
         when(repository.findAgents()).thenReturn(List.of());

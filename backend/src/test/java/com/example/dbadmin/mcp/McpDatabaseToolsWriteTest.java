@@ -1,6 +1,5 @@
 package com.example.dbadmin.mcp;
 
-import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.model.DbConnection;
@@ -12,6 +11,7 @@ import com.example.dbadmin.service.ExecutionGuard;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.SqlExecutionRegistry;
 import com.example.dbadmin.service.SqlExecutionMetrics;
+import com.example.dbadmin.service.SqlFileExecutionService;
 import com.example.dbadmin.service.SqlScriptSplitter;
 import com.example.dbadmin.service.SqlService;
 import com.example.dbadmin.service.SqlStatementClassifier;
@@ -32,8 +32,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -72,7 +72,7 @@ class McpDatabaseToolsWriteTest {
         when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(settings(), java.util.Set.of(), Map.of()));
         tools = new McpDatabaseTools(
                 new McpAccessService(connections), metadata, mock(DataEditService.class), sql,
-                new SqlStatementClassifier(), audit, new SimpleMeterRegistry(), configuration
+                new SqlStatementClassifier(), audit, new SimpleMeterRegistry(), configuration, mock(SqlFileExecutionService.class)
         );
     }
 
@@ -87,7 +87,8 @@ class McpDatabaseToolsWriteTest {
         authenticate(Map.of(1L, McpAccessLevel.READ_ONLY));
 
         assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance = 0 WHERE id = 1", null, null))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .hasMessageStartingWith("[INVALID_REQUEST]")
                 .hasMessageContaining("数据读写");
         assertThat(balance()).isEqualTo(100);
     }
@@ -101,6 +102,7 @@ class McpDatabaseToolsWriteTest {
 
         assertThat(result.statementKind()).isEqualTo("MUTATION");
         assertThat(result.updatedRows()).isEqualTo(1);
+        assertThat(result.compilationErrors()).isEmpty();
         assertThat(balance()).isEqualTo(50);
         assertThatThrownBy(() -> tools.execute(1L, null, "CREATE TABLE extra(id INT)", null, null))
                 .hasMessageContaining("完全");
@@ -121,8 +123,8 @@ class McpDatabaseToolsWriteTest {
         authenticate(Map.of(1L, McpAccessLevel.FULL));
 
         assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance = 0 WHERE id = 1", null, null))
-                .isInstanceOf(ApiProblemException.class)
-                .extracting(error -> ((ApiProblemException) error).code())
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .extracting(error -> ((McpToolErrors.McpToolException) error).code())
                 .isEqualTo("READONLY_CONNECTION");
         assertThat(balance()).isEqualTo(100);
     }
@@ -133,8 +135,8 @@ class McpDatabaseToolsWriteTest {
         authenticate(Map.of(1L, McpAccessLevel.FULL), true);
 
         assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance = 0 WHERE id = 1", null, null))
-                .isInstanceOf(ApiProblemException.class)
-                .extracting(error -> ((ApiProblemException) error).code())
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .extracting(error -> ((McpToolErrors.McpToolException) error).code())
                 .isEqualTo("PRODUCTION_CONFIRMATION_REQUIRED");
         assertThat(balance()).isEqualTo(100);
     }
@@ -145,8 +147,8 @@ class McpDatabaseToolsWriteTest {
         authenticate(Map.of(1L, McpAccessLevel.DATA_WRITE));
 
         assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance = 0", null, null))
-                .isInstanceOf(ApiProblemException.class)
-                .extracting(error -> ((ApiProblemException) error).code())
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .extracting(error -> ((McpToolErrors.McpToolException) error).code())
                 .isEqualTo("UNSCOPED_MUTATION_CONFIRMATION_REQUIRED");
         assertThat(balance()).isEqualTo(100);
 
@@ -160,7 +162,8 @@ class McpDatabaseToolsWriteTest {
         authenticate(Map.of(1L, McpAccessLevel.FULL));
 
         assertThatThrownBy(() -> tools.execute(1L, null, "SELECT * FROM accounts", null, null))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .hasMessageStartingWith("[INVALID_REQUEST]")
                 .hasMessageContaining("db_query");
     }
 
@@ -171,6 +174,32 @@ class McpDatabaseToolsWriteTest {
         assertThatThrownBy(() -> tools.execute(1L, null, "UPDATE accounts SET balance=0 WHERE id=1; DROP TABLE accounts;", null, false))
                 .hasMessageContaining("仅支持一条 SQL");
         assertThat(balance()).isEqualTo(100);
+    }
+
+    @Test
+    void writesUseTheMcpWriteTimeoutAndListingsShowScriptCapacity() throws Exception {
+        connection(1L, "dev", "dev", false);
+        authenticate(Map.of(1L, McpAccessLevel.FULL));
+        SqlService sql = mock(SqlService.class);
+        SqlFileExecutionService scripts = mock(SqlFileExecutionService.class);
+        McpConfigurationService configuration = mock(McpConfigurationService.class);
+        var custom = new McpRuntimeConfig.Settings(true, 100, 1_000, 200_000, 1_000_000, 10_000, 100_000, 30, 50, 200, 50, 200, 60, 2, 90);
+        when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(custom, java.util.Set.of(), Map.of()));
+        when(sql.execute(anyLong(), anyString(), any(), anyString(), any(), any(), any(), anyBoolean(), anyInt()))
+                .thenReturn(new com.example.dbadmin.dto.ApiDtos.SqlResult(List.of(), List.of(), 1, 5, false));
+        var isolated = new McpDatabaseTools(new McpAccessService(connections), mock(MetadataService.class), mock(DataEditService.class), sql,
+                new SqlStatementClassifier(), mock(AuditRepository.class), new SimpleMeterRegistry(), configuration, scripts);
+
+        isolated.execute(1L, null, "UPDATE accounts SET balance = 1 WHERE id = 1", null, null);
+        verify(sql).execute(eq(1L), anyString(), any(), anyString(), any(), any(), any(), eq(false), eq(90));
+
+        when(connections.list()).thenReturn(List.of(new com.example.dbadmin.dto.ApiDtos.ConnectionResponse(
+                1L, "dev", "h2", url, "sa", "dev", false,
+                new com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities(true, true, true, true, List.of(), List.of()))));
+        when(scripts.activeScriptCount(1L)).thenReturn(1);
+        var view = isolated.listConnections().connections().get(0);
+        assertThat(view.scriptConcurrencyLimit()).isEqualTo(2);
+        assertThat(view.activeScriptTasks()).isEqualTo(1);
     }
 
     private void connection(long id, String name, String environment, boolean readonly) {
@@ -194,6 +223,6 @@ class McpDatabaseToolsWriteTest {
     }
 
     private McpRuntimeConfig.Settings settings() {
-        return new McpRuntimeConfig.Settings(true, 100, 1_000, 200_000, 1_000_000, 10_000, 100_000, 30, 50, 200, 50, 200, 60, 1);
+        return new McpRuntimeConfig.Settings(true, 100, 1_000, 200_000, 1_000_000, 10_000, 100_000, 30, 50, 200, 50, 200, 60, 1, 60);
     }
 }

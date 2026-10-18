@@ -15,7 +15,7 @@ class McpSessionOwnershipStoreTest {
         McpConfigurationService configuration = mock(McpConfigurationService.class);
         when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(
                 new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
-                        20_000, 100_000, 30, 100, 500, 100, 500, 5, 1),
+                        20_000, 100_000, 30, 100, 500, 100, 500, 5, 1, 60),
                 Set.of(), Map.of()
         ));
         McpSessionOwnershipStore sessions = new McpSessionOwnershipStore(configuration);

@@ -64,6 +64,6 @@ class SqlFileExecutionConcurrencyTest {
 
     private McpRuntimeConfig configWithLimit(int limit) {
         return new McpRuntimeConfig(new McpRuntimeConfig.Settings(true, 100, 500, 20_000,
-                1_000_000, 20_000, 200_000, 30, 50, 200, 50, 100, 120, limit), Set.of(), Map.of());
+                1_000_000, 20_000, 200_000, 30, 50, 200, 50, 100, 120, limit, 60), Set.of(), Map.of());
     }
 }

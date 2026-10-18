@@ -58,7 +58,6 @@ import java.util.regex.Pattern;
 @Service
 public class SchemaObjectService {
     /** 编译错误条数上限：一条语法错误往往会级联出几十行，前几条才指得出真正的位置。 */
-    private static final int MAX_COMPILATION_ERRORS = 100;
     /** 例程消息条数上限：一个循环里的 PUT_LINE 能刷出几十万行。 */
     private static final int MAX_ROUTINE_MESSAGES = 500;
     private static final int MAX_RESULT_ROWS = 500;
@@ -148,6 +147,20 @@ public class SchemaObjectService {
             SchemaObjectDetail detail = loadDetail(connection, configured, resolved);
             cache.putSchemaObjectDetail(connectionId, objectKey, detail);
             return detail;
+        }
+    }
+
+    /**
+     * 一个已存在对象的编译错误（Oracle 系 INVALID 对象）。方言不需要这一步时返回空列表。
+     * 给 MCP 用：Agent 部署完过程后最常问的就是「哪些坏了、坏在哪」。
+     */
+    public List<CompilationError> compilationErrors(long connectionId, SchemaObjectSummary object) throws Exception {
+        DbConnection configured = connections.require(connectionId);
+        DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
+        if (dialect.compilationErrorsSql() == null) return List.of();
+        try (Connection connection = connections.open(connectionId)) {
+            return CompilationDiagnostics.query(connection, dialect, object.schemaName(), object.name(),
+                    object.kind().replace('_', ' '), properties.getSql().getTimeoutSeconds());
         }
     }
 
@@ -458,23 +471,9 @@ public class SchemaObjectService {
         if (plan.operation() != SchemaObjectOperation.CREATE && plan.operation() != SchemaObjectOperation.REPLACE) {
             return List.of();
         }
-        List<CompilationError> errors = new ArrayList<>();
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
-            statement.setString(1, plan.schemaName().isBlank() ? null : plan.schemaName());
-            statement.setString(2, plan.objectName());
-            // 字典表里的类型是 PROCEDURE / MATERIALIZED VIEW 这样的字面量，下划线要还原成空格。
-            statement.setString(3, plan.kind().name().replace('_', ' '));
-            try (ResultSet rs = statement.executeQuery()) {
-                while (rs.next() && errors.size() < MAX_COMPILATION_ERRORS) {
-                    errors.add(new CompilationError(
-                            intOrNull(rs.getObject("line")), intOrNull(rs.getObject("position")), rs.getString("text")));
-                }
-            }
-        } catch (Exception ignored) {
-            return List.of();
-        }
-        return List.copyOf(errors);
+        // 字典表里的类型是 PROCEDURE / MATERIALIZED VIEW 这样的字面量，下划线要还原成空格。
+        return CompilationDiagnostics.query(connection, dialect, plan.schemaName(), plan.objectName(),
+                plan.kind().name().replace('_', ' '), properties.getSql().getTimeoutSeconds());
     }
 
     /** 写进 SQL 历史的那一句。取第一条：级联出来的后续错误通常都指向同一个原因。 */
@@ -483,10 +482,6 @@ public class SchemaObjectService {
         String where = first.line() == null ? "" : "第 " + first.line() + " 行"
                 + (first.position() == null ? "" : "第 " + first.position() + " 列") + "：";
         return where + (first.text() == null ? "" : first.text().strip());
-    }
-
-    private static Integer intOrNull(Object value) {
-        return value instanceof Number number ? number.intValue() : null;
     }
 
     /**

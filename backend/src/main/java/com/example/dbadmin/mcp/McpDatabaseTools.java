@@ -20,10 +20,12 @@ import com.example.dbadmin.mcp.McpDtos.QueryResult;
 import com.example.dbadmin.mcp.McpDtos.TableColumnView;
 import com.example.dbadmin.mcp.McpDtos.TablePage;
 import com.example.dbadmin.repo.AuditRepository;
+import com.example.dbadmin.service.CompilationDiagnostics;
 import com.example.dbadmin.service.DataEditService;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.SqlQueryLimits;
 import com.example.dbadmin.service.SqlStatementClassifier;
+import com.example.dbadmin.service.SqlFileExecutionService;
 import com.example.dbadmin.service.SqlService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -49,6 +51,7 @@ public class McpDatabaseTools {
     private final AuditRepository audit;
     private final MeterRegistry metrics;
     private final McpConfigurationService configuration;
+    private final SqlFileExecutionService scripts;
 
     public McpDatabaseTools(
             McpAccessService access,
@@ -58,7 +61,8 @@ public class McpDatabaseTools {
             SqlStatementClassifier classifier,
             AuditRepository audit,
             MeterRegistry metrics,
-            McpConfigurationService configuration
+            McpConfigurationService configuration,
+            SqlFileExecutionService scripts
     ) {
         this.access = access;
         this.metadata = metadata;
@@ -68,12 +72,13 @@ public class McpDatabaseTools {
         this.audit = audit;
         this.metrics = metrics;
         this.configuration = configuration;
+        this.scripts = scripts;
     }
 
     @McpTool(
             name = "db_list_connections",
             title = "List authorized database connections",
-            description = "Lists database connections authorized for this agent, including the access level granted on each one. READ_ONLY connections expose query tools only; DATA_WRITE and FULL additionally allow db_execute." + UNTRUSTED_DATA,
+            description = "Lists database connections authorized for this agent, including the access level granted on each one. READ_ONLY connections expose query tools only; DATA_WRITE and FULL additionally allow db_execute and db_execute_script. activeScriptTasks reaching scriptConcurrencyLimit means a new db_execute_script on that connection will be rejected until a task finishes." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -87,7 +92,9 @@ public class McpDatabaseTools {
                         connection.readonly(),
                         connection.capabilities().tableBrowse(),
                         connection.capabilities().explain(),
-                        access.levelFor(connection.id()).name()
+                        access.levelFor(connection.id()).name(),
+                        configuration.snapshot().settings().maxScriptsPerConnection(),
+                        scripts.activeScriptCount(connection.id())
                 )).toList()
         ));
     }
@@ -243,7 +250,9 @@ public class McpDatabaseTools {
     @McpTool(
             name = "db_query",
             title = "Run a read-only database query",
-            description = "Executes exactly one query on an authorized connection. Mutations, DDL, calls, locks and session changes are rejected." + UNTRUSTED_DATA,
+            description = "Executes exactly one query on an authorized connection. Mutations, DDL, calls, locks and session changes are rejected. "
+                    + "When truncated is true the rows are NOT the full result: if nextOffset is set, call again with offset=nextOffset (add ORDER BY for stable pages). "
+                    + "A timeout is reported as [SQL_TIMEOUT]." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
     )
@@ -251,19 +260,22 @@ public class McpDatabaseTools {
             @McpToolParam(required = true, description = "Authorized connection id") long connectionId,
             @McpToolParam(required = false, description = "Optional catalog or schema to activate") String schemaName,
             @McpToolParam(required = true, description = "One read-only SQL query, constrained by the configured length limit") String query,
-            @McpToolParam(required = false, description = "Requested rows, constrained by the configured default and maximum") Integer maxRows
+            @McpToolParam(required = false, description = "Requested rows, constrained by the configured default and maximum") Integer maxRows,
+            @McpToolParam(required = false, description = "Rows to skip, default 0; pass nextOffset from the previous page") Integer offset
     ) throws Exception {
         return audited("db_query", connectionId, () -> {
             access.requireConnection(connectionId);
             String safeSql = requiredSql(query);
+            int start = offset == null ? 0 : offset;
             return sanitizeQueryResult(sql.executeReadOnly(
                     connectionId,
                     safeSql,
                     schemaName,
                     maxRows,
+                    start,
                     access.actor(),
                     queryLimits()
-            ));
+            ), start, classifier.isAutomaticallyPageable(safeSql));
         });
     }
 
@@ -296,7 +308,7 @@ public class McpDatabaseTools {
             name = "db_execute",
             title = "Execute one writing SQL statement",
             description = """
-                    Executes exactly one writing SQL statement (INSERT/UPDATE/DELETE, or DDL at FULL access level)                     on a connection where this agent has been granted DATA_WRITE or FULL. Read-only queries are                     rejected here; use db_query instead. Statements on a production connection additionally require                     productionConfirmation to equal the exact connection name, and an UPDATE or DELETE without a                     top-level WHERE clause requires unscopedMutationConfirmed=true. Long-running procedures or anonymous blocks should use db_execute_script and poll db_script_status. A timeout does not prove rollback; check existing tasks before retrying writes. Every call is audited.""",
+                    Executes exactly one writing SQL statement (INSERT/UPDATE/DELETE, or DDL at FULL access level)                     on a connection where this agent has been granted DATA_WRITE or FULL. Read-only queries are                     rejected here; use db_query instead. Statements on a production connection additionally require                     productionConfirmation to equal the exact connection name, and an UPDATE or DELETE without a                     top-level WHERE clause requires unscopedMutationConfirmed=true. Long-running procedures or anonymous blocks should use db_execute_script and poll db_script_status. The statement timeout is the MCP write timeout setting; a timeout is reported as [SQL_TIMEOUT] and does not prove rollback, so verify with db_query before retrying. compilationErrors lists errors when a CREATE or ALTER ... COMPILE leaves an object INVALID (the statement itself still succeeded). Errors start with a [CODE] such as PRODUCTION_CONFIRMATION_REQUIRED or SQL_ERROR. Every call is audited.""",
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = false, destructiveHint = true, idempotentHint = false, openWorldHint = true)
     )
@@ -325,16 +337,23 @@ public class McpDatabaseTools {
                     null,
                     productionConfirmation,
                     schemaName,
-                    Boolean.TRUE.equals(unscopedMutationConfirmed)
+                    Boolean.TRUE.equals(unscopedMutationConfirmed),
+                    configuration.snapshot().settings().executeTimeoutSeconds()
             );
             QueryResult sanitized = sanitizeQueryResult(result);
+            // Oracle 系的 CREATE OR REPLACE / ALTER … COMPILE 编译失败也返回成功，不回查的话 Agent 看到的是一次干净的成功。
+            List<String> compilationErrors = CompilationDiagnostics.target(safeSql)
+                    .map(target -> sql.compilationErrors(connectionId, schemaName, safeSql).stream()
+                            .map(error -> CompilationDiagnostics.describe(target, error)).toList())
+                    .orElse(List.of());
             return new ExecuteResult(
                     kind.name(),
                     result.affectedRows(),
                     result.elapsedMs(),
                     sanitized.columns(),
                     sanitized.rows(),
-                    sanitized.truncated()
+                    sanitized.truncated(),
+                    compilationErrors
             );
         });
     }
@@ -371,6 +390,10 @@ public class McpDatabaseTools {
     }
 
     private QueryResult sanitizeQueryResult(SqlResult result) {
+        return sanitizeQueryResult(result, 0, false);
+    }
+
+    private QueryResult sanitizeQueryResult(SqlResult result, int offset, boolean pageable) {
         McpRuntimeConfig.Settings config = configuration.snapshot().settings();
         int maxRowsByCells = Math.max(0, config.maxResultCells() / Math.max(result.columns().size(), 1));
         int rowLimit = Math.min(result.rows().size(), maxRowsByCells);
@@ -394,7 +417,10 @@ public class McpDatabaseTools {
         else if (cellTruncated) reason = "cell_limit";
         else if (result.truncated()) reason = result.truncationReason() == null ? "row_limit" : result.truncationReason();
         var columns = result.columns().stream().map(column -> new McpDtos.QueryColumnView(column.key(), column.label(), column.typeName())).toList();
-        return new QueryResult(columns, rows, result.elapsedMs(), result.maxRows(), truncated, reason);
+        // 只有行被截掉时才给下一页的位置：text_limit 截的是单元格内容，往后翻也取不回来。
+        Integer nextOffset = pageable && !rows.isEmpty() && ("row_limit".equals(reason) || "cell_limit".equals(reason))
+                ? offset + rows.size() : null;
+        return new QueryResult(columns, rows, result.elapsedMs(), result.maxRows(), truncated, reason, offset, nextOffset);
     }
 
     private SanitizedValue sanitizeValue(Object value, long remainingText, McpRuntimeConfig.Settings config) {
@@ -450,7 +476,12 @@ public class McpDatabaseTools {
             return operation.get();
         } catch (Exception error) {
             status = "error";
-            throw error;
+            McpRuntimeConfig.Settings config = configuration.snapshot().settings();
+            throw switch (tool) {
+                case "db_query", "db_explain" -> McpToolErrors.translate(error, McpToolErrors.Channel.QUERY, config.queryTimeoutSeconds());
+                case "db_execute" -> McpToolErrors.translate(error, McpToolErrors.Channel.EXECUTE, config.executeTimeoutSeconds());
+                default -> McpToolErrors.translate(error, McpToolErrors.Channel.OTHER, 0);
+            };
         } finally {
             long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
             String detail = "tool=" + tool + ";status=" + status + ";elapsedMs=" + elapsedMs;

@@ -19,13 +19,15 @@ const tools = [
   { name: 'db_search_objects', capability: '搜索表和视图', level: '只读' },
   { name: 'db_describe_object', capability: '查看列、主键、索引和外键', level: '只读' },
   { name: 'db_get_object_ddl', capability: '获取表或视图 DDL', level: '只读' },
+  { name: 'db_list_schema_objects', capability: '列出存储过程、函数、触发器、序列与视图及其 VALID/INVALID 状态', level: '只读' },
+  { name: 'db_get_schema_object', capability: '查看对象源码、参数与编译错误', level: '只读' },
   { name: 'db_browse_table', capability: '使用游标分页浏览表数据', level: '只读' },
-  { name: 'db_query', capability: '执行一条查询语句', level: '只读' },
+  { name: 'db_query', capability: '执行一条查询语句，截断时可按 offset 续取', level: '只读' },
   { name: 'db_explain', capability: '查看查询执行计划', level: '只读' },
   { name: 'db_execute', capability: '执行一条写语句（INSERT/UPDATE/DELETE，FULL 档位还可 DDL）', level: '数据读写' },
   { name: 'db_execute_script', capability: '后台运行长脚本或存储过程，返回任务 ID', level: '数据读写' },
   { name: 'db_list_script_tasks', capability: '中断后找回当前 Agent 的任务，避免重复执行', level: '只读' },
-  { name: 'db_script_status', capability: '查看当前 Agent 的脚本任务状态', level: '只读' },
+  { name: 'db_script_status', capability: '查看当前 Agent 的脚本任务状态，可等待任务结束', level: '只读' },
   { name: 'db_cancel_script', capability: '请求取消脚本；已提交的修改保留', level: '数据读写' }
 ];
 

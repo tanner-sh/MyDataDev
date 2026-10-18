@@ -272,6 +272,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
                 {job.transaction?.outcome === 'UNKNOWN' && <Alert type="warning" showIcon title="提交结果未知，请核对数据库；任务不会自动重跑。" />}
                 {job.message && <Text type={job.status === 'FAILED' ? 'danger' : 'secondary'}>{job.message}</Text>}
                 {job.failedStatementIndex != null && <Alert type="error" showIcon title={`第 ${job.failedStatementIndex} 条执行失败`} description={job.failedSqlPreview ? <pre className="sql-file-error-sql">{job.failedSqlPreview}</pre> : undefined} />}
+                {!!job.compilationErrors?.length && <Alert type="warning" showIcon title={`${job.compilationErrors.length} 条编译错误：对象已创建，但处于不可用（INVALID）状态`} description={<pre className="sql-file-error-sql">{job.compilationErrors.join('\n')}</pre>} />}
               </Space>
             </div>
           );

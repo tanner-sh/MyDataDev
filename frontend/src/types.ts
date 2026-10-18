@@ -549,6 +549,8 @@ export type SqlFileExecution = {
   startedAt?: string;
   finishedAt?: string;
   createdAt: string;
+  /** 语句成功但对象编译失败（Oracle 系 INVALID）的明细，每条一行。 */
+  compilationErrors?: string[];
 };
 export type SqlFileExecutionPage = { items: SqlFileExecution[]; page: number; pageSize: number; hasMore: boolean };
 export type SqlFileCandidate = {
@@ -599,6 +601,7 @@ export type McpLimits = {
   maxTablePageSize: number;
   sessionTtlMinutes: number;
   maxScriptsPerConnection: number;
+  executeTimeoutSeconds: number;
 };
 export type McpAccessLevel = 'READ_ONLY' | 'DATA_WRITE' | 'FULL';
 /** 一条连接授权：连接与它的档位是一体的，分开存会出现「授了连接没档位」的中间态。 */

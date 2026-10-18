@@ -37,7 +37,10 @@ import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -408,6 +411,9 @@ public class SqlFileExecutionService {
 
     public SqlFileExecutionResponse get(long id) { return response(require(id)); }
 
+    /** 排队或运行中的脚本任务数，与 start 时比较并发上限用的是同一个计数。 */
+    public int activeScriptCount(long connectionId) { return jobs.countRunningByConnection(connectionId); }
+
     public SqlFileExecutionPage list(Long connectionId, Integer page, Integer pageSize) {
         int safePage = Math.max(page == null ? 0 : page, 0);
         int size = Math.min(Math.max(pageSize == null ? 20 : pageSize, 1), 100);
@@ -493,12 +499,15 @@ public class SqlFileExecutionService {
         long[] current = {0};
         long[] success = {0};
         long[] queryRows = {0};
+        CompilationCollector[] compiled = {null};
         try {
             jobs.markRunning(id);
             ensureNotCancelled(id);
             verifyUnchanged(job);
             DbConnection target = connections.require(job.connectionId());
             DatabaseDialect dialect = dialects.dialectFor(target);
+            CompilationCollector compilation = new CompilationCollector(id, dialect);
+            compiled[0] = compilation;
             try (Connection connection = connections.open(job.connectionId())) {
                 if (job.sessionChanged()) connections.discardOnClose(connection);
                 connection.setAutoCommit(false);
@@ -548,6 +557,7 @@ public class SqlFileExecutionService {
                                     }
                                     result = statement.getMoreResults();
                                 }
+                                compilation.collect(connection, sql);
                                 pending[0]++;
                                 if (pending[0] >= commitBatchSize) {
                                     connection.commit();
@@ -589,7 +599,7 @@ public class SqlFileExecutionService {
                 }
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
-                    "SQL 文件执行完成，共成功 " + success[0] + " 条语句。");
+                    "SQL 文件执行完成，共成功 " + success[0] + " 条语句。" + compiled[0].summary());
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; statements=" + success[0]);
         } catch (StatementFailure failure) {
             if (cancellationRequested(id)) {
@@ -624,6 +634,7 @@ public class SqlFileExecutionService {
     private void executeScriptJob(long id) {
         SqlFileExecution job = require(id);
         long[] current = {0}, success = {0}, queryRows = {0}, lastProgress = {0};
+        CompilationCollector[] compiled = {null};
         SqlScriptParser.Unit[] currentUnit = {null};
         SqlScriptTransaction[] scope = {null};
         Runnable persist = () -> {
@@ -645,6 +656,7 @@ public class SqlFileExecutionService {
                 try (Statement statement = connection.createStatement()) {
                     runningStatements.put(id, statement);
                     dialects.dialectFor(target).configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
+                    compiled[0] = new CompilationCollector(id, dialects.dialectFor(target));
                     SqlFileStatementReader.readUnits(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
                             properties.getSqlFile().getMaxStatementChars(), unit -> {
                         ensureNotCancelled(id);
@@ -662,6 +674,7 @@ public class SqlFileExecutionService {
                             } else if (statement.getUpdateCount() == -1) break;
                             result = statement.getMoreResults();
                         }
+                        compiled[0].collect(connection, unit.sql());
                         success[0]++;
                         if (progressDue(lastProgress)) jobs.updateExecutionProgress(id, current[0], success[0], queryRows[0],
                                 "已执行第 " + current[0] + " 个单元（不代表已提交）。");
@@ -675,7 +688,8 @@ public class SqlFileExecutionService {
                 } finally { runningStatements.remove(id); }
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
-                    "SQL 文件执行完成；" + ("COMMIT".equals(job.transaction().endOfFileAction()) ? "剩余事务已提交。" : "剩余未提交事务已回滚，仅保留此前已提交内容。"));
+                    "SQL 文件执行完成；" + ("COMMIT".equals(job.transaction().endOfFileAction()) ? "剩余事务已提交。" : "剩余未提交事务已回滚，仅保留此前已提交内容。")
+                            + (compiled[0] == null ? "" : compiled[0].summary()));
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; mode=SCRIPT");
         } catch (Exception error) {
             boolean cancelled = error instanceof CancelledException || jobs.isCancelRequested(id);
@@ -788,7 +802,45 @@ public class SqlFileExecutionService {
                 job.fileSize(), job.checksumSha256(), job.detectedCharset(), job.status(), job.phase(), job.processedBytes(),
                 job.statementTotal(), job.statementCurrent(), job.queryCount(), job.mutationCount(), job.ddlCount(), job.unknownCount(),
                 job.successCount(), job.queryRowCount(), job.failedStatementIndex(), job.failedSqlPreview(), job.message(),
-                job.metadataChanged(), job.sessionChanged(), job.cancelRequested(), job.expiresAt(), job.startedAt(), job.finishedAt(), job.createdAt(), job.transaction());
+                job.metadataChanged(), job.sessionChanged(), job.cancelRequested(), job.expiresAt(), job.startedAt(), job.finishedAt(), job.createdAt(), job.transaction(),
+                job.compilationErrors() == null || job.compilationErrors().isBlank() ? List.of() : job.compilationErrors().lines().toList());
+    }
+
+    /**
+     * Oracle 系的 CREATE OR REPLACE / ALTER … COMPILE 编译失败也返回成功，对象以 INVALID 留在库里。
+     * 脚本照 SQL*Plus 的习惯继续往下跑（中途停下会让一份部署脚本只装一半），但每个坏对象都要记进任务结果，
+     * 否则调用方只能自己去翻 ALL_ERRORS —— 部署 78 个过程时那就是 78 次核对。
+     */
+    private final class CompilationCollector {
+        private static final int MAX_LINES = 200;
+        private final long id;
+        private final DatabaseDialect dialect;
+        private final List<String> lines = new ArrayList<>();
+        private final Set<String> objects = new LinkedHashSet<>();
+
+        CompilationCollector(long id, DatabaseDialect dialect) {
+            this.id = id;
+            this.dialect = dialect;
+        }
+
+        void collect(Connection connection, String sql) {
+            if (dialect.compilationErrorsSql() == null) return;
+            var target = CompilationDiagnostics.target(sql);
+            if (target.isEmpty()) return;
+            var errors = CompilationDiagnostics.read(connection, dialect, sql, null, properties.getSql().getTimeoutSeconds());
+            if (errors.isEmpty()) return;
+            objects.add(target.get().label());
+            for (var error : errors) {
+                if (lines.size() >= MAX_LINES) break;
+                lines.add(CompilationDiagnostics.describe(target.get(), error).replaceAll("[\\r\\n]+", " "));
+            }
+            try { jobs.updateCompilationErrors(id, String.join("\n", lines)); } catch (Exception ignored) { }
+        }
+
+        String summary() {
+            return objects.isEmpty() ? "" : "其中 " + objects.size() + " 个对象编译失败（INVALID）：" + String.join("、", objects)
+                    + "；明细见 compilationErrors。";
+        }
     }
 
     private static final class CancelledException extends RuntimeException { }

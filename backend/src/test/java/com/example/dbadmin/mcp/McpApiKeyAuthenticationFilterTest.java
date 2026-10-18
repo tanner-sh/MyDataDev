@@ -95,7 +95,7 @@ class McpApiKeyAuthenticationFilterTest {
         McpRuntimeConfig.Agent agentB = agent(2L, "agent-b", "secret-b", 2L);
         when(configuration.snapshot()).thenReturn(new McpRuntimeConfig(
                 new McpRuntimeConfig.Settings(true, 100, 1_000, 50_000, 2_000_000,
-                        20_000, 100_000, 30, 100, 500, 100, 500, 30, 1),
+                        20_000, 100_000, 30, 100, 500, 100, 500, 30, 1, 60),
                 Set.of("https://trusted.example"),
                 Map.of(agentA.agentId(), agentA, agentB.agentId(), agentB)
         ));

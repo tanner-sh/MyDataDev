@@ -58,7 +58,8 @@ class McpEndpointIntegrationTest {
     public static class ScriptProbe {
         @org.springaicommunity.mcp.annotation.McpTool(name = "test_script_probe", description = "Test structured null fields", generateOutputSchema = true)
         public McpDtos.ScriptJobResult run() {
-            return new McpDtos.ScriptJobResult(1, 999, "SUCCEEDED", "DONE", 3L, 3, null, "SCRIPT", "COMMIT", "COMMITTED", 1, 0, null, null, null, "");
+            return new McpDtos.ScriptJobResult(1, 999, "SUCCEEDED", "DONE", 3L, 3, null, "SCRIPT", "COMMIT", "COMMITTED", 1, 0, null, null, null, "",
+                    3, null, null, null, java.util.List.of());
         }
     }
 
@@ -81,7 +82,7 @@ class McpEndpointIntegrationTest {
         for (JsonNode required : schema.path("required")) {
             assertThat(structured.has(required.asText())).as("structuredContent 缺少必有字段 " + required.asText()).isTrue();
         }
-        for (String field : new String[]{"failedStatementIndex", "lastCommitIndex", "failedStartLine", "failedEndLine"}) {
+        for (String field : new String[]{"failedStatementIndex", "lastCommitIndex", "failedStartLine", "failedEndLine", "startedAt", "finishedAt", "elapsedMs"}) {
             assertThat(structured.get(field).isNull()).isTrue();
             assertThat(schema.path("properties").path(field).path("type").toString()).contains("\"null\"");
         }
@@ -167,6 +168,8 @@ class McpEndpointIntegrationTest {
                 .contains("db_script_status")
                 .contains("db_cancel_script")
                 .contains("db_list_script_tasks")
+                .contains("db_list_schema_objects")
+                .contains("db_get_schema_object")
                 .contains("\"readOnlyHint\":true")
                 .doesNotContain("db_update")
                 .doesNotContain("db_delete");
@@ -189,7 +192,21 @@ class McpEndpointIntegrationTest {
                     assertNullableString(output.path("items").path("items").path("properties").path("schemaName"));
                 }
                 case "db_browse_table" -> assertNullableString(output.path("nextCursor"));
-                case "db_query", "db_explain" -> assertNullableString(output.path("truncatedReason"));
+                case "db_query", "db_explain" -> {
+                    assertNullableString(output.path("truncatedReason"));
+                    assertNullable(output.path("nextOffset"), "integer");
+                }
+                case "db_execute" -> assertThat(output.path("compilationErrors").path("type").asText()).isEqualTo("array");
+                case "db_list_schema_objects" -> {
+                    JsonNode item = output.path("items").path("items").path("properties");
+                    for (String field : new String[]{"schemaName", "displayName", "subtype", "status"}) assertNullableString(item.path(field));
+                }
+                case "db_get_schema_object" -> {
+                    assertNullableString(output.path("source"));
+                    assertNullableString(output.path("sourceUnavailableReason"));
+                    JsonNode parameter = output.path("parameters").path("items").path("properties");
+                    for (String field : new String[]{"name", "mode", "typeName"}) assertNullableString(parameter.path(field));
+                }
                 default -> { }
             }
         }
@@ -232,6 +249,13 @@ class McpEndpointIntegrationTest {
                 .contains("\"connections\":[]")
                 .contains("\"isError\":false")
                 .doesNotContain("MCP 调用身份不可用");
+    }
+
+    private static void assertNullable(JsonNode schema, String type) {
+        assertThat(schema.path("type").isArray()).as(schema.toString()).isTrue();
+        assertThat(schema.path("type")).containsExactlyInAnyOrder(
+                com.fasterxml.jackson.databind.node.TextNode.valueOf(type),
+                com.fasterxml.jackson.databind.node.TextNode.valueOf("null"));
     }
 
     private static void assertNullableString(JsonNode schema) {

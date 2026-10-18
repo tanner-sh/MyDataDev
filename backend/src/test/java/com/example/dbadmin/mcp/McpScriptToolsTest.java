@@ -19,7 +19,7 @@ class McpScriptToolsTest {
     @BeforeEach void setup() {
         when(connections.require(1)).thenReturn(new DbConnection(1L, "target", "oracle", "jdbc:test", "sa", "", "dev", false, Instant.now(), Instant.now()));
         var config = mock(McpConfigurationService.class);
-        when(config.snapshot()).thenReturn(new McpRuntimeConfig(new McpRuntimeConfig.Settings(true, 100, 1000, 200000, 1000000, 10000, 100000, 30, 50, 200, 50, 200, 60, 1), Set.of(), Map.of()));
+        when(config.snapshot()).thenReturn(new McpRuntimeConfig(new McpRuntimeConfig.Settings(true, 100, 1000, 200000, 1000000, 10000, 100000, 30, 50, 200, 50, 200, 60, 1, 60), Set.of(), Map.of()));
         tools = new McpScriptTools(new McpAccessService(connections), config, files, new SqlScriptSplitter(), new SqlStatementClassifier(),
                 new ExecutionGuard(), mock(SqlTransactionRegistry.class), mock(AuditRepository.class));
     }
@@ -66,7 +66,7 @@ class McpScriptToolsTest {
     @Test void statusAndCancelAlwaysCheckOwnership() {
         authenticate(McpAccessLevel.FULL);
         when(files.ownedScript(10, "mcp:agent")).thenThrow(new IllegalArgumentException("不属于当前 agent"));
-        assertThatThrownBy(() -> tools.status(10)).hasMessageContaining("不属于");
+        assertThatThrownBy(() -> tools.status(10, null)).hasMessageContaining("不属于");
         assertThatThrownBy(() -> tools.cancel(10)).hasMessageContaining("不属于");
         verify(files, never()).cancel(anyLong(), anyString());
     }
@@ -80,7 +80,8 @@ class McpScriptToolsTest {
         when(files.ownedScripts(1, "mcp:agent", true, 0, 20))
                 .thenReturn(new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionPage(List.of(running, ready), 0, 20, false));
         assertThatThrownBy(() -> tools.executeScript(1, "INSERT INTO t VALUES(1);", "BATCH", "COMMIT", null, false))
-                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .isInstanceOf(McpToolErrors.McpToolException.class)
+                .hasMessageStartingWith("[SQL_FILE_ALREADY_RUNNING]")
                 .hasMessageContaining("并发上限").hasMessageContaining("taskId=42（RUNNING，已执行 3/6）").hasMessageContaining("没有执行");
 
         when(files.ownedScripts(1, "mcp:agent", true, 0, 20))
@@ -88,10 +89,34 @@ class McpScriptToolsTest {
         assertThatThrownBy(() -> tools.executeScript(1, "INSERT INTO t VALUES(1);", "BATCH", "COMMIT", null, false))
                 .hasMessageContaining("不是本 agent 的脚本任务");
     }
+    @Test void statusWaitsOnTheServerUntilTheTaskFinishes() throws Exception {
+        authenticate(McpAccessLevel.READ_ONLY);
+        Instant started = Instant.parse("2026-10-18T01:00:00Z");
+        var finished = new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse(42, 1, "target", "oracle", "mcp-script.sql", 10, "abc", "UTF-8",
+                "SUCCESS", "COMPLETED", 10, 6L, 6, 0, 1, 0, 0, 6, 0, null, null, "完成", false, false, false,
+                Instant.now(), started, started.plusMillis(1500), started, com.example.dbadmin.model.SqlFileTransaction.defaults(),
+                List.of("ETL.SP_X（PROCEDURE） 第 3 行第 5 列：PLS-00201"));
+        when(files.ownedScript(42, "mcp:agent")).thenReturn(job(42, "RUNNING", 3, 6L), job(42, "RUNNING", 4, 6L), finished);
+        var result = tools.status(42, 5);
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.elapsedMs()).isEqualTo(1500);
+        assertThat(result.startedAt()).isEqualTo("2026-10-18T01:00:00Z");
+        assertThat(result.compilationErrors()).containsExactly("ETL.SP_X（PROCEDURE） 第 3 行第 5 列：PLS-00201");
+        verify(files, times(3)).ownedScript(42, "mcp:agent");
+
+        // READY 不会自己开始，等它没有意义；不传 waitSeconds 时保持原来的立即返回。
+        when(files.ownedScript(43, "mcp:agent")).thenReturn(job(43, "READY", 0, null));
+        long before = System.nanoTime();
+        assertThat(tools.status(43, 30).status()).isEqualTo("READY");
+        assertThat(tools.status(43, null).status()).isEqualTo("READY");
+        assertThat(java.time.Duration.ofNanos(System.nanoTime() - before)).isLessThan(java.time.Duration.ofSeconds(1));
+
+        assertThatThrownBy(() -> tools.status(42, 61)).hasMessageStartingWith("[INVALID_REQUEST]").hasMessageContaining("waitSeconds");
+    }
     private static com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse job(long id, String status, long success, Long total) {
         return new com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse(id, 1, "target", "oracle", "mcp-script.sql", 10, "abc", "UTF-8",
                 status, "EXECUTING", 10, total, success, 0, 1, 0, 0, success, 0, null, null, "", false, false, false,
-                Instant.now(), null, null, Instant.now(), com.example.dbadmin.model.SqlFileTransaction.defaults());
+                Instant.now(), null, null, Instant.now(), com.example.dbadmin.model.SqlFileTransaction.defaults(), List.of());
     }
     private void execute(String sql, boolean confirmed) throws Exception { tools.executeScript(1, sql, "SCRIPT", "ROLLBACK", null, confirmed); }
     private void authenticate(McpAccessLevel level) {

@@ -46,6 +46,8 @@ public class McpConfigurationService {
     private static final int MAX_CELL_TEXT_CHARS = 100_000;
     private static final int MAX_SQL_CHARS = 1_000_000;
     private static final int MAX_QUERY_TIMEOUT_SECONDS = 300;
+    /** 与全局 app.sql.timeout-seconds 的默认值一致：db_execute 原来就用那个值。 */
+    private static final int DEFAULT_EXECUTE_TIMEOUT_SECONDS = 60;
     private static final int MAX_PAGE_SIZE = 1_000;
     private static final int MAX_SESSION_TTL_MINUTES = 1_440;
 
@@ -136,7 +138,8 @@ public class McpConfigurationService {
                 limits.maxResultTextChars(), limits.maxCellTextChars(), limits.maxSqlChars(),
                 limits.queryTimeoutSeconds(), limits.metadataPageSize(), limits.maxMetadataPageSize(),
                 limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes(),
-                limits.maxScriptsPerConnection() == null ? old.maxScriptsPerConnection() : limits.maxScriptsPerConnection()
+                limits.maxScriptsPerConnection() == null ? old.maxScriptsPerConnection() : limits.maxScriptsPerConnection(),
+                limits.executeTimeoutSeconds() == null ? old.executeTimeoutSeconds() : limits.executeTimeoutSeconds()
         );
         validateSettings(updated);
         Set<String> origins = normalizeOrigins(request.allowedOrigins());
@@ -154,7 +157,8 @@ public class McpConfigurationService {
         Settings updated = new Settings(
                 enabled, old.defaultQueryRows(), old.maxQueryRows(), old.maxResultCells(), old.maxResultTextChars(),
                 old.maxCellTextChars(), old.maxSqlChars(), old.queryTimeoutSeconds(), old.metadataPageSize(),
-                old.maxMetadataPageSize(), old.tablePageSize(), old.maxTablePageSize(), old.sessionTtlMinutes(), old.maxScriptsPerConnection()
+                old.maxMetadataPageSize(), old.tablePageSize(), old.maxTablePageSize(), old.sessionTtlMinutes(), old.maxScriptsPerConnection(),
+                old.executeTimeoutSeconds()
         );
         transactions.executeWithoutResult(ignored -> repository.updateSettings(updated));
         reload();
@@ -305,6 +309,7 @@ public class McpConfigurationService {
         if (settings.maxCellTextChars() > settings.maxResultTextChars()) throw new IllegalArgumentException("单元文本上限不能大于结果文本总量上限");
         between(settings.maxSqlChars(), 1, MAX_SQL_CHARS, "SQL 长度上限");
         between(settings.queryTimeoutSeconds(), 1, MAX_QUERY_TIMEOUT_SECONDS, "查询超时");
+        between(settings.executeTimeoutSeconds(), 1, MAX_QUERY_TIMEOUT_SECONDS, "写操作超时");
         positive(settings.metadataPageSize(), "元数据默认分页");
         between(settings.maxMetadataPageSize(), 1, MAX_PAGE_SIZE, "元数据最大分页");
         if (settings.metadataPageSize() > settings.maxMetadataPageSize()) throw new IllegalArgumentException("元数据默认分页不能大于最大分页");
@@ -327,7 +332,7 @@ public class McpConfigurationService {
                 source.isEnabled(), source.getDefaultQueryRows(), source.getMaxQueryRows(), source.getMaxResultCells(),
                 source.getMaxResultTextChars(), source.getMaxCellTextChars(), source.getMaxSqlChars(),
                 source.getQueryTimeoutSeconds(), source.getMetadataPageSize(), source.getMaxMetadataPageSize(),
-                source.getTablePageSize(), source.getMaxTablePageSize(), source.getSessionTtlMinutes(), 1
+                source.getTablePageSize(), source.getMaxTablePageSize(), source.getSessionTtlMinutes(), 1, DEFAULT_EXECUTE_TIMEOUT_SECONDS
         );
     }
 
@@ -336,7 +341,8 @@ public class McpConfigurationService {
                 settings.defaultQueryRows(), settings.maxQueryRows(), settings.maxResultCells(),
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(),
                 settings.queryTimeoutSeconds(), settings.metadataPageSize(), settings.maxMetadataPageSize(),
-                settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection()
+                settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection(),
+                settings.executeTimeoutSeconds()
         );
     }
 

@@ -29,7 +29,9 @@ public record McpRuntimeConfig(
             int tablePageSize,
             int maxTablePageSize,
             int sessionTtlMinutes,
-            int maxScriptsPerConnection
+            int maxScriptsPerConnection,
+            /** db_execute 的语句超时；db_query / db_explain 用 queryTimeoutSeconds。 */
+            int executeTimeoutSeconds
     ) {
     }
 
