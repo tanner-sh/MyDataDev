@@ -1,6 +1,7 @@
 package com.example.dbadmin.core;
 
 import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
+import com.example.dbadmin.dto.ApiDtos.SqlResult;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -16,6 +17,19 @@ public class OceanBaseOracleDialect extends OracleDialect {
     @Override
     public boolean supports(String dbType, String jdbcUrl) {
         return "oceanbase-oracle".equalsIgnoreCase(dbType);
+    }
+
+    /** OceanBase returns the plan directly; Oracle's PLAN_TABLE / DBMS_XPLAN sequence is incompatible. */
+    @Override
+    public SqlResult explain(Connection connection, String sql, int maxRows, int timeoutSeconds) throws Exception {
+        long started = System.nanoTime();
+        try (Statement statement = connection.createStatement()) {
+            configureReadStatement(connection, statement, Math.min(maxRows + 1, 200), timeoutSeconds);
+            statement.setMaxRows(maxRows + 1);
+            try (var rows = statement.executeQuery("EXPLAIN " + sql)) {
+                return readResult(rows, (System.nanoTime() - started) / 1_000_000, maxRows);
+            }
+        }
     }
 
     /**

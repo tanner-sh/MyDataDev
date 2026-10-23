@@ -6,6 +6,8 @@ import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.*;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -68,6 +70,141 @@ class SqlFileScriptExecutionTest {
         service.start(upload("INSERT INTO t VALUES(2);"), null, "tester", "SCRIPT", "COMMIT");
         service.start(upload("INSERT INTO t VALUES(3);"), null, "tester");
         assertThat(target.queryForList("SELECT id FROM t ORDER BY id", Integer.class)).containsExactly(2, 3);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"SCRIPT,COMMIT,1,true", "SCRIPT,ROLLBACK,0,true", "BATCH,COMMIT,1,true",
+            "SCRIPT,COMMIT,1,false", "SCRIPT,ROLLBACK,0,false", "BATCH,COMMIT,1,false"})
+    void cleanupFailureDoesNotReplaceConfirmedExecution(String mode, String ending, int persistedRows, boolean statementClose) throws Exception {
+        failResourceClose(statementClose);
+        var result = service.start(upload("INSERT INTO t VALUES(1);"), null, "tester", mode, ending);
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.phase()).isEqualTo("COMPLETED");
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.failedStatementIndex()).isNull();
+        assertThat(result.message()).contains("收尾警告", "connection close failed");
+        if (statementClose) assertThat(result.message()).contains("statement close failed");
+        if (mode.equals("SCRIPT")) {
+            assertThat(result.transaction().outcome()).isEqualTo(ending.equals("COMMIT") ? "COMMITTED" : "TAIL_ROLLED_BACK");
+            assertThat(result.transaction().commitCount()).isEqualTo(ending.equals("COMMIT") ? 1 : 0);
+            assertThat(result.transaction().rollbackCount()).isEqualTo(ending.equals("ROLLBACK") ? 1 : 0);
+        }
+        assertThat(target.queryForObject("SELECT COUNT(*) FROM t", Integer.class)).isEqualTo(persistedRows);
+    }
+
+    @Test void sqlFailureKeepsOriginalErrorAndEarlierCommitWhenCleanupAlsoFails() throws Exception {
+        failResourceClose(true);
+        var result = service.start(upload("INSERT INTO t VALUES(1); COMMIT; INSERT INTO missing VALUES(2);"),
+                null, "tester", "SCRIPT", "ROLLBACK");
+        assertThat(result.status()).isEqualTo("FAILED");
+        assertThat(result.successCount()).isEqualTo(2);
+        assertThat(result.failedStatementIndex()).isEqualTo(3);
+        assertThat(result.message()).contains("MISSING", "收尾错误", "statement close failed", "connection close failed");
+        assertThat(result.transaction().lastCommitIndex()).isEqualTo(2);
+        assertThat(target.queryForList("SELECT id FROM t", Integer.class)).containsExactly(1);
+    }
+
+    @Test void ddlAndExplicitCommitKeepTheirResultsWhenConnectionCloseFails() throws Exception {
+        failResourceClose(false);
+        var result = service.start(upload("CREATE TABLE deployed(id INT); INSERT INTO deployed VALUES(1); COMMIT;"),
+                null, "tester", "SCRIPT", "ROLLBACK");
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.successCount()).isEqualTo(3);
+        assertThat(result.transaction().outcome()).isEqualTo("TAIL_ROLLED_BACK");
+        assertThat(result.transaction().commitCount()).isEqualTo(1);
+        assertThat(result.transaction().rollbackCount()).isEqualTo(1);
+        assertThat(result.transaction().lastCommitIndex()).isEqualTo(3);
+        assertThat(result.message()).contains("收尾警告");
+        assertThat(target.queryForList("SELECT id FROM deployed", Integer.class)).containsExactly(1);
+    }
+
+    @Test void emptyAnonymousBlockCompletesWithTailRollback() throws Exception {
+        var connection = mock(java.sql.Connection.class);
+        var statement = mock(java.sql.Statement.class);
+        when(connections.open(1)).thenReturn(connection);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.getUpdateCount()).thenReturn(-1);
+        var result = service.start(upload("BEGIN\n NULL;\nEND;\n/"), null, "tester", "SCRIPT", "ROLLBACK");
+        assertThat(result.status()).isEqualTo("SUCCESS");
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.transaction().outcome()).isEqualTo("TAIL_ROLLED_BACK");
+        verify(connection).rollback();
+        verify(connection, never()).commit();
+        verify(connections).discardOnClose(connection);
+    }
+
+    @Test void lostExecutionReplyStaysUnknownAndIsNeverRetried() throws Exception {
+        var connection = mock(java.sql.Connection.class);
+        var statement = mock(java.sql.Statement.class);
+        when(connections.open(1)).thenReturn(connection);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.execute(anyString())).thenThrow(new java.sql.SQLRecoverableException("unexpected end of stream", "08006"));
+        doThrow(new java.sql.SQLException("Connection is closed")).when(connection).rollback();
+        doThrow(new java.sql.SQLException("connection close failed")).when(connection).close();
+        var result = service.start(upload("BEGIN\n NULL;\nEND;\n/"), null, "tester", "SCRIPT", "COMMIT");
+        assertThat(result.status()).isEqualTo("FAILED");
+        assertThat(result.phase()).isEqualTo("TRANSACTION_UNKNOWN");
+        assertThat(result.successCount()).isZero();
+        assertThat(result.transaction().outcome()).isEqualTo("UNKNOWN");
+        assertThat(result.message()).contains("unexpected end of stream", "事务结果未知", "不会自动重跑", "connection close failed");
+        verify(statement).execute(anyString());
+        verify(connection, never()).commit();
+    }
+
+    @Test void cancellationKeepsItsStatusWhenConnectionCloseFails() throws Exception {
+        long id = upload("INSERT INTO t VALUES(1); INSERT INTO t VALUES(2);");
+        var connection = mock(java.sql.Connection.class);
+        var statement = mock(java.sql.Statement.class);
+        when(connections.open(1)).thenReturn(connection);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.execute(anyString())).thenAnswer(i -> {
+            service.cancel(id, "tester");
+            throw new java.sql.SQLException("query cancelled", "HY008");
+        });
+        doThrow(new java.sql.SQLException("connection close failed")).when(connection).close();
+        var result = service.start(id, null, "tester", "SCRIPT", "COMMIT");
+        assertThat(result.status()).isEqualTo("CANCELLED");
+        assertThat(result.transaction().outcome()).isEqualTo("ROLLED_BACK");
+        assertThat(result.message()).contains("query cancelled", "connection close failed");
+        verify(statement).execute(anyString());
+        verify(connection).rollback();
+        verify(connection, never()).commit();
+    }
+
+    @Test void finalCommitFailureCannotBecomeSuccessfulCleanupWarning() throws Exception {
+        var connection = mock(java.sql.Connection.class);
+        var statement = mock(java.sql.Statement.class);
+        when(connections.open(1)).thenReturn(connection);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.getUpdateCount()).thenReturn(-1);
+        doThrow(new java.sql.SQLException("commit reply lost", "08006")).when(connection).commit();
+        doThrow(new java.sql.SQLException("connection close failed")).when(connection).close();
+        var result = service.start(upload("INSERT INTO t VALUES(1);"), null, "tester", "SCRIPT", "COMMIT");
+        assertThat(result.status()).isEqualTo("FAILED");
+        assertThat(result.phase()).isEqualTo("TRANSACTION_UNKNOWN");
+        assertThat(result.successCount()).isEqualTo(1);
+        assertThat(result.transaction().outcome()).isEqualTo("UNKNOWN");
+        assertThat(result.transaction().commitCount()).isZero();
+        assertThat(result.message()).contains("commit reply lost", "事务结果未知", "connection close failed");
+        verify(connection).commit();
+        verify(connection).rollback();
+    }
+
+    private void failResourceClose(boolean statementClose) throws Exception {
+        when(connections.open(1)).thenAnswer(i -> {
+            var real = target.getDataSource().getConnection();
+            var connection = mock(java.sql.Connection.class, org.mockito.AdditionalAnswers.delegatesTo(real));
+            if (statementClose) {
+                doAnswer(ignored -> {
+                    var realStatement = real.createStatement();
+                    var statement = mock(java.sql.Statement.class, org.mockito.AdditionalAnswers.delegatesTo(realStatement));
+                    doAnswer(close -> { realStatement.close(); throw new java.sql.SQLException("statement close failed"); }).when(statement).close();
+                    return statement;
+                }).when(connection).createStatement();
+            }
+            doAnswer(close -> { real.close(); throw new java.sql.SQLException("connection close failed"); }).when(connection).close();
+            return connection;
+        });
     }
     @Test void storedProcedureCommitIsNotATopLevelControl() throws Exception {
         long id = upload("-- log\nCREATE OR REPLACE PROCEDURE p AS\nBEGIN\n COMMIT;\nEND;\n/\n");

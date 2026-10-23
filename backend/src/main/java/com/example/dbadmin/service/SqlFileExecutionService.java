@@ -11,6 +11,8 @@ import com.example.dbadmin.model.SqlFileExecution;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -48,6 +50,7 @@ import java.util.concurrent.RejectedExecutionException;
 
 @Service
 public class SqlFileExecutionService {
+    private static final Logger log = LoggerFactory.getLogger(SqlFileExecutionService.class);
     private static final int ERROR_SQL_PREVIEW = 2_000;
 
 
@@ -506,6 +509,8 @@ public class SqlFileExecutionService {
             DatabaseDialect dialect = dialects.dialectFor(target);
             CompilationCollector compilation = new CompilationCollector(id, dialect);
             compiled[0] = compilation;
+            boolean executionCompleted = false;
+            String cleanupWarning = "";
             try (Connection connection = connections.open(job.connectionId())) {
                 if (job.sessionChanged()) connections.discardOnClose(connection);
                 connection.setAutoCommit(false);
@@ -584,20 +589,26 @@ public class SqlFileExecutionService {
                     pending[0] = 0;
                     jobs.updateExecutionProgress(id, current[0], success[0], queryRows[0],
                             "已执行全部 " + current[0] + " 条语句，正在收尾。");
+                    executionCompleted = true;
                 } catch (Exception error) {
                     // Includes file reads, cancellation between units, final batch flush and final commit.
-                    try { connection.rollback(); }
-                    catch (Exception rollbackError) {
-                        error.addSuppressed(rollbackError);
-                        try { connection.abort(Runnable::run); } catch (Exception abortError) { error.addSuppressed(abortError); }
+                    if (!executionCompleted) {
+                        try { connection.rollback(); }
+                        catch (Exception rollbackError) {
+                            error.addSuppressed(rollbackError);
+                            try { connection.abort(Runnable::run); } catch (Exception abortError) { error.addSuppressed(abortError); }
+                        }
                     }
                     throw error;
                 } finally {
                     runningStatements.remove(id);
                 }
+            } catch (Exception error) {
+                if (!executionCompleted) throw error;
+                cleanupWarning = cleanupWarning(job, error);
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
-                    "SQL 文件执行完成，共成功 " + success[0] + " 条语句。" + compiled[0].summary());
+                    "SQL 文件执行完成，共成功 " + success[0] + " 条语句。" + compiled[0].summary() + cleanupWarning);
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; statements=" + success[0]);
         } catch (StatementFailure failure) {
             if (cancellationRequested(id)) {
@@ -647,6 +658,8 @@ public class SqlFileExecutionService {
             verifyUnchanged(job);
             DbConnection target = connections.require(job.connectionId());
             connections.requireNoManualTransaction(job.connectionId());
+            boolean executionCompleted = false;
+            String cleanupWarning = "";
             try (Connection connection = connections.open(job.connectionId());
                  SqlScriptTransaction tx = new SqlScriptTransaction(connection, persist)) {
                 if (job.sessionChanged()) connections.discardOnClose(connection);
@@ -680,22 +693,29 @@ public class SqlFileExecutionService {
                     ensureNotCancelled(id);
                     currentUnit[0] = null;
                     tx.finish("COMMIT".equals(job.transaction().endOfFileAction()), current[0]);
+                    // Only resource closing remains; its errors cannot undo this confirmed outcome.
+                    executionCompleted = true;
                 } catch (Exception error) {
                     tx.fail(error);
                     throw error;
                 } finally { runningStatements.remove(id); }
+            } catch (Exception error) {
+                if (!executionCompleted) throw error;
+                cleanupWarning = cleanupWarning(job, error);
             }
             jobs.markTerminal(id, "SUCCESS", "COMPLETED", current[0], success[0], queryRows[0], null, null,
                     "SQL 文件执行完成；" + ("COMMIT".equals(job.transaction().endOfFileAction()) ? "剩余事务已提交。" : "剩余未提交事务已回滚，仅保留此前已提交内容。")
-                            + (compiled[0] == null ? "" : compiled[0].summary()));
+                            + (compiled[0] == null ? "" : compiled[0].summary()) + cleanupWarning);
             audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; mode=SCRIPT");
         } catch (Exception error) {
             boolean cancelled = error instanceof CancelledException || jobs.isCancelRequested(id);
             var unit = currentUnit[0];
             String outcome = scope[0] == null ? "NOT_STARTED" : scope[0].outcome;
+            log.warn("SQL script failed: taskId={}, connectionId={}, executedCount={}, transactionOutcome={}",
+                    id, job.connectionId(), success[0], outcome, error);
             String detail = (unit == null ? "" : "第 " + unit.startLine() + "–" + unit.endLine() + " 行：") + safeMessage(error)
                     + ("UNKNOWN".equals(outcome) ? "；事务结果未知，请核对数据库，不会自动重跑。" : "；已尝试回滚当前事务，此前提交及数据库内部提交不会撤销。")
-                    + (error.getSuppressed().length == 0 ? "" : "；收尾错误：" + safeMessage(error.getSuppressed()[0]));
+                    + suppressedErrors(error);
             jobs.markTerminal(id, cancelled ? "CANCELLED" : "FAILED", "UNKNOWN".equals(outcome) ? "TRANSACTION_UNKNOWN" : cancelled ? "CANCELLED" : "EXECUTION_FAILED",
                     current[0], success[0], queryRows[0], unit == null ? null : unit.index(), unit == null ? null : preview(unit.sql()), detail);
             audit.onConnection(job.actor(), cancelled ? "SQL_FILE_CANCELLED" : "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; " + detail);
@@ -705,6 +725,19 @@ public class SqlFileExecutionService {
 
             deleteFileQuietly(job);
         }
+    }
+
+    private String cleanupWarning(SqlFileExecution job, Exception error) {
+        log.warn("SQL file resource cleanup failed after execution completed: taskId={}, connectionId={}, mode={}",
+                job.id(), job.connectionId(), job.transaction().mode(), error);
+        String warning = "；收尾警告（执行及事务结果保持不变，请勿因此重跑）：" + safeMessage(error) + suppressedErrors(error);
+        return warning;
+    }
+
+    private String suppressedErrors(Throwable error) {
+        if (error.getSuppressed().length == 0) return "";
+        return "；收尾错误：" + java.util.Arrays.stream(error.getSuppressed())
+                .map(this::safeMessage).collect(java.util.stream.Collectors.joining("；"));
     }
 
     @Scheduled(fixedDelay = 60 * 60 * 1000, initialDelay = 60 * 1000)
