@@ -21,6 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -165,18 +166,20 @@ class ConnectionServiceNamespaceTest {
      * 一条，连接池借空之后这条连接上的所有请求都只剩借连接超时。
      */
     @Test
-    void returnsTheBorrowedConnectionWhenTheDriverThrowsAnErrorWhileSwitching() throws Exception {
+    void evictsTheBorrowedConnectionWhenTheDriverThrowsAnErrorWhileSwitching() throws Exception {
         Connection driver = mock(Connection.class);
         when(driver.getSchema()).thenThrow(new AbstractMethodError("Unimplemented method: getSchema()"));
         doThrow(new AbstractMethodError("Unimplemented method: getSchema()")).when(driver).setSchema(anyString());
         RemoteDataSourceRegistry registry = mock(RemoteDataSourceRegistry.class);
-        when(registry.open(any(), any(), any())).thenReturn(BorrowedConnection.wrap(driver, mock(com.zaxxer.hikari.HikariDataSource.class)));
+        var pool = mock(com.zaxxer.hikari.HikariDataSource.class);
+        when(registry.open(any(), any(), any())).thenReturn(BorrowedConnection.wrap(driver, pool));
         ConnectionService overDriver = serviceOver(registry);
 
         assertThatThrownBy(() -> overDriver.open(CONNECTION_ID, "REPORTING"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("REPORTING");
-        verify(driver).close();
+        verify(pool).evictConnection(driver);
+        verify(driver, never()).close();
     }
 
     private ConnectionService serviceOver(RemoteDataSourceRegistry registry) {

@@ -6,6 +6,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
+import java.sql.SQLException;
 
 /** Keeps eviction attached to the borrowed connection's original pool, even after pool replacement. */
 final class BorrowedConnection implements InvocationHandler {
@@ -36,12 +37,16 @@ final class BorrowedConnection implements InvocationHandler {
         if (method.getName().equals("close") && method.getParameterCount() == 0) {
             if (closed) return null;
             closed = true;
-            try {
-                // Evict BEFORE returning to the pool: no other borrower may see contaminated session state.
-                if (discard) owner.evictConnection(delegate);
-            } finally { delegate.close(); }
+            // Eviction already removes and closes the physical connection. Closing the Hikari proxy
+            // afterwards resets dirty state through a now-empty PoolEntry (setAutoCommit NPE).
+            // Returning it first would expose contaminated session state to another borrower.
+            if (discard) owner.evictConnection(delegate);
+            else delegate.close();
             return null;
         }
+        if (method.getName().equals("isClosed") && closed) return true;
+        if (method.getName().equals("isValid") && closed) return false;
+        if (closed && method.getDeclaringClass() != Object.class) throw new SQLException("Connection is closed");
         try { return method.invoke(delegate, args); }
         catch (InvocationTargetException error) { throw error.getCause(); }
     }
