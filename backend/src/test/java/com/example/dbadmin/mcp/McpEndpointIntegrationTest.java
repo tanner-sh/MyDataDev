@@ -206,6 +206,18 @@ class McpEndpointIntegrationTest {
                 case "db_get_schema_object" -> {
                     assertNullableString(output.path("source"));
                     assertNullableString(output.path("sourceUnavailableReason"));
+                    assertNullableString(output.path("sourceVersion"));
+                    assertNullable(output.path("sourceTotalChars"), "integer");
+                    assertNullable(output.path("nextSourceOffset"), "integer");
+                    assertThat(output.path("sourceOffset").path("type").asText()).isEqualTo("integer");
+                    var input = tool.path("inputSchema");
+                    assertThat(input.path("required")).doesNotContain(
+                            com.fasterxml.jackson.databind.node.TextNode.valueOf("sourceOffset"),
+                            com.fasterxml.jackson.databind.node.TextNode.valueOf("sourceMaxChars"),
+                            com.fasterxml.jackson.databind.node.TextNode.valueOf("expectedSourceVersion"));
+                    assertThat(input.path("properties").has("sourceOffset")).isTrue();
+                    assertThat(input.path("properties").has("sourceMaxChars")).isTrue();
+                    assertThat(input.path("properties").has("expectedSourceVersion")).isTrue();
                     JsonNode parameter = output.path("parameters").path("items").path("properties");
                     for (String field : new String[]{"name", "mode", "typeName"}) assertNullableString(parameter.path(field));
                 }

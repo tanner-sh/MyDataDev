@@ -697,7 +697,12 @@ public class SchemaObjectCatalog {
     private String scalar(Connection connection, String sql, Object... parameters) throws Exception {
         List<String> values = query(connection, sql, rs -> {
             Object value = rs.getObject(1);
-            if (value instanceof java.sql.Clob clob) return clob.getSubString(1, (int) Math.min(clob.length(), 2_000_000));
+            if (value instanceof java.sql.Clob clob) {
+                long length = clob.length();
+                // 不能把前缀冒充完整定义，否则 MCP 分片会报告错误的总长度，界面替换还可能丢掉尾部。
+                if (length > 2_000_000) throw new IllegalStateException("对象源码超过 200 万字符读取上限，请按字符分片查询数据库源码。");
+                return clob.getSubString(1, (int) length);
+            }
             return value == null ? null : value.toString();
         }, parameters);
         return values.isEmpty() ? null : values.get(0);

@@ -134,7 +134,14 @@ public final class McpDtos {
             @Schema(nullable = true) String source,
             boolean sourceAvailable,
             @Schema(nullable = true) String sourceUnavailableReason,
+            /** 当前分片后是否还有源码；完整性还需核对从 0 开始的累计长度。 */
             boolean sourceTruncated,
+            int sourceOffset,
+            /** 完整源码的 UTF-16 长度；源码不可用时为 null。 */
+            @Schema(nullable = true) Integer sourceTotalChars,
+            @Schema(nullable = true) Integer nextSourceOffset,
+            /** 完整源码 UTF-8 字节的 SHA-256，用于检测分片之间的源码变更。 */
+            @Schema(nullable = true) String sourceVersion,
             List<SchemaObjectParameterView> parameters,
             List<String> compilationErrors
     ) {
