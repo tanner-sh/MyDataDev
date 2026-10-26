@@ -252,6 +252,9 @@ public class McpDatabaseTools {
             title = "Run a read-only database query",
             description = "Executes exactly one query on an authorized connection. Mutations, DDL, calls, locks and session changes are rejected. "
                     + "When truncated is true the rows are NOT the full result: if nextOffset is set, call again with offset=nextOffset (add ORDER BY for stable pages). "
+                    + "For truncatedReason=text_limit, row offsets and larger maxRows cannot recover a truncated cell. "
+                    + "For procedure/function/trigger source, use db_list_schema_objects then db_get_schema_object character chunks. "
+                    + "For other long text, query its length and read bounded substrings until the full length is covered; ALL_SOURCE may store an entire body in one row. "
                     + "A timeout is reported as [SQL_TIMEOUT]." + UNTRUSTED_DATA,
             generateOutputSchema = true,
             annotations = @McpTool.McpAnnotations(readOnlyHint = true, destructiveHint = false, idempotentHint = true, openWorldHint = true)
