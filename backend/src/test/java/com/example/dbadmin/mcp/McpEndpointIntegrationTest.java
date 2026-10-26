@@ -37,6 +37,9 @@ class McpEndpointIntegrationTest {
     @Autowired
     private MockMvc mvc;
 
+    @Autowired
+    private io.modelcontextprotocol.server.transport.WebMvcStreamableServerTransportProvider streamableTransport;
+
     @org.springframework.boot.test.context.TestConfiguration
     static class ProbeConfig {
         @org.springframework.context.annotation.Bean CancellationProbe cancellationProbe() { return new CancellationProbe(); }
@@ -263,6 +266,31 @@ class McpEndpointIntegrationTest {
                 .contains("\"connections\":[]")
                 .contains("\"isError\":false")
                 .doesNotContain("MCP 调用身份不可用");
+        // 本测试仅通过 POST 初始化并调用工具，没有监听 GET 流；默认不应为这样的会话启动 ping 定时器。
+        assertThat(org.springframework.test.util.ReflectionTestUtils.getField(streamableTransport, "keepAliveScheduler")).isNull();
+
+        // SDK 工具正文也要带上 HTTP 的关联编号，客户端只保存工具文本时仍能查到服务端审计。
+        MvcResult failedCall = complete(mvc.perform(post("/mcp")
+                        .header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                        .header(McpApiKeyAuthenticationFilter.SESSION_HEADER, sessionId)
+                        .header("X-Request-ID", "probe-readback-denied")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                        .content("""
+                                {
+                                  "jsonrpc":"2.0",
+                                  "id":4,
+                                  "method":"tools/call",
+                                  "params":{"name":"db_query","arguments":{"connectionId":2,"query":"SELECT 1"}}
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andReturn());
+        assertThat(failedCall.getResponse().getHeader("X-Request-ID")).isEqualTo("probe-readback-denied");
+        assertThat(failedCall.getResponse().getContentAsString())
+                .contains("[INVALID_REQUEST]")
+                .contains("[requestId=probe-readback-denied]")
+                .contains("\"isError\":true");
     }
 
     private static void assertNullable(JsonNode schema, String type) {

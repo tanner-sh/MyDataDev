@@ -1,5 +1,9 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.audit.AuditRequestContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.sql.Connection;
 import java.sql.SQLException;
 
@@ -11,6 +15,7 @@ import java.sql.SQLException;
  * 「设只读、回滚、恢复」的样板，不如让两条路径共用这一个已经被验证过的实现。</p>
  */
 public final class ReadOnlyQueryScope implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(ReadOnlyQueryScope.class);
     private final Connection connection;
     private final boolean active;
     private final boolean previousAutoCommit;
@@ -76,26 +81,33 @@ public final class ReadOnlyQueryScope implements AutoCloseable {
     @Override
     public void close() throws Exception {
         if (!active) return;
-        Exception failure = null;
         try {
             connection.rollback();
         } catch (Exception error) {
-            failure = error;
+            // 回滚失败后不能恢复自动提交：setAutoCommit(true) 可能把未知的剩余事务提交。
+            discardAfterFailure(error, "ROLLBACK");
+            throw error;
         }
         try {
             connection.setAutoCommit(previousAutoCommit);
+            if (restoreReadOnly) connection.setReadOnly(previousReadOnly);
         } catch (Exception error) {
-            if (failure == null) failure = error;
-            else failure.addSuppressed(error);
+            // JDBC 驱动不一定使用 08 类 SQLState，不能仅依赖 Hikari 自动识别坏连接。
+            discardAfterFailure(error, "RESTORE_STATE");
+            throw error;
         }
-        if (restoreReadOnly) {
-            try {
-                connection.setReadOnly(previousReadOnly);
-            } catch (Exception error) {
-                if (failure == null) failure = error;
-                else failure.addSuppressed(error);
-            }
+    }
+
+    private void discardAfterFailure(Exception failure, String phase) {
+        boolean discardScheduled = false;
+        try {
+            BorrowedConnection.discardOnClose(connection);
+            discardScheduled = true;
+        } catch (Exception discardFailure) {
+            failure.addSuppressed(discardFailure);
         }
-        if (failure != null) throw failure;
+        var context = AuditRequestContext.current();
+        log.warn("只读查询收尾失败 requestId={} phase={} discardOnClose={}",
+                context == null ? null : context.requestId(), phase, discardScheduled, failure);
     }
 }

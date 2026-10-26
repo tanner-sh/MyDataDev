@@ -1,6 +1,9 @@
 package com.example.dbadmin.mcp;
 
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.audit.AuditRequestContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
@@ -18,6 +21,7 @@ import java.util.Locale;
  */
 final class McpToolErrors {
     static final String SQL_TIMEOUT = "SQL_TIMEOUT";
+    private static final Logger log = LoggerFactory.getLogger(McpToolErrors.class);
 
     private McpToolErrors() { }
 
@@ -39,14 +43,15 @@ final class McpToolErrors {
         String message;
         if (isCancelled(error)) {
             code = "CANCELLED";
-            message = "请求已取消，数据库侧的语句已请求中止。";
+            message = "请求已取消；此回执不确认数据库语句已终止或完成回滚。";
         } else if (isConnectionUnavailable(error)) {
             code = "CONNECTION_UNAVAILABLE";
             message = "无法取得或保持数据库连接，语句可能根本没有发出。只读调用可以稍后直接重试；写操作请先用 db_query 核对结果"
                     + "（后台脚本用 db_list_script_tasks 查看任务真实状态）再决定是否重试。数据库原文：" + rootMessage(error);
         } else if (isTimeout(error)) {
             code = SQL_TIMEOUT;
-            message = (timeoutSeconds > 0 ? "语句执行超过 " + timeoutSeconds + " 秒" : "语句执行超时") + "，已请求数据库取消该语句。" + channel.timeoutHint
+            message = "数据库报告语句超时或中止" + (timeoutSeconds > 0 ? "（配置的语句超时为 " + timeoutSeconds + " 秒）" : "")
+                    + "；此回执不确认数据库语句已终止或完成回滚。" + channel.timeoutHint
                     + " 数据库原文：" + rootMessage(error);
         } else if (error instanceof ApiProblemException problem) {
             code = problem.code();
@@ -66,7 +71,14 @@ final class McpToolErrors {
             code = "INTERNAL_ERROR";
             message = rootMessage(error);
         }
-        McpToolException translated = new McpToolException(code, "[" + code + "] " + message);
+        var context = AuditRequestContext.current();
+        String requestId = context == null ? null : context.requestId();
+        if ("CONNECTION_UNAVAILABLE".equals(code) || SQL_TIMEOUT.equals(code) || "SQL_ERROR".equals(code) || "INTERNAL_ERROR".equals(code)) {
+            // 工具只显示一段错误文本；服务端保留含 suppressed 收尾异常的根堆栈，按同一 ID 关联审计连接与工具名。
+            log.warn("MCP 工具失败 requestId={} channel={} code={}", requestId, channel, code, error);
+        }
+        String correlation = requestId == null ? "" : " [requestId=" + requestId + "]";
+        McpToolException translated = new McpToolException(code, "[" + code + "] " + message + correlation);
         translated.addSuppressed(error);
         return translated;
     }

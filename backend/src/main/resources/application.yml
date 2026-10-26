@@ -64,7 +64,9 @@ spring:
         tool-change-notification: false
         streamable-http:
           mcp-endpoint: /mcp
-          keep-alive-interval: 15s
+          # Omit keep-alive-interval: SDK 0.18.3 pings every session, including
+          # POST-only clients without a listening GET stream, and retries forever.
+          # Leave the optional server-to-client ping scheduler disabled.
 
 app:
   crypto-key-source: FILE
