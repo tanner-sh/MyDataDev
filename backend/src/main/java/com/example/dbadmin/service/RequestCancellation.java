@@ -48,7 +48,7 @@ public final class RequestCancellation implements AutoCloseable {
     private void dispatch(Registration action) {
         if (!action.active.get() || !action.dispatched.compareAndSet(false, true)) return;
         try { executor.execute(() -> {
-            try { action.action.run(); }
+            try { action.runIfActive(); }
             catch (Exception error) {
                 org.slf4j.LoggerFactory.getLogger(RequestCancellation.class).warn("请求取消操作失败", error);
             }
@@ -67,6 +67,13 @@ public final class RequestCancellation implements AutoCloseable {
         private final AtomicBoolean dispatched = new AtomicBoolean();
         private final AtomicBoolean active = new AtomicBoolean(true);
         private Registration(Action action) { this.action = action; }
-        @Override public void close() { active.set(false); }
+        private synchronized void runIfActive() throws Exception {
+            // 排队期间语句或请求可能已结束，不能对已归还连接再发取消。
+            if (active.get()) action.run();
+        }
+        @Override public synchronized void close() {
+            // 已开始的驱动取消必须先退出，调用方才能关闭 Statement 并归还连接。
+            active.set(false);
+        }
     }
 }

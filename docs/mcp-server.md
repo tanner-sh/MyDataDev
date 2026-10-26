@@ -209,12 +209,26 @@ Oracle / OceanBase Oracle 上，`CREATE OR REPLACE` 或 `ALTER … COMPILE` 编�
 - 元数据分页最大 200 项，表数据分页最大 100 行。
 - MCP session 归属记录默认保留 120 分钟并在访问时续期。
 
+Streamable HTTP 默认不启用服务端定时 ping。当前 SDK 对没有独立 GET 监听流的会话也会发 ping 并反复记录 `Stream unavailable`；只通过 POST 调用工具的客户端无需保持 GET 流。部署配置若覆盖了 `spring.ai.mcp.server.streamable-http.keep-alive-interval`，删除该项并重启即可恢复默认，不要设成 `0s`。客户端会话使用完毕后应带原认证和 `Mcp-Session-Id` 发送 `DELETE /mcp`；停止 ping 不会自动删除 SDK 内部遗留会话。
+
 工具调用会以 `mcp:<agent-id>` 作为 actor 写入审计记录；SQL 查询和执行计划还会写入 SQL 历史。Actuator 指标包括：
 
 - `dbadmin.mcp.tool`：按工具和状态记录执行耗时。
 - `dbadmin.mcp.security.denied`：按原因统计被拒绝的 MCP 请求。
 
 调整结果上限时应同时评估目标数据库负载、后端堆内存和 agent 上下文大小。
+
+### 请求关联与超时诊断
+
+HTTP 响应头 `X-Request-ID` 与审计事件中的 `requestId` 对应。客户端也可在发出请求前指定该头（1–120 个字母、数字或 `._:-`），这样即使未收到响应，也能按预先保存的编号查服务端审计。工具错误正文附带 `[requestId=...]`；连接、SQL、超时及内部错误的服务日志会记录相同编号、错误码和原始异常堆栈，包括收尾阶段的 suppressed 异常。成功工具正文没有单独的 `requestId` 字段，应保存响应头。
+
+该编号与 MCP JSON-RPC 请求 `id`、后台脚本 `taskId` 是不同标识；发送 `notifications/cancelled` 时仍使用原 JSON-RPC 请求 `id`。客户端应同时保留工具名、连接 ID、SQL 指纹、分页 offset、原始错误 envelope 和这些关联编号，不能只包装成通用 `ReadError`。
+
+查询超时配置通过 JDBC Statement 下发，不是整个 HTTP 请求的总时限。借连接、租户/Schema 初始化、结果与 CLOB 读取、回滚归还、响应发送还受连接池和驱动各自行为影响。`elapsedMs` 也不是独立的纯 SQL 执行耗时；当前工具尚未返回各阶段耗时或同步查询的可轮询最终状态。`SQL_TIMEOUT`/`CANCELLED` 回执不能确认数据库已经停止执行或完成回滚。
+
+客户端 HTTP 读取超时或直接断开不等于发送了 `notifications/cancelled`；当前实现没有通用的断流即取消保证。需要取消在途请求时，应显式发送取消通知。取消回调已排队但对应语句/请求先结束时，回调会失效；已开始的 JDBC 取消退出后才允许关闭语句并归还连接，实际等待仍依赖驱动返回，不是数据库端取消成功的确认。
+
+只读查询回滚或连接状态恢复失败时，服务端会记录带请求编号的 `ROLLBACK`/`RESTORE_STATE` 阶段日志，并安排淘汰该次借出的连接。回滚失败后不会继续恢复自动提交；查询本身的错误不会被后续清理错误覆盖，清理错误也不会被当作成功。
 
 脚本模式、结束策略、失败和取消语义见 [SQL 脚本与文件事务](sql-script-transactions.md)。
 

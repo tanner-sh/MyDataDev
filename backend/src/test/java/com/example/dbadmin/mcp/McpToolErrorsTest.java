@@ -1,6 +1,8 @@
 package com.example.dbadmin.mcp;
 
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.audit.AuditRequestContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 
@@ -11,6 +13,9 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class McpToolErrorsTest {
+    @AfterEach
+    void clearRequestContext() { AuditRequestContext.clear(); }
+
     @Test
     void keepsTheProblemCodeAndTellsTheAgentWhatToSend() {
         var production = McpToolErrors.translate(new ApiProblemException(HttpStatus.CONFLICT, "PRODUCTION_CONFIRMATION_REQUIRED",
@@ -27,7 +32,9 @@ class McpToolErrorsTest {
     void reportsTimeoutsSeparatelyWithChannelSpecificAdvice() {
         var query = McpToolErrors.translate(new RuntimeException(new SQLTimeoutException("statement timeout")), McpToolErrors.Channel.QUERY, 30);
         assertThat(query.code()).isEqualTo(McpToolErrors.SQL_TIMEOUT);
-        assertThat(query).hasMessageContaining("超过 30 秒").hasMessageContaining("查询超时");
+        assertThat(query).hasMessageContaining("配置的语句超时为 30 秒").hasMessageContaining("查询超时")
+                .hasMessageContaining("不确认数据库语句已终止").hasMessageNotContaining("已请求数据库取消")
+                .hasMessageNotContaining("执行超过");
 
         var write = McpToolErrors.translate(new SQLException("ORA-01013: user requested cancel of current operation", "72000", 1013),
                 McpToolErrors.Channel.EXECUTE, 60);
@@ -58,9 +65,22 @@ class McpToolErrorsTest {
 
         var cancelled = McpToolErrors.translate(new SQLException("MCP 请求已取消", "HY008"), McpToolErrors.Channel.QUERY, 30);
         assertThat(cancelled.code()).isEqualTo("CANCELLED");
+        assertThat(cancelled).hasMessageContaining("不确认数据库语句已终止");
 
         assertThat(McpToolErrors.translate(new IllegalArgumentException("query 不能为空"), McpToolErrors.Channel.OTHER, 0))
                 .hasMessage("[INVALID_REQUEST] query 不能为空");
+    }
+
+    @Test
+    void includesTheHttpRequestIdWithoutLosingTheErrorCodeOrRootException() {
+        AuditRequestContext.set(new AuditRequestContext(null, null, null, "probe-readback-1"));
+        var original = new SQLException("Connection is closed", "08003");
+        var translated = McpToolErrors.translate(original, McpToolErrors.Channel.QUERY, 30);
+
+        assertThat(translated).hasMessageStartingWith("[CONNECTION_UNAVAILABLE]")
+                .hasMessageContaining("[requestId=probe-readback-1]");
+        assertThat(translated.getSuppressed()).containsExactly(original);
+        assertThat(translated.getCause()).isNull();
     }
 
     @Test
