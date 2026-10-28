@@ -40,6 +40,37 @@ class McpEndpointIntegrationTest {
     @Autowired
     private io.modelcontextprotocol.server.transport.WebMvcStreamableServerTransportProvider streamableTransport;
 
+    @Autowired
+    private McpSessionOwnershipStore sessions;
+
+    @Test
+    void lostSessionCanBeReinitializedWithoutRestartingTheServer() throws Exception {
+        var initialized = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content(initializeRequest())).andExpect(status().isOk()).andReturn());
+        String oldSession = initialized.getResponse().getHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER);
+        assertThat(oldSession).isNotBlank();
+        // 模拟归属记录在闲置到期或服务重启后丢失；旧 ID 不能被当作权限错误永久拒绝。
+        sessions.remove(oldSession, "integration-agent");
+        mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .header(McpApiKeyAuthenticationFilter.SESSION_HEADER, oldSession)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}"))
+                .andExpect(status().isNotFound());
+
+        // 按 Streamable HTTP 协议重新 initialize，不附带旧 session ID，随后可正常调用工具。
+        var reinitialized = complete(mvc.perform(post("/mcp").header(HttpHeaders.AUTHORIZATION, AUTHORIZATION)
+                .contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON, MediaType.TEXT_EVENT_STREAM)
+                .content(initializeRequest())).andExpect(status().isOk()).andReturn());
+        String newSession = reinitialized.getResponse().getHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER);
+        assertThat(newSession).isNotBlank().isNotEqualTo(oldSession);
+        JsonNode result = rpc(newSession,
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"db_list_connections\",\"arguments\":{}}}");
+        assertThat(result.has("error")).isFalse();
+        assertThat(result.path("result").path("isError").asBoolean(true)).isFalse();
+        assertThat(result.path("result").path("structuredContent").path("connections").isArray()).isTrue();
+    }
+
     @org.springframework.boot.test.context.TestConfiguration
     static class ProbeConfig {
         @org.springframework.context.annotation.Bean CancellationProbe cancellationProbe() { return new CancellationProbe(); }

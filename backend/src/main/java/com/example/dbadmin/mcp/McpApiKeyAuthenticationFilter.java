@@ -76,10 +76,20 @@ public class McpApiKeyAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String requestSessionId = trimToNull(request.getHeader(SESSION_HEADER));
-        if (requestSessionId != null && !sessions.belongsTo(requestSessionId, principal.id())) {
-            metrics.counter("dbadmin.mcp.security.denied", "reason", "session-owner").increment();
-            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Forbidden");
-            return;
+        if (requestSessionId != null) {
+            McpSessionOwnershipStore.Access access = sessions.checkAccess(requestSessionId, principal.id());
+            if (access == McpSessionOwnershipStore.Access.NOT_FOUND) {
+                // Streamable HTTP 用 404 通知客户端丢弃旧 ID 并重新 initialize。
+                // 闲置到期或服务重启后返回 403，会被客户端当作权限失败而无法恢复。
+                metrics.counter("dbadmin.mcp.security.denied", "reason", "session-missing").increment();
+                response.sendError(HttpServletResponse.SC_NOT_FOUND, "MCP session not found; initialize a new session");
+                return;
+            }
+            if (access == McpSessionOwnershipStore.Access.FORBIDDEN) {
+                metrics.counter("dbadmin.mcp.security.denied", "reason", "session-owner").increment();
+                response.sendError(HttpServletResponse.SC_FORBIDDEN, "Forbidden");
+                return;
+            }
         }
 
         request.setAttribute(AUTHENTICATED_REQUEST, principal);

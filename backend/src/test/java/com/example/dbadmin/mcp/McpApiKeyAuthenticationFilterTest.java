@@ -9,7 +9,9 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 
+import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Set;
 
@@ -43,7 +45,48 @@ class McpApiKeyAuthenticationFilterTest {
         fresh.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "expired-session");
         var rejected = new MockHttpServletResponse();
         filter.doFilter(fresh, rejected, new MockFilterChain());
-        assertThat(rejected.getStatus()).isEqualTo(403);
+        assertThat(rejected.getStatus()).isEqualTo(404);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"GET", "POST", "DELETE"})
+    void missingSessionTellsAuthenticatedClientsToInitializeAgain(String method) throws Exception {
+        var request = authorizedRequest("agent-a.secret-a");
+        request.setMethod(method);
+        request.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "missing-session");
+        var response = new MockHttpServletResponse();
+        var chain = new MockFilterChain();
+
+        filter().doFilter(request, response, chain);
+
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(chain.getRequest()).isNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+    }
+
+    @Test
+    void idleSessionExpiresWithNotFoundWhileInvalidCredentialsStillReturnUnauthorized() throws Exception {
+        var clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(Instant.EPOCH);
+        var filter = filter(clock);
+        filter.doFilter(authorizedRequest("agent-a.secret-a"), new MockHttpServletResponse(), (request, response) ->
+                ((MockHttpServletResponse) response).setHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "idle-session"));
+        SecurityContextHolder.clearContext();
+
+        when(clock.instant()).thenReturn(Instant.EPOCH.plus(31, ChronoUnit.MINUTES));
+        var expired = authorizedRequest("agent-a.secret-a");
+        expired.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "idle-session");
+        var response = new MockHttpServletResponse();
+        var chain = new MockFilterChain();
+        filter.doFilter(expired, response, chain);
+        assertThat(response.getStatus()).isEqualTo(404);
+        assertThat(chain.getRequest()).isNull();
+
+        var invalid = authorizedRequest("agent-a.wrong-secret");
+        invalid.addHeader(McpApiKeyAuthenticationFilter.SESSION_HEADER, "idle-session");
+        var unauthorized = new MockHttpServletResponse();
+        filter.doFilter(invalid, unauthorized, new MockFilterChain());
+        assertThat(unauthorized.getStatus()).isEqualTo(401);
     }
 
     @Test
@@ -90,6 +133,10 @@ class McpApiKeyAuthenticationFilterTest {
     }
 
     private McpApiKeyAuthenticationFilter filter() {
+        return filter(Clock.systemUTC());
+    }
+
+    private McpApiKeyAuthenticationFilter filter(Clock clock) {
         McpConfigurationService configuration = mock(McpConfigurationService.class);
         McpRuntimeConfig.Agent agentA = agent(1L, "agent-a", "secret-a", 1L);
         McpRuntimeConfig.Agent agentB = agent(2L, "agent-b", "secret-b", 2L);
@@ -101,7 +148,7 @@ class McpApiKeyAuthenticationFilterTest {
         ));
         return new McpApiKeyAuthenticationFilter(
                 new McpApiKeyRegistry(configuration),
-                new McpSessionOwnershipStore(configuration),
+                new McpSessionOwnershipStore(configuration, clock),
                 configuration,
                 new SimpleMeterRegistry()
         );

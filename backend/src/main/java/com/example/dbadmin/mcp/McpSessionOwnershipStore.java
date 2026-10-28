@@ -1,36 +1,52 @@
 package com.example.dbadmin.mcp;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class McpSessionOwnershipStore {
+    public enum Access { ALLOWED, NOT_FOUND, FORBIDDEN }
+
     private final ConcurrentHashMap<String, Ownership> sessions = new ConcurrentHashMap<>();
     private final McpConfigurationService configuration;
+    private final Clock clock;
 
+    @Autowired
     public McpSessionOwnershipStore(McpConfigurationService configuration) {
-        this.configuration = configuration;
+        this(configuration, Clock.systemUTC());
     }
 
-    public boolean belongsTo(String sessionId, String agentId) {
-        cleanupExpired();
-        Ownership ownership = sessions.get(sessionId);
-        if (ownership == null || !ownership.agentId().equals(agentId)) return false;
-        sessions.replace(sessionId, ownership, new Ownership(agentId, Instant.now().plus(ttl())));
-        return true;
+    McpSessionOwnershipStore(McpConfigurationService configuration, Clock clock) {
+        this.configuration = configuration;
+        this.clock = clock;
+    }
+
+    /** 区分失效会话与跨 Agent 访问，让客户端能收到重新初始化所需的 404。 */
+    public Access checkAccess(String sessionId, String agentId) {
+        Instant now = clock.instant();
+        cleanupExpired(now);
+        Ownership ownership = sessions.computeIfPresent(sessionId, (ignored, existing) -> {
+            if (!existing.expiresAt().isAfter(now)) return null;
+            if (!existing.agentId().equals(agentId)) return existing;
+            return new Ownership(agentId, now.plus(ttl()));
+        });
+        if (ownership == null) return Access.NOT_FOUND;
+        return ownership.agentId().equals(agentId) ? Access.ALLOWED : Access.FORBIDDEN;
     }
 
     public boolean bind(String sessionId, String agentId) {
-        cleanupExpired();
-        Ownership requested = new Ownership(agentId, Instant.now().plus(ttl()));
-        Ownership existing = sessions.putIfAbsent(sessionId, requested);
-        if (existing == null) return true;
-        if (!existing.agentId().equals(agentId)) return false;
-        sessions.replace(sessionId, existing, requested);
-        return true;
+        Instant now = clock.instant();
+        cleanupExpired(now);
+        Ownership requested = new Ownership(agentId, now.plus(ttl()));
+        Ownership ownership = sessions.compute(sessionId, (ignored, existing) ->
+                existing != null && existing.expiresAt().isAfter(now) && !existing.agentId().equals(agentId)
+                        ? existing : requested);
+        return ownership.agentId().equals(agentId);
     }
 
     public void remove(String sessionId, String agentId) {
@@ -49,9 +65,8 @@ public class McpSessionOwnershipStore {
         return Duration.ofMinutes(Math.max(1, configuration.snapshot().settings().sessionTtlMinutes()));
     }
 
-    private void cleanupExpired() {
-        Instant now = Instant.now();
-        sessions.entrySet().removeIf(entry -> entry.getValue().expiresAt().isBefore(now));
+    private void cleanupExpired(Instant now) {
+        sessions.entrySet().removeIf(entry -> !entry.getValue().expiresAt().isAfter(now));
     }
 
     private record Ownership(String agentId, Instant expiresAt) {
