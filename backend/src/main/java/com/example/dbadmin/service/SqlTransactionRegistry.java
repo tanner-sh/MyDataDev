@@ -22,8 +22,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p>此前脚本执行一律是逐条 autocommit、失败即停，前面已提交的不会回滚 —— 想在生产上「先看
  * 效果再决定提交」是做不到的。手动事务把一个标签页里的多次执行绑到同一条连接、同一个事务上。</p>
  *
- * <p>代价必须讲清楚：一个开着的事务会独占远程连接池里的一条连接，而每个连接的池上限只有
- * 个位数（{@code app.remote-pool.maximum-pool-size} 默认 3）。因此：</p>
+ * <p>代价必须讲清楚：一个开着的事务会独占远程连接池里的一条连接，而每个连接的池容量
+ * 有限（{@code app.remote-pool.maximum-pool-size} 默认 10）。因此：</p>
  * <ul>
  *   <li>每条数据库连接同时只允许一个手动事务；</li>
  *   <li>空闲超过 {@link #idleTimeout} 自动回滚并归还连接，避免忘记提交把池占死；</li>

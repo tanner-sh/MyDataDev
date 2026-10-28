@@ -1,10 +1,11 @@
 import { useCallback, useState } from 'react';
-import { Alert, Button, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { DisconnectOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, Button, Form, InputNumber, Modal, Popconfirm, Progress, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { DisconnectOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { isAuthenticationEnabled, isCurrentUserAdmin } from '../auth';
 import { formatIdleFor, poolCloseWarning, poolPressure, poolWarnings } from '../connectionPools';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
-import type { ConnectionPoolOverview, ConnectionPoolStatus } from '../types';
+import type { ConnectionPoolOverview, ConnectionPoolSettings, ConnectionPoolStatus } from '../types';
 import { localizeError } from '../utils';
 
 const { Text } = Typography;
@@ -28,6 +29,11 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [closingId, setClosingId] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [settingsForm] = Form.useForm<ConnectionPoolSettings>();
+  const canManage = !isAuthenticationEnabled() || isCurrentUserAdmin();
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -57,6 +63,35 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
     }
   }
 
+  async function editSettings() {
+    setSettingsLoading(true);
+    try {
+      const settings = await api<ConnectionPoolSettings>('/admin/connection-pool-settings');
+      settingsForm.setFieldsValue(settings);
+      setSettingsOpen(true);
+    } catch (failure) {
+      toast.error(localizeError(failure));
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  async function saveSettings(values: ConnectionPoolSettings) {
+    setSaving(true);
+    try {
+      await api<ConnectionPoolSettings>('/admin/connection-pool-settings', {
+        method: 'PUT', body: JSON.stringify(values)
+      });
+      toast.success('连接池上限已保存并生效。');
+      setSettingsOpen(false);
+      await reload();
+    } catch (failure) {
+      toast.error(localizeError(failure));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!overview && !error) return null;
   const pressure = overview ? poolPressure(overview) : null;
 
@@ -81,7 +116,13 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
             </>
           )}
         </Space>
-        <Button size="small" type="text" icon={<ReloadOutlined />} loading={loading} onClick={() => void reload()} />
+        <Space size={4}>
+          {canManage && (
+            <Button size="small" type="text" icon={<SettingOutlined />} loading={settingsLoading}
+              onClick={() => void editSettings()}>连接池设置</Button>
+          )}
+          <Button aria-label="刷新连接池" size="small" type="text" icon={<ReloadOutlined />} loading={loading} onClick={() => void reload()} />
+        </Space>
       </Space>
 
       {error && <Alert type="error" showIcon message={error} style={{ marginTop: 'var(--space-2)' }} />}
@@ -154,6 +195,24 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
           ]}
         />
       )}
+
+      <Modal title="连接池设置" open={settingsOpen} okText="保存" cancelText="取消"
+        confirmLoading={saving} onOk={() => settingsForm.submit()}
+        onCancel={() => { if (!saving) setSettingsOpen(false); }}
+        cancelButtonProps={{ disabled: saving }} closable={!saving} mask={{ closable: !saving }}>
+        <Form form={settingsForm} layout="vertical" onFinish={(values) => void saveSettings(values)} disabled={saving}>
+          <Form.Item name="maximumPoolSize" label="每个连接池的连接上限"
+            extra="默认 10，可设置 2–50。统一应用于所有数据库连接，MCP、网页查询和后台任务共享。"
+            rules={[{ required: true, message: '请输入连接上限' }, { type: 'integer', min: 2, max: 50, message: '请输入 2–50 之间的整数' }]}>
+            <InputNumber min={2} max={50} precision={0} style={{ width: '100%' }} />
+          </Form.Item>
+          <Alert type="info" showIcon title="保存后生效，重启后保留"
+            description="连接按需建立。调低时已有查询和事务继续执行，连接归还后回收；过渡期间连接数可能高于新上限。" />
+          <Typography.Paragraph type="secondary" style={{ marginTop: 'var(--space-3)', marginBottom: 0 }}>
+            调高会增加数据库并发负载。多个连接配置指向同一个数据库时，连接数会叠加，请结合数据库容量调整。
+          </Typography.Paragraph>
+        </Form>
+      </Modal>
     </div>
   );
 }

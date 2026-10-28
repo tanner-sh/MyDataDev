@@ -31,13 +31,13 @@ import java.util.logging.Logger;
 @Component
 public class RemoteDataSourceRegistry {
     static final int MAX_POOLS = 20;
-    private static final int MAX_POOL_SIZE = 3;
+    private static final int MAX_POOL_SIZE = 10;
     private static final long CONNECTION_TIMEOUT_MS = 10_000;
     private static final long IDLE_TIMEOUT_MS = 300_000;
     private static final long MAX_LIFETIME_MS = 1_800_000;
     private final Map<Long, PoolEntry> pools = new LinkedHashMap<>();
     private final int maxPools;
-    private final int maximumPoolSize;
+    private volatile int maximumPoolSize;
     private final long connectionTimeoutMs;
     private final long idleTimeoutMs;
     private final long maxLifetimeMs;
@@ -154,6 +154,8 @@ public class RemoteDataSourceRegistry {
                 }
                 try {
                     makeRoom();
+                    // 建池发生在锁外，期间管理员可能已修改上限；安装时必须采用最新值。
+                    resizePool(created.dataSource(), maximumPoolSize);
                     pools.put(connectionId, created);
                     dataSource = created.dataSource();
                 } catch (RuntimeException error) {
@@ -289,7 +291,7 @@ public class RemoteDataSourceRegistry {
                     mx == null ? 0 : mx.getActiveConnections(),
                     mx == null ? 0 : mx.getIdleConnections(),
                     mx == null ? 0 : mx.getThreadsAwaitingConnection(),
-                    maximumPoolSize,
+                    pool.dataSource().getMaximumPoolSize(),
                     pool.pendingBorrows(),
                     Math.max(0, (now - pool.lastAccessNanos()) / 1_000_000),
                     pool.tunnel() == null ? null : pool.tunnel().isOpen());
@@ -299,6 +301,29 @@ public class RemoteDataSourceRegistry {
     /** 同时能存在多少个池。快照里的条数除以它就是「还剩多少名额」。 */
     public int capacity() {
         return maxPools;
+    }
+
+    public int maximumPoolSize() {
+        return maximumPoolSize;
+    }
+
+    /** 原地调整容量，不关闭池或 SSH 隧道；缩容时在借出的连接归还后再回收。 */
+    public void resizePools(int size) {
+        if (size < 2) throw new IllegalArgumentException("每个连接池的连接上限不能小于 2");
+        synchronized (pools) {
+            maximumPoolSize = size;
+            pools.values().forEach(pool -> resizePool(pool.dataSource(), size));
+        }
+    }
+
+    private void resizePool(HikariDataSource dataSource, int size) {
+        int previous = dataSource.getMaximumPoolSize();
+        dataSource.setMaximumPoolSize(size);
+        if (size < previous && dataSource.getHikariPoolMXBean() != null) {
+            // 单改 maximumPoolSize 不会阻止借出存量空闲连接。软淘汰只关闭空闲连接，
+            // 活跃连接标记为归还后回收，保留正在执行的 SQL 和尚未提交的事务。
+            dataSource.getHikariPoolMXBean().softEvictConnections();
+        }
     }
 
     public void evict(long connectionId) {

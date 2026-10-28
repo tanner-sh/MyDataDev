@@ -15,6 +15,92 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RemoteDataSourceRegistryTest {
     @Test
+    void defaultsToTenConnectionsAndStillEnforcesTheLimit() throws Exception {
+        var properties = new AppProperties();
+        properties.getRemotePool().setConnectionTimeoutMs(1000);
+        var registry = new RemoteDataSourceRegistry(properties, new EmptyObjectProvider<>());
+        var held = new java.util.ArrayList<java.sql.Connection>();
+        var target = connection(1L, "jdbc:h2:mem:pool-default-" + UUID.randomUUID());
+        try {
+            for (int i = 0; i < 10; i++) held.add(registry.open(target, ""));
+            assertThat(registry.poolSnapshot()).singleElement().satisfies(pool -> {
+                assertThat(pool.maxPoolSize()).isEqualTo(10);
+                assertThat(pool.active()).isEqualTo(10);
+            });
+            assertThatThrownBy(() -> registry.open(target, "")).isInstanceOf(PoolCapacityException.class);
+        } finally {
+            for (var jdbc : held) jdbc.close();
+            registry.close();
+        }
+    }
+
+    @Test
+    void growsExistingAndFuturePoolsWithoutInterruptingBorrowers() throws Exception {
+        var properties = new AppProperties();
+        properties.getRemotePool().setMaximumPoolSize(3);
+        properties.getRemotePool().setConnectionTimeoutMs(1000);
+        var registry = new RemoteDataSourceRegistry(properties, new EmptyObjectProvider<>());
+        var held = new java.util.ArrayList<java.sql.Connection>();
+        var target = connection(1L, "jdbc:h2:mem:pool-grow-" + UUID.randomUUID());
+        try {
+            for (int i = 0; i < 3; i++) held.add(registry.open(target, ""));
+            registry.resizePools(10);
+            for (int i = 3; i < 10; i++) held.add(registry.open(target, ""));
+            for (var jdbc : held) assertThat(jdbc.isValid(1)).isTrue();
+            assertThat(registry.poolSnapshot()).singleElement().satisfies(pool -> {
+                assertThat(pool.active()).isEqualTo(10);
+                assertThat(pool.maxPoolSize()).isEqualTo(10);
+            });
+            try (var other = registry.open(connection(2L, "jdbc:h2:mem:pool-new-" + UUID.randomUUID()), "")) {
+                assertThat(other.isValid(1)).isTrue();
+                assertThat(registry.poolSnapshot()).allSatisfy(pool -> assertThat(pool.maxPoolSize()).isEqualTo(10));
+            }
+        } finally {
+            for (var jdbc : held) jdbc.close();
+            registry.close();
+        }
+    }
+
+    @Test
+    void shrinkingPreservesAnUncommittedTransactionAndRetiresReturnedConnections() throws Exception {
+        var properties = new AppProperties();
+        properties.getRemotePool().setConnectionTimeoutMs(1000);
+        var registry = new RemoteDataSourceRegistry(properties, new EmptyObjectProvider<>());
+        var held = new java.util.ArrayList<java.sql.Connection>();
+        var target = connection(1L, "jdbc:h2:mem:pool-shrink-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1");
+        try {
+            for (int i = 0; i < 5; i++) held.add(registry.open(target, ""));
+            var transaction = held.get(0);
+            try (var sql = transaction.createStatement()) { sql.execute("CREATE TABLE saved(id INT)"); }
+            transaction.setAutoCommit(false);
+            try (var sql = transaction.createStatement()) { sql.executeUpdate("INSERT INTO saved VALUES (42)"); }
+            // 包含空闲连接的缩容，不能只改配置后继续借出超额的存量连接。
+            held.get(4).close();
+            registry.resizePools(2);
+            assertThat(registry.poolSnapshot()).singleElement().satisfies(pool -> {
+                assertThat(pool.maxPoolSize()).isEqualTo(2);
+                assertThat(pool.active()).isEqualTo(4);
+            });
+            assertThatThrownBy(() -> registry.open(target, "")).isInstanceOf(PoolCapacityException.class);
+            transaction.commit();
+            for (var jdbc : held) jdbc.close();
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(5)).untilAsserted(() ->
+                    assertThat(registry.poolSnapshot()).singleElement()
+                            .satisfies(pool -> assertThat(pool.total()).isLessThanOrEqualTo(2)));
+            try (var first = registry.open(target, ""); var second = registry.open(target, "");
+                 var sql = first.createStatement(); var rows = sql.executeQuery("SELECT id FROM saved")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getInt(1)).isEqualTo(42);
+                assertThat(second.isValid(1)).isTrue();
+                assertThatThrownBy(() -> registry.open(target, "")).isInstanceOf(PoolCapacityException.class);
+            }
+        } finally {
+            for (var jdbc : held) jdbc.close();
+            registry.close();
+        }
+    }
+
+    @Test
     @org.junit.jupiter.api.Timeout(30)
     void reconnectsAfterDatabaseServerRestartsWithoutEvictingThePool() throws Exception {
         var properties = new AppProperties();

@@ -161,7 +161,7 @@ app:
     heartbeat-seconds: 30
   remote-pool:
     max-pools: 50
-    maximum-pool-size: 3
+    maximum-pool-size: 10
     connection-timeout-ms: 10000
     idle-timeout-ms: 300000
     max-lifetime-ms: 1800000
