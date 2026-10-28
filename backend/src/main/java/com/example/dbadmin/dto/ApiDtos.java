@@ -837,6 +837,9 @@ public final class ApiDtos {
     public record ConnectionPoolOverview(List<ConnectionPoolStatus> pools, int capacity) {
     }
 
+    public record ConnectionPoolSettings(@NotNull @Min(2) @Max(50) Integer maximumPoolSize) {
+    }
+
     /**
      * 定时导出任务。
      *

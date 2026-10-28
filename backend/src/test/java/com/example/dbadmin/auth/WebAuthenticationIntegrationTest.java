@@ -108,6 +108,19 @@ class WebAuthenticationIntegrationTest {
         long userId = mapper.readTree(created.getResponse().getContentAsString()).path("id").asLong();
 
         LoginSession operator = login(username, "operator-password-123");
+        mvc.perform(get("/api/admin/connection-pool-settings").session(operator.session()))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/admin/connection-pool-settings").session(operator.session())
+                        .cookie(operator.csrfCookie()).header("X-XSRF-TOKEN", operator.csrfToken())
+                        .contentType("application/json").content("{\"maximumPoolSize\":20}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/admin/connection-pool-settings").session(administrator.session())
+                        .contentType("application/json").content("{\"maximumPoolSize\":12}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(put("/api/admin/connection-pool-settings").session(administrator.session())
+                        .cookie(administrator.csrfCookie()).header("X-XSRF-TOKEN", administrator.csrfToken())
+                        .contentType("application/json").content("{\"maximumPoolSize\":12}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.maximumPoolSize").value(12));
         mvc.perform(get("/api/connections").session(operator.session()))
                 .andExpect(status().isOk());
         mvc.perform(get("/api/admin/users").session(operator.session()))

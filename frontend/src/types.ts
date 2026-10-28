@@ -1043,6 +1043,10 @@ export type ConnectionPoolOverview = {
   capacity: number;
 };
 
+export type ConnectionPoolSettings = {
+  maximumPoolSize: number;
+};
+
 export type ScheduledExportRun = {
   id: string; taskId: number; connectionId: number; taskName: string; status: string; message: string;
   startedAt: string; finishedAt?: string; fileName?: string; fileSize: number; downloadable: boolean;

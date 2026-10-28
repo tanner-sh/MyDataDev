@@ -462,7 +462,7 @@ public class AppProperties {
 
     public static class RemotePool {
         private int maxPools = 20;
-        private int maximumPoolSize = 3;
+        private int maximumPoolSize = 10;
         private int connectionTimeoutMs = 10_000;
         private long idleTimeoutMs = 300_000;
         private long maxLifetimeMs = 1_800_000;
