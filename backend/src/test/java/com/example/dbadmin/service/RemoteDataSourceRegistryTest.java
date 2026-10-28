@@ -15,6 +15,55 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class RemoteDataSourceRegistryTest {
     @Test
+    @org.junit.jupiter.api.Timeout(30)
+    void reconnectsAfterDatabaseServerRestartsWithoutEvictingThePool() throws Exception {
+        var properties = new AppProperties();
+        properties.getRemotePool().setConnectionTimeoutMs(1000);
+        var registry = new RemoteDataSourceRegistry(properties, new EmptyObjectProvider<>());
+        var server = org.h2.tools.Server.createTcpServer("-tcpPort", "0", "-ifNotExists").start();
+        int port = server.getPort();
+        var target = connection(1L, "jdbc:h2:tcp://127.0.0.1:" + port + "/mem:reconnect-" + UUID.randomUUID()
+                + ";DB_CLOSE_DELAY=-1");
+        try {
+            var disconnected = registry.open(target, "");
+            assertThat(disconnected.isValid(1)).isTrue();
+            // 服务停掉时保留一条已借出的连接，验证中途断线之后池仍可恢复。
+            server.stop();
+            assertThatThrownBy(() -> {
+                try (disconnected; var statement = disconnected.createStatement()) {
+                    statement.executeQuery("SELECT 1");
+                }
+            }).isInstanceOf(java.sql.SQLException.class);
+            // Hikari 对刚归还的连接会短暂跳过存活检测；等待池识别失效连接，而非假定立刻检测。
+            org.awaitility.Awaitility.await().pollInterval(java.time.Duration.ofSeconds(1))
+                    .atMost(java.time.Duration.ofSeconds(10)).untilAsserted(() ->
+                    assertThatThrownBy(() -> {
+                        try (var ignored = registry.open(target, "")) { }
+                    }).isInstanceOf(java.sql.SQLTransientConnectionException.class)
+                            .isNotInstanceOf(PoolCapacityException.class));
+            assertThat(registry.size()).isEqualTo(1);
+
+            server = org.h2.tools.Server.createTcpServer("-tcpPort", Integer.toString(port), "-ifNotExists").start();
+            org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(10))
+                    .ignoreExceptionsInstanceOf(java.sql.SQLException.class).untilAsserted(() -> {
+                        try (var jdbc = registry.open(target, "");
+                             var statement = jdbc.createStatement();
+                             var rows = statement.executeQuery("SELECT 1")) {
+                            assertThat(rows.next()).isTrue();
+                            assertThat(rows.getInt(1)).isEqualTo(1);
+                        }
+                    });
+            assertThat(registry.poolSnapshot()).singleElement().satisfies(pool -> {
+                assertThat(pool.active()).isZero();
+                assertThat(pool.pendingBorrows()).isZero();
+            });
+        } finally {
+            registry.close();
+            server.stop();
+        }
+    }
+
+    @Test
     void boundedPoolTimeoutIsRetryableAndRecoversAfterRelease() throws Exception {
         var properties = new AppProperties(); properties.getRemotePool().setMaximumPoolSize(2); properties.getRemotePool().setConnectionTimeoutMs(1000);
         var registry = new RemoteDataSourceRegistry(properties, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
