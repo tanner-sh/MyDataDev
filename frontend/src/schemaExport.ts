@@ -29,12 +29,25 @@ export function candidateKey(candidate: SchemaExportCandidate): string {
   return `${candidate.kind}\u0000${candidate.name}\u0000${candidate.objectKey ?? ''}`;
 }
 
-export type KindCount = { kind: string; label: string; total: number; selected: number };
+export type KindCount = { kind: string; label: string; total: number; selected: number; truncated: boolean };
 
-export function kindCounts(candidates: SchemaExportCandidate[], selected: ReadonlySet<string>): KindCount[] {
+/**
+ * 按类型计数。checkedKinds 是服务端这次查过的类型：查过但一个都没有的也要列出来（计数 0），
+ * 否则「这个 Schema 没有存储过程」和「不支持导出存储过程」在界面上看起来一模一样。
+ * truncatedKinds 里的类型触到了每类上限，数量要写成「2000+」而不是让人以为一共就这么多。
+ */
+export function kindCounts(
+  candidates: SchemaExportCandidate[],
+  selected: ReadonlySet<string>,
+  checkedKinds: readonly string[] = [],
+  truncatedKinds: readonly string[] = []
+): KindCount[] {
   const counts = new Map<string, KindCount>();
+  const entryFor = (kind: string) => counts.get(kind)
+    ?? { kind, label: schemaExportKindLabel(kind), total: 0, selected: 0, truncated: truncatedKinds.includes(kind) };
+  for (const kind of checkedKinds) counts.set(kind, entryFor(kind));
   for (const candidate of candidates) {
-    const entry = counts.get(candidate.kind) ?? { kind: candidate.kind, label: schemaExportKindLabel(candidate.kind), total: 0, selected: 0 };
+    const entry = entryFor(candidate.kind);
     entry.total += 1;
     if (selected.has(candidateKey(candidate))) entry.selected += 1;
     counts.set(candidate.kind, entry);
@@ -44,6 +57,31 @@ export function kindCounts(candidates: SchemaExportCandidate[], selected: Readon
     return index < 0 ? SCHEMA_EXPORT_KINDS.length : index;
   };
   return [...counts.values()].sort((left, right) => rank(left.kind) - rank(right.kind));
+}
+
+export function kindCountLabel(count: KindCount): string {
+  return `${count.label} ${count.selected > 0 ? `${count.selected}/` : ''}${count.total}${count.truncated ? '+' : ''}`;
+}
+
+/** 查过却一个都没有的类型，合成一句话放在列表上方。 */
+export function emptyKindsNotice(counts: KindCount[]): string | null {
+  const empty = counts.filter((count) => count.total === 0).map((count) => count.label);
+  return empty.length ? `当前 Schema 没有${empty.join('、')}。` : null;
+}
+
+/**
+ * 把一次「按名称到数据库搜索」的结果并进现有清单：按 candidateKey 去重，原有顺序不动，新的接在后面。
+ * 并而不是替换 —— 用户在前一批里已经勾好的对象不能因为搜了一次就丢掉。
+ */
+export function mergeCandidates(existing: SchemaExportCandidate[], incoming: SchemaExportCandidate[]): { objects: SchemaExportCandidate[]; added: number } {
+  const seen = new Set(existing.map(candidateKey));
+  const fresh = incoming.filter((candidate) => {
+    const key = candidateKey(candidate);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return { objects: fresh.length ? [...existing, ...fresh] : existing, added: fresh.length };
 }
 
 /** 当前类型 + 关键字下可见的候选项。关键字不分大小写，匹配名字或显示名（带参数签名）。 */
