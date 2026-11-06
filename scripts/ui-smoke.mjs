@@ -1285,10 +1285,13 @@ try {
       };
       const create = URL.createObjectURL;
       URL.createObjectURL = blob => { window.__exportBlob = blob; return create.call(URL, blob); };
-      document.querySelector('button[aria-label^="导出当前批次"]')?.click();
+      document.querySelector('button[aria-label="导出查询结果"]')?.click();
     })()`);
     await page.sleep(300);
-    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
+    // 导出菜单分两组：当前批次（前端序列化）在前，重新执行原 SQL（服务端）在后。这里测的是前一组。
+    const exportGroups = await page.evaluate(`[...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group-title')].map(node => node.textContent.trim())`);
+    check('结果导出菜单含当前批次与重新执行两组', exportGroups.length === 2 && exportGroups[0].startsWith('当前批次') && exportGroups[1].startsWith('重新执行原 SQL'), JSON.stringify(exportGroups));
+    await page.evaluate(`(() => { const group = document.querySelector('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(group?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
     for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
     const exported = await page.evaluate(`(async () => {
       const blob = window.__exportBlob;
@@ -1298,6 +1301,18 @@ try {
     })()`);
     check('大结果 Excel 导出经过 Worker，文件包含全部 400 行', exported.workers === 1 && exported.stopped === 1 && exported.xlsx, JSON.stringify(exported));
     await page.shot('11-大结果导出');
+
+    // 第二组走服务端：重新执行产生这份结果的 SQL（不是编辑器里此刻的内容）。
+    await page.evaluate(`(() => { window.__exportBlob = null; document.querySelector('button[aria-label="导出查询结果"]')?.click(); })()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { const groups = document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(groups[1]?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'CSV')?.click(); })()`);
+    for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
+    const reExported = await page.evaluate(`(async () => {
+      const blob = window.__exportBlob;
+      const text = blob ? await blob.text() : '';
+      return { size: blob?.size || 0, header: text.split(/\\r?\\n/)[0], lines: text.trim().split(/\\r?\\n/).length };
+    })()`);
+    check('重新执行原 SQL 导出走服务端并返回全部 400 行', /ID/i.test(reExported.header) && reExported.lines === 401, JSON.stringify(reExported));
 
     const templateResponse = await fetch(APP_URL + '/api/sql-snippets', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
 
 const columns = [
   { key: 'c1', label: 'id', typeName: 'INTEGER' },
@@ -147,5 +147,30 @@ describe('导出文件扩展名', () => {
     expect(exportFileExtension('csv')).toBe('csv');
     expect(exportFileExtension('json')).toBe('json');
     expect(exportFileExtension('xlsx')).toBe('xlsx');
+  });
+});
+
+describe('resultExportGroups', () => {
+  it('没有完整导出能力时只有当前批次一组', () => {
+    const groups = resultExportGroups({ loadedRows: 240, selectedRows: 0, fullAvailable: false, narrowed: false });
+    expect(groups.map((group) => group.label)).toEqual(['当前批次 240 行']);
+    expect(groups[0].formats.map((item) => item.key)).toContain('loaded:markdown');
+  });
+
+  it('选了行时第一组按已选行数命名', () => {
+    expect(resultExportGroups({ loadedRows: 240, selectedRows: 3, fullAvailable: true, narrowed: false })[0].label).toBe('已选 3 行');
+  });
+
+  it('有筛选或排序时说明完整导出不包含它们', () => {
+    const [, full] = resultExportGroups({ loadedRows: 12, selectedRows: 0, fullAvailable: true, narrowed: true });
+    expect(full.label).toContain('不含筛选与排序');
+    expect(full.formats).toHaveLength(6);
+  });
+
+  it('解析菜单 key', () => {
+    expect(parseResultExportKey('full:xlsx')).toEqual({ scope: 'full', format: 'xlsx' });
+    expect(parseResultExportKey('loaded:markdown')).toEqual({ scope: 'loaded', format: 'markdown' });
+    expect(parseResultExportKey('full:pdf')).toBeUndefined();
+    expect(parseResultExportKey('other:csv')).toBeUndefined();
   });
 });

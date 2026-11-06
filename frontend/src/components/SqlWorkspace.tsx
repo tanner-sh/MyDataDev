@@ -91,7 +91,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   onExplain: (liveSql?: string) => void;
   onExecute: (liveSql?: string) => void;
   onCancel: () => void;
-  onExport: (format: ExportFormat, liveSql?: string) => void;
+  /** 重新查询并导出。exactSql 给定时导出的就是这条（结果区的「重新执行原 SQL 导出」），否则取编辑器的选中或全文。 */
+  onExport: (format: ExportFormat, liveSql?: string, exactSql?: string) => void;
   onOpenHistory: () => void;
   onSqlFileSelect: (file: File) => void;
   onOpenSqlFileTasks: () => void;
@@ -300,6 +301,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
     });
   });
 
+  // 结果区「重新执行原 SQL 导出」：重新执行产生这份结果的那条 SQL，而不是编辑器里此刻的内容 ——
+  // 脚本里有多条语句、或者跑完之后又改了编辑器时，两者不是一回事。
+  const exportFullResult = useStableEvent((result: SqlStatementResult, format: ExportFormat) => {
+    commitDraft();
+    onExport(format, draftRef.current, result.sql);
+  });
+
   function askAiToDocument() {
     if (!selected || aiDocumentTables.length === 0) return;
     setAiDocumentOpen(false);
@@ -357,10 +365,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
           onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined}
           onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined}
           onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined}
+          onExportFull={canExport ? exportFullResult : undefined}
         />
       )
     };
-  })], [showScriptLog, tabResults, activeTab.scriptNotices, activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, onPreviewResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  })], [showScriptLog, tabResults, activeTab.scriptNotices, activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canExport, canQuery, canWrite, exportFullResult, handleResultPageChange, onCommitResultEdits, onPreviewResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -380,20 +389,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
     items: [
       { key: 'snippets', icon: <BookOutlined />, label: 'SQL 片段库' },
       { key: 'save-snippet', icon: <SaveOutlined />, label: '把当前 SQL 保存为片段', disabled: !draftSql.trim() },
+      // 导出只在结果区有一个入口（当前批次 / 重新执行原 SQL 两组）；这里原来还有一份「重新查询并导出」。
       ...(commandTab ? [] : [{ type: 'divider' as const }, {
-        key: 'export',
-        icon: <DownloadOutlined />,
-        label: '重新查询并导出',
-        disabled: !canExport || loading,
-        children: [
-          { key: 'export:csv', label: '重新查询并导出 CSV' },
-          { key: 'export:json', label: '重新查询并导出 JSON' },
-          { key: 'export:sql', label: '重新查询并导出 SQL' },
-          { key: 'export:xml', label: '重新查询并导出 XML' },
-          { key: 'export:xlsx', label: '重新查询并导出 Excel' }
-        ]
-      },
-      {
         key: 'explain',
         icon: <FundProjectionScreenOutlined />,
         label: '查看执行计划',
@@ -428,10 +425,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
         setAiDocumentTables(schemaTables.slice(0, MAX_DOCUMENT_TABLES));
         setAiDocumentOpen(true);
         return;
-      }
-      if (key.startsWith('export:')) {
-        commitDraft();
-        onExport(key.slice('export:'.length) as ExportFormat, draftRef.current);
       }
     }
   };
@@ -797,7 +790,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">
-              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onPreviewEdits={canWrite ? onPreviewResultEdits : undefined} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} />
+              <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onPreviewEdits={canWrite ? onPreviewResultEdits : undefined} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} onExportFull={canExport ? exportFullResult : undefined} />
             </div>
           ) : showScriptLog || resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
@@ -955,7 +948,7 @@ const SqlExecutionErrorBanner = memo(function SqlExecutionErrorBanner({ detail, 
   );
 });
 
-const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onPreviewEdits, onCommitEdits, onAskAiExplain, onAskAiInterpret, onAskAiReview }: {
+const StatementResultPanel = memo(function StatementResultPanel({ result, selectedConnectionId, dbType, active, pagingLoading, paneMode, showIdentity, onPaneModeChange, onPageChange, connectionId, onPreviewEdits, onCommitEdits, onAskAiExplain, onAskAiInterpret, onAskAiReview, onExportFull }: {
   result: SqlStatementResult;
   selectedConnectionId?: number;
   dbType?: string;
@@ -974,12 +967,26 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
   onAskAiInterpret?: (result: SqlStatementResult) => void;
   /** 结果跑通了但看着不对：把形状交给 AI 复盘。零行也要能点，那恰恰是最需要复盘的一种。 */
   onAskAiReview?: (result: SqlStatementResult) => void;
+  /** 重新执行这条结果的 SQL 并由服务端导出；没有导出权限时不传。 */
+  onExportFull?: (result: SqlStatementResult, format: ExportFormat) => void;
 }) {
   const rowCount = result.result.resultSet ? result.result.rows.length : 0;
   const pagingEnabled = !result.result.page || selectedConnectionId === result.result.page.connectionId;
   const handlePageChange = useCallback((navigation: SqlPageNavigation) => {
     onPageChange(result, navigation);
   }, [onPageChange, result]);
+  const handleExportFull = useMemo(() => onExportFull ? (format: ExportFormat) => onExportFull(result, format) : undefined, [onExportFull, result]);
+  /*
+    两个 AI 入口合成一个下拉。原来是灯泡（解读）和问号（复盘）两个图标并排，问号还和右边的
+    说明图标长得一样。两条路发出去的东西不同（解读发前几行数据、复盘只发计数），所以菜单项
+    上把这一点写明，而不是只靠悬停提示。
+  */
+  const aiItems: NonNullable<MenuProps['items']> = [
+    ...(onAskAiInterpret && result.result.resultSet && result.result.rows.length > 0
+      ? [{ key: 'interpret', icon: <BulbOutlined />, label: '解读结果并推荐图表（发送前几行数据）' }] : []),
+    ...(onAskAiReview && result.result.resultSet
+      ? [{ key: 'review', icon: <QuestionCircleOutlined />, label: '结果不对，交给 AI 复盘（只发计数）' }] : [])
+  ];
   return (
     <div className="statement-result-panel">
       <div className="statement-result-meta">
@@ -996,15 +1003,16 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
               <Button type="text" size="small" icon={<InfoCircleOutlined />} aria-label="查看结果翻页说明" />
             </Tooltip>
           )}
-          {onAskAiInterpret && result.result.resultSet && result.result.rows.length > 0 && (
-            <Tooltip title="把前几行结果发给模型解读，并推荐合适的图表">
-              <Button type="text" size="small" icon={<BulbOutlined />} aria-label="AI 解读查询结果" onClick={() => onAskAiInterpret(result)} />
-            </Tooltip>
-          )}
-          {onAskAiReview && result.result.resultSet && (
-            <Tooltip title="结果不对？把行数与各列的空值、取值个数交给 AI 复盘 —— 只发计数，不发数据">
-              <Button type="text" size="small" icon={<QuestionCircleOutlined />} aria-label="结果不对，交给 AI 复盘" onClick={() => onAskAiReview(result)} />
-            </Tooltip>
+          {aiItems.length > 0 && (
+            <Dropdown trigger={['click']} menu={{
+              items: aiItems,
+              onClick: ({ key }) => {
+                if (key === 'interpret') onAskAiInterpret?.(result);
+                if (key === 'review') onAskAiReview?.(result);
+              }
+            }}>
+              <Button type="text" size="small" icon={<BulbOutlined />} aria-label="AI 分析查询结果">AI</Button>
+            </Dropdown>
           )}
           <StatementSqlButton result={result} />
           <ResultPaneModeButtons mode={paneMode} onChange={onPaneModeChange} />
@@ -1024,7 +1032,7 @@ const StatementResultPanel = memo(function StatementResultPanel({ result, select
               />
             )}
           </div>
-          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onPreviewEdits={onPreviewEdits} onCommitEdits={onCommitEdits} />
+          <ResultGrid result={result.result} fill active={active} pagingLoading={pagingLoading} pagingEnabled={pagingEnabled} dbType={dbType} sourceSql={result.sql} connectionId={connectionId} onPageChange={handlePageChange} onPreviewEdits={onPreviewEdits} onCommitEdits={onCommitEdits} onExportFull={handleExportFull} />
         </div>
       )}
     </div>

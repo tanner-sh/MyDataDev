@@ -36,7 +36,7 @@ import {
   type ResultEditState
 } from '../resultEditing';
 import { timestamp } from '../utils';
-import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, readResultCopyFormat, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
 import { exportResult } from '../resultExport';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
@@ -58,7 +58,7 @@ const RESULT_SELECTION_COLUMN_WIDTH = 38;
 // A very wide SELECT * would otherwise render hundreds of columns on load.
 const DEFAULT_VISIBLE_COLUMNS = 50;
 
-export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, connectionId, onPageChange, onPreviewEdits, onCommitEdits }: {
+export const ResultGrid = memo(function ResultGrid({ result, fill = false, active = true, pagingLoading = false, pagingEnabled = true, dbType, sourceSql, connectionId, onPageChange, onPreviewEdits, onCommitEdits, onExportFull }: {
   result: SqlResult | null;
   fill?: boolean;
   active?: boolean;
@@ -72,6 +72,8 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   onPreviewEdits?: (request: ResultEditCommit) => Promise<string[]>;
   /** 提交结果里的就地修改；由 App 复用表数据的 /data/preview 与 /data/commit。 */
   onCommitEdits?: (request: ResultEditCommit) => Promise<void>;
+  /** 重新执行原 SQL 并由服务端导出。不传时导出菜单只有当前批次一组。 */
+  onExportFull?: (format: ExportFormat) => void;
 }) {
   const [pageSizeDraft, setPageSizeDraft] = useState(500);
   const [columnFilters, setColumnFilters] = useState<ResultColumnFilters>({});
@@ -852,11 +854,27 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       {messageContextHolder}
       <div className="result-grid-toolbar">
         <div className="result-local-actions">
-          <Tooltip title={selectedRows.length > 0 ? '仅导出当前批次中已选择的行' : '仅导出当前已加载批次；如需完整数据，请使用 SQL 工作台“重新查询并导出”'}>
-            <Dropdown disabled={Boolean(exportStage)} trigger={['click']} menu={{ items: LOCAL_EXPORT_ITEMS, onClick: ({ key }) => exportLoadedRows(key as ExportFormat) }}>
-              <Button size="small" loading={Boolean(exportStage)} icon={<DownloadOutlined />} aria-label={selectedRows.length > 0 ? `导出已选择的 ${selectedRows.length} 行` : `导出当前批次 ${rows.length} 行`}>导出{selectedRows.length > 0 ? `已选 ${selectedRows.length} 行` : `本批 ${rows.length} 行`} <DownOutlined /></Button>
-            </Dropdown>
-          </Tooltip>
+          <Dropdown disabled={Boolean(exportStage)} trigger={['click']} menu={{
+            items: resultExportGroups({
+              loadedRows: rows.length,
+              selectedRows: selectedRows.length,
+              fullAvailable: Boolean(onExportFull),
+              narrowed: Object.values(columnFilters).some(Boolean) || Boolean(sortState) || Boolean(serverSort?.sortColumn) || Boolean(result?.page?.filters?.length)
+            }).map((group) => ({
+              type: 'group' as const,
+              key: group.scope,
+              label: group.label,
+              children: group.formats.map((item) => ({ key: item.key, label: item.label }))
+            })),
+            onClick: ({ key }) => {
+              const parsed = parseResultExportKey(key);
+              if (!parsed) return;
+              if (parsed.scope === 'full') onExportFull?.(parsed.format);
+              else exportLoadedRows(parsed.format);
+            }
+          }}>
+            <Button size="small" loading={Boolean(exportStage)} icon={<DownloadOutlined />} aria-label="导出查询结果">导出{selectedRows.length > 0 ? ` 已选 ${selectedRows.length} 行` : ''} <DownOutlined /></Button>
+          </Dropdown>
           {exportStage && <Space size={4}>
             <Text role="status">{exportStage === 'preparing' ? '正在准备导出…' : '正在生成文件…'}</Text>
             <Button size="small" onClick={() => exportAbortRef.current?.abort()}>取消导出</Button>
@@ -1158,14 +1176,6 @@ const MemoizedResultTable = memo(function MemoizedResultTable({ tableRef, column
   );
 });
 
-const LOCAL_EXPORT_ITEMS = [
-  { key: 'csv', label: 'CSV' },
-  { key: 'json', label: 'JSON' },
-  { key: 'sql', label: 'SQL 插入' },
-  { key: 'xml', label: 'XML' },
-  { key: 'markdown', label: 'Markdown 表格' },
-  { key: 'xlsx', label: 'Excel' }
-];
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('input, textarea, [contenteditable="true"]'));
