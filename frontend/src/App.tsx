@@ -24,7 +24,7 @@ import { hasConnectionPermission, type ConnectionPermission } from './accessCont
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCommandView, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
-import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
+import { buildChanges, createCommandTab, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
 import { provideSqlCompletions } from './sqlCompletionProvider';
@@ -2104,6 +2104,32 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     setActiveSqlTabId(tab.id);
   }
 
+  /**
+   * 新开一个独立的命令窗口。sql 给了就是「把这段脚本搬到命令窗口里」：当前标签的草稿与结果原样保留，
+   * 选项沿用来源标签在命令窗口按钮上设过的那一套。
+   */
+  function addCommandTab(sql?: string, commandOptions?: CommandWindowOptions) {
+    if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
+      toastApi.warning(`最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`);
+      return;
+    }
+    const currentId = activeSqlTabIdRef.current;
+    const liveSql = editorRef.current?.getValue();
+    const nextIndex = sqlTabSeqRef.current + 1;
+    sqlTabSeqRef.current = nextIndex;
+    const tab: SqlTab = {
+      ...createCommandTab(nextIndex),
+      ...(sql !== undefined ? { sql, dirty: Boolean(sql.trim()) } : {}),
+      ...(commandOptions ? { commandOptions } : {})
+    };
+    setSqlTabs((tabs) => [
+      ...tabs.map((item) => item.id === currentId && liveSql !== undefined && liveSql !== item.sql ? { ...item, sql: liveSql, dirty: true } : item),
+      tab
+    ]);
+    setActiveSqlTabId(tab.id);
+    setMode('sql');
+  }
+
   function closeSqlTab(targetId: string, liveSql?: string) {
     const current = sqlTabs.find((tab) => tab.id === targetId);
     if (!current || sqlTabs.length === 1) return;
@@ -2185,8 +2211,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     if (!source) return;
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
-    const duplicate = {
-      ...createSqlTab(nextIndex),
+    const duplicate: SqlTab = {
+      ...(source.kind === 'command' ? createCommandTab(nextIndex) : createSqlTab(nextIndex)),
+      ...(source.commandOptions ? { commandOptions: source.commandOptions } : {}),
+      ...(source.delimiter ? { delimiter: source.delimiter } : {}),
       title: `${source.title} 副本`.slice(0, 80),
       sql: liveSql ?? source.sql,
       dirty: true
@@ -2800,6 +2828,17 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
   }
 
+  /** 批量操作（TableBatchBar）算好的整份新行：与逐格编辑一样进撤销栈，超出单次可提交变更数就拒绝。 */
+  const applyBatchRows = useStableEvent((nextRows: TableRow[]) => {
+    if (buildChanges(nextRows, tableData?.keyColumns || []).length > MAX_TABLE_CHANGES) {
+      showInfo(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更，请先提交当前修改或少选一些行。`);
+      return false;
+    }
+    tableEdits.editRows(nextRows);
+    setPreviewSql([]);
+    return true;
+  });
+
   const deleteRow = useCallback((rowId: string) => {
     tableEdits.editRows((rows) => rows.flatMap((row) => {
       if (row.id !== rowId) return [row];
@@ -3138,6 +3177,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     });
   });
   const addSqlTabEvent = useStableEvent(() => addSqlTab());
+  const addCommandTabEvent = useStableEvent(() => addCommandTab());
+  const openInCommandTabEvent = useStableEvent((sql: string) => addCommandTab(sql, activeSqlTab.commandOptions));
   const closeSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => closeSqlTab(tabId, liveSql));
   const renameSqlTabEvent = useStableEvent((tabId: string) => renameSqlTab(tabId));
   const duplicateSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => duplicateSqlTab(tabId, liveSql));
@@ -3195,6 +3236,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         hint: SHORTCUT_HINTS.newSqlTab,
         disabledReason: needsConnection,
         run: () => { setMode('sql'); addSqlTab(); }
+      },
+      {
+        id: 'sql.new-command-window',
+        title: '新建命令窗口',
+        section: 'SQL',
+        keywords: 'new command window script sqlplus plsql 命令 脚本',
+        disabledReason: needsConnection,
+        run: () => addCommandTab()
       },
       {
         id: 'sql.history',
@@ -3575,6 +3624,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     <ConfigProvider
       locale={zhCN}
       theme={antThemeConfig}
+      // 下拉弹层默认与选择框等宽：侧栏、工具栏里的窄选择框会把选项截成「视.」「物.」。
+      // 关掉之后弹层按内容撑开，最小仍是选择框宽度，最大宽度由 styles.css 的 .ant-select-dropdown 兜住。
+      popupMatchSelectWidth={false}
     >
       <ErrorCenter />
       {toastContextHolder}
@@ -3685,6 +3737,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
                 onTabChange={setActiveSqlTabId}
                 onTabAdd={addSqlTabEvent}
+                onCommandTabAdd={addCommandTabEvent}
+                onOpenInCommandTab={openInCommandTabEvent}
                 onTabClose={closeSqlTabEvent}
                 onTabRename={renameSqlTabEvent}
                 onTabDuplicate={duplicateSqlTabEvent}
@@ -3760,6 +3814,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onCommit={commitTableChangesEvent}
                 onEdit={editCell}
                 onDelete={deleteRow}
+                onBatchRows={applyBatchRows}
                 foreignKeys={tableForeignKeys}
                 onFollowRelation={followRelationEvent}
               />

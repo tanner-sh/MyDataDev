@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSchemaExportRequest,
   candidateKey,
+  emptyKindsNotice,
+  kindCountLabel,
   kindCounts,
+  mergeCandidates,
   MAX_SCHEMA_EXPORT_OBJECTS,
   schemaExportFileName,
   schemaExportSummary,
@@ -31,6 +34,26 @@ describe('schema export', () => {
     expect(kindCounts(candidates, selected).map((item) => [item.label, item.total, item.selected])).toEqual([
       ['表', 1, 0], ['视图', 1, 0], ['函数', 2, 1], ['存储过程', 1, 0]
     ]);
+  });
+
+  it('lists checked kinds with zero objects and marks truncated kinds', () => {
+    const counts = kindCounts([candidates[1]], new Set([candidateKey(candidates[1])]), ['TABLE', 'VIEW', 'SEQUENCE', 'PROCEDURE'], ['TABLE']);
+    expect(counts.map((item) => [item.kind, item.total, item.truncated])).toEqual([
+      ['TABLE', 1, true], ['VIEW', 0, false], ['SEQUENCE', 0, false], ['PROCEDURE', 0, false]
+    ]);
+    expect(kindCountLabel(counts[0])).toBe('表 1/1+');
+    expect(kindCountLabel(counts[1])).toBe('视图 0');
+    expect(emptyKindsNotice(counts)).toBe('当前 Schema 没有视图、序列、存储过程。');
+    expect(emptyKindsNotice(counts.slice(0, 1))).toBeNull();
+  });
+
+  it('merges database search results without dropping or duplicating existing candidates', () => {
+    const extra = { kind: 'TABLE', name: 'Z_ARCHIVE', displayName: 'Z_ARCHIVE', objectKey: null };
+    const merged = mergeCandidates(candidates.slice(0, 2), [candidates[1], extra]);
+    expect(merged.added).toBe(1);
+    expect(merged.objects.map((item) => item.name)).toEqual([candidates[0].name, candidates[1].name, 'Z_ARCHIVE']);
+    const same = candidates.slice(0, 2);
+    expect(mergeCandidates(same, [candidates[0]]).objects).toBe(same);
   });
 
   it('filters by kind and by name or signature, ignoring case', () => {

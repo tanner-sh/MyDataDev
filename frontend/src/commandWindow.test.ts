@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commandLogText, commandOptionsLabel, commandProgressText, effectiveCommandOptions, isTerminalJob, lineRangeOffsets, mergeCommandLog } from './commandWindow';
+import { commandLogText, commandOptionsLabel, commandProgressText, effectiveCommandOptions, isCommandTab, isTerminalJob, lineRangeOffsets, mergeCommandLog, normalizeCommandOptions } from './commandWindow';
 import type { SqlCommandLogEntry, SqlFileExecution } from './types';
 
 const entry = (seq: number, kind: SqlCommandLogEntry['kind'] = 'RESULT', text = `r${seq}`): SqlCommandLogEntry => ({ seq, kind, text });
@@ -45,5 +45,15 @@ describe('command window', () => {
       { seq: 3, kind: 'RESULT', text: '已插入 1 行。' },
       { seq: 4, kind: 'ERROR', text: 'ORA-00942', startLine: 3, endLine: 4 }
     ])).toBe('-- 开始执行\nSQL> INSERT INTO t VALUES (1)\n已插入 1 行。\n错误（第 3–4 行）：ORA-00942');
+  });
+
+  it('recognizes standalone command tabs and validates stored options', () => {
+    expect(isCommandTab({ kind: 'command' })).toBe(true);
+    expect(isCommandTab({})).toBe(false);
+    expect(isCommandTab(undefined)).toBe(false);
+    expect(normalizeCommandOptions({ onError: 'CONTINUE', transactionMode: 'AUTOCOMMIT', endOfFileAction: 'ROLLBACK', extra: 1 }))
+      .toEqual({ onError: 'CONTINUE', transactionMode: 'AUTOCOMMIT', endOfFileAction: 'ROLLBACK' });
+    expect(normalizeCommandOptions({ onError: 'CONTINUE' })).toBeUndefined();
+    expect(normalizeCommandOptions('STOP')).toBeUndefined();
   });
 });

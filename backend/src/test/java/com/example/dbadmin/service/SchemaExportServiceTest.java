@@ -93,6 +93,27 @@ class SchemaExportServiceTest {
     }
 
     @Test
+    void searchesByNameInTheDatabaseAndReportsEveryCheckedKind() throws Exception {
+        Fixture fixture = fixture();
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", ""); Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE fin_ledger(id BIGINT PRIMARY KEY)");
+            statement.execute("CREATE TABLE fin_voucher(id BIGINT PRIMARY KEY)");
+            statement.execute("CREATE TABLE crm_customer(id BIGINT PRIMARY KEY)");
+            statement.execute("CREATE SEQUENCE fin_seq");
+        }
+
+        var all = fixture.service().candidates(1L, "PUBLIC");
+        // 查过但一个都没有的类型也要报出来，界面才能说「没有」而不是让它消失。
+        assertThat(all.kinds()).contains("TABLE", "VIEW", "SEQUENCE");
+        assertThat(all.truncatedKinds()).isEmpty();
+        assertThat(all.truncated()).isFalse();
+
+        // 按名称搜索走数据库，而不是在已列出的那一批里筛：超出每类上限的对象也找得到。
+        var searched = fixture.service().candidates(1L, "PUBLIC", "fin_");
+        assertThat(searched.objects()).extracting("name").containsExactlyInAnyOrder("FIN_LEDGER", "FIN_VOUCHER", "FIN_SEQ");
+    }
+
+    @Test
     void rejectsEmptyAndOversizedRequests() throws Exception {
         Fixture fixture = fixture();
         assertThatThrownBy(() -> fixture.service().export(1L, new SchemaExportRequest("PUBLIC", List.of(), null), "tester"))

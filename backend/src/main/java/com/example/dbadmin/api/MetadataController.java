@@ -271,9 +271,10 @@ public class MetadataController {
 
     /** 对象定义批量导出的候选清单：表 + 方言支持的各类对象。 */
     @GetMapping("/{connectionId}/schema-export/candidates")
-    public SchemaExportCandidates schemaExportCandidates(@PathVariable long connectionId, @RequestParam(required = false) String schemaName) throws Exception {
+    public SchemaExportCandidates schemaExportCandidates(@PathVariable long connectionId, @RequestParam(required = false) String schemaName,
+                                                         @RequestParam(required = false) String keyword) throws Exception {
         view(connectionId);
-        return schemaExport.candidates(connectionId, schemaName);
+        return schemaExport.candidates(connectionId, schemaName, keyword);
     }
 
     /**

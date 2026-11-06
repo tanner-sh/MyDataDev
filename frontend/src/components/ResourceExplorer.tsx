@@ -342,9 +342,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
       )}
 
       <div className="explorer-filters">
-        {/* Schema 与对象类型合并成一行：这两个选择器之前各占一整行，加上搜索、分组、
-            提示，表列表要滚过近 300px 的控件才开始。 */}
-        <div className="explorer-scope-row">
+        {/* Schema（Oracle 下就是用户名）独占一行：它是侧栏里最长、也最需要看全的名字；之前和对象类型
+            挤在一行，各分到一半宽度，默认侧栏宽度下两边都只剩几个字。对象类型挪到搜索框左边，
+            控件总行数不变。 */}
         <Select
           size="small"
           allowClear
@@ -359,15 +359,43 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           }))}
           onChange={(schema) => onSchemaChange(schema || '', activeKind)}
         />
-        <div className="object-type-toolbar">
+        <div className="explorer-search-row">
           <Select<ExplorerObjectKind>
             size="small"
             className="object-kind-select"
+            classNames={{ popup: { root: 'object-kind-popup' } }}
             aria-label="选择数据库对象类型"
             value={activeKind}
             options={kindOptions}
+            // 选中后框里只放图标和类型名：数量在弹层和底部状态栏都有，挤进窄框只会把类型名挤没。
+            labelRender={({ value }) => (
+              <span className="object-kind-option-main">{kindIcon(value as ExplorerObjectKind)}<span>{explorerObjectKindLabel(value as ExplorerObjectKind, managesViews)}</span></span>
+            )}
             onChange={changeObjectKind}
           />
+          {/*
+            键盘提示原本写在下面那行常驻文字里。改成聚焦时的浮层：提示紧挨着搜索框，
+            比在下一行更容易看到，而且出现和消失都不会把整棵树往下推。
+          */}
+          <Tooltip title="↑↓ 选择，Enter 查看" placement="right" open={searchFocused && activeKind === 'TABLE'}>
+          <Input.Search
+            size="small"
+            allowClear
+            className="explorer-search-input"
+            loading={activeLoading && !metadataBlockingLoading}
+            placeholder={`搜索${activeLabel}`}
+            disabled={!selected || metadataBlockingLoading}
+            value={metadataQuery.keyword}
+            onChange={(event) => {
+              setKeyboardObjectIndex(-1);
+              onKeywordChange(event.target.value, activeKind);
+            }}
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+            onKeyDown={handleObjectSearchKeyDown}
+            onSearch={(keyword) => onSearch(keyword, activeKind)}
+          />
+          </Tooltip>
           {canCreate && (
             <Tooltip title={`新建${activeLabel}`}>
               <Button type="text" size="small" icon={<PlusOutlined />} aria-label={`新建${activeLabel}`}
@@ -375,29 +403,6 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             </Tooltip>
           )}
         </div>
-        </div>
-        {/*
-          键盘提示原本写在下面那行常驻文字里。改成聚焦时的浮层：提示紧挨着搜索框，
-          比在下一行更容易看到，而且出现和消失都不会把整棵树往下推。
-        */}
-        <Tooltip title="↑↓ 选择，Enter 查看" placement="right" open={searchFocused && activeKind === 'TABLE'}>
-        <Input.Search
-          size="small"
-          allowClear
-          loading={activeLoading && !metadataBlockingLoading}
-          placeholder={`搜索${activeLabel}`}
-          disabled={!selected || metadataBlockingLoading}
-          value={metadataQuery.keyword}
-          onChange={(event) => {
-            setKeyboardObjectIndex(-1);
-            onKeywordChange(event.target.value, activeKind);
-          }}
-          onFocus={() => setSearchFocused(true)}
-          onBlur={() => setSearchFocused(false)}
-          onKeyDown={handleObjectSearchKeyDown}
-          onSearch={(keyword) => onSearch(keyword, activeKind)}
-        />
-        </Tooltip>
         {activeKind === 'TABLE' && (
           <div className="object-view-filter">
             <Segmented

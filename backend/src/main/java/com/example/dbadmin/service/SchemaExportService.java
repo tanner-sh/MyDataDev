@@ -68,47 +68,77 @@ public class SchemaExportService {
     }
 
     public SchemaExportCandidates candidates(long connectionId, String schemaName) throws Exception {
+        return candidates(connectionId, schemaName, null);
+    }
+
+    /**
+     * 可导出的对象清单。每类最多列 {@value #MAX_CANDIDATES_PER_KIND} 个；带 keyword 时按名称在数据库里搜
+     * （与资源树的搜索同一条路），这样超出上限的对象也找得到 —— 只在已列出的那一批里筛等于看不见其余的。
+     *
+     * <p>kinds 是这次实际查过的类型（含查出 0 个的）：界面要据此说清「这个 Schema 没有存储过程」，
+     * 而不是让一个空类型从分组里消失，看起来像不支持导出。truncatedKinds 是触顶的类型，数量显示成「2000+」。</p>
+     */
+    public SchemaExportCandidates candidates(long connectionId, String schemaName, String keyword) throws Exception {
         DbConnection configured = connections.require(connectionId);
         String schema = resolveSchema(connectionId, schemaName);
+        String search = keyword == null || keyword.isBlank() ? null : keyword.trim();
         Set<String> kinds = exportableKinds(configured);
         List<SchemaExportCandidate> objects = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
-        boolean truncated = false;
+        Set<String> checked = new LinkedHashSet<>();
+        Set<String> truncatedKinds = new LinkedHashSet<>();
+        checked.add("TABLE");
+        if (!kinds.contains(SchemaObjectKind.VIEW.name())) checked.add("VIEW");
 
+        // 视图由方言按对象管理时从那边列，这里只列表；否则表元数据里的视图也在这里列，各自计数。
+        boolean viewsFromCatalog = kinds.contains(SchemaObjectKind.VIEW.name());
         int tables = 0;
+        int views = 0;
         for (int page = 0; ; page++) {
-            var response = metadata.inspect(connectionId, schema, null, page, LIST_PAGE_SIZE, false);
+            var response = metadata.inspect(connectionId, schema, search, page, LIST_PAGE_SIZE, false);
             for (var object : response.objects()) {
                 boolean view = object.type() != null && object.type().toUpperCase(Locale.ROOT).contains("VIEW");
-                // 方言能把视图当对象管理时，视图从那边列（带源码与依赖）；否则退回表元数据里的视图。
-                if (view && kinds.contains(SchemaObjectKind.VIEW.name())) continue;
-                if (tables >= MAX_CANDIDATES_PER_KIND) { truncated = true; break; }
-                objects.add(new SchemaExportCandidate(view ? "VIEW" : "TABLE", object.name(), object.name(), null));
-                tables++;
+                if (view && viewsFromCatalog) continue;
+                String kind = view ? "VIEW" : "TABLE";
+                if ((view ? views : tables) >= MAX_CANDIDATES_PER_KIND) {
+                    truncatedKinds.add(kind);
+                    continue;
+                }
+                objects.add(new SchemaExportCandidate(kind, object.name(), object.name(), null));
+                if (view) views++; else tables++;
             }
-            if (!response.hasMore() || tables >= MAX_CANDIDATES_PER_KIND) {
-                truncated |= response.hasMore();
+            if (!response.hasMore()) break;
+            boolean tablesFull = tables >= MAX_CANDIDATES_PER_KIND;
+            boolean viewsFull = viewsFromCatalog || views >= MAX_CANDIDATES_PER_KIND;
+            if (tablesFull && viewsFull) {
+                // 后面还有，但已经分不清是表还是视图：满了的都按「还有更多」报。
+                truncatedKinds.add("TABLE");
+                if (!viewsFromCatalog) truncatedKinds.add("VIEW");
                 break;
             }
         }
         for (String kind : kinds) {
+            checked.add(kind);
             int count = 0;
             try {
                 for (int page = 0; ; page++) {
-                    var response = schemaObjects.list(connectionId, schema, kind, null, page, LIST_PAGE_SIZE, false);
+                    var response = schemaObjects.list(connectionId, schema, kind, search, page, LIST_PAGE_SIZE, false);
                     for (SchemaObjectSummary item : response.items()) {
-                        if (count >= MAX_CANDIDATES_PER_KIND) { truncated = true; break; }
+                        if (count >= MAX_CANDIDATES_PER_KIND) { truncatedKinds.add(kind); break; }
                         objects.add(new SchemaExportCandidate(kind, item.name(), item.displayName(), item.objectKey()));
                         count++;
                     }
-                    if (!response.hasMore() || count >= MAX_CANDIDATES_PER_KIND) break;
+                    if (!response.hasMore()) break;
+                    if (count >= MAX_CANDIDATES_PER_KIND) { truncatedKinds.add(kind); break; }
                 }
             } catch (Exception error) {
                 warnings.add(SchemaObjectKind.parse(kind).label() + "列表读取失败：" + message(error));
             }
         }
-        if (truncated) warnings.add("对象较多，每类最多列出 " + MAX_CANDIDATES_PER_KIND + " 个；其余对象请用搜索缩小范围后分批导出。");
-        return new SchemaExportCandidates(schema, objects, truncated, warnings);
+        if (!truncatedKinds.isEmpty()) {
+            warnings.add("对象较多，每类最多列出 " + MAX_CANDIDATES_PER_KIND + " 个；其余对象请在「按名称筛选」里输入名称后回车，到数据库中搜索并加入列表。");
+        }
+        return new SchemaExportCandidates(schema, objects, !truncatedKinds.isEmpty(), warnings, List.copyOf(checked), List.copyOf(truncatedKinds));
     }
 
     public SchemaExportResponse export(long connectionId, SchemaExportRequest request, String actor) throws Exception {

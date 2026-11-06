@@ -99,4 +99,24 @@ describe('sql session delimiter', () => {
     expect(session?.tabs[0].delimiter).toEqual({ mode: 'CUSTOM', token: '!' });
     expect(session?.tabs[1].delimiter).toBeUndefined();
   });
+
+  it('keeps a standalone command window and its options across reloads', () => {
+    const storage = memoryStorage();
+    const options = { onError: 'CONTINUE' as const, transactionMode: 'SCRIPT' as const, endOfFileAction: 'COMMIT' as const };
+    writeSqlSession(9, [tab('q'), { ...tab('c', 'begin null; end;'), kind: 'command', commandOptions: options }], 'c', storage, 'owner');
+    const session = readSqlSession(9, storage, 'owner');
+    expect(session?.activeTabId).toBe('c');
+    expect(session?.tabs[0].kind).toBeUndefined();
+    expect(session?.tabs[1]).toMatchObject({ kind: 'command', commandOptions: options, sql: 'begin null; end;', results: [] });
+  });
+
+  it('drops unknown tab kinds and malformed command options', () => {
+    const session = normalizeSqlSession({ version: 1, activeTabId: 'a', tabs: [
+      { id: 'a', title: '', sql: 'x', kind: 'shell', commandOptions: { onError: 'IGNORE', transactionMode: 'AUTOCOMMIT', endOfFileAction: 'COMMIT' } },
+      { id: 'b', title: '', sql: 'y', kind: 'command' }
+    ] });
+    expect(session?.tabs[0].kind).toBeUndefined();
+    expect(session?.tabs[0].commandOptions).toBeUndefined();
+    expect(session?.tabs[1]).toMatchObject({ kind: 'command', title: '命令窗口 2' });
+  });
 });

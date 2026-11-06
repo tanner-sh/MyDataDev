@@ -7,7 +7,10 @@ import { localizeError, timestamp } from '../utils';
 import {
   buildSchemaExportRequest,
   candidateKey,
+  emptyKindsNotice,
+  kindCountLabel,
   kindCounts,
+  mergeCandidates,
   schemaExportFileName,
   schemaExportKindLabel,
   schemaExportSummary,
@@ -46,6 +49,8 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
   const [exporting, setExporting] = useState(false);
   const [result, setResult] = useState<SchemaExportResponse>();
   const [error, setError] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [searchNotice, setSearchNotice] = useState('');
 
   const connection = connections.find((item) => item.id === connectionId);
   const connectionOptions = useMemo(() => connections.map((item) => ({
@@ -53,7 +58,9 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
     label: `${item.name}（${item.dbType}${item.environment === 'prod' ? ' · 生产' : ''}）`
   })), [connections]);
   const objects = candidates?.objects ?? [];
-  const counts = useMemo(() => kindCounts(objects, selected), [objects, selected]);
+  const counts = useMemo(() => kindCounts(objects, selected, candidates?.kinds, candidates?.truncatedKinds),
+    [objects, selected, candidates?.kinds, candidates?.truncatedKinds]);
+  const emptyNotice = emptyKindsNotice(counts);
   const visible = useMemo(() => visibleCandidates(objects, kind, keyword), [objects, kind, keyword]);
   const allVisibleSelected = visible.length > 0 && visible.every((item) => selected.has(candidateKey(item)));
   const problem = selectionProblem(selected.size);
@@ -71,6 +78,7 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
       setSchemaName(loaded.schemaName || schemaName);
       setSelected(new Set());
       setKind('ALL');
+      setSearchNotice('');
     } catch (failure) {
       setCandidates(undefined);
       setError(localizeError(failure));
@@ -85,6 +93,30 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
     setSelected(new Set());
     setResult(undefined);
   }, [connectionId]);
+
+  /**
+   * 清单触到了每类上限时，按名称筛选只在已列出的那一批里找是找不全的：回车就到数据库里按名称搜，
+   * 结果并进清单（已勾选的不丢）。没触顶时本地筛选已经是全集，不必多打一次接口。
+   */
+  const searchDatabase = async (value: string) => {
+    const term = value.trim();
+    if (!connectionId || !candidates?.truncated || !term) return;
+    setSearching(true);
+    setError('');
+    try {
+      const query = new URLSearchParams({ keyword: term });
+      if (candidates.schemaName) query.set('schemaName', candidates.schemaName);
+      const found = await api<SchemaExportCandidates>(`/metadata/${connectionId}/schema-export/candidates?${query.toString()}`);
+      const merged = mergeCandidates(candidates.objects, found.objects);
+      setCandidates({ ...candidates, objects: merged.objects });
+      const more = found.truncated ? '；匹配的也超过了每类上限，请输入更完整的名称' : '';
+      setSearchNotice(`在数据库中搜索「${term}」：匹配 ${found.objects.length} 个，新加入列表 ${merged.added} 个${more}`);
+    } catch (failure) {
+      setError(localizeError(failure));
+    } finally {
+      setSearching(false);
+    }
+  };
 
   const runExport = async () => {
     if (!connectionId || !candidates || problem) return;
@@ -131,10 +163,12 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
       {error && <Alert type="error" showIcon message={error} />}
 
       {!candidates ? (
-        <PanelEmpty title="选择连接与 Schema 后加载对象" description="可以批量导出表、视图、序列、函数、存储过程与触发器的定义，脚本按依赖关系排好顺序。" />
+        <PanelEmpty title="选择连接与 Schema 后加载对象" description="可以批量导出表、视图、物化视图、序列、函数、存储过程与触发器的定义（以当前数据库支持的为准），脚本按依赖关系排好顺序。" />
       ) : (
         <>
           {candidates.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
+          {emptyNotice && <Text type="secondary">{emptyNotice}</Text>}
+          {searchNotice && <Alert type="info" showIcon closable message={searchNotice} onClose={() => setSearchNotice('')} />}
           <Space size={8} wrap>
             <Segmented
               size="small"
@@ -142,10 +176,13 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
               onChange={(value) => setKind(String(value))}
               options={[
                 { value: 'ALL', label: `全部 ${objects.length}` },
-                ...counts.map((item) => ({ value: item.kind, label: `${item.label} ${item.selected > 0 ? `${item.selected}/` : ''}${item.total}` }))
+                ...counts.map((item) => ({ value: item.kind, label: kindCountLabel(item), disabled: item.total === 0 }))
               ]}
             />
-            <Input.Search size="small" allowClear style={{ width: 200 }} placeholder="按名称筛选" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
+            <Input.Search size="small" allowClear style={{ width: candidates.truncated ? 260 : 200 }} loading={searching}
+              placeholder={candidates.truncated ? '按名称筛选，回车到数据库中搜索' : '按名称筛选'}
+              value={keyword} onChange={(event) => setKeyword(event.target.value)}
+              onSearch={(value, _event, info) => { if (info?.source !== 'clear') void searchDatabase(value); }} />
             <Button size="small" disabled={visible.length === 0} onClick={() => setSelected(toggleCandidates(selected, visible, !allVisibleSelected))}>
               {allVisibleSelected ? '取消选择当前列表' : `选择当前列表（${visible.length}）`}
             </Button>

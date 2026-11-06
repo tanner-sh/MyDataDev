@@ -476,6 +476,11 @@ export type ConnectionSshForm = {
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = {
+  /**
+   * 标签页的种类：缺省是查询窗口；'command' 是独立的命令窗口 —— 执行一律交给后台逐条跑，
+   * 结果区只有滚动日志（见 commandWindow.ts）。
+   */
+  kind?: 'command';
   /** Generated migration scripts keep their target namespace. */
   executionSchema?: string;
   parameters?: import('./sqlParameters').SqlParameterDefinition[];
@@ -1064,7 +1069,13 @@ export type ScheduledExportRun = {
 
 /** 对象定义批量导出。kind 是 TABLE 或 SchemaObjectKind 之一；非表对象带 objectKey。 */
 export type SchemaExportCandidate = { kind: string; name: string; displayName: string; objectKey: string | null };
-export type SchemaExportCandidates = { schemaName: string; objects: SchemaExportCandidate[]; truncated: boolean; warnings: string[] };
+export type SchemaExportCandidates = {
+  schemaName: string; objects: SchemaExportCandidate[]; truncated: boolean; warnings: string[];
+  /** 这次查过的对象类型（含 0 个的）；旧后端没有这个字段。 */
+  kinds?: string[];
+  /** 触到每类上限的类型：其余对象要按名称到数据库搜索才列得出来。 */
+  truncatedKinds?: string[];
+};
 export type SchemaExportItem = { order: number; kind: string; name: string; dependsOn: string[] };
 export type SchemaExportResponse = {
   schemaName: string;

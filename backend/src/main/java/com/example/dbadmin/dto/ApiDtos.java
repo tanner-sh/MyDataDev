@@ -1434,7 +1434,12 @@ public final class ApiDtos {
     public record SchemaExportCandidate(String kind, String name, String displayName, @Schema(nullable = true) String objectKey) {
     }
 
-    public record SchemaExportCandidates(String schemaName, List<SchemaExportCandidate> objects, boolean truncated, List<String> warnings) {
+    /**
+     * kinds：这次查过的对象类型（含 0 个的），界面据此说明「没有」而不是让类型消失；
+     * truncatedKinds：触到每类上限的类型，其余对象要按名称搜索才列得出来。
+     */
+    public record SchemaExportCandidates(String schemaName, List<SchemaExportCandidate> objects, boolean truncated, List<String> warnings,
+                                         List<String> kinds, List<String> truncatedKinds) {
     }
 
     public record SchemaExportObject(@NotBlank String kind, @NotBlank String name, @Schema(nullable = true) String objectKey) {
