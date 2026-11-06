@@ -6,7 +6,7 @@ import type { ConnectionPermission } from './accessControl';
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
+export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'table-relations' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
 
 /**
  * 分区的分组。
@@ -52,6 +52,8 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'schema-snapshots', label: '结构快照', group: 'data', requiresPermission: 'VIEW_METADATA' },
   // 只读定义、只生成文本，与查看单个对象的 DDL 同档；执行仍要走 SQL 工作台那条路。
   { key: 'schema-export', label: '对象导出', group: 'data', requiresPermission: 'VIEW_METADATA' },
+  // 表关系的候选来自执行历史（只给名字对），判断影响所有人的 JOIN 补全：与看历史同档，要 QUERY。
+  { key: 'table-relations', label: '表关系', group: 'data', requiresPermission: 'QUERY' },
   // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
   { key: 'data-diff', label: '数据对比', group: 'data', requiresPermission: 'QUERY' },
   // 检索读的是业务数据本身，所以要 QUERY 而不是 VIEW_METADATA。

@@ -19,6 +19,9 @@
  * 比不给更糟，因为它看起来像是工具确认过的。</p>
  */
 
+import type { RelationKnowledge } from './tableRelations';
+import type { TableRelationPair } from './types';
+
 export type JoinColumn = { name: string; type?: string };
 
 export type JoinTable = {
@@ -31,7 +34,7 @@ export type JoinTable = {
   primaryKeys: string[];
 };
 
-export type JoinReason = 'same-name-key' | 'id-suffix';
+export type JoinReason = 'confirmed' | 'history' | 'same-name-key' | 'id-suffix';
 
 export type JoinSuggestion = {
   /** 已经在语句里的那张表一侧。 */
@@ -52,21 +55,71 @@ const GENERIC_KEYS = new Set(['id', 'rowid', 'uuid', 'guid', 'code', 'name']);
  *
  * existing 按在语句里出现的顺序传入；离得越近（越靠后）的表排在越前面 —— `a JOIN b JOIN c ON`
  * 时，c 最可能连的是刚 JOIN 进来的 b。
+ *
+ * knowledge 是人的判断与执行历史（见 tableRelations.ts）：确认过的排最前（100 分），历史里用过的
+ * 按次数排（82 起，用得越多越靠前，常用的会超过命名推断），否决过的不论哪条规则推出来都去掉。
  */
-export function inferJoinConditions(joined: JoinTable, existing: JoinTable[]): JoinSuggestion[] {
-  const suggestions: JoinSuggestion[] = [];
-  const seen = new Set<string>();
+export function inferJoinConditions(joined: JoinTable, existing: JoinTable[], knowledge?: RelationKnowledge): JoinSuggestion[] {
+  const candidates: JoinSuggestion[] = [];
   existing.forEach((other, index) => {
     // 同一张表自连接时也照常推断：树形结构里 pk_parent → pk_xxx 本来就是这样连的。
     const proximity = (index + 1) / (existing.length + 1);
-    for (const candidate of [...inferBetween(other, joined, 'existing-owns'), ...inferBetween(joined, other, 'joined-owns')]) {
-      const key = `${candidate.existing.qualifier}.${candidate.existing.column.toLowerCase()}=${candidate.joined.qualifier}.${candidate.joined.column.toLowerCase()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      suggestions.push({ ...candidate, score: candidate.score + proximity });
-    }
+    const between = [
+      ...fromKnowledge(joined, other, knowledge),
+      ...inferBetween(other, joined, 'existing-owns'),
+      ...inferBetween(joined, other, 'joined-owns')
+    ];
+    for (const candidate of between) candidates.push({ ...candidate, score: candidate.score + proximity });
   });
-  return suggestions.sort((left, right) => right.score - left.score);
+  const rejected = knowledge?.rejectedKeys;
+  const seen = new Set<string>();
+  return candidates
+    .sort((left, right) => right.score - left.score)
+    .filter((candidate) => {
+      const key = conditionKey(candidate);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return !rejected?.has(relationPairKey(candidate));
+    });
+}
+
+/** 去重用的键：同一个别名组合下的同一对列（不同来源推出同一条条件只留分数最高的那个）。 */
+function conditionKey(suggestion: JoinSuggestion): string {
+  return `${suggestion.existing.qualifier}.${suggestion.existing.column.toLowerCase()}=${suggestion.joined.qualifier}.${suggestion.joined.column.toLowerCase()}`;
+}
+
+/** 与服务端、tableRelations.relationKey 同一个规范，用来对照否决记录。 */
+function relationPairKey(suggestion: JoinSuggestion): string {
+  const a = `${suggestion.existing.table}.${suggestion.existing.column}`.toLowerCase();
+  const b = `${suggestion.joined.table}.${suggestion.joined.column}`.toLowerCase();
+  return a <= b ? `${a}=${b}` : `${b}=${a}`;
+}
+
+/** 把确认过的 / 历史里挖到的关联套到这两张表上：表名对得上、两列在列清单里都存在才算。 */
+function fromKnowledge(joined: JoinTable, other: JoinTable, knowledge: RelationKnowledge | undefined): JoinSuggestion[] {
+  if (!knowledge) return [];
+  const results: JoinSuggestion[] = [];
+  const apply = (pair: TableRelationPair, reason: 'confirmed' | 'history', score: number, explanation: string) => {
+    for (const [existingTable, existingColumn, joinedTable, joinedColumn] of [
+      [pair.leftTable, pair.leftColumn, pair.rightTable, pair.rightColumn],
+      [pair.rightTable, pair.rightColumn, pair.leftTable, pair.leftColumn]
+    ]) {
+      if (lower(existingTable) !== lower(other.name) || lower(joinedTable) !== lower(joined.name)) continue;
+      const existingMeta = findColumn(other, existingColumn);
+      const joinedMeta = findColumn(joined, joinedColumn);
+      if (!existingMeta || !joinedMeta) continue;
+      results.push({
+        existing: { qualifier: other.qualifier, column: existingMeta.name, table: other.name },
+        joined: { qualifier: joined.qualifier, column: joinedMeta.name, table: joined.name },
+        reason, score, explanation
+      });
+    }
+  };
+  for (const relation of knowledge.confirmed) apply(relation, 'confirmed', 100, '已确认的关联');
+  for (const relation of knowledge.mined) {
+    apply(relation, 'history', 82 + Math.min(relation.hits, 12), `执行历史里用过 ${relation.hits} 次`);
+  }
+  return results;
 }
 
 /** 条件的 SQL 文本：已有的表在左，新 JOIN 的表在右。quote 负责按库引用标识符。 */

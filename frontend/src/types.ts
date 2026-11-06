@@ -144,6 +144,13 @@ export type TableLifecycleRequest = {
   confirmation?: string;
 };
 export type ObjectStructure = DbObject;
+/** 表关系（JOIN 补全的知识来源），见 tableRelations.ts。两侧已按 (表, 列) 规范化排序。 */
+export type TableRelationPair = { leftTable: string; leftColumn: string; rightTable: string; rightColumn: string };
+export type TableRelationStatus = 'CONFIRMED' | 'REJECTED';
+export type TableRelationSource = 'HISTORY' | 'NAMING' | 'MANUAL';
+export type TableRelation = TableRelationPair & { status: TableRelationStatus; source: TableRelationSource; decidedBy?: string | null; decidedAt?: string | null };
+export type MinedTableRelation = TableRelationPair & { hits: number; lastUsedAt?: string | null };
+export type TableRelationsResponse = { decided: TableRelation[]; mined: MinedTableRelation[]; scannedStatements: number };
 /** primaryKeys：主键列（按键序），JOIN 条件推断用；旧后端没有这个字段。 */
 export type ObjectColumns = Omit<DbObject, 'indexes'> & { primaryKeys?: string[] };
 export type Metadata = {

@@ -1449,6 +1449,29 @@ public final class ApiDtos {
                                          List<String> kinds, List<String> truncatedKinds) {
     }
 
+    /**
+     * 表关系：人确认或否决过的一对关联列。status 为 CONFIRMED / REJECTED；source 说明候选从哪来
+     * （HISTORY 执行历史、NAMING 命名推断、MANUAL 手工添加）。两侧已按 (表, 列) 规范化排好序。
+     */
+    public record TableRelation(String leftTable, String leftColumn, String rightTable, String rightColumn,
+                                String status, String source, @Schema(nullable = true) String decidedBy,
+                                @Schema(nullable = true) String decidedAt) {
+    }
+
+    /** 从执行历史里挖出、还没人判断过的关联：只有名字与次数，不含任何 SQL 正文。 */
+    public record MinedTableRelation(String leftTable, String leftColumn, String rightTable, String rightColumn,
+                                     int hits, @Schema(nullable = true) String lastUsedAt) {
+    }
+
+    /** scannedStatements：这次挖掘读了多少条成功执行的 SQL，界面据此说明「样本有多大」。 */
+    public record TableRelationsResponse(List<TableRelation> decided, List<MinedTableRelation> mined, int scannedStatements) {
+    }
+
+    public record TableRelationDecisionRequest(@NotBlank String leftTable, @NotBlank String leftColumn,
+                                               @NotBlank String rightTable, @NotBlank String rightColumn,
+                                               @Schema(nullable = true) String status, @Schema(nullable = true) String source) {
+    }
+
     public record SchemaExportObject(@NotBlank String kind, @NotBlank String name, @Schema(nullable = true) String objectKey) {
     }
 

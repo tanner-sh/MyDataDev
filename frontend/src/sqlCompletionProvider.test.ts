@@ -112,6 +112,21 @@ describe('SQL 补全数据通路', () => {
     // 写到条件中间（AND 后面）不再弹推断。
     const later = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on v.PK_ORG = o.PK_ORG and '), dependencies);
     expect(later?.items.some(item => item.kind === 'join')).toBe(false);
+    // 表关系：只在 ON 后面才取；确认过的排最前；取不到不影响其余候选。
+    const loadRelations = vi.fn(async () => ({
+      confirmed: [{ leftTable: 'GL_VOUCHER', leftColumn: 'PK_VOUCHER', rightTable: 'ORG_ORGS', rightColumn: 'NAME', status: 'CONFIRMED' as const, source: 'MANUAL' as const }],
+      mined: [], rejectedKeys: new Set<string>()
+    }));
+    const withRelations = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on '), { ...dependencies, loadRelations });
+    expect(withRelations?.items.slice(0, 2).map(item => [item.label, item.detail])).toEqual([
+      ['v.PK_VOUCHER = o.NAME', '已确认的关联'],
+      ['v.PK_ORG = o.PK_ORG', 'GL_VOUCHER.PK_ORG 与 ORG_ORGS 的主键同名']
+    ]);
+    await provideSqlCompletions(request('select * from GL_VOUCHER where '), { ...dependencies, loadRelations });
+    expect(loadRelations).toHaveBeenCalledTimes(1);
+    const failing = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on '),
+      { ...dependencies, loadRelations: vi.fn(async () => { throw new Error('403'); }) });
+    expect(failing?.items[0]).toMatchObject({ kind: 'join', label: 'v.PK_ORG = o.PK_ORG' });
     // 旧后端没有 primaryKeys：不报错，只是推断不出来。
     const legacy = { ...dependencies, loadColumns: vi.fn(async (_id: number, object: { name: string }) => ({ ...tables[object.name], primaryKeys: undefined })) };
     const fallback = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on '), legacy);

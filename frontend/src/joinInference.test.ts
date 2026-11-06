@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { RelationKnowledge } from './tableRelations';
 import { idSuffixStem, inferJoinConditions, joinConditionText, tableNameMatchesStem, type JoinTable } from './joinInference';
 
 const table = (qualifier: string, name: string, columns: [string, string?][], primaryKeys: string[]): JoinTable =>
@@ -82,4 +83,55 @@ describe('JOIN 条件命名推断', () => {
     const [suggestion] = inferJoinConditions(org, [voucher]);
     expect(joinConditionText(suggestion, (value) => `"${value}"`)).toBe('v."PK_ORG" = o."PK_ORG"');
   });
+
+  describe('人的判断与执行历史', () => {
+    const knowledge = (partial: Partial<RelationKnowledge>): RelationKnowledge => ({ confirmed: [], mined: [], rejectedKeys: new Set(), ...partial });
+    // 两张表之间没有任何命名规律可循：只能靠确认或历史。
+    const bill = table('b', 'IFI_BILL', [['ID', 'NUMBER'], ['SRC_NO', 'VARCHAR2']], ['ID']);
+    const source = table('s', 'IFI_SOURCE', [['SEQ', 'NUMBER'], ['BILLNO', 'VARCHAR2']], ['SEQ']);
+
+    it('确认过的关联排在最前，命名推断之上', () => {
+      const confirmed = knowledge({ confirmed: [{ leftTable: 'gl_voucher', leftColumn: 'creator', rightTable: 'org_orgs', rightColumn: 'pk_org', status: 'CONFIRMED', source: 'MANUAL' }] });
+      const conditions = inferJoinConditions(org, [voucher], confirmed);
+      expect(conditions.map((item) => [joinConditionText(item), item.reason])).toEqual([
+        ['v.CREATOR = o.PK_ORG', 'confirmed'],
+        ['v.PK_ORG = o.PK_ORG', 'same-name-key']
+      ]);
+    });
+
+    it('历史里挖到的关联补上命名推断推不出来的那一对，按次数决定排在命名推断前后', () => {
+      const once = knowledge({ mined: [{ leftTable: 'ifi_bill', leftColumn: 'src_no', rightTable: 'ifi_source', rightColumn: 'billno', hits: 1 }] });
+      expect(inferJoinConditions(source, [bill], once).map((item) => [joinConditionText(item), item.reason, item.explanation]))
+        .toEqual([['b.SRC_NO = s.BILLNO', 'history', '执行历史里用过 1 次']]);
+
+      const often = knowledge({ mined: [{ leftTable: 'GL_VOUCHER', leftColumn: 'CREATOR', rightTable: 'ORG_ORGS', rightColumn: 'PK_ORG', hits: 30 }] });
+      const rare = knowledge({ mined: [{ leftTable: 'GL_VOUCHER', leftColumn: 'CREATOR', rightTable: 'ORG_ORGS', rightColumn: 'PK_ORG', hits: 1 }] });
+      expect(inferJoinConditions(org, [voucher], often)[0].reason).toBe('history');
+      expect(inferJoinConditions(org, [voucher], rare)[0].reason).toBe('same-name-key');
+    });
+
+    it('同一条条件被几条规则推出来时只留分数最高的', () => {
+      const both = knowledge({ confirmed: [{ leftTable: 'GL_VOUCHER', leftColumn: 'PK_ORG', rightTable: 'ORG_ORGS', rightColumn: 'PK_ORG', status: 'CONFIRMED', source: 'NAMING' }] });
+      const conditions = inferJoinConditions(org, [voucher], both);
+      expect(conditions).toHaveLength(1);
+      expect(conditions[0].reason).toBe('confirmed');
+    });
+
+    it('否决过的不论来自命名推断还是历史都不再提示', () => {
+      const rejected = knowledge({
+        rejectedKeys: new Set(['gl_voucher.pk_org=org_orgs.pk_org']),
+        mined: [{ leftTable: 'gl_voucher', leftColumn: 'pk_org', rightTable: 'org_orgs', rightColumn: 'pk_org', hits: 9 }]
+      });
+      expect(inferJoinConditions(org, [voucher], rejected)).toEqual([]);
+    });
+
+    it('表名对不上、或者列已经不存在的历史关联不提示', () => {
+      const stale = knowledge({ mined: [
+        { leftTable: 'gl_voucher', leftColumn: 'pk_org_old', rightTable: 'org_orgs', rightColumn: 'pk_org', hits: 5 },
+        { leftTable: 'other', leftColumn: 'pk_org', rightTable: 'org_orgs', rightColumn: 'pk_org', hits: 5 }
+      ] });
+      expect(inferJoinConditions(org, [voucher], stale).map((item) => item.reason)).toEqual(['same-name-key']);
+    });
+  });
 });
+

@@ -3,6 +3,7 @@ import type { SqlCompletionItem, SqlCompletionRequest, SqlCompletionResult } fro
 import type { CompletionCatalog, ObjectColumns } from './types';
 import { sqlKeywordCompletionItems } from './sqlKeywordSuggestions';
 import { inferJoinConditions, joinConditionText, type JoinTable } from './joinInference';
+import type { RelationKnowledge } from './tableRelations';
 
 export type SqlCompletionDependencies = {
   connectionId: number | null;
@@ -10,6 +11,8 @@ export type SqlCompletionDependencies = {
   isCurrent: () => boolean;
   loadCatalog: (connectionId: number, schemaName: string, prefix: string) => Promise<CompletionCatalog>;
   loadColumns: (connectionId: number, object: { schemaName?: string; name: string }) => Promise<ObjectColumns>;
+  /** 表关系（确认 / 否决 / 历史挖掘），只在停在 JOIN … ON 后面时才取；取不到就只用命名推断。 */
+  loadRelations?: (connectionId: number) => Promise<RelationKnowledge>;
 };
 
 export async function provideSqlCompletions(request: SqlCompletionRequest, deps: SqlCompletionDependencies): Promise<SqlCompletionResult | null> {
@@ -65,7 +68,11 @@ export async function provideSqlCompletions(request: SqlCompletionRequest, deps:
         }));
       });
       if (structures.some(result => result.status === 'rejected')) warning = '部分字段加载失败';
-      items = [...joinConditionItems(context, references, structures, prefix), ...columns, ...items];
+      const knowledge = joinConditionPosition(context) && deps.loadRelations
+        ? await deps.loadRelations(connectionId).catch(() => undefined)
+        : undefined;
+      if (!current()) return null;
+      items = [...joinConditionItems(context, references, structures, prefix, knowledge), ...columns, ...items];
     }
   }
   if (!current()) return null;
@@ -85,7 +92,8 @@ function joinConditionItems(
   context: ReturnType<typeof analyzeSqlCompletion>,
   references: ReturnType<typeof analyzeSqlCompletion>['tables'],
   structures: PromiseSettledResult<ObjectColumns>[],
-  prefix: string
+  prefix: string,
+  knowledge?: RelationKnowledge
 ): SqlCompletionItem[] {
   const position = joinConditionPosition(context);
   if (!position) return [];
@@ -104,7 +112,7 @@ function joinConditionItems(
   if (!joined) return [];
   const existing = position.existing.map(toJoinTable).filter((table): table is JoinTable => Boolean(table));
   const quote = (identifier: string) => quoteSqlIdentifier(identifier, context.replacement.quoteStyle);
-  return inferJoinConditions(joined, existing)
+  return inferJoinConditions(joined, existing, knowledge)
     .map((suggestion, index) => {
       const text = joinConditionText(suggestion, quote);
       return {
