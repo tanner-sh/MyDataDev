@@ -5663,3 +5663,36 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .script-execution-log-notices ul { margin: 0; padding-left: var(--space-4); }
 .script-log-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: var(--text-sm); }
 .script-execution-log-table .script-log-failed .ant-table-cell { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }
+
+/* 命令窗口：头部一行状态与操作，下面是等宽的滚动日志。 */
+.command-console { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.command-console-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-1) var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.command-console-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.command-line { white-space: pre-wrap; overflow-wrap: anywhere; }
+.command-line-statement { margin-top: var(--space-2); color: var(--text); font-weight: 600; cursor: pointer; }
+.command-line-statement:hover, .command-line-error:hover { text-decoration: underline; }
+.command-line-statement:first-child { margin-top: 0; }
+.command-prompt { color: var(--primary); }
+.command-line-result { color: var(--text-secondary); }
+.command-line-output { color: var(--success); padding-left: var(--space-3); }
+.command-line-prompt { color: var(--text); }
+.command-line-error { color: var(--danger); cursor: pointer; }
+.command-line-compile { color: var(--warning); cursor: pointer; }
+.command-line-info { color: var(--text-secondary); font-style: italic; }
+.command-elapsed { color: var(--text-secondary); font-size: var(--text-xs); }
+.command-cursor { animation: command-blink 1.2s steps(2, start) infinite; }
+@keyframes command-blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .command-cursor { animation: none; } }
+
+/* 命令窗口选项：两列，标签在左。 */
+.command-options { display: grid; grid-template-columns: auto auto; align-items: center; gap: var(--space-2) var(--space-3); max-width: 360px; }
+.command-options-hint { grid-column: 1 / -1; font-size: var(--text-xs); }

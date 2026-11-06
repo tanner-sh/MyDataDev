@@ -321,6 +321,18 @@ public class SqlService {
         scriptSplitter.requireDelimiterDecision(sql, connections.require(connectionId).dbType(), delimiter, delimiterChecked);
     }
 
+    /**
+     * 命令窗口提交前的无 WHERE 写操作检查：与工作台同一套判定、同一个 409，确认了也同样记审计。
+     * 脚本里的 SQL*Plus 指令（含 WHENEVER SQLERROR CONTINUE）在这里只是被跳过。
+     */
+    public void requireUnscopedMutationConfirmation(long connectionId, String actor, String sql, SqlScriptDelimiter delimiter, boolean confirmed) throws Exception {
+        String dbType = connections.require(connectionId).dbType();
+        List<StatementSegment> segments = new ArrayList<>();
+        SqlScriptParser.read(new java.io.StringReader(sql), dbType, Math.max(1, sql.length()), delimiter, unit ->
+                segments.add(new StatementSegment(unit.sql(), Math.toIntExact(unit.startOffset()), Math.toIntExact(unit.endOffset()))), ignored -> { });
+        requireUnscopedMutationConfirmation(connectionId, actor, scriptSplitter.classificationUnits(segments, dbType, delimiter), confirmed);
+    }
+
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction,
                                            SqlScriptDelimiter delimiter, boolean delimiterChecked, boolean largeScriptConfirmed) throws Exception {
         boolean scriptMode = "SCRIPT".equals(transactionMode);
@@ -495,7 +507,7 @@ public class SqlService {
         return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, null);
     }
 
-    private void requireUnscopedMutationConfirmation(
+    public void requireUnscopedMutationConfirmation(
             long connectionId,
             String actor,
             List<StatementSegment> statements,

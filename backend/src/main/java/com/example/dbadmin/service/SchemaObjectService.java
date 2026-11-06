@@ -39,7 +39,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
-import java.sql.SQLWarning;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.LocalDate;
@@ -494,49 +493,12 @@ public class SchemaObjectService {
      * <p>整段吞异常：这是调用之外的诊断信息，读不回来不该把一次已经成功的调用改判成失败。</p>
      */
     private List<String> routineMessages(Connection connection, DatabaseDialect dialect, Statement statement) {
-        List<String> messages = new ArrayList<>();
-        try {
-            collectWarnings(statement.getWarnings(), messages);
-            collectWarnings(connection.getWarnings(), messages);
-        } catch (Exception ignored) {
-            // 读警告本身失败就算了。
-        }
-        String fetch = dialect.routineOutputFetchCall();
-        if (fetch == null) return List.copyOf(messages);
-        try (CallableStatement output = connection.prepareCall(fetch)) {
-            output.registerOutParameter(1, Types.VARCHAR);
-            output.registerOutParameter(2, Types.INTEGER);
-            while (messages.size() < MAX_ROUTINE_MESSAGES) {
-                output.execute();
-                // 状态码非 0 表示缓冲读完了。这是 DBMS_OUTPUT.GET_LINE 的约定。
-                if (output.getInt(2) != 0) break;
-                String line = output.getString(1);
-                if (line != null) messages.add(line);
-            }
-        } catch (Exception ignored) {
-            // 缓冲没打开、没权限、或这个连接根本不是 Oracle：都不是调用本身的问题。
-        }
-        return List.copyOf(messages);
-    }
-
-    private static void collectWarnings(SQLWarning warning, List<String> messages) {
-        SQLWarning current = warning;
-        while (current != null && messages.size() < MAX_ROUTINE_MESSAGES) {
-            String text = current.getMessage();
-            if (text != null && !text.isBlank()) messages.add(text.strip());
-            current = current.getNextWarning();
-        }
+        return RoutineOutput.read(connection, dialect, statement, MAX_ROUTINE_MESSAGES);
     }
 
     /** 打开服务端的输出缓冲。失败无所谓：拿不到 DBMS_OUTPUT 只是少一份诊断信息。 */
     private void enableRoutineOutput(Connection connection, DatabaseDialect dialect) {
-        String sql = dialect.routineOutputEnableSql();
-        if (sql == null) return;
-        try (Statement statement = connection.createStatement()) {
-            statement.execute(sql);
-        } catch (Exception ignored) {
-            // 见方法注释。
-        }
+        RoutineOutput.enable(connection, dialect);
     }
 
     private RoutineInvokeResponse invokePrepared(

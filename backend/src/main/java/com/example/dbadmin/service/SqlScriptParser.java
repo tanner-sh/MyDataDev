@@ -14,11 +14,26 @@ final class SqlScriptParser {
     /** 解析过程中顺带说明的事：被忽略的 SQL*Plus 指令、PROMPT 文本、EXIT 之后被跳过的内容。 */
     record Summary(List<String> notices) { }
     @FunctionalInterface interface UnitConsumer { void accept(Unit unit) throws Exception; }
+
+    /**
+     * 命令窗口要的不只是语句：PROMPT 要按它在脚本里的位置输出，WHENEVER SQLERROR 要在执行到那一行时
+     * 才改变遇错策略。有监听器时这些指令按出现顺序报给它（夹在前后两条语句之间）；没有监听器时
+     * 行为不变 —— 工作台与普通文件任务仍然拒绝 WHENEVER SQLERROR CONTINUE。
+     */
+    enum DirectiveKind { NOTICE, PROMPT, ON_ERROR_CONTINUE, ON_ERROR_EXIT }
+    record Directive(DirectiveKind kind, String text, int line) { }
+    @FunctionalInterface interface DirectiveListener { void accept(Directive directive) throws Exception; }
+
     static Summary read(Reader reader, String dbType, int maxChars, UnitConsumer consumer) throws Exception {
         return read(reader, dbType, maxChars, SqlScriptDelimiter.AUTO, consumer);
     }
     static Summary read(Reader reader, String dbType, int maxChars, SqlScriptDelimiter delimiterMode, UnitConsumer consumer) throws Exception {
+        return read(reader, dbType, maxChars, delimiterMode, consumer, null);
+    }
+    static Summary read(Reader reader, String dbType, int maxChars, SqlScriptDelimiter delimiterMode, UnitConsumer consumer,
+                        DirectiveListener directives) throws Exception {
         Parser parser = new Parser(dbType, maxChars, delimiterMode == null ? SqlScriptDelimiter.AUTO : delimiterMode, consumer);
+        parser.directives = directives;
         StringBuilder line = new StringBuilder();
         PushbackReader input = new PushbackReader(reader, 1);
         int c;
@@ -70,6 +85,7 @@ final class SqlScriptParser {
         private final boolean blankLineDelimiter;
         private final boolean sqlPlus;
         private final Set<String> notices = new LinkedHashSet<>();
+        private DirectiveListener directives;
         private int plsqlDepth;
         private boolean blockComplete;
         /** blockComplete 成立时，块的代码在 statement 里结束的位置；其后的空白与注释属于下一条。 */
@@ -443,7 +459,15 @@ final class SqlScriptParser {
                 throw failure("不支持需要交互或绑定变量的 SQL*Plus 指令：" + command.split("\\s+")[0]);
             }
             if (upper.matches("WHENEVER\\s+SQLERROR\\s+CONTINUE\\b.*")) {
-                throw failure("暂不支持 WHENEVER SQLERROR CONTINUE（遇错继续）；当前遇到错误会停在出错的那一条");
+                if (directives == null) {
+                    throw failure("WHENEVER SQLERROR CONTINUE（遇错继续）只在命令窗口里支持；当前遇到错误会停在出错的那一条");
+                }
+                directives.accept(new Directive(DirectiveKind.ON_ERROR_CONTINUE, command, lineNumber));
+                return true;
+            }
+            if (directives != null && upper.matches("WHENEVER\\s+SQLERROR\\s+EXIT\\b.*")) {
+                directives.accept(new Directive(DirectiveKind.ON_ERROR_EXIT, command, lineNumber));
+                return true;
             }
             if (upper.matches("(?:EXIT|QUIT)\\b.*")) {
                 exited = true;
@@ -480,8 +504,13 @@ final class SqlScriptParser {
             return false;
         }
 
-        private void notice(String text) {
+        private void notice(String text) throws Exception {
             if (notices.size() < 100) notices.add(text);
+            if (directives != null) {
+                boolean prompt = text.startsWith("PROMPT ");
+                directives.accept(new Directive(prompt ? DirectiveKind.PROMPT : DirectiveKind.NOTICE,
+                        prompt ? text.substring("PROMPT ".length()) : text, lineNumber));
+            }
         }
 
         /** 换写成另一条 SQL 的指令行：偏移与行号仍指向源文件里的那一行，报错时能定位回去。 */
