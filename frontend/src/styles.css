@@ -2698,18 +2698,13 @@ body.is-resizing-column * {
   width: 100%;
 }
 
-.explorer-scope-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 6px;
-}
-
 .explorer-schema-select {
+  width: 100%;
   min-width: 0;
 }
 
-.object-type-toolbar {
+/* 对象类型 + 搜索 + 新建。类型框给到能放下「物化视图」四个字加图标的宽度，其余给搜索框。 */
+.explorer-search-row {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -2717,8 +2712,17 @@ body.is-resizing-column * {
 }
 
 .object-kind-select {
+  flex: 0 0 auto;
+  width: 112px;
+}
+
+.explorer-search-input {
   min-width: 0;
   flex: 1 1 auto;
+}
+
+.object-kind-popup {
+  min-width: 168px;
 }
 
 .object-kind-option,
@@ -5697,3 +5701,8 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .command-options { display: grid; grid-template-columns: auto auto; align-items: center; gap: var(--space-2) var(--space-3); max-width: 360px; }
 .command-options-hint { grid-column: 1 / -1; font-size: var(--text-xs); }
 .sql-tab-kind-icon { margin-right: var(--space-1); color: var(--text-secondary); }
+
+/* 弹层按内容撑开（见 App.tsx 的 popupMatchSelectWidth），但不能比视口还宽：超长的表名照样省略号。 */
+.ant-select-dropdown {
+  max-width: min(480px, calc(100vw - 32px));
+}

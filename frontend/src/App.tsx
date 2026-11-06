@@ -3613,6 +3613,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     <ConfigProvider
       locale={zhCN}
       theme={antThemeConfig}
+      // 下拉弹层默认与选择框等宽：侧栏、工具栏里的窄选择框会把选项截成「视.」「物.」。
+      // 关掉之后弹层按内容撑开，最小仍是选择框宽度，最大宽度由 styles.css 的 .ant-select-dropdown 兜住。
+      popupMatchSelectWidth={false}
     >
       <ErrorCenter />
       {toastContextHolder}
