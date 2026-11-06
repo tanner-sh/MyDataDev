@@ -97,6 +97,22 @@ public class SqlHistoryRepository {
         }, parameters.toArray());
     }
 
+    public record MiningSource(String sql, java.time.Instant createdAt) {
+    }
+
+    /**
+     * 挖表关系用的最近成功执行的 SQL（所有执行人）。调用方只从中提取「表.列 = 表.列」的名字对，
+     * 正文不出服务端，因此不受「只看自己的历史」限制。过长的脚本跳过：关联条件不在几十 KB 的尾部。
+     */
+    public List<MiningSource> recentSuccessfulSql(long connectionId, int limit, int maxChars) {
+        return jdbc.query("SELECT sql_text, created_at FROM sql_history WHERE connection_id = ? AND status = 'SUCCESS'"
+                        + " AND LENGTH(sql_text) <= ? ORDER BY id DESC LIMIT ?",
+                (rs, rowNum) -> {
+                    Timestamp createdAt = rs.getTimestamp("created_at");
+                    return new MiningSource(rs.getString("sql_text"), createdAt == null ? null : createdAt.toInstant());
+                }, connectionId, maxChars, Math.max(1, limit));
+    }
+
     /** 关键字里的 LIKE 元字符必须转义，否则用户搜 "100%" 会匹配到所有记录。 */
     private String likePattern(String keyword) {
         return "%" + keyword.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";

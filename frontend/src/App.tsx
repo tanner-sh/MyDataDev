@@ -27,6 +27,7 @@ import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, Activ
 import { buildChanges, createCommandTab, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
+import { loadRelationKnowledge } from './tableRelations';
 import { provideSqlCompletions } from './sqlCompletionProvider';
 import { withLoadedObjectStructure } from './objectTreeModel';
 import type { ExplorerObjectKind } from './schemaObjectModel';
@@ -135,6 +136,7 @@ const ConnectionFormPanel = lazy(() => import('./components/ConnectionFormPanel'
 const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPanel').then((module) => ({ default: module.ScheduledExportPanel })));
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
+const TableRelationsPanel = lazy(() => import('./components/TableRelationsPanel').then((module) => ({ default: module.TableRelationsPanel })));
 const SchemaSnapshotPanel = lazy(() => import('./components/SchemaSnapshotPanel').then((module) => ({ default: module.SchemaSnapshotPanel })));
 const SchemaExportPanel = lazy(() => import('./components/SchemaExportPanel').then((module) => ({ default: module.SchemaExportPanel })));
 const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
@@ -2317,7 +2319,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         && (metadataRef.current?.selectedSchema || '') === schemaName
         && activeSqlTabIdRef.current === tabId,
       loadCatalog: loadCompletionCatalog,
-      loadColumns: loadObjectColumns
+      loadColumns: loadObjectColumns,
+      loadRelations: loadRelationKnowledge
     });
   }
 
@@ -4008,6 +4011,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     defaultConnectionId={selected?.id}
                     defaultSchema={activeSqlSchema}
                   />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'table-relations' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>表关系</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载表关系…" />}>
+                  <TableRelationsPanel connections={connections} defaultConnectionId={selected?.id} />
                 </Suspense>
               </div>
             )}

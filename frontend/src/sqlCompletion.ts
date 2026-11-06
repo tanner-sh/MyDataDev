@@ -373,6 +373,23 @@ export function shouldTriggerSqlConditionColumnCompletion(context: SqlCompletion
   return /^\s+$/u.test(whitespace);
 }
 
+/**
+ * 光标是不是正停在某个 `JOIN 表 [别名] ON` 后面（还没写条件，或者只敲了几个字母）。
+ * 是的话返回正在 JOIN 的那张表和它前面已有的表，供 JOIN 条件推断用；否则 undefined。
+ *
+ * 只认紧跟在 ON 后面的位置：写到 `ON a.x = b.y AND` 时再弹一遍推断，多半是在干扰。
+ */
+export function joinConditionPosition(context: SqlCompletionContext): { joined: SqlTableReference; existing: SqlTableReference[] } | undefined {
+  if (context.insideCommentOrString || context.mode !== 'column') return undefined;
+  const before = context.significantTokens.filter((token) => token.end <= context.replacement.start);
+  if (!isKeyword(before[before.length - 1], 'ON')) return undefined;
+  const onToken = before[before.length - 1];
+  const joined = [...context.tables].reverse().find((table) => table.sourceKeyword === 'JOIN' && table.end <= onToken.start);
+  if (!joined) return undefined;
+  const existing = context.tables.filter((table) => table.start < joined.start);
+  return existing.length ? { joined, existing } : undefined;
+}
+
 /** Parses FROM/JOIN/UPDATE/INTO table names and their explicit or implicit aliases. */
 export function parseSqlTableReferences(tokensOrSql: SqlToken[] | string): SqlTableReference[] {
   const tokens = (typeof tokensOrSql === 'string' ? tokenizeSql(tokensOrSql) : tokensOrSql)

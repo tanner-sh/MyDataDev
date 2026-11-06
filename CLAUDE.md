@@ -141,6 +141,10 @@ SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuer
 
 编辑器里的「未知表名」波浪线（`src/sqlUnknownObjects.ts` + `SqlEditor` 的装饰层）用的就是补全那份对象清单，不打接口、不需要模型。**它只在清单确实完整时才提示** —— 资源树是分页的、还可能带着搜索关键字，拿一份筛过或只有第一页的清单去判断「不存在」会把正确的表名也划上线，那比没有提示更糟。CTE、表值函数、临时表、限定到别的 Schema 的引用一律跳过，比对折大小写。改这块时的默认方向永远是「宁可不提示」。
 
+JOIN 条件补全（`src/joinInference.ts`，接在 `sqlCompletionProvider` 里）是给不建外键的库用的：光标停在 `JOIN 表 ON` 后面时，按命名推断出整条条件排在候选最前面。两条规则 —— **同名主键**（一张表的单列主键 `pk_org`/`cuserid` 在另一张表里出现同名列）与 **`xxx_id` → `xxx` 表的主键**（认复数与 `t_xxx` 这类前缀）；主键都叫 `id` 的不算，类型明显不兼容的不给。主键来自 `/objects/columns` 的 `primaryKeys`，用的就是字段候选已经加载的那几份列清单，不多打接口。方向与未知表名提示一样是「宁可少给」：一条错的条件看起来像是工具确认过的，比不给更糟。
+
+推断之外还有两份知识，经 `src/tableRelations.ts` 并进同一份候选：**执行历史挖掘**（`service/SqlJoinMining` 从这条连接上所有人最近成功执行的 SQL 里认出 `JOIN … ON` 与 Oracle 逗号连接的 `a.x = b.y`，别名还原成表名，CTE、子查询、同名异指的别名一律跳过；服务端只返回名字对与次数，SQL 正文不出服务端）与**人的判断**（`table_relation` 表，Flyway V29，按连接归属）。排序是确认 > 常用的历史 > 命名推断 > 偶发的历史；**否决的不论哪条规则推出来都不再提示**。管理入口是管理抽屉的「表关系」分区（QUERY 档，判断影响该连接所有人的补全，写审计 `TABLE_RELATION_DECIDE` / `TABLE_RELATION_REMOVE`）；改了判断要 `invalidateRelationKnowledge`，补全那边缓存了两分钟。
+
 **测试约定：纯逻辑从组件里抽出来，放在 `src/` 下的独立模块，每个模块配一个同名 `.test.ts`**（`sqlCompletion.ts`/`sqlCompletion.test.ts`、`resultGridData.ts`、`productionConfirmation.ts`、`tableLifecycle.ts` …）。仓库里没有组件渲染测试。新增行为时，先想清楚哪部分能抽成纯函数放进这类模块并补测试，而不是把逻辑埋进 `.tsx`。
 
 `src/api.ts` 的 `ApiError` 会解析后端问题详情中的 `code`、`confirmationText`、`statements`，前端据此弹出生产确认或未限定范围写操作的确认框 —— 后端新增这类错误码时要同步这里。

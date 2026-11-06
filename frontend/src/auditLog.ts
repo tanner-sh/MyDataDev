@@ -52,6 +52,8 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_FILE_SUCCESS: { label: 'SQL 文件执行成功', category: 'file' },
   SQL_FILE_FAILED: { label: 'SQL 文件执行失败', category: 'file', dangerous: true },
   DATA_IMPORT_UPLOAD: { label: '上传 CSV 导入任务', category: 'data' },
+  TABLE_RELATION_DECIDE: { label: '确认 / 否决表关系', category: 'data' },
+  TABLE_RELATION_REMOVE: { label: '删除表关系判断', category: 'data' },
   SCHEMA_SNAPSHOT_CAPTURE: { label: '采集结构快照', category: 'data' },
   SCHEMA_SNAPSHOT_UNCHANGED: { label: '结构快照无变化', category: 'data' },
   SCHEMA_SNAPSHOT_TARGET_SAVE: { label: '保存结构快照采集任务', category: 'data' },

@@ -534,7 +534,7 @@ public class MetadataService {
                 var scope = dialect.metadataScope(connection, object.schemaName());
                 List<ColumnInfo> cols = columnsWithRemarks(connection, dialect, scope, object);
                 return new ObjectColumns(object.schemaName(), object.name(), object.type(),
-                        tableRemarks(connection, dialect, object), cols);
+                        tableRemarks(connection, dialect, object), cols, primaryKeysOrEmpty(meta, scope, object));
             }
         });
     }
@@ -1144,6 +1144,16 @@ public class MetadataService {
         if (foldedMatches.size() == 1) return foldedMatches.get(0);
         if (foldedMatches.size() > 1) throw new IllegalArgumentException("对象名称大小写不明确，请使用数据库返回的精确名称：" + objectName);
         return null;
+    }
+
+    /** 补全用的主键：视图没有主键、个别驱动对视图直接抛错，读不到就当没有，不该让列清单跟着失败。 */
+    private List<String> primaryKeysOrEmpty(DatabaseMetaData meta, DatabaseDialect.MetadataScope scope, DbObject object) {
+        if (object.type() != null && object.type().toUpperCase(java.util.Locale.ROOT).contains("VIEW")) return List.of();
+        try {
+            return List.copyOf(primaryKeys(meta, scope.catalog(), scope.schemaPattern(), object.name()));
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private List<String> primaryKeys(DatabaseMetaData meta, String catalog, String schema, String table) throws Exception {

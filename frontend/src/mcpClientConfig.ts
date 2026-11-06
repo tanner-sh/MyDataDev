@@ -9,7 +9,89 @@ export type McpConfigSnippet = {
   title: string;
   language: 'bash' | 'powershell' | 'toml' | 'json' | 'text';
   content: string;
+  /**
+   * persistent：一次设置长期有效（推荐，排在最前）；temporary：只在当前终端窗口里有效，
+   * 关掉就没了，界面上收进「临时试用」并写明限制。缺省是普通的客户端配置。
+   */
+  kind?: 'persistent' | 'temporary';
+  /** 标题下面的一句说明。 */
+  hint?: string;
 };
+
+/** 保存 Key 的文件：只有当前用户可读，由 shell 启动文件加载。 */
+export const MCP_TOKEN_ENV_FILE = '~/.config/mydatadev/mcp.env';
+
+function persistentPosixTokenSetup(shell: 'zsh' | 'bash') {
+  const prompt = shell === 'zsh'
+    ? 'read -s "MDD_KEY?请输入 Agent API Key: " && echo'
+    : 'read -rsp "请输入 Agent API Key: " MDD_KEY && echo';
+  const rc = shell === 'zsh' ? '~/.zshrc' : '~/.bashrc';
+  return [
+    '# 只需做一次：Key 存进只有自己可读的文件，之后新开的终端自动加载；轮换 Key 后重跑一遍即可',
+    'mkdir -p ~/.config/mydatadev && chmod 700 ~/.config/mydatadev',
+    prompt,
+    `(umask 077 && printf 'export ${MCP_TOKEN_ENV_VAR}=%q\\n' "$MDD_KEY" > ${MCP_TOKEN_ENV_FILE}) && unset MDD_KEY`,
+    `grep -qs 'mydatadev/mcp.env' ${rc} || echo '[ -f ${MCP_TOKEN_ENV_FILE} ] && . ${MCP_TOKEN_ENV_FILE}' >> ${rc}`,
+    `. ${MCP_TOKEN_ENV_FILE}`
+  ].join('\n');
+}
+
+const PERSISTENT_WINDOWS_TOKEN_SETUP = [
+  '# 只需做一次：写入当前用户的环境变量，之后新开的终端和重新启动的应用都能读到；轮换 Key 后重跑一遍即可',
+  '$secure = Read-Host "请输入 Agent API Key" -AsSecureString',
+  '$key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))',
+  `[Environment]::SetEnvironmentVariable('${MCP_TOKEN_ENV_VAR}', $key, 'User')`,
+  `$env:${MCP_TOKEN_ENV_VAR} = $key`,
+  'Remove-Variable key, secure'
+].join('\n');
+
+const TEMPORARY_HINT = '只在当前这个终端窗口里有效：关掉窗口、新开终端或从桌面图标启动客户端都读不到，需要重新输入。只适合临时试用。';
+
+/**
+ * 保存 Key 的几段命令。推荐的是持久化到用户级（新开终端、重启电脑都还在）；
+ * 只在当前终端有效的写法保留给「先试一下」，并明确标出限制 —— 以前只给了这一种，
+ * 新手照做之后换个终端就 401，还以为是 Key 错了。
+ */
+function tokenSetupSnippets(prefix: string): McpConfigSnippet[] {
+  return [
+    {
+      id: `${prefix}-token-persist-zsh`, kind: 'persistent', language: 'bash',
+      title: '保存 Key（macOS zsh）',
+      hint: `Key 写入 ${MCP_TOKEN_ENV_FILE}（权限 600），并在 ~/.zshrc 里加载。`,
+      content: persistentPosixTokenSetup('zsh')
+    },
+    {
+      id: `${prefix}-token-persist-bash`, kind: 'persistent', language: 'bash',
+      title: '保存 Key（Linux bash）',
+      hint: `Key 写入 ${MCP_TOKEN_ENV_FILE}（权限 600），并在 ~/.bashrc 里加载。`,
+      content: persistentPosixTokenSetup('bash')
+    },
+    {
+      id: `${prefix}-token-persist-windows`, kind: 'persistent', language: 'powershell',
+      title: '保存 Key（Windows PowerShell）',
+      hint: '写入当前用户的环境变量；已经打开的终端和客户端需要重开一次才能读到。',
+      content: PERSISTENT_WINDOWS_TOKEN_SETUP
+    },
+    {
+      id: `${prefix}-token-zsh`, kind: 'temporary', language: 'bash',
+      title: '仅当前终端有效（macOS zsh）', hint: TEMPORARY_HINT,
+      content: 'read -s "MYDATADEV_MCP_TOKEN?请输入 Agent API Key: "\nexport MYDATADEV_MCP_TOKEN\necho'
+    },
+    {
+      id: `${prefix}-token-bash`, kind: 'temporary', language: 'bash',
+      title: '仅当前终端有效（Linux bash）', hint: TEMPORARY_HINT,
+      content: 'read -rsp "请输入 Agent API Key: " MYDATADEV_MCP_TOKEN\nexport MYDATADEV_MCP_TOKEN\nprintf \'\\n\''
+    },
+    {
+      id: `${prefix}-token-windows`, kind: 'temporary', language: 'powershell',
+      title: '仅当前终端有效（Windows PowerShell 7）', hint: TEMPORARY_HINT,
+      content: '$env:MYDATADEV_MCP_TOKEN = Read-Host "请输入 Agent API Key" -MaskInput'
+    }
+  ];
+}
+
+/** 从 Dock / 开始菜单启动的桌面客户端读不到 shell 启动文件里的变量。 */
+const DESKTOP_ENV_NOTE = 'macOS 上从 Dock 或启动台打开的桌面应用不会读取 ~/.zshrc：要么在终端里用客户端自带的命令行启动（如 cursor .），要么把一次性弹窗生成的、含真实 Key 的配置保存到用户级全局配置文件（仅本机、权限 600）。Windows 写入用户环境变量后重启客户端即可。';
 
 export type McpConfigScope = {
   id: 'global' | 'project';
@@ -149,38 +231,33 @@ export function antigravityMcpConfig(endpoint: string, credential?: string) {
 }
 
 export function buildMcpClientGuides(endpoint: string, credential?: string): McpClientGuide[] {
-  const zshTokenSetup = 'read -s "MYDATADEV_MCP_TOKEN?请输入 Agent API Key: "\nexport MYDATADEV_MCP_TOKEN\necho';
-  const bashTokenSetup = 'read -rsp "请输入 Agent API Key: " MYDATADEV_MCP_TOKEN\nexport MYDATADEV_MCP_TOKEN\nprintf \'\\n\'';
-  const powershellTokenSetup = '$env:MYDATADEV_MCP_TOKEN = Read-Host "请输入 Agent API Key" -MaskInput';
   return [
     {
       id: 'codex',
       label: 'Codex CLI',
-      summary: '通过 Streamable HTTP 直连；推荐从环境变量读取 Bearer Token，也可使用静态 http_headers 免去每次设置环境变量。',
+      summary: '通过 Streamable HTTP 直连。推荐先把 Key 保存为用户环境变量（一次设置长期有效），再用 codex mcp add 注册到全局配置。',
       scopes: [
         {
           id: 'global',
           availability: 'supported',
           location: '~/.codex/config.toml',
-          description: 'codex mcp add 默认写入用户配置，所有项目都能看到该 MCP，并使用同一个 Agent Key 和连接白名单。'
+          description: 'codex mcp add 默认写入用户配置，所有项目都能用，配一次即可。新手首选。',
+          recommended: true
         },
         {
           id: 'project',
           availability: 'supported',
           location: '<项目根目录>/.codex/config.toml',
-          description: '仅可信项目加载。需要按项目隔离数据源时，建议每个项目创建独立 MyDataDev Agent；可选择独立环境变量或静态 Header。',
-          recommended: true
+          description: '仅可信项目加载。需要按项目隔离数据源时使用：每个项目创建独立 MyDataDev Agent，配独立环境变量或静态 Header。'
         }
       ],
       notes: [
-        '环境变量方案不会把 Key 写入 config.toml；先在启动 Codex 的同一个终端中设置变量。',
+        '先运行下方「第一步：保存 Key」中对应系统的命令（只需一次），再运行「全局配置：使用 CLI 注册」。环境变量方案不会把 Key 写进 config.toml。',
         'bearer_token_env_var 必须填写环境变量名，不能直接填写 Agent API Key。',
         '静态 http_headers 无需设置环境变量，但会把完整 Key 明文写入配置文件；只用于本机私有配置，并确保文件不进入 Git。'
       ],
       snippets: [
-        { id: 'codex-token-zsh', title: 'macOS zsh：安全输入 Key', language: 'bash', content: zshTokenSetup },
-        { id: 'codex-token-bash', title: 'Linux bash：安全输入 Key', language: 'bash', content: bashTokenSetup },
-        { id: 'codex-token-windows', title: 'Windows PowerShell 7：安全输入 Key', language: 'powershell', content: powershellTokenSetup },
+        ...tokenSetupSnippets('codex'),
         {
           id: 'codex-add',
           title: '全局配置：使用 CLI 注册',
@@ -200,30 +277,28 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
     {
       id: 'claude-code',
       label: 'Claude Code',
-      summary: 'Claude Code 可直接连接 HTTP MCP，并支持在共享 JSON 中用环境变量注入认证 Header。',
+      summary: 'Claude Code 可直接连接 HTTP MCP。推荐先保存 Key 为用户环境变量，再用 --scope user 注册到全局配置。',
       scopes: [
         {
           id: 'global',
           availability: 'supported',
           location: '用户级配置（--scope user）',
-          description: '当前用户的所有项目都能使用；下方带 --scope user 的 CLI 命令属于全局配置。'
+          description: '当前用户的所有项目都能使用，配一次即可；下方带 --scope user 的 CLI 命令属于全局配置。新手首选。',
+          recommended: true
         },
         {
           id: 'project',
           availability: 'supported',
           location: '<项目根目录>/.mcp.json',
-          description: '随项目共享的配置。需要不同连接白名单时，为项目使用独立 MyDataDev Agent 和环境变量。',
-          recommended: true
+          description: '随项目共享的配置。需要不同连接白名单时，为项目使用独立 MyDataDev Agent 和环境变量。'
         }
       ],
       notes: [
-        '推荐把下面 JSON 保存为项目根目录 .mcp.json；首次使用项目配置时 Claude Code 会要求确认信任。',
-        '如需跨项目使用，可用 --scope user 添加到用户配置。'
+        '先运行「第一步：保存 Key」中对应系统的命令（只需一次），再运行「全局配置：CLI」命令。',
+        '只想在某个项目里用：把 .mcp.json 放到项目根目录，首次使用时 Claude Code 会要求确认信任；JSON 里引用的是环境变量，不含真实 Key。'
       ],
       snippets: [
-        { id: 'claude-token-zsh', title: 'macOS zsh：安全输入 Key', language: 'bash', content: zshTokenSetup },
-        { id: 'claude-token-bash', title: 'Linux bash：安全输入 Key', language: 'bash', content: bashTokenSetup },
-        { id: 'claude-token-windows', title: 'Windows PowerShell 7：安全输入 Key', language: 'powershell', content: powershellTokenSetup },
+        ...tokenSetupSnippets('claude'),
         { id: 'claude-json', title: '项目级配置：.mcp.json', language: 'json', content: claudeCodeJsonConfig(endpoint, credential) },
         {
           id: 'claude-add-posix',
@@ -277,26 +352,24 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
           id: 'global',
           availability: 'supported',
           location: '~/.cursor/mcp.json',
-          description: '当前用户打开的所有 Cursor 项目都能使用该 MCP。'
+          description: '当前用户打开的所有 Cursor 项目都能使用该 MCP，配一次即可。新手首选。',
+          recommended: true
         },
         {
           id: 'project',
           availability: 'supported',
           location: '<项目根目录>/.cursor/mcp.json',
-          description: '仅当前项目加载；需要按项目限制数据源时，建议配合独立 MyDataDev Agent 使用。',
-          recommended: true
+          description: '仅当前项目加载；需要按项目限制数据源时，建议配合独立 MyDataDev Agent 使用。'
         }
       ],
       notes: [
         '项目配置路径为 .cursor/mcp.json；全局路径为 ~/.cursor/mcp.json。',
         credential
           ? '当前配置已写入一次性 Key，请确保文件不进入 Git。'
-          : `示例使用 \${env:${MCP_TOKEN_ENV_VAR}}；从桌面图标启动 Cursor 时也要确保该环境变量对桌面进程可见。`
+          : `示例使用 \${env:${MCP_TOKEN_ENV_VAR}}，需要先保存 Key 为用户环境变量。${DESKTOP_ENV_NOTE}`
       ],
       snippets: [
-        { id: 'cursor-token-zsh', title: 'macOS zsh：安全输入 Key', language: 'bash', content: zshTokenSetup },
-        { id: 'cursor-token-bash', title: 'Linux bash：安全输入 Key', language: 'bash', content: bashTokenSetup },
-        { id: 'cursor-token-windows', title: 'Windows PowerShell 7：安全输入 Key', language: 'powershell', content: powershellTokenSetup },
+        ...tokenSetupSnippets('cursor'),
         { id: 'cursor-json', title: '全局 / 项目级：mcp.json 内容', language: 'json', content: cursorMcpConfig(endpoint, credential) }
       ],
       verify: ['重启 Cursor，在 Settings > MCP 中启用并确认 mydatadev。', '在 Agent 中让它列出可用数据库连接。']
@@ -310,24 +383,23 @@ export function buildMcpClientGuides(endpoint: string, credential?: string): Mcp
           id: 'global',
           availability: 'supported',
           location: '~/.gemini/settings.json（--scope user）',
-          description: '当前用户的所有项目都能使用；下方 CLI 添加命令属于全局配置。'
+          description: '当前用户的所有项目都能使用，配一次即可；下方 CLI 添加命令属于全局配置。新手首选。',
+          recommended: true
         },
         {
           id: 'project',
           availability: 'supported',
           location: '<项目根目录>/.gemini/settings.json',
-          description: '仅当前项目加载；复制 JSON 到项目配置时不要把真实 Key 提交到 Git。',
-          recommended: true
+          description: '仅当前项目加载；复制 JSON 到项目配置时不要把真实 Key 提交到 Git。'
         }
       ],
       notes: [
+        '先运行「第一步：保存 Key」中对应系统的命令（只需一次），再运行「全局配置：CLI」命令。',
         'CLI 添加命令会把展开后的 Header 写入配置；不要把包含真实 Key 的项目配置提交到 Git。',
         '用户配置位于 ~/.gemini/settings.json，项目配置位于 .gemini/settings.json。'
       ],
       snippets: [
-        { id: 'gemini-token-zsh', title: 'macOS zsh：安全输入 Key', language: 'bash', content: zshTokenSetup },
-        { id: 'gemini-token-bash', title: 'Linux bash：安全输入 Key', language: 'bash', content: bashTokenSetup },
-        { id: 'gemini-token-windows', title: 'Windows PowerShell 7：安全输入 Key', language: 'powershell', content: powershellTokenSetup },
+        ...tokenSetupSnippets('gemini'),
         {
           id: 'gemini-add-posix',
           title: '全局配置：CLI（macOS / Linux）',

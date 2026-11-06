@@ -96,10 +96,16 @@ describe('MCP client configuration generators', () => {
     const guides = buildMcpClientGuides(ENDPOINT);
     expect(guides.every((guide) => guide.scopes.map((scope) => scope.id).join(',') === 'global,project')).toBe(true);
 
+    // 新手首选全局：配一次所有项目都能用；项目级留给需要按项目隔离数据源的场景。
     expect(guides.find((guide) => guide.id === 'codex')?.scopes).toMatchObject([
-      { id: 'global', location: '~/.codex/config.toml' },
-      { id: 'project', location: '<项目根目录>/.codex/config.toml', recommended: true }
+      { id: 'global', location: '~/.codex/config.toml', recommended: true },
+      { id: 'project', location: '<项目根目录>/.codex/config.toml' }
     ]);
+    for (const id of ['codex', 'claude-code', 'cursor', 'gemini']) {
+      const scopes = guides.find((guide) => guide.id === id)!.scopes;
+      expect(scopes.find((scope) => scope.id === 'global')?.recommended).toBe(true);
+      expect(scopes.find((scope) => scope.id === 'project')?.recommended).toBeFalsy();
+    }
     expect(guides.find((guide) => guide.id === 'claude-desktop')?.scopes).toMatchObject([
       { id: 'global', availability: 'supported' },
       { id: 'project', availability: 'unsupported' }
@@ -111,4 +117,34 @@ describe('MCP client configuration generators', () => {
     expect(JSON.parse(genericMcpConfig(endpoint)).mcpServers.mydatadev.url).toBe(endpoint);
     expect(codexTomlConfig(endpoint)).toContain('name=\\"analytics\\"');
   });
+
+  it('recommends persisting the key at user level first and labels one-shot commands as temporary', () => {
+    for (const credential of [undefined, CREDENTIAL]) {
+      const guides = buildMcpClientGuides(ENDPOINT, credential);
+      for (const id of ['codex', 'claude-code', 'cursor', 'gemini']) {
+        const snippets = guides.find((guide) => guide.id === id)!.snippets;
+        const persistent = snippets.filter((snippet) => snippet.kind === 'persistent');
+        const temporary = snippets.filter((snippet) => snippet.kind === 'temporary');
+        expect(persistent.map((snippet) => snippet.language)).toEqual(['bash', 'bash', 'powershell']);
+        expect(snippets.slice(0, 3)).toEqual(persistent);
+        expect(temporary).toHaveLength(3);
+        expect(temporary.every((snippet) => snippet.title.includes('仅当前终端有效') && snippet.hint?.includes('关掉窗口'))).toBe(true);
+        // 保存 Key 的命令一律交互输入，不把 Key 写进命令本身（会进 shell 历史）。
+        expect(persistent.every((snippet) => !snippet.content.includes(CREDENTIAL))).toBe(true);
+      }
+    }
+    const [zsh, bash, windows] = buildMcpClientGuides(ENDPOINT).find((guide) => guide.id === 'codex')!.snippets;
+    expect(zsh.content).toContain('umask 077');
+    expect(zsh.content).toContain('~/.zshrc');
+    expect(zsh.content).toContain("printf 'export MYDATADEV_MCP_TOKEN=%q\\n'");
+    expect(bash.content).toContain('~/.bashrc');
+    expect(windows.content).toContain("SetEnvironmentVariable('MYDATADEV_MCP_TOKEN', $key, 'User')");
+    expect(windows.content).toContain('-AsSecureString');
+  });
+
+  it('explains that desktop apps launched from the Dock do not read shell startup files', () => {
+    const cursor = buildMcpClientGuides(ENDPOINT).find((guide) => guide.id === 'cursor')!;
+    expect(cursor.notes.join('\n')).toContain('不会读取 ~/.zshrc');
+  });
 });
+

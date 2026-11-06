@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AsyncResourceCache } from './asyncResourceCache';
-import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion, tokenizeSqlIter } from './sqlCompletion';
+import { analyzeSqlCompletion, findSqlObjectReferenceAtOffset, getCurrentSqlStatement, isSqlCompletionListIncomplete, joinConditionPosition, parseSqlTableReferences, shouldTriggerSqlConditionColumnCompletion, tokenizeSqlIter } from './sqlCompletion';
 
 describe('getCurrentSqlStatement caching', () => {
   const script = "select a from first;\nselect b from second;\nselect c from third";
@@ -288,3 +288,28 @@ describe('AsyncResourceCache', () => {
     expect(cache.get('users')).toBeUndefined();
   });
 });
+
+describe('JOIN 条件位置', () => {
+  const position = (sql: string) => joinConditionPosition(analyzeSqlCompletion(sql, sql.length));
+
+  it('紧跟在 ON 后面时给出正在 JOIN 的表和它前面的表', () => {
+    const found = position('select * from a x join b y on ');
+    expect(found?.joined.name).toBe('b');
+    expect(found?.existing.map((table) => table.name)).toEqual(['a']);
+    const third = position('select * from a join b on a.id = b.a_id left join c on ');
+    expect(third?.joined.name).toBe('c');
+    expect(third?.existing.map((table) => table.name)).toEqual(['a', 'b']);
+  });
+
+  it('已经开始写条件、或不在 ON 后面时不算', () => {
+    expect(position('select * from a join b on a.id = b.a_id and ')).toBeUndefined();
+    expect(position('select * from a join b where ')).toBeUndefined();
+    expect(position('select * from a where ')).toBeUndefined();
+    expect(position("select 'join b on ' from a")).toBeUndefined();
+  });
+
+  it('只敲了几个字母也算（用来按前缀筛选推断出的条件）', () => {
+    expect(position('select * from a x join b y on x')?.joined.name).toBe('b');
+  });
+});
+

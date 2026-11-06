@@ -31,7 +31,8 @@ const COMPLETION_TYPES: Record<SqlCompletionItem['kind'], string> = {
   table: 'class',
   column: 'property',
   schema: 'namespace',
-  keyword: 'keyword'
+  keyword: 'keyword',
+  join: 'interface'
 };
 
 /**
@@ -108,7 +109,8 @@ export function toEditorCompletion(result: SqlCompletionResult): EditorCompletio
       remarks: item.remarks,
       info: item.remarks ? `${item.label}\n${item.remarks}\n${item.detail || ''}` : undefined,
       // sortText 以 '0-' 开头的是列：查询里正缺的通常是列名，让它排在表和关键字前面。
-      boost: item.sortText?.startsWith('0-') ? 1 : 0
+      // 推断出的 JOIN 条件再往前：停在 ON 后面时，要的就是整条条件。
+      boost: item.kind === 'join' ? 2 : item.sortText?.startsWith('0-') ? 1 : 0
     }))
   };
 }
