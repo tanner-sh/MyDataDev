@@ -358,6 +358,46 @@ class SqlFileScriptExecutionTest {
         assertThat(service.get(id).message()).contains("命令窗口");
     }
 
+    @Test void routineCommandsRunTheirOwnStatementOnceUnderTheBackgroundTimeout() throws Exception {
+        int[] calls = {0};
+        int[] timeout = {0};
+        boolean[] autocommit = {false};
+        var job = service.submitRoutineCommand(1, "{call APP.LOAD_DAY(?, ?)}", "tester", null, (connection, context) -> {
+            calls[0]++;
+            timeout[0] = context.timeoutSeconds();
+            autocommit[0] = connection.getAutoCommit();
+            try (var statement = connection.createStatement()) {
+                context.register(statement);
+                statement.execute("INSERT INTO t VALUES(9)");
+            }
+            return new SqlFileExecutionService.CommandUnitResult("调用完成，耗时 1 ms。\n返回值：OK", List.of("第一步完成"), 0);
+        });
+        assertThat(service.get(job.id()).status()).isEqualTo("SUCCESS");
+        assertThat(calls[0]).isEqualTo(1);
+        assertThat(timeout[0]).isEqualTo(7200);
+        assertThat(autocommit[0]).isTrue();
+        assertThat(target.queryForList("SELECT id FROM t", Integer.class)).containsExactly(9);
+        assertThat(commandLog(job.id())).contains("STATEMENT:{call APP.LOAD_DAY(?, ?)}", "RESULT:调用完成，耗时 1 ms。\n返回值：OK", "OUTPUT:第一步完成");
+    }
+
+    /** 驱动把取消报成和超时一样的错误：任务要记成「已取消」，runner 也要能分辨出是用户停的。 */
+    @Test void cancellingARoutineCommandCancelsTheRegisteredStatement() throws Exception {
+        java.sql.Statement running = mock(java.sql.Statement.class);
+        boolean[] sawCancel = {false};
+        long[] jobId = {0};
+        doAnswer(i -> { jobId[0] = i.getArgument(0); ((Runnable)i.getArgument(1)).run(); ((Runnable)i.getArgument(2)).run(); return null; })
+                .when(coordinator).submit(anyLong(), any(Runnable.class), any(Runnable.class));
+        var job = service.submitRoutineCommand(1, "{call APP.LONG_JOB}", "tester", null, (connection, context) -> {
+            context.register(running);
+            service.cancel(jobId[0], "tester");
+            sawCancel[0] = context.cancelRequested();
+            throw new java.sql.SQLException("ORA-01013: user requested cancel of current operation", "72000", 1013);
+        });
+        verify(coordinator).cancelStatement(running);
+        assertThat(sawCancel[0]).isTrue();
+        assertThat(service.get(job.id()).status()).isEqualTo("CANCELLED");
+    }
+
     private long upload(String sql) throws Exception {
         byte[] bytes = sql.getBytes(StandardCharsets.UTF_8);
         return service.upload(1, "test.sql", bytes.length, new ByteArrayInputStream(bytes), "tester").id();

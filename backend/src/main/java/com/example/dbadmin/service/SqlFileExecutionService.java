@@ -69,6 +69,8 @@ public class SqlFileExecutionService {
     private final LargeFileUploadGuard uploadGuard;
     private final Map<Long, Statement> runningStatements = new ConcurrentHashMap<>();
     private final Map<Long, FileFingerprint> analyzedSources = new ConcurrentHashMap<>();
+    /** 由调用方代为执行唯一那条语句的命令任务（后台调用例程）。只在内存里：参数值不落盘，重启后任务本来就会被判失败。 */
+    private final Map<Long, CommandUnitRunner> commandRunners = new ConcurrentHashMap<>();
 
     public SqlFileExecutionService(SqlFileExecutionRepository jobs, ConnectionService connections, ExecutionGuard guard,
                                    SqlStatementClassifier classifier, SqlScriptSplitter scriptSplitter, DialectRegistry dialects, MetadataService metadata,
@@ -221,6 +223,75 @@ public class SqlFileExecutionService {
 
     public record CommandView(SqlFileExecutionResponse job, com.example.dbadmin.repo.SqlCommandRepository.CommandJob command,
                               List<com.example.dbadmin.repo.SqlCommandRepository.LogEntry> entries, boolean hasMore) { }
+
+    /**
+     * 命令任务里那一条语句由调用方自己执行：例程调用要绑定参数、取 OUT 参数，这些脚本文本表达不了。
+     * 其余 —— 落盘、分析、生产确认、排队、每连接并发闸门、超时、取消、日志 —— 与命令窗口同一条路。
+     */
+    @FunctionalInterface
+    public interface CommandUnitRunner {
+        CommandUnitResult run(Connection connection, CommandUnitContext context) throws Exception;
+    }
+
+    public interface CommandUnitContext {
+        /** 登记正在执行的语句：任务被取消时 cancel 它。 */
+        void register(Statement statement);
+
+        /** 后台任务的语句超时（{@code app.sql-file.statement-timeout-seconds}）。 */
+        int timeoutSeconds();
+
+        /** 用户是否已请求取消 —— 驱动报「取消」和「超时」常是同一个错误，靠这个区分。 */
+        boolean cancelRequested();
+    }
+
+    /** @param text 写进日志 RESULT 行的文字；@param output 例程打印的消息，逐条写成 OUTPUT 行 */
+    public record CommandUnitResult(String text, List<String> output, long queryRows) {
+        public CommandUnitResult {
+            output = output == null ? List.of() : List.copyOf(output);
+        }
+    }
+
+    /**
+     * 提交一个只有一条语句、由 {@code runner} 执行的命令任务（逐条自动提交、遇错停止）。
+     * {@code displaySql} 是落盘、写进日志的那句，不该带任何参数值。
+     */
+    public SqlFileExecutionResponse submitRoutineCommand(long connectionId, String displaySql, String actor,
+                                                         String productionConfirmation, CommandUnitRunner runner) throws Exception {
+        if (commands == null) throw new IllegalStateException("命令窗口不可用。");
+        byte[] bytes = displaySql.getBytes(StandardCharsets.UTF_8);
+        long[] registered = {-1};
+        SqlFileExecutionResponse job;
+        try {
+            job = uploadScript(connectionId, "routine-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".sql",
+                    bytes.length, writer -> { writer.write(displaySql); return "source=routine-invoke"; }, actor, "SQL_FILE_UPLOAD", "routine invoke",
+                    true, SqlScriptDelimiter.AUTO, false, id -> {
+                        registered[0] = id;
+                        commands.insert(id, "STOP");
+                        commandRunners.put(id, runner);
+                    });
+        } catch (Exception error) {
+            if (registered[0] >= 0) commandRunners.remove(registered[0]);
+            throw error;
+        }
+        if (!"READY".equals(job.status())) {
+            commandRunners.remove(job.id());
+            return job;
+        }
+        try {
+            // runner 只会被调用一次：调用语句被拆成了不止一条，说明生成的那句有问题，宁可不跑。
+            if (job.statementTotal() != 1) throw new IllegalStateException("后台调用语句解析异常（" + job.statementTotal() + " 条），未执行。");
+            return start(job.id(), productionConfirmation, actor, "AUTOCOMMIT", "COMMIT");
+        } catch (Exception error) {
+            commandRunners.remove(job.id());
+            SqlFileExecution draft = require(job.id());
+            if ("READY".equals(draft.status())) {
+                jobs.markTerminal(draft.id(), "FAILED", "NOT_STARTED", 0, 0, 0, null, null,
+                        "调用未开始执行：" + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+                deleteFileQuietly(draft);
+            }
+            throw error;
+        }
+    }
 
     private boolean isCommand(long id) {
         return commands != null && commands.isCommand(id);
@@ -875,6 +946,7 @@ public class SqlFileExecutionService {
     private void executeCommandJob(long id) {
         SqlFileExecution job = require(id);
         var settings = commands.find(id).orElseThrow();
+        CommandUnitRunner runner = commandRunners.get(id);
         boolean[] continueOnError = {"CONTINUE".equals(settings.onError())};
         boolean scriptTx = "SCRIPT".equals(job.transaction().mode());
         boolean commitAtEnd = "COMMIT".equals(job.transaction().endOfFileAction());
@@ -923,24 +995,43 @@ public class SqlFileExecutionService {
                         try {
                             statement.clearWarnings();
                             try { connection.clearWarnings(); } catch (Exception ignored) { }
-                            boolean result = tx != null ? tx.execute(statement, unit.sql(), unit.index()) : statement.execute(unit.sql());
                             List<String> outcome = new ArrayList<>();
-                            while (true) {
-                                if (result) {
-                                    try (ResultSet rows = statement.getResultSet()) {
-                                        var rendered = SqlCommandOutput.render(rows, COMMAND_PREVIEW_ROWS, COMMAND_MAX_COUNTED_ROWS, () -> ensureNotCancelled(id));
-                                        queryRows[0] += rendered.rows();
-                                        outcome.add(rendered.text());
-                                    }
-                                } else {
-                                    int count = statement.getUpdateCount();
-                                    if (count == -1) break;
-                                    outcome.add(SqlCommandOutput.updateText(unit.sql(), count));
+                            List<String> printed;
+                            if (runner != null) {
+                                if (unit.index() != 1) throw new IllegalStateException("后台调用只能有一条语句。");
+                                CommandUnitResult produced;
+                                try {
+                                    produced = runner.run(connection, new CommandUnitContext() {
+                                        @Override public void register(Statement running) { runningStatements.put(id, running); }
+                                        @Override public int timeoutSeconds() { return properties.getSqlFile().getStatementTimeoutSeconds(); }
+                                        @Override public boolean cancelRequested() { return cancellationRequested(id); }
+                                    });
+                                } finally {
+                                    runningStatements.put(id, statement);
                                 }
-                                result = statement.getMoreResults();
+                                queryRows[0] += produced.queryRows();
+                                outcome.add(produced.text());
+                                printed = produced.output();
+                            } else {
+                                boolean result = tx != null ? tx.execute(statement, unit.sql(), unit.index()) : statement.execute(unit.sql());
+                                while (true) {
+                                    if (result) {
+                                        try (ResultSet rows = statement.getResultSet()) {
+                                            var rendered = SqlCommandOutput.render(rows, COMMAND_PREVIEW_ROWS, COMMAND_MAX_COUNTED_ROWS, () -> ensureNotCancelled(id));
+                                            queryRows[0] += rendered.rows();
+                                            outcome.add(rendered.text());
+                                        }
+                                    } else {
+                                        int count = statement.getUpdateCount();
+                                        if (count == -1) break;
+                                        outcome.add(SqlCommandOutput.updateText(unit.sql(), count));
+                                    }
+                                    result = statement.getMoreResults();
+                                }
+                                printed = RoutineOutput.read(connection, dialect, statement, COMMAND_OUTPUT_LINES);
                             }
                             out.add("RESULT", unit, elapsedMillis(started), outcome.isEmpty() ? "执行成功。" : String.join("\n", outcome));
-                            for (String line : RoutineOutput.read(connection, dialect, statement, COMMAND_OUTPUT_LINES)) out.add("OUTPUT", unit, null, line);
+                            for (String line : printed) out.add("OUTPUT", unit, null, line);
                             List<String> compileErrors = compiled[0].collectNew(connection, unit.sql());
                             if (!compileErrors.isEmpty()) out.add("COMPILE", unit, null, "对象已创建但编译失败：\n" + String.join("\n", compileErrors));
                             success[0]++;
@@ -1015,6 +1106,7 @@ public class SqlFileExecutionService {
         } finally {
             out.flush();
             runningStatements.remove(id);
+            commandRunners.remove(id);
             analyzedSources.remove(id);
             if (job.metadataChanged()) metadata.invalidateConnection(job.connectionId());
             deleteFileQuietly(job);

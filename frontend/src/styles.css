@@ -2928,6 +2928,24 @@ body.is-resizing-column * {
   gap: 12px;
 }
 
+.routine-invoke-error {
+  margin-top: var(--space-3);
+}
+
+.routine-invoke-mode {
+  margin-top: var(--space-3);
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* 后台调用的执行日志：命令窗口那份是撑满父容器的，这里给它一个高度。 */
+.routine-background-log {
+  height: min(60vh, 560px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
 .routine-argument-row {
   display: grid;
   gap: 6px;

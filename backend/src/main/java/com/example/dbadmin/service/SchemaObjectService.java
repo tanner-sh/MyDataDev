@@ -24,6 +24,7 @@ import com.example.dbadmin.dto.ApiDtos.SchemaObjectPage;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectParameter;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectSummary;
 import com.example.dbadmin.dto.ApiDtos.SchemaObjectTemplateResponse;
+import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
@@ -103,6 +104,21 @@ public class SchemaObjectService {
         this.history = history;
         this.properties = properties;
         this.scriptSplitter = scriptSplitter;
+    }
+
+    /** 前台调用的取消登记；为空时（部分单测）调用不可取消。 */
+    private SqlExecutionRegistry executions;
+    /** 后台调用借用命令窗口任务；为空时（部分单测）没有后台调用。 */
+    private SqlFileExecutionService sqlFiles;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setExecutionRegistry(SqlExecutionRegistry executions) {
+        this.executions = executions;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setSqlFileExecutions(SqlFileExecutionService sqlFiles) {
+        this.sqlFiles = sqlFiles;
     }
 
     public SchemaObjectPage list(long connectionId, String schemaName, String kindValue, String keyword, Integer page, Integer pageSize, boolean refresh) throws Exception {
@@ -234,55 +250,177 @@ public class SchemaObjectService {
     ) throws Exception {
         DbConnection configured = connections.require(connectionId);
         executionGuard.requireMutationAllowed(configured, productionConfirmation);
+        requireInvocable(configured, request);
+        long started = System.nanoTime();
+        int timeoutSeconds = Math.max(properties.getSql().getTimeoutSeconds(), 1);
+        String historySql = null;
+        // 登记到 SqlExecutionRegistry 之后，界面上的「取消」走的就是 SQL 工作台那个接口。
+        Statement[] registered = {null};
+        String[] executionId = {null};
+        try (Connection connection = connections.open(connectionId)) {
+            InvocationPlan plan = planInvocation(connection, configured, request);
+            historySql = plan.historySql();
+            // 旧警告会被当成这次调用的输出报出来，池化连接上尤其容易串味。
+            connection.clearWarnings();
+            enableRoutineOutput(connection, plan.dialect());
+            RoutineInvokeResponse response = runInvocation(connection, plan, statement -> {
+                if (executions != null) executionId[0] = executions.register(request.executionId(), connectionId, statement);
+                registered[0] = statement;
+            }, timeoutSeconds, started);
+            audit.onConnection(actor, "OBJECT_INVOKE", connectionId, plan.auditTarget(), plan.auditDetail());
+            history.insert(connectionId, historySql, "ROUTINE_INVOKE", "SUCCESS", response.elapsedMs(), null, actor);
+            return response;
+        } catch (Exception exception) {
+            boolean cancelled = executions != null && registered[0] != null && executions.cancelRequested(executionId[0], registered[0]);
+            history.insert(connectionId, historySql == null ? "CALL <schema-object>" : historySql, "ROUTINE_INVOKE", "FAILED", elapsed(started),
+                    cancelled ? "已取消" : error(exception), actor);
+            audit.onConnection(actor, "OBJECT_INVOKE_FAILED", connectionId, cancelled ? "已取消" : error(exception));
+            throw invokeFailure(exception, cancelled, timeoutSeconds);
+        } finally {
+            if (executions != null && registered[0] != null) executions.unregister(executionId[0], registered[0]);
+            // Routines may execute DDL internally, so metadata cannot be kept.
+            cache.evictConnection(connectionId);
+        }
+    }
+
+    /**
+     * 后台调用：参数校验与前台同一套，执行交给命令窗口那条后台任务 —— 排队、每连接并发闸门、进度、取消、
+     * 滚动日志全部沿用，语句超时是 {@code app.sql-file.statement-timeout-seconds} 而不是前台的
+     * {@code app.sql.timeout-seconds}。跑几十分钟的批处理过程只能走这里：前台调用占着一个 HTTP 请求，
+     * 浏览器、反向代理任何一环先断开，用户就再也不知道它跑完没有。
+     *
+     * <p>参数值只留在内存里交给执行线程，不落盘、不进审计与历史；落盘的脚本只是那句带占位符的调用。
+     * 返回值、OUT 参数与结果集写进命令日志，与命令窗口打出查询结果是同一回事。</p>
+     */
+    public SqlFileExecutionResponse invokeInBackground(
+            long connectionId,
+            RoutineInvokeRequest request,
+            String actor,
+            String productionConfirmation
+    ) throws Exception {
+        if (sqlFiles == null) throw new IllegalStateException("后台执行不可用。");
+        DbConnection configured = connections.require(connectionId);
+        executionGuard.requireMutationAllowed(configured, productionConfirmation);
+        requireInvocable(configured, request);
+        InvocationPlan plan;
+        try (Connection connection = connections.open(connectionId)) {
+            plan = planInvocation(connection, configured, request);
+        }
+        return sqlFiles.submitRoutineCommand(connectionId, plan.historySql(), actor, productionConfirmation,
+                (connection, context) -> runInBackground(connectionId, plan, actor, connection, context));
+    }
+
+    private SqlFileExecutionService.CommandUnitResult runInBackground(
+            long connectionId,
+            InvocationPlan plan,
+            String actor,
+            Connection connection,
+            SqlFileExecutionService.CommandUnitContext context
+    ) throws Exception {
+        long started = System.nanoTime();
+        try {
+            connection.clearWarnings();
+            enableRoutineOutput(connection, plan.dialect());
+            RoutineInvokeResponse response = runInvocation(connection, plan, context::register, context.timeoutSeconds(), started);
+            audit.onConnection(actor, "OBJECT_INVOKE", connectionId, plan.auditTarget(), "后台执行; " + plan.auditDetail());
+            history.insert(connectionId, plan.historySql(), "ROUTINE_INVOKE", "SUCCESS", response.elapsedMs(), null, actor);
+            return RoutineCommandText.describe(response);
+        } catch (Exception error) {
+            boolean cancelled = context.cancelRequested();
+            history.insert(connectionId, plan.historySql(), "ROUTINE_INVOKE", "FAILED", elapsed(started), cancelled ? "已取消" : error(error), actor);
+            audit.onConnection(actor, "OBJECT_INVOKE_FAILED", connectionId, cancelled ? "后台执行已取消" : "后台执行; " + error(error));
+            if (!cancelled && SqlTimeouts.isTimeout(error)) {
+                // 不挂 cause 会丢掉驱动原文；挂上之后命令日志显示的是这条翻译过的说明。
+                throw new java.sql.SQLTimeoutException("调用超过后台语句超时（" + RoutineCommandText.duration(context.timeoutSeconds())
+                        + "）被中止；过程内部已经提交的部分不会回滚。数据库原文：" + error(error), null, 0, error);
+            }
+            throw error;
+        } finally {
+            cache.evictConnection(connectionId);
+        }
+    }
+
+    private void requireInvocable(DbConnection configured, RoutineInvokeRequest request) {
         ObjectRef reference = decodeKey(request.objectKey());
         if (reference.kind() != SchemaObjectKind.PROCEDURE && reference.kind() != SchemaObjectKind.FUNCTION) {
             throw new IllegalArgumentException("仅存储过程和函数支持调用。");
         }
         requireCapability(configured, reference.kind(), SchemaObjectOperation.INVOKE);
-        long started = System.nanoTime();
-        String historySql = null;
-        try (Connection connection = connections.open(connectionId)) {
-            ResolvedObject resolved = resolve(connection, configured, reference);
-            SchemaObjectDetail live = loadDetail(connection, configured, resolved);
-            requireFresh(request.structureVersion(), live.structureVersion());
-            DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
-            List<SchemaObjectParameter> parameters = live.parameters();
-            Map<Integer, RoutineArgumentInput> inputs = new HashMap<>();
-            Set<Integer> inputPositions = parameters.stream()
-                    .filter(parameter -> parameter.mode().equals("IN") || parameter.mode().equals("INOUT"))
-                    .map(SchemaObjectParameter::position)
-                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
-            for (RoutineArgumentInput input : request.arguments() == null ? List.<RoutineArgumentInput>of() : request.arguments()) {
-                if (!inputPositions.contains(input.position())) throw new IllegalArgumentException("例程参数位置无效：" + input.position());
-                if (inputs.put(input.position(), input) != null) throw new IllegalArgumentException("例程参数位置不能重复：" + input.position());
-            }
-            for (SchemaObjectParameter parameter : parameters) {
-                if ((parameter.mode().equals("IN") || parameter.mode().equals("INOUT")) && !inputs.containsKey(parameter.position())) {
-                    throw new IllegalArgumentException("请填写参数：" + parameterLabel(parameter));
-                }
-            }
-            String family = catalog.family(configured);
-            historySql = routineSql(dialect, family, reference.kind(), resolved.object(), parameters);
-            // 旧警告会被当成这次调用的输出报出来，池化连接上尤其容易串味。
-            connection.clearWarnings();
-            enableRoutineOutput(connection, dialect);
-            RoutineInvokeResponse response = family.equals("postgresql") || family.equals("clickhouse")
-                    ? invokePrepared(connection, dialect, reference.kind(), resolved.object(), parameters, inputs, started)
-                    : invokeCallable(connection, dialect, reference.kind(), resolved.object(), parameters, inputs, started);
-            String auditDetail = parameters.stream()
-                    .map(parameter -> parameterLabel(parameter) + ":" + value(parameter.typeName()) + ":" + parameter.mode())
-                    .reduce((left, right) -> left + ", " + right).orElse("无参数");
-            audit.onConnection(actor, "OBJECT_INVOKE", connectionId, "object:" + confirmationTarget(live.object()), auditDetail);
-            history.insert(connectionId, historySql, "ROUTINE_INVOKE", "SUCCESS", response.elapsedMs(), null, actor);
-            return response;
-        } catch (Exception exception) {
-            history.insert(connectionId, historySql == null ? "CALL <schema-object>" : historySql, "ROUTINE_INVOKE", "FAILED", elapsed(started), error(exception), actor);
-            audit.onConnection(actor, "OBJECT_INVOKE_FAILED", connectionId, error(exception));
-            throw exception;
-        } finally {
-            // Routines may execute DDL internally, so metadata cannot be kept.
-            cache.evictConnection(connectionId);
+    }
+
+    /** 一次调用要用到的全部东西：解析好的对象与参数、方言、写进历史的那句（只有占位符，没有参数值）。 */
+    private record InvocationPlan(
+            DatabaseDialect dialect,
+            String family,
+            SchemaObjectKind kind,
+            SchemaObjectSummary object,
+            List<SchemaObjectParameter> parameters,
+            Map<Integer, RoutineArgumentInput> inputs,
+            String historySql,
+            String auditTarget,
+            String auditDetail
+    ) { }
+
+    /** 语句建好、执行之前调一次：登记取消。 */
+    @FunctionalInterface
+    interface StatementHook {
+        void opened(Statement statement) throws java.sql.SQLException;
+    }
+
+    private InvocationPlan planInvocation(Connection connection, DbConnection configured, RoutineInvokeRequest request) throws Exception {
+        ObjectRef reference = decodeKey(request.objectKey());
+        ResolvedObject resolved = resolve(connection, configured, reference);
+        SchemaObjectDetail live = loadDetail(connection, configured, resolved);
+        requireFresh(request.structureVersion(), live.structureVersion());
+        DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
+        List<SchemaObjectParameter> parameters = live.parameters();
+        Map<Integer, RoutineArgumentInput> inputs = new HashMap<>();
+        Set<Integer> inputPositions = parameters.stream()
+                .filter(parameter -> parameter.mode().equals("IN") || parameter.mode().equals("INOUT"))
+                .map(SchemaObjectParameter::position)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        for (RoutineArgumentInput input : request.arguments() == null ? List.<RoutineArgumentInput>of() : request.arguments()) {
+            if (!inputPositions.contains(input.position())) throw new IllegalArgumentException("例程参数位置无效：" + input.position());
+            if (inputs.put(input.position(), input) != null) throw new IllegalArgumentException("例程参数位置不能重复：" + input.position());
         }
+        for (SchemaObjectParameter parameter : parameters) {
+            if ((parameter.mode().equals("IN") || parameter.mode().equals("INOUT")) && !inputs.containsKey(parameter.position())) {
+                throw new IllegalArgumentException("请填写参数：" + parameterLabel(parameter));
+            }
+        }
+        String family = catalog.family(configured);
+        String auditDetail = parameters.stream()
+                .map(parameter -> parameterLabel(parameter) + ":" + value(parameter.typeName()) + ":" + parameter.mode())
+                .reduce((left, right) -> left + ", " + right).orElse("无参数");
+        return new InvocationPlan(dialect, family, reference.kind(), resolved.object(), parameters, Map.copyOf(inputs),
+                routineSql(dialect, family, reference.kind(), resolved.object(), parameters),
+                "object:" + confirmationTarget(live.object()), auditDetail);
+    }
+
+    private RoutineInvokeResponse runInvocation(Connection connection, InvocationPlan plan, StatementHook hook,
+                                                int timeoutSeconds, long started) throws Exception {
+        return plan.family().equals("postgresql") || plan.family().equals("clickhouse")
+                ? invokePrepared(connection, plan.dialect(), plan.kind(), plan.object(), plan.parameters(), plan.inputs(), hook, timeoutSeconds, started)
+                : invokeCallable(connection, plan.dialect(), plan.kind(), plan.object(), plan.parameters(), plan.inputs(), hook, timeoutSeconds, started);
+    }
+
+    /**
+     * 前台调用失败时给用户的那句话。取消与超时在驱动层常是同一个错误（PostgreSQL 57014、Oracle ORA-01013），
+     * 先问登记处是不是用户点的取消，再判超时；两样都要说清「已提交的部分不会回滚」，并给出长任务该走的路。
+     */
+    private Exception invokeFailure(Exception error, boolean cancelled, int timeoutSeconds) {
+        if (cancelled) {
+            return new ApiProblemException(HttpStatus.CONFLICT, "SQL_CANCELLED",
+                    "调用已取消，数据库已中止执行。过程内部已经提交的部分不会回滚，请先核对结果。");
+        }
+        if (SqlTimeouts.isTimeout(error)) {
+            return new ApiProblemException(HttpStatus.BAD_REQUEST, "SQL_TIMEOUT",
+                    "调用超过前台调用的上限 " + RoutineCommandText.duration(timeoutSeconds) + "，已被数据库中止；过程内部已经提交的部分不会回滚，请先核对结果。"
+                            + "运行时间长的过程请选择「后台执行」（每条语句最长 "
+                            + RoutineCommandText.duration(properties.getSqlFile().getStatementTimeoutSeconds()) + "，可查看进度、随时取消）。"
+                            + "数据库原文：" + error(error));
+        }
+        return error;
     }
 
     private LifecyclePlan lifecyclePlan(long connectionId, SchemaObjectLifecycleRequest request) throws Exception {
@@ -508,6 +646,8 @@ public class SchemaObjectService {
             SchemaObjectSummary object,
             List<SchemaObjectParameter> parameters,
             Map<Integer, RoutineArgumentInput> inputs,
+            StatementHook hook,
+            int timeoutSeconds,
             long started
     ) throws Exception {
         List<SchemaObjectParameter> inputParameters = parameters.stream()
@@ -518,7 +658,8 @@ public class SchemaObjectService {
         String sql = kind == SchemaObjectKind.PROCEDURE ? "CALL " + qualified + "(" + placeholders + ")"
                 : "SELECT * FROM " + qualified + "(" + placeholders + ")";
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
+            statement.setQueryTimeout(Math.max(timeoutSeconds, 1));
+            hook.opened(statement);
             for (int index = 0; index < inputParameters.size(); index++) {
                 bind(statement, index + 1, inputParameters.get(index), inputs.get(inputParameters.get(index).position()));
             }
@@ -539,6 +680,8 @@ public class SchemaObjectService {
             SchemaObjectSummary object,
             List<SchemaObjectParameter> parameters,
             Map<Integer, RoutineArgumentInput> inputs,
+            StatementHook hook,
+            int timeoutSeconds,
             long started
     ) throws Exception {
         List<SchemaObjectParameter> callParameters = parameters.stream().filter(parameter -> !parameter.mode().equals("RETURN")).toList();
@@ -546,7 +689,8 @@ public class SchemaObjectService {
         String placeholders = String.join(", ", callParameters.stream().map(ignored -> "?").toList());
         String sql = "{" + (hasReturn ? "? = " : "") + "call " + dialect.qualifiedName(object.schemaName(), object.name()) + "(" + placeholders + ")}";
         try (CallableStatement statement = connection.prepareCall(sql)) {
-            statement.setQueryTimeout(Math.max(properties.getSql().getTimeoutSeconds(), 1));
+            statement.setQueryTimeout(Math.max(timeoutSeconds, 1));
+            hook.opened(statement);
             int jdbcIndex = 1;
             if (hasReturn) {
                 SchemaObjectParameter returned = parameters.stream().filter(parameter -> parameter.mode().equals("RETURN")).findFirst().orElse(null);

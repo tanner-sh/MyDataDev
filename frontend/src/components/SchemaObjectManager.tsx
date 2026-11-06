@@ -1,6 +1,6 @@
 import Editor from './SqlEditor';
 import { DRAWER_WIDTH } from '../constants';
-import { PanelEmpty } from './PanelState';
+import { PanelEmpty, PanelLoading } from './PanelState';
 import {
   ApiOutlined,
   CodeOutlined,
@@ -22,6 +22,7 @@ import {
   Empty,
   Input,
   Modal,
+  Radio,
   Space,
   Spin,
   Switch,
@@ -32,7 +33,7 @@ import {
   message as antdMessage
 } from 'antd';
 import type { MenuProps, TableColumnsType } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import {
@@ -50,6 +51,7 @@ import type {
   RoutineArgumentInput,
   CompilationError,
   RoutineInvokeResponse,
+  SqlFileExecution,
   SchemaObjectCapability,
   SchemaObjectDetail,
   SchemaObjectKind,
@@ -65,9 +67,22 @@ import { ResultGrid } from './ResultGrid';
 import { SqlPreview } from './SqlPreview';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
 import { productionConfirmationHeaders } from '../productionConfirmation';
+import { createUuid } from '../createUuid';
+import { localizeError } from '../utils';
+import {
+  ROUTINE_INVOKE_MODE_HINTS,
+  backgroundSubmitFailure,
+  describeRoutineInvokeFailure,
+  routineInvokePath,
+  type RoutineInvokeFailure,
+  type RoutineInvokeMode
+} from '../routineInvoke';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 
 const { Text, Title } = Typography;
+// 后台调用的日志就是命令窗口那份；懒加载，免得调用对话框把它拉进对象管理器的首屏。
+const CommandConsole = lazy(() => import('./CommandConsole').then((module) => ({ default: module.CommandConsole })));
+const noLocate = () => undefined;
 
 type GroupState = {
   items: SchemaObjectSummary[];
@@ -313,6 +328,13 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   const [compilationErrors, setCompilationErrors] = useState<CompilationError[]>([]);
   const [invoking, setInvoking] = useState(false);
   const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
+  const [invokeMode, setInvokeMode] = useState<RoutineInvokeMode>('foreground');
+  const [invokeError, setInvokeError] = useState<RoutineInvokeFailure>();
+  const [cancellingInvoke, setCancellingInvoke] = useState(false);
+  /** 后台调用的任务；有它时「调用结果」显示的是那份执行日志。 */
+  const [backgroundJobId, setBackgroundJobId] = useState<number>();
+  /** 正在执行的前台调用：取消用 executionId，关闭页面时中止等待。 */
+  const invokeExecutionRef = useRef<{ executionId: string; controller: AbortController } | undefined>(undefined);
   const [messageApi, messageContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const objectKey = state?.object?.objectKey;
@@ -320,6 +342,8 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   useEffect(() => {
     setDetail(undefined);
     setInvokeResult(undefined);
+    setBackgroundJobId(undefined);
+    setInvokeError(undefined);
     setActiveTab(state?.creation ? 'source' : 'overview');
     if (state?.creation) {
       setSource(state.creation.source);
@@ -329,6 +353,9 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     if (objectKey) void loadDetail(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectKey, state?.creation?.objectName]);
+
+  // 卸载时只停止等待；数据库那边的取消由关闭抽屉的确认负责（见 closeWorkspace）。
+  useEffect(() => () => invokeExecutionRef.current?.controller.abort(), []);
 
   if (!state) return null;
   const creation = state.creation;
@@ -426,29 +453,88 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
 
   async function invokeRoutine() {
     if (!detail) return;
+    setInvokeError(undefined);
     setInvoking(true);
+    const headers = productionConfirmationHeaders(production ? invokeProductionConfirmation : undefined);
+    const request = {
+      objectKey: detail.object.objectKey,
+      structureVersion: detail.structureVersion,
+      arguments: Object.values(invokeInputs)
+    };
     try {
-      const result = await api<RoutineInvokeResponse>(`/metadata/${connection.id}/schema-objects/invoke`, {
+      if (invokeMode === 'background') {
+        const job = await api<SqlFileExecution>(routineInvokePath(connection.id, 'background'), { method: 'POST', headers, body: JSON.stringify(request) });
+        const failure = backgroundSubmitFailure(job);
+        if (failure) {
+          setInvokeError(failure);
+          return;
+        }
+        setInvokeResult(undefined);
+        setBackgroundJobId(job.id);
+        setInvokeOpen(false);
+        setActiveTab('results');
+        messageApi.success('已提交后台执行，执行日志在「调用结果」里');
+        return;
+      }
+      const executionId = createUuid();
+      // 不用默认的 3 分钟请求超时：前台调用的上限由服务端的 SQL 超时决定，浏览器先放弃只会让调用变成无人看管。
+      const controller = new AbortController();
+      invokeExecutionRef.current = { executionId, controller };
+      const result = await api<RoutineInvokeResponse>(routineInvokePath(connection.id, 'foreground'), {
         method: 'POST',
-        headers: productionConfirmationHeaders(production ? invokeProductionConfirmation : undefined),
-        body: JSON.stringify({
-          objectKey: detail.object.objectKey,
-          structureVersion: detail.structureVersion,
-          arguments: Object.values(invokeInputs)
-        })
+        headers,
+        body: JSON.stringify({ ...request, executionId }),
+        signal: controller.signal
       });
+      setBackgroundJobId(undefined);
       setInvokeResult(result);
       setInvokeOpen(false);
       setActiveTab('results');
       messageApi.success(`调用完成，耗时 ${result.elapsedMs}ms`);
     } catch (error) {
-      messageApi.error(error instanceof Error ? error.message : '例程调用失败');
+      const failure = describeRoutineInvokeFailure(error);
+      if (failure) setInvokeError(failure);
     } finally {
+      invokeExecutionRef.current = undefined;
       setInvoking(false);
+      setCancellingInvoke(false);
+    }
+  }
+
+  async function cancelInvoke() {
+    const running = invokeExecutionRef.current;
+    if (!running) return;
+    setCancellingInvoke(true);
+    try {
+      const result = await api<{ ok: boolean; message: string }>(`/sql/executions/${running.executionId}/cancel`, { method: 'POST' });
+      // 已经跑完的调用取消不了，结果马上就会回来，不用提示。
+      if (!result.ok) setCancellingInvoke(false);
+    } catch (error) {
+      setCancellingInvoke(false);
+      messageApi.error(`取消失败：${localizeError(error)}`);
     }
   }
 
   function closeWorkspace() {
+    if (invokeExecutionRef.current) {
+      // 关掉之后就看不到这次调用的结果了：与其让它在库里无人看管地跑完，不如先取消。
+      modalApi.confirm({
+        title: '取消正在执行的调用？',
+        content: '关闭后看不到这次调用的结果，因此会先取消它；过程内部已经提交的部分不会回滚。运行时间长的过程请改用后台执行。',
+        okText: '取消调用并关闭',
+        cancelText: '继续等待',
+        okButtonProps: { danger: true },
+        onOk: () => {
+          void cancelInvoke();
+          closeIfClean();
+        }
+      });
+      return;
+    }
+    closeIfClean();
+  }
+
+  function closeIfClean() {
     if (!dirty) {
       onClose();
       return;
@@ -496,7 +582,14 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     ) },
     !creation && { key: 'parameters', label: `参数 ${detail?.parameters.length || 0}`, children: detail ? <ParameterTable parameters={detail.parameters} /> : null },
     !creation && { key: 'dependencies', label: `依赖 ${detail?.dependencies.length || 0}`, children: detail ? <DependencyPanel detail={detail} /> : null },
-    invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} /> }
+    backgroundJobId !== undefined && { key: 'results', label: '调用结果', children: (
+      <div className="routine-background-log">
+        <Suspense fallback={<PanelLoading text="正在加载执行日志…" />}>
+          <CommandConsole jobId={backgroundJobId} onLocate={noLocate} onClose={() => { setBackgroundJobId(undefined); setActiveTab('overview'); }} />
+        </Suspense>
+      </div>
+    ) },
+    backgroundJobId === undefined && invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} /> }
   ].filter(Boolean) as { key: string; label: string; children: ReactNode }[];
 
   return (
@@ -549,13 +642,40 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         title={`调用 ${detail?.object.displayName || ''}`}
         open={invokeOpen}
         width={640}
-        okText="执行调用"
+        okText={invokeMode === 'background' ? '提交后台执行' : '执行调用'}
         confirmLoading={invoking}
         okButtonProps={{ disabled: production && invokeProductionConfirmation !== connection.name }}
+        // 前台调用进行中不能关掉对话框：关掉之后就没有地方取消它了。
+        closable={!invoking}
+        mask={{ closable: !invoking }}
+        keyboard={!invoking}
+        footer={(_, { OkBtn, CancelBtn }) => invoking && invokeMode === 'foreground'
+          ? <Space><Button danger loading={cancellingInvoke} onClick={() => void cancelInvoke()}>取消调用</Button><OkBtn /></Space>
+          : <Space><CancelBtn /><OkBtn /></Space>}
         onOk={() => void invokeRoutine()}
-        onCancel={() => setInvokeOpen(false)}
+        onCancel={() => { if (!invoking) setInvokeOpen(false); }}
       >
-        <Alert type="warning" showIcon message="例程可能包含写入或结构变更" description="调用参数值不会写入审计或 SQL 历史。" />
+        <Alert type="warning" showIcon message="例程可能包含写入或结构变更" description="调用参数值不会写入审计、SQL 历史或执行日志。" />
+        {invokeError && <Alert
+          className="routine-invoke-error"
+          type={invokeError.kind === 'cancelled' ? 'info' : 'error'}
+          showIcon
+          message={invokeError.title}
+          description={invokeError.message}
+          action={invokeError.suggestBackground && invokeMode === 'foreground'
+            ? <Button size="small" onClick={() => { setInvokeMode('background'); setInvokeError(undefined); }}>改用后台执行</Button>
+            : undefined}
+        />}
+        <div className="routine-invoke-mode">
+          <Radio.Group
+            optionType="button"
+            value={invokeMode}
+            disabled={invoking}
+            onChange={(event) => { setInvokeMode(event.target.value as RoutineInvokeMode); setInvokeError(undefined); }}
+            options={[{ value: 'foreground', label: '前台调用' }, { value: 'background', label: '后台执行' }]}
+          />
+          <Text type="secondary">{ROUTINE_INVOKE_MODE_HINTS[invokeMode]}</Text>
+        </div>
         <div className="routine-argument-list">
           {detail?.parameters.filter((parameter) => parameter.mode !== 'RETURN').map((parameter) => {
             const input = invokeInputs[parameter.position];
