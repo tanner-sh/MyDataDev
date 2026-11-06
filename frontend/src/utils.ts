@@ -5,6 +5,11 @@ export function createSqlTab(index: number): SqlTab {
   return { id: `query-${Date.now()}-${index}`, title: `查询 ${index}`, sql: 'select 1 as val', dirty: false, results: [], message: '' };
 }
 
+/** 独立的命令窗口：编辑器起手是空的 —— 它装的是要整段交给后台的脚本，不是一句试探性的查询。 */
+export function createCommandTab(index: number): SqlTab {
+  return { id: `command-${Date.now()}-${index}`, title: `命令窗口 ${index}`, sql: '', dirty: false, results: [], message: '', kind: 'command' };
+}
+
 export function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }

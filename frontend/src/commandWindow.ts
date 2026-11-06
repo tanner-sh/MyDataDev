@@ -29,6 +29,20 @@ export function effectiveCommandOptions(options: CommandWindowOptions | undefine
   return value.transactionMode === 'SCRIPT' && !supportsScriptTransaction(dbType) ? { ...value, transactionMode: 'AUTOCOMMIT' } : value;
 }
 
+export function isCommandTab(tab: { kind?: string } | undefined): boolean {
+  return tab?.kind === 'command';
+}
+
+/** 从本地存储读回的选项：字段不认识就整个不要，退回默认值。 */
+export function normalizeCommandOptions(value: unknown): CommandWindowOptions | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.onError !== 'STOP' && record.onError !== 'CONTINUE') return undefined;
+  if (record.transactionMode !== 'AUTOCOMMIT' && record.transactionMode !== 'SCRIPT') return undefined;
+  if (record.endOfFileAction !== 'COMMIT' && record.endOfFileAction !== 'ROLLBACK') return undefined;
+  return { onError: record.onError, transactionMode: record.transactionMode, endOfFileAction: record.endOfFileAction };
+}
+
 export function commandOptionsLabel(options: CommandWindowOptions): string {
   const transaction = options.transactionMode === 'SCRIPT'
     ? `脚本控制事务，结束时${options.endOfFileAction === 'COMMIT' ? '提交' : '回滚'}`

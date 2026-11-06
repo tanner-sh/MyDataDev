@@ -476,6 +476,11 @@ export type ConnectionSshForm = {
 export type WorkspaceStatusKind = 'idle' | 'loading' | 'success' | 'info' | 'error';
 export type WorkspaceStatus = { kind: WorkspaceStatusKind; text: string; detail?: string };
 export type SqlTab = {
+  /**
+   * 标签页的种类：缺省是查询窗口；'command' 是独立的命令窗口 —— 执行一律交给后台逐条跑，
+   * 结果区只有滚动日志（见 commandWindow.ts）。
+   */
+  kind?: 'command';
   /** Generated migration scripts keep their target namespace. */
   executionSchema?: string;
   parameters?: import('./sqlParameters').SqlParameterDefinition[];

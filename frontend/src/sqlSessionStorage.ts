@@ -1,6 +1,7 @@
 import { normalizeParameterDefinitions, type SqlParameterDefinition } from './sqlParameters';
 import { workspaceIdentity } from './auth';
 import { normalizeDelimiterSetting, type SqlDelimiterSetting } from './scriptDelimiter';
+import { normalizeCommandOptions, type CommandWindowOptions } from './commandWindow';
 import type { SqlTab } from './types';
 
 export const MAX_STORED_SQL_TABS = 20;
@@ -9,6 +10,8 @@ const STORAGE_PREFIX = 'db-admin:sql-session:v2:';
 type SessionStorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
 type StoredSqlTab = {
+  kind?: 'command';
+  commandOptions?: CommandWindowOptions;
   executionSchema?: string;
   delimiter?: SqlDelimiterSetting;
   parameters?: SqlParameterDefinition[];
@@ -58,7 +61,9 @@ export function writeSqlSession(
     dirty: tab.dirty,
     executionSchema: tab.executionSchema,
     ...(tab.parameters ? { parameters: tab.parameters } : {}),
-    ...(tab.delimiter && tab.delimiter.mode !== 'AUTO' ? { delimiter: tab.delimiter } : {})
+    ...(tab.delimiter && tab.delimiter.mode !== 'AUTO' ? { delimiter: tab.delimiter } : {}),
+    ...(tab.kind === 'command' ? { kind: 'command' as const } : {}),
+    ...(tab.commandOptions ? { commandOptions: tab.commandOptions } : {})
   }));
   if (storedTabs.length === 0) return false;
   const session: StoredSqlSession = {
@@ -84,16 +89,20 @@ export function normalizeSqlSession(value: unknown): SqlSession | undefined {
     const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
     if (!id || seen.has(id) || typeof candidate.sql !== 'string') continue;
     seen.add(id);
+    const kind = candidate.kind === 'command' ? 'command' as const : undefined;
+    const commandOptions = normalizeCommandOptions(candidate.commandOptions);
     tabs.push({
       id,
       title: typeof candidate.title === 'string' && candidate.title.trim()
         ? candidate.title.trim().slice(0, 80)
-        : `查询 ${tabs.length + 1}`,
+        : `${kind ? '命令窗口' : '查询'} ${tabs.length + 1}`,
       sql: candidate.sql,
       dirty: candidate.dirty === true,
       executionSchema: typeof candidate.executionSchema === 'string' ? candidate.executionSchema : undefined,
       ...(candidate.parameters ? { parameters: normalizeParameterDefinitions(candidate.parameters) } : {}),
       ...(normalizeDelimiterSetting(candidate.delimiter) ? { delimiter: normalizeDelimiterSetting(candidate.delimiter) } : {}),
+      ...(kind ? { kind } : {}),
+      ...(commandOptions ? { commandOptions } : {}),
       results: [],
       message: ''
     });
