@@ -682,16 +682,37 @@ public final class ApiDtos {
         }
     }
 
-    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction) {
+    /**
+     * delimiterMode/delimiter：语句分隔方式（见 SqlScriptDelimiter）；delimiterChecked 表示用户已经看过
+     * 「检测到自定义分隔符」的提示并选择保持自动；largeScriptConfirmed 表示用户确认在工作台里执行大脚本。
+     */
+    public record SqlScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql, Integer maxRows, Integer pageSize, @Size(max = 120) String executionId, @Size(max = 240) String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction,
+                                   @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter, boolean delimiterChecked, boolean largeScriptConfirmed) {
         public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId) {
             this(connectionId, sql, maxRows, pageSize, executionId, null, false, null, null);
         }
         public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId, String schemaName, boolean confirmed) {
             this(connectionId, sql, maxRows, pageSize, executionId, schemaName, confirmed, null, null);
         }
+        public SqlScriptRequest(Long connectionId, String sql, Integer maxRows, Integer pageSize, String executionId, String schemaName, boolean confirmed, String transactionMode, String endOfFileAction) {
+            this(connectionId, sql, maxRows, pageSize, executionId, schemaName, confirmed, transactionMode, endOfFileAction, null, null, false, false);
+        }
     }
 
-    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged, String transactionMessage) {
+    /** notices：解析时顺带说明的事（被忽略的 SQL*Plus 指令、PROMPT 文本、按哪种分隔方式分的段）。 */
+    public record SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged, String transactionMessage, List<String> notices) {
+        public SqlScriptResponse {
+            notices = notices == null ? List.of() : List.copyOf(notices);
+        }
+        public SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results, boolean metadataChanged, String transactionMessage) {
+            this(status, elapsedMs, executedCount, results, metadataChanged, transactionMessage, List.of());
+        }
+        public SqlScriptResponse withNotices(List<String> extra) {
+            if (extra == null || extra.isEmpty()) return this;
+            List<String> merged = new java.util.ArrayList<>(extra);
+            merged.addAll(notices);
+            return new SqlScriptResponse(status, elapsedMs, executedCount, results, metadataChanged, transactionMessage, merged);
+        }
         public SqlScriptResponse(String status, long elapsedMs, int executedCount, List<SqlStatementResult> results) {
             this(status, elapsedMs, executedCount, results, false, null);
         }
@@ -746,11 +767,29 @@ public final class ApiDtos {
             Instant createdAt,
             com.example.dbadmin.model.SqlFileTransaction transaction,
             /** 语句成功但对象编译失败（Oracle 系 INVALID）的明细，每条一行。 */
-            List<String> compilationErrors
+            List<String> compilationErrors,
+            /** 非默认的分隔方式（如「独占行 !」）；默认规则时为 null。 */
+            @Schema(nullable = true) String statementDelimiter
     ) {
         public SqlFileExecutionResponse {
             compilationErrors = compilationErrors == null ? List.of() : List.copyOf(compilationErrors);
         }
+        public SqlFileExecutionResponse(long id, long connectionId, String connectionName, String targetDbType, String fileName,
+                                        long fileSize, String checksumSha256, String detectedCharset, String status, String phase,
+                                        long processedBytes, Long statementTotal, long statementCurrent, long queryCount, long mutationCount,
+                                        long ddlCount, long unknownCount, long successCount, long queryRowCount, Long failedStatementIndex,
+                                        String failedSqlPreview, String message, boolean metadataChanged, boolean sessionChanged,
+                                        boolean cancelRequested, Instant expiresAt, Instant startedAt, Instant finishedAt, Instant createdAt,
+                                        com.example.dbadmin.model.SqlFileTransaction transaction, List<String> compilationErrors) {
+            this(id, connectionId, connectionName, targetDbType, fileName, fileSize, checksumSha256, detectedCharset, status, phase,
+                    processedBytes, statementTotal, statementCurrent, queryCount, mutationCount, ddlCount, unknownCount, successCount,
+                    queryRowCount, failedStatementIndex, failedSqlPreview, message, metadataChanged, sessionChanged, cancelRequested,
+                    expiresAt, startedAt, finishedAt, createdAt, transaction, compilationErrors, null);
+        }
+    }
+
+    public record SqlEditorScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql,
+                                         @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter) {
     }
 
     public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {

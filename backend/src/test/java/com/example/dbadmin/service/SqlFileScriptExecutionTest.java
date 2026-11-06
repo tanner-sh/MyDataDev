@@ -264,6 +264,34 @@ class SqlFileScriptExecutionTest {
         assertThat(service.get(id).mutationCount()).isZero();
     }
 
+    @Test void dbeaverDelimiterFilesAreDetectedAnalysedAndExecutedWithTheSameBoundaries() throws Exception {
+        String script = "-- DBeaver 分隔符为 !\nSET DEFINE OFF\nINSERT INTO t VALUES(1)\n!\nINSERT INTO t VALUES(2);\n!\nINSERT INTO t VALUES(3)\n!\n";
+        long id = upload(script);
+        var ready = service.get(id);
+        assertThat(ready.status()).isEqualTo("READY");
+        assertThat(ready.statementTotal()).isEqualTo(3);
+        assertThat(ready.statementDelimiter()).isEqualTo("独占行 !");
+        assertThat(service.start(id, null, "tester").status()).isEqualTo("SUCCESS");
+        assertThat(target.queryForObject("SELECT COUNT(*) FROM t", Integer.class)).isEqualTo(3);
+    }
+
+    @Test void explicitBlankLineModeIsStoredForTheWholeJob() throws Exception {
+        byte[] bytes = "INSERT INTO t VALUES(7)\n\nINSERT INTO t VALUES(8)\n".getBytes(StandardCharsets.UTF_8);
+        long id = service.upload(1, "blank.sql", bytes.length, new ByteArrayInputStream(bytes), "tester", SqlScriptDelimiter.BLANK_LINE).id();
+        assertThat(service.get(id).statementTotal()).isEqualTo(2);
+        assertThat(service.get(id).statementDelimiter()).isEqualTo("空行分隔");
+        assertThat(service.start(id, null, "tester").status()).isEqualTo("SUCCESS");
+        assertThat(target.queryForList("SELECT id FROM t ORDER BY id", Integer.class)).containsExactly(7, 8);
+    }
+
+    @Test void editorScriptsBecomeOrdinaryBackgroundJobs() throws Exception {
+        var job = service.submitEditorScript(1, "INSERT INTO t VALUES(41);\nINSERT INTO t VALUES(42);", "tester", SqlScriptDelimiter.AUTO);
+        assertThat(service.get(job.id()).statementTotal()).isEqualTo(2);
+        assertThat(service.get(job.id()).statementDelimiter()).isNull();
+        assertThat(service.start(job.id(), null, "tester").status()).isEqualTo("SUCCESS");
+        assertThat(target.queryForObject("SELECT COUNT(*) FROM t WHERE id IN (41, 42)", Integer.class)).isEqualTo(2);
+    }
+
     private long upload(String sql) throws Exception {
         byte[] bytes = sql.getBytes(StandardCharsets.UTF_8);
         return service.upload(1, "test.sql", bytes.length, new ByteArrayInputStream(bytes), "tester").id();

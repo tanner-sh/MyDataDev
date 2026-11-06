@@ -102,6 +102,15 @@ public class SqlFileExecutionService {
     }
 
     public SqlFileExecutionResponse upload(long connectionId, String rawFileName, long contentLength, InputStream input, String actor) throws Exception {
+        return upload(connectionId, rawFileName, contentLength, input, actor, SqlScriptDelimiter.AUTO);
+    }
+
+    /**
+     * @param delimiter 用户选的分隔方式。选「自动」时先看文件里有没有独占行的分隔符（DBeaver 的 !）：有就按它分段，
+     *                  并把分隔方式写进任务 —— 开始执行之前，界面上能看到「按独占行 ! 分段、共 N 条」。
+     */
+    public SqlFileExecutionResponse upload(long connectionId, String rawFileName, long contentLength, InputStream input, String actor,
+                                           SqlScriptDelimiter delimiter) throws Exception {
         DbConnection connection = connections.require(connectionId);
         String fileName = safeFileName(rawFileName);
         if (!fileName.toLowerCase(Locale.ROOT).endsWith(".sql")) throw new IllegalArgumentException("只支持 .sql 文件。");
@@ -140,8 +149,37 @@ public class SqlFileExecutionService {
             throw new IllegalArgumentException("SQL 文件不能为空。");
         }
 
+        SqlScriptDelimiter resolved = resolveDelimiter(target, connection.dbType(), delimiter);
         return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
-                actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size);
+                actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size + delimiterAuditSuffix(resolved), false, resolved);
+    }
+
+    /**
+     * 把编辑器里的脚本交给后台执行（工作台里语句太多时的去处）。与上传文件同一条管线：落盘、分析、
+     * 等用户在任务面板里点开始；生产确认、无 WHERE 写确认、并发闸门都在开始那一步。
+     */
+    public SqlFileExecutionResponse submitEditorScript(long connectionId, String sql, String actor, SqlScriptDelimiter delimiter) throws Exception {
+        if (sql == null || sql.isBlank()) throw new IllegalArgumentException("请输入要执行的 SQL");
+        byte[] bytes = sql.getBytes(StandardCharsets.UTF_8);
+        return uploadScript(connectionId, "workbench-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".sql",
+                bytes.length, writer -> { writer.write(sql); return "source=workbench"; }, actor, "SQL_FILE_UPLOAD", "editor script",
+                false, delimiter == null ? SqlScriptDelimiter.AUTO : delimiter, true);
+    }
+
+    /** 自动模式下识别独占行分隔符；识别不出或用户已经指定了方式时原样返回。只读文件开头，符号都是 ASCII，编码不影响判断。 */
+    private SqlScriptDelimiter resolveDelimiter(Path file, String dbType, SqlScriptDelimiter requested) throws IOException {
+        if (requested != null && !requested.isAuto()) return requested;
+        try (var reader = new java.io.InputStreamReader(Files.newInputStream(file), StandardCharsets.UTF_8)) {
+            return SqlScriptDelimiter.detect(reader, dbType).map(SqlScriptDelimiter::custom).orElse(SqlScriptDelimiter.AUTO);
+        }
+    }
+
+    private static String delimiterAuditSuffix(SqlScriptDelimiter delimiter) {
+        return delimiter.isAuto() ? "" : "; delimiter=" + delimiter.encode();
+    }
+
+    private static SqlScriptDelimiter delimiterOf(SqlFileExecution job) {
+        return SqlScriptDelimiter.decode(job.statementDelimiter());
     }
 
     /**
@@ -174,6 +212,15 @@ public class SqlFileExecutionService {
     private SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, long estimatedBytes,
                                                  ScriptWriter writer, String actor, String auditAction,
                                                  String auditDetailPrefix, boolean inlineAnalysis) throws Exception {
+        // 服务端自己生成的脚本（CSV/Excel 导入、跨库传输）不做分隔符识别：内容是我们写的，就是默认规则。
+        return uploadScript(connectionId, rawFileName, estimatedBytes, writer, actor, auditAction, auditDetailPrefix,
+                inlineAnalysis, SqlScriptDelimiter.AUTO, false);
+    }
+
+    private SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, long estimatedBytes,
+                                                 ScriptWriter writer, String actor, String auditAction,
+                                                 String auditDetailPrefix, boolean inlineAnalysis,
+                                                 SqlScriptDelimiter delimiter, boolean detectDelimiter) throws Exception {
         String auditDetail = auditDetailPrefix;
         DbConnection connection = connections.require(connectionId);
         String fileName = safeFileName(rawFileName);
@@ -208,8 +255,9 @@ public class SqlFileExecutionService {
             Files.deleteIfExists(target);
             throw new IllegalArgumentException("生成的 SQL 脚本为空。");
         }
+        SqlScriptDelimiter resolved = detectDelimiter ? resolveDelimiter(target, connection.dbType(), delimiter) : delimiter;
         return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
-                actor, auditAction, auditDetail, inlineAnalysis);
+                actor, auditAction, auditDetail + delimiterAuditSuffix(resolved), inlineAnalysis, resolved);
     }
 
     /**
@@ -228,12 +276,8 @@ public class SqlFileExecutionService {
     }
 
     private SqlFileExecutionResponse register(DbConnection connection, String fileName, Path target, long size,
-                                              String checksum, String actor, String auditAction, String auditDetail) throws Exception {
-        return register(connection, fileName, target, size, checksum, actor, auditAction, auditDetail, false);
-    }
-
-    private SqlFileExecutionResponse register(DbConnection connection, String fileName, Path target, long size,
-                                              String checksum, String actor, String auditAction, String auditDetail, boolean inlineAnalysis) throws Exception {
+                                              String checksum, String actor, String auditAction, String auditDetail, boolean inlineAnalysis,
+                                              SqlScriptDelimiter delimiter) throws Exception {
         Instant expiresAt = Instant.now().plus(Math.max(1, properties.getSqlFile().getReadyTtlHours()), ChronoUnit.HOURS);
         SqlFileExecution draft = new SqlFileExecution(0, connection.id(), connection.name(), connection.dbType(), fileName,
                 target.toString(), size, checksum, null, "ANALYZING", "DETECTING_ENCODING",
@@ -247,6 +291,7 @@ public class SqlFileExecutionService {
             throw error;
         }
         try {
+            if (delimiter != null && !delimiter.isAuto()) jobs.updateStatementDelimiter(id, delimiter.encode());
             analyzedSources.put(id, fingerprint(Files.readAttributes(target, BasicFileAttributes.class)));
             taskControl.clear(sqlFileOperationKey(id));
             if (inlineAnalysis) analyze(id);
@@ -323,7 +368,7 @@ public class SqlFileExecutionService {
         }
         if ("SCRIPT".equals(mode)) {
             connections.requireNoManualTransaction(job.connectionId());
-            SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
+            SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
                     properties.getSqlFile().getMaxStatementChars(), (index, sql) -> SqlScriptSyntax.validateScriptControl(sql), ignored -> { });
         }
         boolean mutation = job.mutationCount() + job.ddlCount() + job.unknownCount() > 0;
@@ -376,8 +421,10 @@ public class SqlFileExecutionService {
 
     public SqlFileExecutionResponse submitScript(long connectionId, String sql, String actor,
                                                  String productionConfirmation, String mode, String ending) throws Exception {
+        // Agent 交来的脚本没有机会回答「按 ! 分段吗」：识别到独占行分隔符就直接按它分，分隔方式写在任务里可查。
         var job = uploadScript(connectionId, "mcp-script.sql", sql.getBytes(StandardCharsets.UTF_8).length,
-                writer -> { writer.write(sql); return "source=MCP"; }, actor, "MCP_SCRIPT_UPLOAD", "script", true);
+                writer -> { writer.write(sql); return "source=MCP"; }, actor, "MCP_SCRIPT_UPLOAD", "script", true,
+                SqlScriptDelimiter.AUTO, true);
         if (!"READY".equals(job.status())) return job;
         try {
             return start(job.id(), productionConfirmation, actor, mode, ending);
@@ -467,13 +514,16 @@ public class SqlFileExecutionService {
         long[] counts = new long[7];
         boolean[] flags = new boolean[2];
         long[] lastProgressNanos = {0};
-        SqlFileStatementReader.read(path, charset, job.targetDbType(), properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
+        SqlScriptDelimiter delimiter = delimiterOf(job);
+        SqlFileStatementReader.read(path, charset, job.targetDbType(), delimiter, properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
             ensureNotCancelled(job.id());
             // GO batches may contain multiple ordinary SQL statements; PL/SQL bodies must remain opaque.
             boolean sqlServer = Set.of("sqlserver", "sql-server", "mssql").contains(job.targetDbType().toLowerCase(Locale.ROOT));
             boolean routine = SqlScriptSyntax.leadingSql(sql).matches("(?is)(?:CREATE(?:\\s+OR\\s+ALTER)?|ALTER)\\s+(?:PROC(?:EDURE)?|FUNCTION|TRIGGER)\\b.*");
+            var whole = java.util.List.of(new SqlScriptSplitter.StatementSegment(sql, 0, sql.length()));
+            // 自定义分隔符下一段可以写好几条：按种类要权限、计数时要逐条看，不能只看开头。
             var parts = sqlServer && !routine ? scriptSplitter.split(sql, "plain")
-                    : java.util.List.of(new SqlScriptSplitter.StatementSegment(sql, 0, sql.length()));
+                    : scriptSplitter.classificationUnits(whole, job.targetDbType(), delimiter);
             if (parts.stream().anyMatch(part -> SqlScriptSyntax.transaction(part.sql()) != SqlScriptSyntax.Transaction.NONE)) counts[5]++;
             if (SqlScriptSyntax.opaqueBlock(sql)) { counts[6]++; flags[0] = true; flags[1] = true; }
             SqlStatementClassifier.Kind kind = strongestKind(parts.stream().map(part -> classifier.classify(part.sql())).toList());
@@ -521,7 +571,7 @@ public class SqlFileExecutionService {
                     runningStatements.put(id, statement);
                     dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
                     int[] batched = {0};
-                    SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
+                    SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
                             properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
                         ensureNotCancelled(id);
                         current[0] = index;
@@ -668,7 +718,7 @@ public class SqlFileExecutionService {
                     runningStatements.put(id, statement);
                     dialects.dialectFor(target).configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
                     compiled[0] = new CompilationCollector(id, dialects.dialectFor(target));
-                    SqlFileStatementReader.readUnits(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(),
+                    SqlFileStatementReader.readUnits(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
                             properties.getSqlFile().getMaxStatementChars(), unit -> {
                         ensureNotCancelled(id);
                         currentUnit[0] = unit;
@@ -834,7 +884,8 @@ public class SqlFileExecutionService {
                 job.statementTotal(), job.statementCurrent(), job.queryCount(), job.mutationCount(), job.ddlCount(), job.unknownCount(),
                 job.successCount(), job.queryRowCount(), job.failedStatementIndex(), job.failedSqlPreview(), job.message(),
                 job.metadataChanged(), job.sessionChanged(), job.cancelRequested(), job.expiresAt(), job.startedAt(), job.finishedAt(), job.createdAt(), job.transaction(),
-                job.compilationErrors() == null || job.compilationErrors().isBlank() ? List.of() : job.compilationErrors().lines().toList());
+                job.compilationErrors() == null || job.compilationErrors().isBlank() ? List.of() : job.compilationErrors().lines().toList(),
+                delimiterOf(job).isAuto() ? null : delimiterOf(job).label());
     }
 
     /**

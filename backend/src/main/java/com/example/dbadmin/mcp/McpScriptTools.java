@@ -63,7 +63,11 @@ public class McpScriptTools {
             if (sqlServer) {
                 access.requireConnection(connectionId, McpAccessLevel.FULL);
             }
-            var units = splitter.split(script, connection.dbType());
+            // 与后台任务同一套识别：独占行分隔符（DBeaver 的 !）按它分段，一段里的多条再细分后逐条校验。
+            var delimiter = com.example.dbadmin.service.SqlScriptDelimiter.detect(script, connection.dbType())
+                    .map(com.example.dbadmin.service.SqlScriptDelimiter::custom)
+                    .orElse(com.example.dbadmin.service.SqlScriptDelimiter.AUTO);
+            var units = splitter.classificationUnits(splitter.parse(script, connection.dbType(), delimiter).segments(), connection.dbType(), delimiter);
             if (units.isEmpty()) throw new IllegalArgumentException("脚本没有可执行单元。");
             for (var unit : units) {
                 if ("SCRIPT".equals(transactionMode)) SqlScriptSyntax.validateScriptControl(unit.sql());

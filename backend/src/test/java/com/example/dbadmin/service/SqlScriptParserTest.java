@@ -125,9 +125,17 @@ class SqlScriptParserTest {
                     .extracting(SqlScriptSplitter.StatementSegment::sql).containsExactly(first, last);
         }
     }
-    @Test void missingSlashBeforeNextCreateIsRejectedInsteadOfMergingTwoObjects() {
+    @Test void missingSlashBeforeNextCreateClosesABalancedBlockAndRejectsAnUnbalancedOne() {
+        // BEGIN/END 配平、以 END …; 收尾的块后面紧跟 CREATE：没写 / 也能确定块在这里结束。
         String script = "CREATE OR REPLACE PROCEDURE A.P1 AS\nBEGIN\n  NULL;\nEND P1;\n-- next\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
-        assertThatThrownBy(() -> splitter.split(script, "oceanbase-oracle")).hasMessageContaining("第 6 行").hasMessageContaining("缺少独占行 /");
+        assertThat(splitter.split(script, "oceanbase-oracle")).extracting(SqlScriptSplitter.StatementSegment::sql)
+                .satisfiesExactly(
+                        first -> assertThat(first).startsWith("CREATE OR REPLACE PROCEDURE A.P1").endsWith("END P1;"),
+                        // 块后面的注释跟着下一条走，不粘在 P1 的源码末尾。
+                        second -> assertThat(second).startsWith("-- next\nCREATE OR REPLACE PROCEDURE A.P2").endsWith("END;"));
+        // 包体带初始化段：最外层 END 收的是两层，深度回不到 0 —— 判断不了块在哪结束时仍然拒绝，而不是猜。
+        String unbalanced = "CREATE OR REPLACE PACKAGE BODY A.PK AS\n  PROCEDURE X IS BEGIN NULL; END;\nBEGIN\n  NULL;\nEND PK;\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
+        assertThatThrownBy(() -> splitter.split(unbalanced, "oceanbase-oracle")).hasMessageContaining("第 6 行").hasMessageContaining("缺少独占行 /");
         // 例程正文里的 CREATE 只会出现在字符串或注释里，不能被当成漏写分隔符。
         assertThat(splitter.split("BEGIN\n  NULL;\nEXECUTE IMMEDIATE '\nCREATE TABLE T (A NUMBER)';\nEND;\n/", "oracle")).hasSize(1);
         assertThat(splitter.split("BEGIN\n  NULL;\n/*\nCREATE TABLE T (A NUMBER);\n*/\nEND;\n/", "oracle")).hasSize(1);

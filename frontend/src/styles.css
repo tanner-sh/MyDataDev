@@ -5649,3 +5649,17 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
   font-size: var(--text-sm);
   white-space: pre;
 }
+
+/* 三选一确认框的页脚：取消在左，推荐的那个在最右。 */
+.choice-dialog-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-3); }
+
+/* 工具栏里的分隔方式：选「自定义」时旁边多一个窄输入框。 */
+.sql-delimiter-select { width: 112px; }
+.sql-delimiter-token { width: 52px; }
+
+/* 多语句执行日志：一行一条，失败行标红。 */
+.script-execution-log { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2) var(--space-3); min-height: 0; }
+.script-execution-log-summary { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: baseline; }
+.script-execution-log-notices ul { margin: 0; padding-left: var(--space-4); }
+.script-log-sql { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; font-size: var(--text-sm); }
+.script-execution-log-table .script-log-failed .ant-table-cell { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); }

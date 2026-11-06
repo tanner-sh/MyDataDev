@@ -267,7 +267,17 @@ public class AppProperties {
         private int maxRows = 1000;
         private int maxPageOffset = 1_000_000;
         private int maxStatements = 500;
+        /** 工作台里一次执行超过这么多条时先问一句：几百条同步执行期间界面没有进度，后台执行更合适。 */
+        private int largeScriptThreshold = 200;
         private int timeoutSeconds = 60;
+
+        public int getLargeScriptThreshold() {
+            return largeScriptThreshold;
+        }
+
+        public void setLargeScriptThreshold(int largeScriptThreshold) {
+            this.largeScriptThreshold = largeScriptThreshold;
+        }
 
         public int getMaxRows() {
             return maxRows;

@@ -20,8 +20,15 @@ export function describeFailure(error: { message: string; code?: string; status?
   return { title, advice, code, message: redactDiagnostic(error.message), requestId: error.requestId, path: path?.split('?')[0], time: new Date().toISOString() };
 }
 
+/** 这些是「先问一句」，界面会接着弹确认框 —— 不是失败，不进操作问题中心。 */
+const PROMPT_CODES = ['PRODUCTION_CONFIRMATION_REQUIRED', 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED', 'SCRIPT_DELIMITER_DETECTED', 'LARGE_SCRIPT_CONFIRMATION_REQUIRED', 'SCRIPT_TOO_LARGE'];
+
+export function isPromptCode(code: string | undefined): boolean {
+  return PROMPT_CODES.includes(code || '');
+}
+
 export function reportFailure(error: Parameters<typeof describeFailure>[0], path?: string) {
-  if (['PRODUCTION_CONFIRMATION_REQUIRED', 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED'].includes(error.code || '')) return;
+  if (isPromptCode(error.code)) return;
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(API_FAILURE_EVENT, { detail: describeFailure(error, path) }));
 }
 

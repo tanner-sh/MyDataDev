@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeFailure, diagnosticText, mayChangeData, redactDiagnostic } from './errorFeedback';
+import { describeFailure, diagnosticText, isPromptCode, mayChangeData, redactDiagnostic } from './errorFeedback';
 
 describe('actionable error feedback', () => {
   it('redacts credentials and omits query parameters in copied diagnostics', () => {
@@ -15,5 +15,15 @@ describe('actionable error feedback', () => {
     expect(mayChangeData('/connections/1/test', 'POST')).toBe(false);
     expect(mayChangeData('/data/preview', 'POST')).toBe(false);
     expect(mayChangeData('/connections', 'GET')).toBe(false);
+  });
+});
+
+describe('prompts are not failures', () => {
+  it('keeps the confirmation prompts out of the problem center', () => {
+    for (const code of ['SCRIPT_DELIMITER_DETECTED', 'LARGE_SCRIPT_CONFIRMATION_REQUIRED', 'SCRIPT_TOO_LARGE', 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED', 'PRODUCTION_CONFIRMATION_REQUIRED']) {
+      expect(isPromptCode(code)).toBe(true);
+    }
+    expect(isPromptCode('SQL_FAILED')).toBe(false);
+    expect(isPromptCode(undefined)).toBe(false);
   });
 });

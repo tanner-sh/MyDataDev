@@ -77,15 +77,20 @@ final class SqlFileStatementReader {
 
     static void read(Path path, Charset charset, String dbType, int maxStatementChars,
                      StatementConsumer consumer, ProgressConsumer progress) throws Exception {
-        readUnits(path, charset, dbType, maxStatementChars, unit -> consumer.accept(unit.index(), unit.sql()), progress);
+        read(path, charset, dbType, SqlScriptDelimiter.AUTO, maxStatementChars, consumer, progress);
     }
 
-    static void readUnits(Path path, Charset charset, String dbType, int maxStatementChars,
+    static void read(Path path, Charset charset, String dbType, SqlScriptDelimiter delimiter, int maxStatementChars,
+                     StatementConsumer consumer, ProgressConsumer progress) throws Exception {
+        readUnits(path, charset, dbType, delimiter, maxStatementChars, unit -> consumer.accept(unit.index(), unit.sql()), progress);
+    }
+
+    static void readUnits(Path path, Charset charset, String dbType, SqlScriptDelimiter delimiter, int maxStatementChars,
                           SqlScriptParser.UnitConsumer consumer, ProgressConsumer progress) throws Exception {
         try (CountingInputStream input = new CountingInputStream(Files.newInputStream(path));
              BufferedReader reader = new BufferedReader(new InputStreamReader(input, decoder(charset)), 128 * 1024)) {
             long[] lastProgress = {0};
-            SqlScriptParser.read(reader, dbType, maxStatementChars, unit -> {
+            SqlScriptParser.read(reader, dbType, maxStatementChars, delimiter, unit -> {
                 consumer.accept(unit);
                 if (input.count() - lastProgress[0] >= 4L * 1024 * 1024) {
                     lastProgress[0] = input.count();

@@ -89,3 +89,14 @@ describe('SQL session storage', () => {
     expect(session?.tabs[0].executionSchema).toBe('TARGET');
   });
 });
+
+describe('sql session delimiter', () => {
+  it('keeps a non-default delimiter per tab and drops invalid ones', () => {
+    const session = normalizeSqlSession({ version: 1, activeTabId: 'a', tabs: [
+      { id: 'a', sql: 'select 1', delimiter: { mode: 'CUSTOM', token: '!' } },
+      { id: 'b', sql: 'select 2', delimiter: { mode: 'CUSTOM', token: ';' } }
+    ] });
+    expect(session?.tabs[0].delimiter).toEqual({ mode: 'CUSTOM', token: '!' });
+    expect(session?.tabs[1].delimiter).toBeUndefined();
+  });
+});

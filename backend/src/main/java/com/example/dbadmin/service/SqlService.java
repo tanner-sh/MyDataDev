@@ -311,6 +311,18 @@ public class SqlService {
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction) throws Exception {
+        // 老入口：分隔方式固定为自动，不做分隔符识别也不问大脚本 —— 行为与这两项加入之前完全一致。
+        return executeScript(connectionId, sql, requestedMaxRows, requestedPageSize, actor, executionId, productionConfirmation, schemaName,
+                unscopedMutationConfirmed, transactionMode, endOfFileAction, SqlScriptDelimiter.AUTO, true, true);
+    }
+
+    /** 交互入口在要权限之前先过分隔符识别：DBeaver 那种脚本按默认规则根本切不开，权限检查会先报错。 */
+    public void requireDelimiterDecision(long connectionId, String sql, SqlScriptDelimiter delimiter, boolean delimiterChecked) {
+        scriptSplitter.requireDelimiterDecision(sql, connections.require(connectionId).dbType(), delimiter, delimiterChecked);
+    }
+
+    public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction,
+                                           SqlScriptDelimiter delimiter, boolean delimiterChecked, boolean largeScriptConfirmed) throws Exception {
         boolean scriptMode = "SCRIPT".equals(transactionMode);
         if (transactionMode != null && !java.util.Set.of("SCRIPT", "AUTO").contains(transactionMode)) throw new IllegalArgumentException("不支持的窗口事务模式。");
         String ending = endOfFileAction == null ? "ROLLBACK" : endOfFileAction;
@@ -322,16 +334,27 @@ public class SqlService {
         if (scriptMode && !SqlScriptSyntax.scriptTransactionsSupported(connections.require(connectionId).dbType())) {
             throw new IllegalArgumentException("脚本事务模式目前支持 Oracle 和 OceanBase Oracle。");
         }
-        List<StatementSegment> statements = scriptSplitter.split(sql, connections.require(connectionId).dbType());
+        SqlScriptSplitter.Split split = scriptSplitter.parseInteractive(sql, connections.require(connectionId).dbType(), delimiter, delimiterChecked);
+        List<StatementSegment> statements = split.segments();
         if (statements.isEmpty()) throw new IllegalArgumentException("请输入要执行的 SQL");
         int maxStatements = Math.max(1, properties.getSql().getMaxStatements());
         if (statements.size() > maxStatements) {
-            throw new IllegalArgumentException("一次最多执行 " + maxStatements + " 条 SQL；更大的脚本请使用“执行本地 SQL 文件”。");
+            throw new ApiProblemException(HttpStatus.BAD_REQUEST, "SCRIPT_TOO_LARGE",
+                    "脚本共 " + statements.size() + " 条，工作台一次最多执行 " + maxStatements + " 条；请改用后台执行。",
+                    java.util.Map.of("statementCount", statements.size(), "limit", maxStatements));
+        }
+        int largeThreshold = Math.max(1, properties.getSql().getLargeScriptThreshold());
+        if (!largeScriptConfirmed && statements.size() > largeThreshold) {
+            // 同步执行期间界面没有进度，几百条语句跑完之前一直是「执行中」；后台执行有进度、能取消。
+            throw new ApiProblemException(HttpStatus.CONFLICT, "LARGE_SCRIPT_CONFIRMATION_REQUIRED",
+                    "脚本共 " + statements.size() + " 条语句，建议改用后台执行：有进度、可取消，界面不会被占住。",
+                    java.util.Map.of("statementCount", statements.size(), "threshold", largeThreshold));
         }
 
         DbConnection dbConnection = connections.require(connectionId);
         List<StatementSegment> checkedStatements = java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbConnection.dbType().toLowerCase(java.util.Locale.ROOT))
-                ? statements.stream().flatMap(unit -> scriptSplitter.split(unit.sql()).stream()).toList() : statements;
+                ? statements.stream().flatMap(unit -> scriptSplitter.split(unit.sql()).stream()).toList()
+                : scriptSplitter.classificationUnits(statements, dbConnection.dbType(), delimiter);
         for (StatementSegment statement : checkedStatements) {
             if (scriptMode) SqlScriptSyntax.validateScriptControl(statement.sql());
             else if (SqlScriptSyntax.transaction(statement.sql()) != SqlScriptSyntax.Transaction.NONE) {
@@ -350,7 +373,7 @@ public class SqlService {
                 SqlStatementResult statementResult = new SqlStatementResult(
                         1, statements.get(0).sql(), statements.get(0).startOffset(), statements.get(0).endOffset(), "SUCCESS", null, result
                 );
-                return new SqlScriptResponse("SUCCESS", elapsedMs, 1, List.of(statementResult), false);
+                return new SqlScriptResponse("SUCCESS", elapsedMs, 1, List.of(statementResult), false).withNotices(split.notices());
             } catch (Exception e) {
                 history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsed(started), error(e), actor);
                 throw e;
@@ -449,7 +472,7 @@ public class SqlService {
             if ("SUCCESS".equals(status)) metrics.success(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted);
             else metrics.failure(SqlExecutionMetrics.KIND_SCRIPT, scriptStarted, null);
             return new SqlScriptResponse(status, elapsedMs, results.size(), results, metadataChanged,
-                    tx == null ? null : tx.summary());
+                    tx == null ? null : tx.summary()).withNotices(split.notices());
         } catch (Exception e) {
             long elapsedMs = elapsed(scriptStarted);
             history.insert(connectionId, sql, "EXECUTE_SCRIPT", "FAILED", elapsedMs, error(e), actor);

@@ -2,6 +2,8 @@ package com.example.dbadmin.service;
 
 import java.io.Reader;
 import java.io.PushbackReader;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -9,9 +11,14 @@ import java.util.regex.Pattern;
 /** Shared streaming lexer: all SQL entry points must use the same execution boundaries. */
 final class SqlScriptParser {
     record Unit(long index, String sql, long startOffset, long endOffset, int startLine, int endLine) { }
+    /** 解析过程中顺带说明的事：被忽略的 SQL*Plus 指令、PROMPT 文本、EXIT 之后被跳过的内容。 */
+    record Summary(List<String> notices) { }
     @FunctionalInterface interface UnitConsumer { void accept(Unit unit) throws Exception; }
-    static void read(Reader reader, String dbType, int maxChars, UnitConsumer consumer) throws Exception {
-        Parser parser = new Parser(dbType, maxChars, consumer);
+    static Summary read(Reader reader, String dbType, int maxChars, UnitConsumer consumer) throws Exception {
+        return read(reader, dbType, maxChars, SqlScriptDelimiter.AUTO, consumer);
+    }
+    static Summary read(Reader reader, String dbType, int maxChars, SqlScriptDelimiter delimiterMode, UnitConsumer consumer) throws Exception {
+        Parser parser = new Parser(dbType, maxChars, delimiterMode == null ? SqlScriptDelimiter.AUTO : delimiterMode, consumer);
         StringBuilder line = new StringBuilder();
         PushbackReader input = new PushbackReader(reader, 1);
         int c;
@@ -30,6 +37,7 @@ final class SqlScriptParser {
         }
         if (!line.isEmpty()) parser.acceptLine(line.toString());
         parser.finish();
+        return new Summary(List.copyOf(parser.notices));
     }
     static final class Parser {
         /** 这些 END 收的是 IF/LOOP/WHILE/REPEAT 语句，开头那个词本来就没计数，收尾也不该减。 */
@@ -38,6 +46,35 @@ final class SqlScriptParser {
                 "CREATE (?:OR REPLACE )?(?:DEFINER ?= ?(?:CURRENT_USER(?: ?\\( ?\\))?|\\S+) )?(?:SQL SECURITY (?:DEFINER|INVOKER) )?"
                         + "(?:AGGREGATE )?(?:PROCEDURE|FUNCTION|TRIGGER|EVENT)\\b.*|BEGIN NOT ATOMIC\\b.*");
         private static final Pattern SQLITE_COMPOUND_START = Pattern.compile("CREATE (?:TEMP |TEMPORARY )?TRIGGER\\b.*");
+        private static final Pattern PLSQL_END = Pattern.compile("(?is).*\\bEND(?:\\s+[\\p{L}\\p{N}_$#\"]+)?\\s*;");
+        /**
+         * PL/SQL 块（深度回到 0 且以 END …; 收尾）之后，下一行以这些词开头时，块一定已经结束了：
+         * 它们不可能是块的声明部分（声明部分只会是变量、游标、类型、子程序或 BEGIN）。BEGIN 与
+         * DECLARE 不在里面 —— 外层过程声明区里的嵌套子程序结束之后，紧跟的正是外层的 BEGIN。
+         */
+        private static final Set<String> TOP_LEVEL_STARTS = Set.of(
+                "CREATE", "ALTER", "DROP", "INSERT", "UPDATE", "DELETE", "MERGE", "SELECT", "WITH", "GRANT", "REVOKE",
+                "COMMENT", "TRUNCATE", "COMMIT", "ROLLBACK", "SAVEPOINT", "CALL", "EXEC", "EXECUTE", "RENAME", "ANALYZE",
+                "LOCK", "PURGE", "FLASHBACK", "AUDIT", "NOAUDIT", "SET", "PROMPT", "PRO", "REM", "REMARK", "SPOOL", "SPO",
+                "WHENEVER", "EXIT", "QUIT", "SHOW", "SHO", "DEFINE", "DEF", "UNDEFINE", "UNDEF", "COLUMN", "COL",
+                "CLEAR", "CL", "TTITLE", "BTITLE", "BREAK", "COMPUTE");
+        /** SQL*Plus 的显示类设置：对脚本执行没有影响，忽略并在结果里说明。不在清单里的 SET 当作 SQL（SET TRANSACTION、SET ROLE）。 */
+        private static final Pattern SQLPLUS_SET = Pattern.compile(
+                "SET\\s+(?:DEFINE|DEF|SERVEROUTPUT|SERVEROUT|ECHO|FEEDBACK|FEED|VERIFY|VER|TIMING|TIMI|LINESIZE|LIN|LINES|"
+                        + "PAGESIZE|PAGES|HEADING|HEA|TERMOUT|TERM|TRIMSPOOL|TRIMS|TRIMOUT|TRIM|SQLBLANKLINES|SQLBL|SCAN|ESCAPE|ESC|"
+                        + "LONG|LONGCHUNKSIZE|NUMWIDTH|NUMW|COLSEP|WRAP|TAB|TIME|AUTOPRINT|SHOWMODE|CONCAT|NULL|UNDERLINE|NEWPAGE|"
+                        + "EMBEDDED|ARRAYSIZE|COPYCOMMIT|MARKUP|APPINFO|EXITCOMMIT|SQLPROMPT|SQLTERMINATOR|SQLT|HEADSEP|PAUSE|"
+                        + "BLOCKTERMINATOR|BLO|CMDSEP|NUMFORMAT|RECSEP|RECSEPCHAR|SUFFIX|LOBOFFSET|FLUSH|SECUREDCOL|ERRORLOGGING|"
+                        + "SQLCASE|STATEMENTCACHE|XQUERY|DESCRIBE|INSTANCE|EDITFILE|AUTOTRACE|AUTOT)\\b.*");
+        private final String customDelimiter;
+        private final boolean blankLineDelimiter;
+        private final boolean sqlPlus;
+        private final Set<String> notices = new LinkedHashSet<>();
+        private int plsqlDepth;
+        private boolean blockComplete;
+        /** blockComplete 成立时，块的代码在 statement 里结束的位置；其后的空白与注释属于下一条。 */
+        private int blockEndLength;
+        private boolean exited;
         private final boolean mysql;
         private final boolean backslashEscapes;
         private final boolean sqlServer;
@@ -70,8 +107,13 @@ final class SqlScriptParser {
         private boolean pendingEnd;
         private Boolean compoundStatement;
 
-        Parser(String dbType, int maxStatementChars, UnitConsumer consumer) {
+        Parser(String dbType, int maxStatementChars, SqlScriptDelimiter delimiterMode, UnitConsumer consumer) {
             String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+            this.customDelimiter = delimiterMode.mode() == SqlScriptDelimiter.Mode.CUSTOM ? delimiterMode.token() : null;
+            this.blankLineDelimiter = delimiterMode.mode() == SqlScriptDelimiter.Mode.BLANK_LINE;
+            // 只对明确的 Oracle 系连接认 SQL*Plus 指令；"generic" 也走 Oracle 词法，但 MySQL 的 SHOW ERRORS
+            // 这类真 SQL 不能被当成客户端指令吞掉。
+            this.sqlPlus = Set.of("oracle", "dm", "dameng", "oceanbase-oracle").contains(type);
             this.mysql = type.equals("mysql") || type.equals("mariadb") || type.equals("oceanbase-mysql");
             this.backslashEscapes = mysql || type.equals("clickhouse");
             this.sqlServer = type.equals("sqlserver") || type.equals("sql-server") || type.equals("mssql");
@@ -84,7 +126,30 @@ final class SqlScriptParser {
         void acceptLine(String line) throws Exception {
             String trimmed = line.trim();
             cursorOffset = 0;
-            if (cleanState()) {
+            if (exited) {
+                advance(line);
+                return;
+            }
+            if (customDelimiter != null) {
+                // 自定义分隔符：只有独占一行的分隔符是边界，分号、/、GO、DELIMITER 一律不再起作用。
+                if (cleanState() && trimmed.equals(customDelimiter)) {
+                    emitWithoutTrailingSemicolon();
+                    advance(line);
+                    return;
+                }
+            } else if (blankLineDelimiter && trimmed.isEmpty() && cleanState() && statementStarted && !blankLineInsideBlock()) {
+                emitWithoutTrailingSemicolon();
+                advance(line);
+                return;
+            }
+            if (customDelimiter == null && cleanState()) {
+                // 上一个 PL/SQL 块已经完整（深度回到 0、以 END …; 收尾），下一行又是一条新语句的开头：
+                // 没写 / 也能确定块在这里结束。SQL*Plus 要求 /，但 PL/SQL Developer、DBeaver 导出的脚本经常不写。
+                if (oracle && oracleBlock && blockComplete && startsTopLevelStatement(trimmed)) {
+                    emitCompletedBlock();
+                }
+            }
+            if (customDelimiter == null && cleanState()) {
                 if (mysql && !statementStarted && trimmed.toUpperCase(Locale.ROOT).startsWith("DELIMITER ")) {
                     String next = trimmed.substring("DELIMITER".length()).trim();
                     if (next.isBlank() || next.length() > 16 || next.chars().anyMatch(Character::isWhitespace)) {
@@ -114,13 +179,20 @@ final class SqlScriptParser {
                 // 有的库只编译前一个对象就返回成功，后一个对象悄无声息地没建。例程正文里不可能出现顶层 CREATE，
                 // 所以 END; 之后紧跟的 CREATE 一定是漏写了分隔符：宁可整份脚本在执行前被拒，也不要静默少建一个对象。
                 if (oracle && oracleBlock && trimmed.matches("(?is)CREATE\\b.*")
-                        && codeTail.toString().stripTrailing().matches("(?is).*\\bEND(?:\\s+[\\p{L}\\p{N}_$#\"]+)?\\s*;")) {
-                    throw failure("上一个 PL/SQL 块缺少独占行 /，下一条 CREATE 会被并入同一条语句而不会单独执行");
+                        && PLSQL_END.matcher(codeTail.toString().stripTrailing()).matches()) {
+                    throw failure("上一个 PL/SQL 块缺少独占行 /，且无法确认它在哪里结束（BEGIN 与 END 没有配平），下一条 CREATE 会被并入同一条语句");
                 }
             }
 
-            if (!blockDetected && cleanState() && !statementStarted && trimmed.matches("(?i)(PROMPT|SPOOL|WHENEVER|SET SERVEROUTPUT|@@?)\\b.*")) {
-                throw failure("暂不支持该客户端指令");
+            if (!blockDetected && cleanState() && !statementStarted) {
+                if (sqlPlus) {
+                    if (sqlPlusCommand(line, trimmed)) {
+                        advance(line);
+                        return;
+                    }
+                } else if (trimmed.matches("(?i)(PROMPT|SPOOL|WHENEVER|SET SERVEROUTPUT|@@?)\\b.*")) {
+                    throw failure("暂不支持该客户端指令");
+                }
             }
             boolean lineComment = false;
             for (int cursor = 0; cursor < line.length(); cursor++) {
@@ -182,7 +254,7 @@ final class SqlScriptParser {
                     continue;
                 }
 
-                if (compoundStart != null) trackCompoundBlock(current, next);
+                if (compoundStart != null || oracle) trackCompoundBlock(current, next);
                 if (oracle && !(current == '-' && next == '-') && !(current == '/' && next == '*')) {
                     // Track only lexical code, so '--' inside a quoted value cannot hide the real END;.
                     boolean quoteStart = current == '\'' || current == '"' || current == '`' || current == '['
@@ -190,7 +262,10 @@ final class SqlScriptParser {
                     codeTail.append(quoteStart ? 'Q' : current);
                     if (codeTail.length() > 256) codeTail.deleteCharAt(0);
                 }
-                if (!Character.isWhitespace(current) && !(current == '-' && next == '-') && !(current == '/' && next == '*')) statementStarted = true;
+                if (!Character.isWhitespace(current) && !(current == '-' && next == '-') && !(current == '/' && next == '*')) {
+                    statementStarted = true;
+                    blockComplete = false;
+                }
                 if (current == '-' && next == '-') {
                     if (oracle) codeTail.append(' ');
                     append(next);
@@ -219,11 +294,21 @@ final class SqlScriptParser {
                     }
                 }
 
-                if (current == ';' && cleanState() && oracle && !blockDetected) {
-                    oracleBlock = isOracleBlockStart(SqlScriptSyntax.leadingSql(statement.toString()));
-                    blockDetected = true;
+                if (current == ';' && cleanState() && oracle && customDelimiter == null) {
+                    if (!blockDetected) {
+                        String prefix = SqlScriptSyntax.leadingSql(statement.toString());
+                        oracleBlock = isOracleBlockStart(prefix);
+                        blockDetected = true;
+                        if (oracleBlock) plsqlDepth += plsqlBaseDepth(prefix);
+                    }
+                    if (oracleBlock) {
+                        String prefix = normalizedPrefix();
+                        blockComplete = isTypeSpec(prefix)
+                                || (plsqlDepth <= 0 && PLSQL_END.matcher(codeTail.toString().stripTrailing()).matches());
+                        blockEndLength = statement.length();
+                    }
                 }
-                if (cleanState() && !sqlServer && !(oracle && oracleBlock) && endsWithDelimiter() && !insideCompoundBlock()) {
+                if (customDelimiter == null && cleanState() && !sqlServer && !(oracle && oracleBlock) && endsWithDelimiter() && !insideCompoundBlock()) {
                     statement.setLength(statement.length() - delimiter.length());
                     emit();
                 }
@@ -233,16 +318,186 @@ final class SqlScriptParser {
 
         void finish() throws Exception {
             if (!cleanState()) throw failure("SQL 存在未闭合的字符串或注释。");
+            if (exited) return;
+            if (customDelimiter != null) {
+                // 最后一条后面常常不再写分隔符。
+                emitWithoutTrailingSemicolon();
+                return;
+            }
             validateBlockEnd();
+            if (blankLineDelimiter) emitWithoutTrailingSemicolon();
+            else emit();
+        }
+
+        /**
+         * 自定义分隔符与空行分隔下，语句末尾的分号是可写可不写的。Oracle JDBC 执行带分号的普通语句会报
+         * ORA-00911，所以去掉；但 PL/SQL 块的 END; 是语法的一部分，必须留着。
+         */
+        private void emitWithoutTrailingSemicolon() throws Exception {
+            String raw = statement.toString();
+            boolean plsqlBlock = oracle && isOracleBlockStart(SqlScriptSyntax.leadingSql(raw));
+            if (!plsqlBlock) {
+                int last = lastCodeCharacter(raw);
+                if (last >= 0 && raw.charAt(last) == ';') statement.deleteCharAt(last);
+            }
             emit();
+        }
+
+        /** 最后一个不在注释里的字符的位置；字符串里的字符算代码。 */
+        private int lastCodeCharacter(String sql) {
+            int last = -1;
+            boolean quoted = false;
+            boolean doubled = false;
+            boolean comment = false;
+            for (int i = 0; i < sql.length(); i++) {
+                char c = sql.charAt(i);
+                char n = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
+                if (comment) {
+                    if (c == '*' && n == '/') { comment = false; i++; }
+                    continue;
+                }
+                if (quoted) {
+                    if (c == '\'') quoted = false;
+                    last = i;
+                    continue;
+                }
+                if (doubled) {
+                    if (c == '"') doubled = false;
+                    last = i;
+                    continue;
+                }
+                if (c == '-' && n == '-') {
+                    while (i < sql.length() && sql.charAt(i) != '\n') i++;
+                    continue;
+                }
+                if (c == '/' && n == '*') { comment = true; i++; continue; }
+                if (c == '\'') quoted = true;
+                else if (c == '"') doubled = true;
+                if (!Character.isWhitespace(c)) last = i;
+            }
+            return last;
+        }
+
+        /** 块之后、下一条语句之前的注释（「-- 第 2 条」这类）跟着下一条走，不粘在过程源码的末尾。 */
+        private void emitCompletedBlock() throws Exception {
+            String trailing = statement.substring(Math.min(blockEndLength, statement.length()));
+            long trailingOffset = statementOffset + blockEndLength;
+            int trailingLine = statementLine + countLines(statement.substring(0, Math.min(blockEndLength, statement.length())));
+            statement.setLength(Math.min(blockEndLength, statement.length()));
+            emit();
+            if (!trailing.isEmpty()) {
+                statement.append(trailing);
+                statementOffset = trailingOffset;
+                statementLine = trailingLine;
+            }
+        }
+
+        /** 空行分隔是「聪明」的那种：PL/SQL 块、MySQL/SQLite 例程、SQL Server 例程内部的空行不算边界。 */
+        private boolean blankLineInsideBlock() {
+            String prefix = SqlScriptSyntax.leadingSql(statement.toString());
+            if (oracle && isOracleBlockStart(prefix)) return true;
+            String normalized = prefix.replaceAll("(?s)/\\*.*?\\*/|--[^\\r\\n]*", " ").toUpperCase(Locale.ROOT).replaceAll("\\s+", " ").trim();
+            if (compoundStart != null && compoundStart.matcher(normalized).matches()) return true;
+            return sqlServer && normalized.matches("(?:CREATE(?: OR ALTER)?|ALTER) (?:PROC(?:EDURE)?|FUNCTION|TRIGGER)\\b.*");
+        }
+
+        private String normalizedPrefix() {
+            return SqlScriptSyntax.leadingSql(statement.toString()).replaceAll("(?s)/\\*.*?\\*/|--[^\\r\\n]*", " ")
+                    .toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
+        }
+
+        private static boolean isTypeSpec(String normalizedPrefix) {
+            return normalizedPrefix.matches("CREATE( OR REPLACE)?( (?:NON)?EDITIONABLE)? TYPE (?!BODY\\b).*\\b(?:OBJECT|TABLE|VARRAY)\\b.*");
+        }
+
+        /** 包、类型体、复合触发器最外层没有 BEGIN，最后那个 END 收的是对象本身，所以从第 1 层算起。 */
+        private int plsqlBaseDepth(String prefix) {
+            String normalized = prefix.replaceAll("(?s)/\\*.*?\\*/|--[^\\r\\n]*", " ").toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
+            if (normalized.matches("CREATE( OR REPLACE)?( (?:NON)?EDITIONABLE)? (?:PACKAGE|TYPE BODY)\\b.*")) return 1;
+            return normalized.matches("CREATE( OR REPLACE)?( (?:NON)?EDITIONABLE)? TRIGGER\\b.*\\bCOMPOUND TRIGGER\\b.*") ? 1 : 0;
+        }
+
+        private boolean startsTopLevelStatement(String trimmed) {
+            if (trimmed.isEmpty() || trimmed.equals("/")) return false;
+            if (trimmed.startsWith("@")) return true;
+            int end = 0;
+            while (end < trimmed.length() && (Character.isLetter(trimmed.charAt(end)))) end++;
+            return end > 0 && TOP_LEVEL_STARTS.contains(trimmed.substring(0, end).toUpperCase(Locale.ROOT));
+        }
+
+        /**
+         * SQL*Plus 客户端指令。它们不是 SQL，不能发给数据库；按行生效，分号可写可不写。
+         *
+         * @return true 表示这一行已经处理掉（忽略或换成了等价的 SQL）
+         */
+        private boolean sqlPlusCommand(String line, String trimmed) throws Exception {
+            String command = trimmed.endsWith(";") ? trimmed.substring(0, trimmed.length() - 1).trim() : trimmed;
+            String upper = command.toUpperCase(Locale.ROOT);
+            if (upper.isEmpty()) return false;
+            if (upper.startsWith("@") || upper.matches("START\\s+\\S+.*")) {
+                throw failure("不支持用 @ / START 引用其他脚本文件，请把内容合并进当前脚本");
+            }
+            if (upper.matches("CONN(?:ECT)?(?:\\s.*)?") || upper.matches("DISC(?:ONNECT)?")) throw failure("不支持在脚本里切换连接（CONNECT）");
+            if (upper.matches("HOST(?:\\s.*)?")) throw failure("不支持在脚本里执行操作系统命令（HOST）");
+            if (upper.matches("(?:ACC(?:EPT)?|PAU(?:SE)?|VAR(?:IABLE)?|PRI(?:NT)?)(?:\\s.*)?")) {
+                throw failure("不支持需要交互或绑定变量的 SQL*Plus 指令：" + command.split("\\s+")[0]);
+            }
+            if (upper.matches("WHENEVER\\s+SQLERROR\\s+CONTINUE\\b.*")) {
+                throw failure("暂不支持 WHENEVER SQLERROR CONTINUE（遇错继续）；当前遇到错误会停在出错的那一条");
+            }
+            if (upper.matches("(?:EXIT|QUIT)\\b.*")) {
+                exited = true;
+                notice("遇到 " + command + "：其后的内容按 SQL*Plus 的规则不再执行");
+                return true;
+            }
+            if (upper.matches("REM(?:ARK)?(?:\\s.*)?")) return true;
+            if (upper.matches("PRO(?:MPT)?(?:\\s.*)?")) {
+                String text = command.replaceFirst("(?i)^PRO(?:MPT)?\\s*", "");
+                notice("PROMPT " + (text.length() > 200 ? text.substring(0, 200) + "…" : text));
+                return true;
+            }
+            if (SQLPLUS_SET.matcher(upper).matches()) {
+                notice(upper.matches("SET\\s+SERVEROUT(?:PUT)?\\b.*")
+                        ? "已忽略 " + command + "：SQL 工作台暂不显示 DBMS_OUTPUT"
+                        : "已忽略 SQL*Plus 设置：" + command);
+                return true;
+            }
+            if (upper.matches("WHENEVER\\s+(?:SQLERROR|OSERROR)\\b.*")) {
+                notice("已忽略 " + command + "：遇到错误本来就会停止执行");
+                return true;
+            }
+            if (upper.matches("(?:SPO(?:OL)?|DEF(?:INE)?|UNDEF(?:INE)?|COL(?:UMN)?|CL(?:EAR)?|TTI(?:TLE)?|BTI(?:TLE)?|BRE(?:AK)?|COMP(?:UTE)?)(?:\\s.*)?")
+                    || upper.matches("SHO(?:W)?\\s+ERR(?:ORS)?\\b.*")) {
+                notice("已忽略 SQL*Plus 指令：" + command + (upper.startsWith("DEF") ? "（本工具不做 & 变量替换）" : ""));
+                return true;
+            }
+            if (upper.matches("EXEC(?:UTE)?\\s+.+")) {
+                // EXEC proc(args) 是 SQL*Plus 对 BEGIN proc(args); END; 的简写。
+                String call = command.replaceFirst("(?i)^EXEC(?:UTE)?\\s+", "");
+                emitSynthetic("BEGIN " + call + "; END;", line);
+                return true;
+            }
+            return false;
+        }
+
+        private void notice(String text) {
+            if (notices.size() < 100) notices.add(text);
+        }
+
+        /** 换写成另一条 SQL 的指令行：偏移与行号仍指向源文件里的那一行，报错时能定位回去。 */
+        private void emitSynthetic(String sql, String line) throws Exception {
+            int leading = line.length() - line.stripLeading().length();
+            long start = sourceOffset + leading;
+            statement.setLength(0);
+            codeTail.setLength(0);
+            consumer.accept(new Unit(++index, sql, start, start + line.strip().length(), lineNumber, lineNumber));
         }
 
         private void validateBlockEnd() {
             if (!oracleBlock) return;
             String sql = codeTail.toString().stripTrailing();
-            String prefix = SqlScriptSyntax.leadingSql(statement.toString()).replaceAll("(?s)/\\*.*?\\*/|--[^\\r\\n]*", " ").toUpperCase(Locale.ROOT).replaceAll("\\s+", " ");
-            boolean typeSpec = prefix.matches("CREATE( OR REPLACE)?( (?:NON)?EDITIONABLE)? TYPE (?!BODY\\b).*\\b(?:OBJECT|TABLE|VARRAY)\\b.*");
-            if (!typeSpec && !sql.matches("(?is).*\\bEND(?:\\s+[\\p{L}\\p{N}_$#\"]+)?\\s*;")) {
+            boolean typeSpec = isTypeSpec(normalizedPrefix());
+            if (!typeSpec && !PLSQL_END.matcher(sql).matches()) {
                 throw failure("PL/SQL 块未完整结束，需要 END; 和独占行 /");
             }
         }
@@ -299,6 +554,8 @@ final class SqlScriptParser {
             blockDetected = false;
             word.setLength(0);
             compoundDepth = 0;
+            plsqlDepth = 0;
+            blockComplete = false;
             pendingEnd = false;
             compoundStatement = null;
             if (sql.isBlank() || SqlScriptSyntax.leadingSql(sql).isBlank()) return;
@@ -329,6 +586,7 @@ final class SqlScriptParser {
             if (pendingEnd && !Character.isWhitespace(current) && !commentStart) {
                 pendingEnd = false;
                 compoundDepth = Math.max(0, compoundDepth - 1);
+                plsqlDepth--;
             }
         }
 
@@ -338,9 +596,13 @@ final class SqlScriptParser {
             word.setLength(0);
             if (pendingEnd) {
                 pendingEnd = false;
-                if (!UNCOUNTED_END_SUFFIXES.contains(value)) compoundDepth = Math.max(0, compoundDepth - 1);
+                if (!UNCOUNTED_END_SUFFIXES.contains(value)) {
+                    compoundDepth = Math.max(0, compoundDepth - 1);
+                    plsqlDepth--;
+                }
             } else if (value.equals("BEGIN") || value.equals("CASE")) {
                 compoundDepth++;
+                plsqlDepth++;
             } else if (value.equals("END")) {
                 pendingEnd = true;
             }
