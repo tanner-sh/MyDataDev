@@ -41,9 +41,15 @@ type EditableTableProps = {
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
+  /** 勾选的行（批量操作）；不传就没有勾选列。 */
+  selectedRowIds?: string[];
+  onSelectionChange?: (rowIds: string[]) => void;
 };
 
-export const EditableTable = memo(function EditableTable({ metadataSource, dbType, initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
+/** 勾选列的宽度：计入表格总宽，否则补白列会多算出这一截，出现横向滚动条。 */
+const SELECTION_COLUMN_WIDTH = 36;
+
+export const EditableTable = memo(function EditableTable({ metadataSource, dbType, initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation, selectedRowIds, onSelectionChange }: EditableTableProps) {
   const tableRef = useRef<TableRef>(null);
   const lastScrolledDataRef = useRef<TableData | null>(null);
   const [largeEditor, setLargeEditor] = useState<{ rowId: string; column: TableColumn; value: string }>();
@@ -295,7 +301,8 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
 
   if (!data) return <PanelEmpty title="点击左侧对象树中的表来浏览数据" fill />;
 
-  const contentWidth = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160), 58);
+  const contentWidth = data.columns.reduce((total, column) => total + (columnWidths[column.name] || suggestedWidths.get(column.name) || 160),
+    58 + (onSelectionChange ? SELECTION_COLUMN_WIDTH : 0));
   // 列宽之和填不满视口时补一列空白，让各列保住按内容估出的宽度（见 fillerColumnWidth）。
   const filler = fillerColumnWidth(contentWidth, viewportWidth);
   const scrollX = contentWidth + filler;
@@ -358,6 +365,14 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
           pagination={false}
           virtual
           rowClassName={rowClassName}
+          rowSelection={onSelectionChange ? {
+            columnWidth: SELECTION_COLUMN_WIDTH,
+            fixed: 'left',
+            selectedRowKeys: selectedRowIds,
+            // 按住 Shift 点两个勾选框选中中间一段，antd 自带；表头勾选框选的是这一页。
+            onChange: (keys) => onSelectionChange(keys.map(String)),
+            getCheckboxProps: () => ({ 'aria-label': '选择此行' })
+          } : undefined}
           scroll={{ x: scrollX, y: scrollY }}
         />
         </div>

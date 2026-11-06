@@ -2828,6 +2828,17 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
   }
 
+  /** 批量操作（TableBatchBar）算好的整份新行：与逐格编辑一样进撤销栈，超出单次可提交变更数就拒绝。 */
+  const applyBatchRows = useStableEvent((nextRows: TableRow[]) => {
+    if (buildChanges(nextRows, tableData?.keyColumns || []).length > MAX_TABLE_CHANGES) {
+      showInfo(`单次最多提交 ${MAX_TABLE_CHANGES} 项变更，请先提交当前修改或少选一些行。`);
+      return false;
+    }
+    tableEdits.editRows(nextRows);
+    setPreviewSql([]);
+    return true;
+  });
+
   const deleteRow = useCallback((rowId: string) => {
     tableEdits.editRows((rows) => rows.flatMap((row) => {
       if (row.id !== rowId) return [row];
@@ -3803,6 +3814,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onCommit={commitTableChangesEvent}
                 onEdit={editCell}
                 onDelete={deleteRow}
+                onBatchRows={applyBatchRows}
                 foreignKeys={tableForeignKeys}
                 onFollowRelation={followRelationEvent}
               />

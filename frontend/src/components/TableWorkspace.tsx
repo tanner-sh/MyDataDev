@@ -29,6 +29,8 @@ import { canCountTableRows, IDLE_TABLE_ROW_COUNT, tablePageSummary, type TableRo
 import type { RelationTarget } from '../relationNavigation';
 import type { TableQuery } from '../tableQuery';
 import { TableQueryBuilder } from './TableQueryBuilder';
+import { TableBatchBar } from './TableBatchBar';
+import { liveSelection } from '../tableBatchEdit';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -74,6 +76,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCommit,
   onEdit,
   onDelete,
+  onBatchRows,
   foreignKeys,
   onFollowRelation,
   onPageChange,
@@ -113,6 +116,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   onCommit: () => void;
   onEdit: (rowId: string, column: string, value: unknown) => void;
   onDelete: (rowId: string) => void;
+  /** 批量操作算好的整份新行；返回 false 表示被拒（超出单次可提交的变更数）。 */
+  onBatchRows?: (rows: TableRow[]) => boolean;
   foreignKeys?: Map<string, RelationTarget>;
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
   onPageChange?: (page: number) => void;
@@ -120,6 +125,11 @@ export const TableWorkspace = memo(function TableWorkspace({
   onTableQueryChange: (query: TableQuery) => void;
 }) {
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
+  // 翻页、刷新、移除新增行之后，旧 id 不在表格里了：按当前这份行筛一遍再用。
+  const selection = useMemo(() => liveSelection(tableRows, selectedRowIds), [tableRows, selectedRowIds]);
+  const targetTableParts = useMemo(() => activeTable ? [activeTable.schemaName, activeTable.tableName].filter((part): part is string => Boolean(part)) : undefined,
+    [activeTable?.schemaName, activeTable?.tableName]);
   const importInputRef = useRef<HTMLInputElement>(null);
   const activeTableKey = activeTable ? `${activeTable.schemaName || ''}.${activeTable.tableName}` : '';
   const metadataSource = useMemo(() => connectionId != null && activeTable
@@ -158,6 +168,11 @@ export const TableWorkspace = memo(function TableWorkspace({
   useEffect(() => {
     setPreviewOpen(false);
   }, [activeTableKey]);
+
+  // 换表、翻页、刷新都会换一份 tableData：勾选跟着清掉，不把上一页的「已选 N 行」带过来。
+  useEffect(() => {
+    setSelectedRowIds([]);
+  }, [tableData]);
 
   useEffect(() => {
     if (previewSql.length === 0 && !loading) setPreviewOpen(false);
@@ -285,26 +300,42 @@ export const TableWorkspace = memo(function TableWorkspace({
         </div>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable metadataSource={metadataSource} dbType={dbType} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
+        <EditableTable metadataSource={metadataSource} dbType={dbType} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation}
+          selectedRowIds={onBatchRows ? selection : undefined} onSelectionChange={onBatchRows ? setSelectedRowIds : undefined} />
       </div>
       <div className="grid-pagination table-pagination">
-        <Space size={8} className="grid-pagination-summary">
-          <Text type="secondary">{tablePageSummary(page, tableRows.length, rowCount)}</Text>
-          {rowCount.status !== 'ready' && onCountRows && (
-            <Tooltip title="对当前表执行 COUNT(*)。大表可能较慢，因此不随翻页自动统计。">
-              <Button
-                size="small"
-                type="link"
-                icon={<CalculatorOutlined />}
-                loading={rowCount.status === 'loading'}
-                disabled={!canCountTableRows(rowCount, Boolean(tableData), loading)}
-                onClick={onCountRows}
-              >
-                统计总行数
-              </Button>
-            </Tooltip>
-          )}
-        </Space>
+        {/* 勾选后批量操作栏替换左侧的页码摘要：放在底栏而不是表格上方，出现时表格不会整体下移，
+            连续点勾选框（含 Shift 连选）不会点错行。 */}
+        {tableData && selection.length > 0 && onBatchRows ? (
+          <TableBatchBar
+            data={tableData}
+            rows={tableRows}
+            selected={selection}
+            editingDisabled={editingDisabled || loading}
+            dbType={dbType}
+            targetTableParts={targetTableParts}
+            onApply={onBatchRows}
+            onClearSelection={() => setSelectedRowIds([])}
+          />
+        ) : (
+          <Space size={8} className="grid-pagination-summary">
+            <Text type="secondary">{tablePageSummary(page, tableRows.length, rowCount)}</Text>
+            {rowCount.status !== 'ready' && onCountRows && (
+              <Tooltip title="对当前表执行 COUNT(*)。大表可能较慢，因此不随翻页自动统计。">
+                <Button
+                  size="small"
+                  type="link"
+                  icon={<CalculatorOutlined />}
+                  loading={rowCount.status === 'loading'}
+                  disabled={!canCountTableRows(rowCount, Boolean(tableData), loading)}
+                  onClick={onCountRows}
+                >
+                  统计总行数
+                </Button>
+              </Tooltip>
+            )}
+          </Space>
+        )}
         <Space size={8} wrap={false} className="table-pagination-actions">
           <Text type="secondary">每页</Text>
           <Select
