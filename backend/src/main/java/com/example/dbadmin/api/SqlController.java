@@ -13,6 +13,7 @@ import com.example.dbadmin.dto.ApiDtos.SqlResult;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptRequest;
 import com.example.dbadmin.dto.ApiDtos.SqlScriptResponse;
 import com.example.dbadmin.service.ExportService;
+import com.example.dbadmin.service.SqlScriptDelimiter;
 import com.example.dbadmin.service.SqlService;
 import com.example.dbadmin.auth.WebIdentity;
 import org.springframework.security.core.Authentication;
@@ -74,12 +75,16 @@ public class SqlController {
             @RequestHeader(value = "X-User", required = false) String actor,
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
-        access.requireSql(request.connectionId(), request.sql());
+        SqlScriptDelimiter delimiter = SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter());
+        access.requireAnyAccess(request.connectionId());
+        sqlService.requireDelimiterDecision(request.connectionId(), request.sql(), delimiter, request.delimiterChecked());
+        access.requireSql(request.connectionId(), request.sql(), delimiter);
         if ("SCRIPT".equals(request.transactionMode())) access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
         if ("SCRIPT".equals(request.transactionMode()) && transactions.active(request.connectionId()) != null) {
             throw new IllegalArgumentException("请先结束该连接的手动事务，再执行脚本事务。");
         }
-        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed(), request.transactionMode(), request.endOfFileAction());
+        return sqlService.executeScript(request.connectionId(), request.sql(), request.maxRows(), request.pageSize(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed(), request.transactionMode(), request.endOfFileAction(),
+                delimiter, true, request.largeScriptConfirmed());
     }
 
     @PostMapping("/query-page")

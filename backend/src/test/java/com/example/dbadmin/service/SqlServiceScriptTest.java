@@ -372,9 +372,13 @@ class SqlServiceScriptTest {
 
         assertThat(service.executeScript(1L, selectScript(2), 10, "admin").executedCount()).isEqualTo(2);
         assertThatThrownBy(() -> service.executeScript(1L, selectScript(3), 10, "admin"))
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("一次最多执行 2 条 SQL")
-                .hasMessageContaining("执行本地 SQL 文件");
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    // 带上码与条数，界面据此给出「改用后台执行」的按钮，而不只是一句话。
+                    assertThat(problem.code()).isEqualTo("SCRIPT_TOO_LARGE");
+                    assertThat(problem.details()).containsEntry("statementCount", 3).containsEntry("limit", 2);
+                })
+                .hasMessageContaining("一次最多执行 2 条")
+                .hasMessageContaining("后台执行");
     }
 
     @Test
@@ -413,6 +417,67 @@ class SqlServiceScriptTest {
                 .contains("\n    LEFT JOIN roles")
                 .contains("\nWHERE users.name")
                 .contains("'A  B'");
+    }
+
+    @Test
+    void asksBeforeSwitchingToADetectedDelimiterAndRunsTheScriptOnceConfirmed() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20))");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+        // DBeaver「自定义分隔符」导出的样子：独占行的 !，普通语句不写分号。
+        String script = "-- exported\nINSERT INTO users VALUES (1, 'a!b')\n!\nINSERT INTO users VALUES (2, 'b');\n!\nSELECT COUNT(*) FROM users\n!\n";
+
+        assertThatThrownBy(() -> service.requireDelimiterDecision(1L, script, SqlScriptDelimiter.AUTO, false))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("SCRIPT_DELIMITER_DETECTED");
+                    assertThat(problem.details()).containsEntry("delimiter", "!").containsEntry("statementCount", 3);
+                });
+
+        SqlScriptResponse response = service.executeScript(1L, script, 500, null, "admin", null, null, null, false, null, null,
+                SqlScriptDelimiter.custom("!"), true, false);
+        assertThat(response.status()).isEqualTo("SUCCESS");
+        assertThat(response.executedCount()).isEqualTo(3);
+        assertThat(response.results().get(2).result().rows().get(0)).containsExactly("2");
+        assertThat(response.notices()).first().asString().contains("独占行 !").contains("3 条");
+    }
+
+    @Test
+    void largeScriptsAskFirstAndScriptsOverTheHardLimitPointToTheBackground() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        AppProperties properties = new AppProperties();
+        properties.getSql().setLargeScriptThreshold(3);
+        properties.getSql().setMaxStatements(5);
+        SqlService service = service(url, mock(SqlHistoryRepository.class), mock(MetadataService.class), properties);
+
+        assertThatThrownBy(() -> service.executeScript(1L, "select 1; select 2; select 3; select 4;", 500, null, "admin", null, null, null,
+                false, null, null, SqlScriptDelimiter.AUTO, true, false))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("LARGE_SCRIPT_CONFIRMATION_REQUIRED");
+                    assertThat(problem.details()).containsEntry("statementCount", 4);
+                });
+        assertThat(service.executeScript(1L, "select 1; select 2; select 3; select 4;", 500, null, "admin", null, null, null,
+                false, null, null, SqlScriptDelimiter.AUTO, true, true).executedCount()).isEqualTo(4);
+        assertThatThrownBy(() -> service.executeScript(1L, "select 1; select 2; select 3; select 4; select 5; select 6;", 500, null, "admin",
+                null, null, null, false, null, null, SqlScriptDelimiter.AUTO, true, true))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> assertThat(problem.code()).isEqualTo("SCRIPT_TOO_LARGE"));
+        // 老入口不问：行为与这两项加入之前一致。
+        assertThat(service.executeScript(1L, "select 1; select 2; select 3; select 4;", 500, null, "admin", null, null, null, false)
+                .executedCount()).isEqualTo(4);
+    }
+
+    @Test
+    void aCustomSegmentHidingASecondStatementIsStillCheckedStatementByStatement() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY, name VARCHAR(20))");
+        }
+        SqlService service = service(url, mock(SqlHistoryRepository.class));
+        // 分号不再分段，但一段里藏着的无 WHERE 更新仍然要被认出来。
+        assertThatThrownBy(() -> service.executeScript(1L, "SELECT 1; UPDATE users SET name = 'x'\n!\n", 500, null, "admin", null, null, null,
+                false, null, null, SqlScriptDelimiter.custom("!"), true, true))
+                .isInstanceOfSatisfying(ApiProblemException.class, problem -> assertThat(problem.code()).isEqualTo("UNSCOPED_MUTATION_CONFIRMATION_REQUIRED"));
     }
 
     private SqlService service(String url, SqlHistoryRepository history) throws Exception {

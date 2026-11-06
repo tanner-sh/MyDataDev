@@ -47,6 +47,7 @@ const EXPORT_MENU_ITEMS = [
 export const TableWorkspace = memo(function TableWorkspace({
   documentTabs,
   connectionId,
+  dbType,
   initialScrollTop, onViewScroll, onUndo, onRedo, canUndo, canRedo,
   activeTable,
   tableData,
@@ -82,6 +83,8 @@ export const TableWorkspace = memo(function TableWorkspace({
   /** 工作区标签条，渲染在工具栏最左边，兼作这个工作区的标题。 */
   documentTabs?: ReactNode;
   connectionId?: number;
+  /** 右键「复制为 INSERT」按库生成标识符引用与字面量。 */
+  dbType?: string;
   initialScrollTop?: number; onViewScroll?: (top: number) => void;
   onUndo?: () => void; onRedo?: () => void; canUndo?: boolean; canRedo?: boolean;
   activeTable: ActiveTable | null;
@@ -282,7 +285,7 @@ export const TableWorkspace = memo(function TableWorkspace({
         </div>
       </Header>
       <div className="table-grid-pane">
-        <EditableTable metadataSource={metadataSource} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
+        <EditableTable metadataSource={metadataSource} dbType={dbType} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation} />
       </div>
       <div className="grid-pagination table-pagination">
         <Space size={8} className="grid-pagination-summary">

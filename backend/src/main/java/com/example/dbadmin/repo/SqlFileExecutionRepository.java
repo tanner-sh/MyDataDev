@@ -32,7 +32,8 @@ public class SqlFileExecutionRepository {
                     rs.getLong("transaction_control_count"), rs.getLong("opaque_count"), rs.getLong("commit_count"),
                     rs.getLong("rollback_count"), rs.getObject("last_commit_index", Long.class), rs.getString("transaction_outcome"),
                     rs.getObject("failed_start_line", Integer.class), rs.getObject("failed_end_line", Integer.class)),
-            rs.getString("compilation_errors")
+            rs.getString("compilation_errors"),
+            rs.getString("statement_delimiter")
     );
 
     public SqlFileExecutionRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
@@ -139,6 +140,11 @@ public class SqlFileExecutionRepository {
 
     public void updateCompilationErrors(long id, String errors) {
         jdbc.update("UPDATE sql_file_execution SET compilation_errors=? WHERE id=?", errors, id);
+    }
+
+    /** 分析开始前写入：之后的分析、执行、断点读取都按这一种分隔方式切分。 */
+    public void updateStatementDelimiter(long id, String delimiter) {
+        jdbc.update("UPDATE sql_file_execution SET statement_delimiter=? WHERE id=?", delimiter, id);
     }
 
     public int countRunningByConnection(long connectionId) {

@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
+import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
 import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
@@ -23,6 +23,9 @@ import { useStableEvent } from '../hooks/useStableEvent';
 import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 import type { AiAskRequest } from './AiAssistantPanel';
+import { ScriptExecutionLog } from './ScriptExecutionLog';
+import { needsScriptLog, resolveResultTabKey, SCRIPT_LOG_KEY, tabbedResults } from '../scriptExecutionLog';
+import { customDelimiterProblem, DELIMITER_MODE_OPTIONS, type SqlDelimiterMode, type SqlDelimiterSetting } from '../scriptDelimiter';
 
 // AI 抽屉只在真的问了一次之后才需要，懒加载它才不会把这条链拉进 SQL 工作台的首屏预算。
 const AiAssistantPanel = lazy(() => import('./AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel })));
@@ -36,7 +39,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange }: {
   /** 工作区标签条，由 App 统一渲染后交给各工作区放进工具栏最左边。 */
   documentTabs?: ReactNode;
   draftSaveState?: string;
@@ -96,6 +99,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   scriptTransactionMode: 'AUTO' | 'SCRIPT';
   scriptEndAction: 'COMMIT' | 'ROLLBACK';
   onScriptTransactionModeChange: (mode: 'AUTO' | 'SCRIPT') => void;
+  /** 当前标签页的语句分隔方式（分号 / 空行 / 自定义独占行符号），按标签页记。 */
+  onDelimiterChange: (delimiter: SqlDelimiterSetting) => void;
   onScriptEndActionChange: (action: 'COMMIT' | 'ROLLBACK') => void;
   onBeginTransaction: () => void;
   onFinishTransaction: (commit: boolean) => void;
@@ -301,9 +306,18 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
     updateDraft(`${draftRef.current}${draftRef.current.trim() ? '\n\n' : ''}${template}`);
   }
 
-  const activeResultKey = activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined);
-  const activeResult = activeTab.results.find((result) => statementResultKey(result) === activeResultKey) || activeTab.results[0];
-  const resultItems = useMemo(() => activeTab.results.map((result) => {
+  // 多条语句时，DML/DDL 合进「执行日志」一个标签；只有查询结果与失败的那条单独成标签。
+  const showScriptLog = needsScriptLog(activeTab.results);
+  const tabResults = useMemo(() => showScriptLog ? tabbedResults(activeTab.results) : activeTab.results, [activeTab.results, showScriptLog]);
+  const tabKeys = useMemo(() => [...(showScriptLog ? [SCRIPT_LOG_KEY] : []), ...tabResults.map((result) => statementResultKey(result))],
+    [showScriptLog, tabResults]);
+  const activeResultKey = resolveResultTabKey(activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined), tabKeys);
+  const activeResult = activeTab.results.find((result) => statementResultKey(result) === activeResultKey) || tabResults[0] || activeTab.results[0];
+  const resultItems = useMemo(() => [...(showScriptLog ? [{
+    key: SCRIPT_LOG_KEY,
+    label: `执行日志 ${activeTab.results.length}`,
+    children: <ScriptExecutionLog results={activeTab.results} notices={activeTab.scriptNotices} />
+  }] : []), ...tabResults.map((result) => {
     const resultKey = statementResultKey(result);
     return {
       key: resultKey,
@@ -328,7 +342,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
         />
       )
     };
-  }), [activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, onPreviewResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
+  })], [showScriptLog, tabResults, activeTab.scriptNotices, activeResultKey, activeTab.id, activeTab.results, aiQueryAvailable, aiSampleAllowed, askAiToExplain, askAiToInterpret, canQuery, canWrite, handleResultPageChange, onCommitResultEdits, onPreviewResultEdits, pagingResultKey, resultPaneMode, selected?.dbType, selected?.id]);
   // 用户拖过分隔条就完全听用户的；没拖过时按「有没有结果 + SQL 有多少行」推算，
   // 而不是无论内容如何都给编辑器固定的一半。
   const preferredSplitRatio = resolveEditorSplitRatio({
@@ -469,6 +483,19 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             </Dropdown>
           </Space>
           <Space size={4} className="sql-toolbar-group sql-toolbar-transaction-group">
+            <Tooltip title={DELIMITER_MODE_OPTIONS.find((option) => option.value === (activeTab.delimiter?.mode ?? 'AUTO'))?.hint}>
+              <Select size="small" aria-label="语句分隔方式" className="sql-delimiter-select" value={activeTab.delimiter?.mode ?? 'AUTO'}
+                disabled={loading}
+                onChange={(mode: SqlDelimiterMode) => onDelimiterChange(mode === 'CUSTOM' ? { mode, token: activeTab.delimiter?.token ?? '!' } : { mode })}
+                options={DELIMITER_MODE_OPTIONS.map((option) => ({ value: option.value, label: `分隔：${option.short}` }))} />
+            </Tooltip>
+            {activeTab.delimiter?.mode === 'CUSTOM' && (
+              <Input size="small" aria-label="自定义分隔符" className="sql-delimiter-token" value={activeTab.delimiter.token}
+                disabled={loading}
+                status={customDelimiterProblem(activeTab.delimiter.token) ? 'error' : undefined}
+                title={customDelimiterProblem(activeTab.delimiter.token) ?? '独占一行的这个符号就是语句边界'}
+                onChange={(event) => onDelimiterChange({ mode: 'CUSTOM', token: event.target.value })} />
+            )}
             {selected && ['oracle', 'oceanbase-oracle'].includes(selected.dbType) && <Space size={4}>
               <Select size="small" aria-label="窗口事务模式" value={scriptTransactionMode}
                 disabled={loading || Boolean(transactionState.transaction) || transactionState.pending}
@@ -623,7 +650,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             <div className="single-result-panel">
               <StatementResultPanel result={activeTab.results[0]} selectedConnectionId={selected?.id} dbType={selected?.dbType} active pagingLoading={pagingResultKey === `${activeTab.id}:${statementResultKey(activeTab.results[0])}`} paneMode={resultPaneMode} showIdentity onPaneModeChange={setResultPaneMode} onPageChange={handleResultPageChange} connectionId={selected?.id} onPreviewEdits={canWrite ? onPreviewResultEdits : undefined} onCommitEdits={canWrite ? onCommitResultEdits : undefined} onAskAiExplain={aiQueryAvailable ? askAiToExplain : undefined} onAskAiInterpret={aiSampleAllowed && canQuery ? askAiToInterpret : undefined} onAskAiReview={aiQueryAvailable ? askAiToReviewResult : undefined} />
             </div>
-          ) : resultItems.length > 1 ? (
+          ) : showScriptLog || resultItems.length > 1 ? (
             <Tabs className="result-tabs" activeKey={activeResultKey} onChange={onResultTabChange} items={resultItems} />
           ) : activeTab.errorDetail ? (
             <SqlExecutionErrorPanel

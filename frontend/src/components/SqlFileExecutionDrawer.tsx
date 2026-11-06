@@ -9,6 +9,7 @@ import { localizeMessage } from '../utils';
 import { formatSqlFileBytes, sqlFileStatusLabel, sqlFileTaskPercent } from '../sqlFileExecution';
 import { backgroundImportPath } from '../dataImport';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
+import { customDelimiterProblem, DEFAULT_DELIMITER, DELIMITER_MODE_OPTIONS, delimiterRequestFields, type SqlDelimiterSetting } from '../scriptDelimiter';
 
 const { Text } = Typography;
 const ACTIVE = new Set(['ANALYZING', 'QUEUED', 'RUNNING']);
@@ -25,7 +26,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
    * 抽屉打开后停在源连接上，用户看到的是一个空列表。用递增的 requestId 而不是裸的连接 ID：
    * 同一条连接连着传两次，第二次也要重新落位。</p>
    */
-  focus?: { requestId: number; connectionId: number };
+  focus?: { requestId: number; connectionId: number; jobId?: number };
   connections: Connection[];
   selected: Connection | null;
   onClose: () => void;
@@ -41,6 +42,9 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
   const [confirmation, setConfirmation] = useState('');
   const [transactionMode, setTransactionMode] = useState<'BATCH' | 'SCRIPT'>('BATCH');
   const [endOfFileAction, setEndOfFileAction] = useState<'COMMIT' | 'ROLLBACK'>('ROLLBACK');
+  // 上传时的语句分隔方式。默认「自动」：服务端会先看文件里有没有 DBeaver 那样的独占行分隔符。
+  const [uploadDelimiter, setUploadDelimiter] = useState<SqlDelimiterSetting>(DEFAULT_DELIMITER);
+  const uploadDelimiterProblem = uploadDelimiter.mode === 'CUSTOM' ? customDelimiterProblem(uploadDelimiter.token) : null;
   const uploadAbortRef = useRef<AbortController | undefined>(undefined);
   const handledCandidateRef = useRef(0);
   const handledFocusRef = useRef(0);
@@ -65,6 +69,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     if (!open || !focus || handledFocusRef.current === focus.requestId) return;
     handledFocusRef.current = focus.requestId;
     setConnectionId(focus.connectionId);
+    if (focus.jobId != null) setFocusedId(focus.jobId);
   }, [focus?.requestId, open]);
 
   useEffect(() => {
@@ -142,7 +147,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
     try {
       const path = dataImport
         ? backgroundImportPath({ connectionId: targetConnectionId, ...dataImport, fileName: file.name })
-        : `/sql-file-executions/uploads?${new URLSearchParams({ connectionId: String(targetConnectionId), fileName: file.name }).toString()}`;
+        : `/sql-file-executions/uploads?${new URLSearchParams({ connectionId: String(targetConnectionId), fileName: file.name, ...delimiterRequestFields(uploadDelimiter) }).toString()}`;
       const job = await uploadBinary<SqlFileExecution>(path, file, setUploadProgress, controller.signal);
       setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]);
       setFocusedId(job.id);
@@ -203,14 +208,32 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
             onChange={(value) => { setConnectionId(value); setJobs([]); setFocusedId(undefined); }}
           />
           <Space>
-            <Upload accept=".sql" showUploadList={false} disabled={!connectionId || uploading} beforeUpload={(file) => { void upload(file as unknown as File, connectionId!); return false; }}>
-              <Button type="primary" icon={<CloudUploadOutlined />} disabled={!connectionId || uploading}>选择 SQL 文件</Button>
+            <Select
+              aria-label="语句分隔方式"
+              value={uploadDelimiter.mode}
+              disabled={uploading}
+              style={{ width: 140 }}
+              options={DELIMITER_MODE_OPTIONS.map((option) => ({ value: option.value, label: option.label, title: option.hint }))}
+              onChange={(mode) => setUploadDelimiter(mode === 'CUSTOM' ? { mode, token: uploadDelimiter.token ?? '!' } : { mode })}
+            />
+            {uploadDelimiter.mode === 'CUSTOM' && (
+              <Input
+                aria-label="自定义分隔符"
+                style={{ width: 72 }}
+                value={uploadDelimiter.token}
+                status={uploadDelimiterProblem ? 'error' : undefined}
+                title={uploadDelimiterProblem ?? '独占一行的这个符号就是语句边界'}
+                onChange={(event) => setUploadDelimiter({ mode: 'CUSTOM', token: event.target.value })}
+              />
+            )}
+            <Upload accept=".sql" showUploadList={false} disabled={!connectionId || uploading || Boolean(uploadDelimiterProblem)} beforeUpload={(file) => { void upload(file as unknown as File, connectionId!); return false; }}>
+              <Button type="primary" icon={<CloudUploadOutlined />} disabled={!connectionId || uploading || Boolean(uploadDelimiterProblem)}>选择 SQL 文件</Button>
             </Upload>
             {uploading && <Button danger onClick={() => uploadAbortRef.current?.abort()}>取消上传</Button>}
             <Button icon={<ReloadOutlined />} loading={loading} disabled={!connectionId} onClick={() => connectionId && void loadJobs(connectionId)}>刷新任务</Button>
           </Space>
           {uploading && <Progress percent={uploadProgress} status="active" />}
-          <Text type="secondary">文件会上传到应用服务器进行流式解析，内容不会载入 SQL 编辑器。</Text>
+          <Text type="secondary">文件会上传到应用服务器进行流式解析，内容不会载入 SQL 编辑器。分隔方式选「自动」时，独占一行的 ! 这类 DBeaver 分隔符会被自动识别。</Text>
         </Space>
       </div>
 
@@ -225,6 +248,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
             { key: 'size', label: '文件大小', children: formatSqlFileBytes(focused.fileSize) },
             { key: 'charset', label: '检测编码', children: focused.detectedCharset || '-' },
             { key: 'statements', label: '执行单元', children: focused.statementTotal ?? 0 },
+            { key: 'delimiter', label: '分隔方式', children: focused.statementDelimiter || '分号（自动）' },
             { key: 'checksum', label: 'SHA-256', children: <Text className="sql-file-checksum" copyable>{focused.checksumSha256}</Text> }
           ]} />
           <Space wrap>

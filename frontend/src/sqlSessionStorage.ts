@@ -1,5 +1,6 @@
 import { normalizeParameterDefinitions, type SqlParameterDefinition } from './sqlParameters';
 import { workspaceIdentity } from './auth';
+import { normalizeDelimiterSetting, type SqlDelimiterSetting } from './scriptDelimiter';
 import type { SqlTab } from './types';
 
 export const MAX_STORED_SQL_TABS = 20;
@@ -9,6 +10,7 @@ type SessionStorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 
 type StoredSqlTab = {
   executionSchema?: string;
+  delimiter?: SqlDelimiterSetting;
   parameters?: SqlParameterDefinition[];
   id: string;
   title: string;
@@ -55,7 +57,8 @@ export function writeSqlSession(
     sql: tab.sql,
     dirty: tab.dirty,
     executionSchema: tab.executionSchema,
-    ...(tab.parameters ? { parameters: tab.parameters } : {})
+    ...(tab.parameters ? { parameters: tab.parameters } : {}),
+    ...(tab.delimiter && tab.delimiter.mode !== 'AUTO' ? { delimiter: tab.delimiter } : {})
   }));
   if (storedTabs.length === 0) return false;
   const session: StoredSqlSession = {
@@ -90,6 +93,7 @@ export function normalizeSqlSession(value: unknown): SqlSession | undefined {
       dirty: candidate.dirty === true,
       executionSchema: typeof candidate.executionSchema === 'string' ? candidate.executionSchema : undefined,
       ...(candidate.parameters ? { parameters: normalizeParameterDefinitions(candidate.parameters) } : {}),
+      ...(normalizeDelimiterSetting(candidate.delimiter) ? { delimiter: normalizeDelimiterSetting(candidate.delimiter) } : {}),
       results: [],
       message: ''
     });

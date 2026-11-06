@@ -202,7 +202,7 @@ export type SqlPageNavigation = {
   filters?: SqlResultFilterRequest[] | null;
 };
 export type SqlStatementResult = { queryParameters?: import('./sqlParameters').SqlParameterValues; index: number; sql: string; startOffset: number; endOffset: number; status: 'SUCCESS' | 'FAILED'; errorMessage?: string | null; result: SqlResult };
-export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean; transactionMessage?: string };
+export type SqlScriptResult = { status: 'SUCCESS' | 'FAILED'; elapsedMs: number; executedCount: number; results: SqlStatementResult[]; metadataChanged?: boolean; transactionMessage?: string; notices?: string[] };
 export type BackupScope = 'DATABASE' | 'SCHEMA' | 'TABLES';
 export type LegacyBackupScope = BackupScope | 'TABLE';
 export type BackupMethod = 'SQL' | 'MYSQLDUMP' | 'ORACLE_EXP' | 'PG_DUMP';
@@ -492,6 +492,10 @@ export type SqlTab = {
    * 状态栏只有一行、会被截断且无法复制，所以结果区也要显示它。
    */
   errorDetail?: string;
+  /** 这个标签页的语句分隔方式；没有就是默认的自动规则。见 scriptDelimiter.ts。 */
+  delimiter?: import('./scriptDelimiter').SqlDelimiterSetting;
+  /** 上一次执行时解析器顺带说明的事（被忽略的 SQL*Plus 指令、PROMPT 文本、按哪种方式分的段）。 */
+  scriptNotices?: string[];
 };
 /** SQL 执行统计：同一批历史数据的另一个视角。 */
 export type SqlHistoryStats = {
@@ -520,6 +524,8 @@ export type SqlFileTransaction = {
 };
 export type SqlFileExecution = {
   transaction?: SqlFileTransaction;
+  /** 非默认的分隔方式说明（如「独占行 !」）；默认规则时为 null。 */
+  statementDelimiter?: string | null;
   id: number;
   connectionId: number;
   connectionName: string;
@@ -1050,4 +1056,17 @@ export type ConnectionPoolSettings = {
 export type ScheduledExportRun = {
   id: string; taskId: number; connectionId: number; taskName: string; status: string; message: string;
   startedAt: string; finishedAt?: string; fileName?: string; fileSize: number; downloadable: boolean;
+};
+
+/** 对象定义批量导出。kind 是 TABLE 或 SchemaObjectKind 之一；非表对象带 objectKey。 */
+export type SchemaExportCandidate = { kind: string; name: string; displayName: string; objectKey: string | null };
+export type SchemaExportCandidates = { schemaName: string; objects: SchemaExportCandidate[]; truncated: boolean; warnings: string[] };
+export type SchemaExportItem = { order: number; kind: string; name: string; dependsOn: string[] };
+export type SchemaExportResponse = {
+  schemaName: string;
+  script: string;
+  items: SchemaExportItem[];
+  cycles: string[][];
+  warnings: string[];
+  failed: number;
 };

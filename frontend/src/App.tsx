@@ -3,6 +3,8 @@ import { resolveLiveCapabilities, type CapabilityReport, type ConnectionCapabili
 import { useSqlParameters } from './components/useSqlParameters';
 import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValues } from './sqlParameters';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { delimiterRequestFields, scriptProblemOf, type SqlDelimiterSetting } from './scriptDelimiter';
 import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
 import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
 import { finishWorkbenchTimingAfterPaint, markWorkbenchResponse, startWorkbenchTiming } from './workbenchPerformance';
@@ -11,6 +13,7 @@ import { useEditableRows } from './hooks/useEditableRows';
 import { cellValidation, rebaseConflictRow } from './tableEditing';
 import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
+import { DocumentTabStrip } from './components/DocumentTabStrip';
 import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
@@ -19,7 +22,7 @@ import { PERSIST_WORK_EVENT, isAuthenticationEnabled, isCurrentUserAdmin } from 
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
-import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
@@ -132,6 +135,7 @@ const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPane
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
 const SchemaSnapshotPanel = lazy(() => import('./components/SchemaSnapshotPanel').then((module) => ({ default: module.SchemaSnapshotPanel })));
+const SchemaExportPanel = lazy(() => import('./components/SchemaExportPanel').then((module) => ({ default: module.SchemaExportPanel })));
 const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
 const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -231,7 +235,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [sqlFileTasksOpen, setSqlFileTasksOpen] = useState(false);
   const [sqlFileFeatureLoaded, setSqlFileFeatureLoaded] = useState(false);
   const [sqlFileCandidate, setSqlFileCandidate] = useState<SqlFileCandidate>();
-  const [sqlFileFocus, setSqlFileFocus] = useState<{ requestId: number; connectionId: number }>();
+  const [sqlFileFocus, setSqlFileFocus] = useState<{ requestId: number; connectionId: number; jobId?: number }>();
   // 管理类面板全部收进一个带左侧导航的抽屉。之前是 6 个头部入口通向 5 个互斥的抽屉，
   // 从「备份」跳到「审计」必须先关再开，而且九种宽度让右侧边界一直在跳。
   const [archivePanelOpen, setArchivePanelOpen] = useState(false);
@@ -585,6 +589,52 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         onCancel: () => resolve(false)
       });
     });
+  }
+
+  /**
+   * 三选一的确认框（「按 ! 分段 / 保持分号规则 / 取消」这类）。确认框默认只有两个按钮，
+   * 这里换成自己的页脚；关闭或按 Esc 等于取消。
+   */
+  function requestChoice<T extends string>(title: string, content: ReactNode,
+    choices: Array<{ key: T; label: string; primary?: boolean }>): Promise<T | undefined> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (value: T | undefined) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+        dialog.destroy();
+      };
+      const dialog = modalApi.confirm({
+        title,
+        content,
+        closable: true,
+        onCancel: () => settle(undefined),
+        footer: (
+          <div className="choice-dialog-footer">
+            <Button onClick={() => settle(undefined)}>取消</Button>
+            {choices.map((choice) => (
+              <Button key={choice.key} type={choice.primary ? 'primary' : 'default'} onClick={() => settle(choice.key)}>{choice.label}</Button>
+            ))}
+          </div>
+        )
+      });
+    });
+  }
+
+  /** 把编辑器里的脚本交给后台任务，然后打开任务面板落在这个任务上；开始执行在那里确认。 */
+  async function submitScriptToBackground(sql: string, delimiter: SqlDelimiterSetting | undefined) {
+    if (!selected) return;
+    try {
+      const job = await api<SqlFileExecution>('/sql-file-executions/scripts', {
+        method: 'POST',
+        body: JSON.stringify({ connectionId: selected.id, sql, ...delimiterRequestFields(delimiter) })
+      });
+      updateActiveSqlTab({ message: '已交给后台执行：解析完成后在任务面板里确认并开始执行', statusKind: 'info' });
+      openSqlFileTasks(selected.id, job.id);
+    } catch (error) {
+      showError(localizeError(error));
+    }
   }
 
   function requestSqlExportTarget(): Promise<string[] | undefined> {
@@ -1358,6 +1408,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         } else {
         // 手动事务开着时走事务端点：同一条连接、同一个事务，由用户决定提交还是回滚。
         const transactionPath = transactionExecutePath(transactionState);
+        // 分隔方式与两道「先问一句」的状态：每答一个问题就带上答案再发一次。
+        let scriptDelimiter = activeSqlTab.delimiter;
+        let delimiterChecked = false;
+        let largeScriptConfirmed = false;
         const executeScript = async (unscopedMutationConfirmed: boolean): Promise<SqlScriptResult> => {
           if (parameterValues) {
             const result = await api<SqlResult>('/sql/execute-parameterized', {
@@ -1388,36 +1442,85 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               schemaName: activeSqlSchema,
               unscopedMutationConfirmed,
               transactionMode: scriptTransactionMode,
-              endOfFileAction: scriptEndAction
+              endOfFileAction: scriptEndAction,
+              ...delimiterRequestFields(scriptDelimiter),
+              delimiterChecked,
+              largeScriptConfirmed
             })
           });
         };
-        let data: SqlScriptResult;
-        try {
-          data = await executeScript(false);
-        } catch (error) {
-          if (!(error instanceof ApiError) || error.code !== 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED') throw error;
-          setSqlCancellable(false);
-          const confirmed = await requestUnscopedMutationConfirmation(error.statements || []);
-          if (!confirmed) {
-            updateActiveSqlTab({ message: '已取消无 WHERE 条件的 UPDATE/DELETE', statusKind: 'info' });
-            return;
+        let data: SqlScriptResult | undefined;
+        let unscopedConfirmed = false;
+        // 最多问三次（分隔符、大脚本、无 WHERE），每种只问一次；答完带着答案重发。
+        for (let attempt = 0; attempt < 4 && !data; attempt++) {
+          try {
+            data = await executeScript(unscopedConfirmed);
+          } catch (error) {
+            const problem = scriptProblemOf(error);
+            if (problem?.kind === 'delimiter-detected' && !delimiterChecked) {
+              setSqlCancellable(false);
+              const choice = await requestChoice('检测到自定义语句分隔符', (
+                <Typography.Paragraph>
+                  {problem.message}<br />
+                  按它分段时分号不再起分隔作用，PL/SQL 块会完整保留；这个标签页之后也按它执行，可在工具栏的「分隔」里改回。
+                </Typography.Paragraph>
+              ), [
+                { key: 'keep', label: '仍按分号' },
+                { key: 'use', label: `按「${problem.delimiter}」分段（${problem.statementCount} 条）`, primary: true }
+              ]);
+              if (!choice) { updateActiveSqlTab({ message: '已取消执行', statusKind: 'info' }); return; }
+              if (choice === 'use') {
+                scriptDelimiter = { mode: 'CUSTOM', token: problem.delimiter };
+                updateActiveSqlTab({ delimiter: scriptDelimiter });
+              }
+              delimiterChecked = true;
+              setSqlCancellable(true);
+              continue;
+            }
+            if ((problem?.kind === 'large-script' && !largeScriptConfirmed) || problem?.kind === 'too-large') {
+              setSqlCancellable(false);
+              const choices: Array<{ key: 'background' | 'here'; label: string; primary?: boolean }> = problem.kind === 'large-script'
+                ? [{ key: 'here', label: '仍在工作台执行' }, { key: 'background', label: '后台执行（推荐）', primary: true }]
+                : [{ key: 'background', label: '后台执行', primary: true }];
+              const choice = await requestChoice(problem.kind === 'large-script' ? '脚本较大' : '超出工作台单次上限', (
+                <Typography.Paragraph>
+                  {problem.message}<br />
+                  后台执行会先解析脚本，在任务面板里确认后开始；执行期间可以继续使用工作台。
+                </Typography.Paragraph>
+              ), choices);
+              if (choice === 'background') { await submitScriptToBackground(target.sql, scriptDelimiter); return; }
+              if (choice !== 'here') { updateActiveSqlTab({ message: '已取消执行', statusKind: 'info' }); return; }
+              largeScriptConfirmed = true;
+              setSqlCancellable(true);
+              continue;
+            }
+            if (!(error instanceof ApiError) || error.code !== 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED' || unscopedConfirmed) throw error;
+            setSqlCancellable(false);
+            const confirmed = await requestUnscopedMutationConfirmation(error.statements || []);
+            if (!confirmed) {
+              updateActiveSqlTab({ message: '已取消无 WHERE 条件的 UPDATE/DELETE', statusKind: 'info' });
+              return;
+            }
+            setSqlCancellable(true);
+            unscopedConfirmed = true;
           }
-          setSqlCancellable(true);
-          data = await executeScript(true);
         }
+        if (!data) throw new Error('脚本执行未返回结果');
         markWorkbenchResponse('result-ready');
         const failed = data.results.find((item) => item.status === 'FAILED');
         const successCount = data.results.filter((item) => item.status === 'SUCCESS').length;
         const firstResultSet = data.results.find((item) => item.result?.resultSet);
         const returnedRows = data.results.reduce((total, item) => total + (item.result?.resultSet ? item.result.rows.length : 0), 0);
         const truncated = data.results.some((item) => item.result?.truncated);
+        const notices = data.notices ?? [];
+        const noticeSuffix = notices.length ? `；${notices.length === 1 ? notices[0] : `${notices[0]} 等 ${notices.length} 条说明`}` : '';
         const nextMessage = failed
-          ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms`
+          ? `第 ${failed.index} 条 SQL 执行失败，已成功 ${successCount} 条，用时 ${data.elapsedMs}ms${noticeSuffix}`
           // 「含往返」是必要的：结果标题栏里的 ms 是单条语句的执行耗时，这里是整批的端到端
           // 耗时，两个数字本来就不该相等，不说明就会被当成哪里算错了。
-          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms（含往返）`;
+          : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms（含往返）${noticeSuffix}`;
         updateActiveSqlTab({
+          scriptNotices: notices,
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
           message: data.transactionMessage ? `${nextMessage}；${data.transactionMessage}` : nextMessage,
@@ -2025,10 +2128,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     setSqlFileTasksOpen(true);
   }
 
-  function openSqlFileTasks(connectionId?: number) {
+  function openSqlFileTasks(connectionId?: number, jobId?: number) {
     // 传输生成的任务挂在目标连接下，而那条连接未必是当前选中的。
     if (connectionId != null) {
-      setSqlFileFocus({ requestId: ++sqlFileRequestSeqRef.current, connectionId });
+      setSqlFileFocus({ requestId: ++sqlFileRequestSeqRef.current, connectionId, jobId });
     }
     setSqlFileFeatureLoaded(true);
     setSqlFileTasksOpen(true);
@@ -2879,6 +2982,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
+  const openSchemaExportEvent = useStableEvent(() => openManagement('schema-export'));
   const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
     if (kind === 'sqlFiles') {
       setActiveDrawer(null);
@@ -3072,6 +3176,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
   const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
   const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());
+  const changeSqlDelimiterEvent = useStableEvent((delimiter: SqlDelimiterSetting) => updateActiveSqlTab({ delimiter }));
   const openSnippetsEvent = useStableEvent(() => {
     setSnippetDraft(undefined);
     setSnippetsOpen(true);
@@ -3283,6 +3388,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       namespaceLabel={namespaceLabel}
       onRefresh={refreshExplorer}
       onOpenDiagram={openDiagramEvent}
+      onOpenSchemaExport={openSchemaExportEvent}
       onClose={closeMobileExplorer}
       onOpenConnections={openConnectionsFromExplorer}
       onSchemaChange={changeExplorerSchema}
@@ -3310,16 +3416,36 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     和操作按钮，一行装下，省掉 42px。三个工作区的工具栏结构相同，标签的位置不会随
     模式跳动。
   */
+  const connectionDocuments = useMemo(
+    () => selected ? resources.documents.filter(document => document.connectionId === selected.id) : [],
+    [resources.documents, selected]
+  );
+  const documentTabItems = useMemo(() => connectionDocuments.map(document => ({
+    key: document.key,
+    kind: document.kind,
+    schemaName: document.object.schemaName,
+    name: document.object.name,
+    dirty: document.dirty
+  })), [connectionDocuments]);
+  // ER 图没有对应的标签，此时没有任何一个标签是激活的。
+  const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : '';
   const documentTabs = selected ? (
-    <nav className="resource-document-tabs" aria-label="工作区标签">
-      <Button size="small" type={mode === 'sql' ? 'primary' : 'text'} onClick={() => setMode('sql')}>SQL 工作台</Button>
-      {resources.documents.filter(document => document.connectionId === selected.id).map(document => <span key={document.key} className="resource-document-tab">
-        <Button size="small" type={(mode === document.kind && (document.kind === 'table' ? tableDocumentKey : objectDocumentKey) === document.key) ? 'primary' : 'text'} disabled={tableLoading || objectDetailLoading} onClick={() => document.kind === 'table' ? void applyOpenTable(document.object) : void loadObjectDetail(document.object)}>
-          {document.dirty ? '● ' : ''}{document.object.schemaName ? `${document.object.schemaName}.` : ''}{document.object.name} · {document.kind === 'table' ? '数据' : '结构'}
-        </Button>
-        <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
-      </span>)}
-    </nav>
+    <DocumentTabStrip
+      activeKey={activeDocumentTabKey}
+      documents={documentTabItems}
+      disabled={tableLoading || objectDetailLoading}
+      onSelectSql={() => setMode('sql')}
+      onSelect={key => {
+        const document = connectionDocuments.find(item => item.key === key);
+        if (!document) return;
+        if (document.kind === 'table') void applyOpenTable(document.object);
+        else void loadObjectDetail(document.object);
+      }}
+      onClose={key => {
+        const document = connectionDocuments.find(item => item.key === key);
+        if (document) closeResourceDocument(document);
+      }}
+    />
   ) : null;
 
   return (
@@ -3464,6 +3590,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 scriptEndAction={scriptEndAction}
                 onScriptTransactionModeChange={setScriptTransactionMode}
                 onScriptEndActionChange={setScriptEndAction}
+                onDelimiterChange={changeSqlDelimiterEvent}
                 onBeginTransaction={beginTransactionEvent}
                 onFinishTransaction={finishTransactionEvent}
               />
@@ -3471,6 +3598,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               <TableWorkspace
                 documentTabs={documentTabs}
                 connectionId={selected?.id}
+                dbType={selected?.dbType}
                 key={tableDocumentKey}
                 initialScrollTop={resources.snapshots.current.get(tableDocumentKey)?.scrollTop || 0}
                 onViewScroll={top => { const snapshot = resources.snapshots.current.get(tableDocumentKey); if (snapshot) resources.snapshots.current.set(tableDocumentKey, { ...snapshot, scrollTop: top }); }}
@@ -3696,6 +3824,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     connections={connections}
                     defaultConnectionId={selected?.id}
                     defaultSchema={activeSqlSchema}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'schema-export' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>对象定义批量导出</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载对象导出…" />}>
+                  <SchemaExportPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    defaultSchema={activeSqlSchema}
+                    onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>
               </div>

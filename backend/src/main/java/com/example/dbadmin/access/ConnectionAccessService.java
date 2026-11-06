@@ -98,7 +98,13 @@ public class ConnectionAccessService {
     }
 
     public void requireSql(long connectionId, String sql) {
-        List<SqlScriptSplitter.StatementSegment> statements = splitter.split(sql);
+        requireSql(connectionId, sql, com.example.dbadmin.service.SqlScriptDelimiter.AUTO);
+    }
+
+    /** 与执行用同一种分隔方式切分后逐条要权限；自定义分隔符下一段里的多条语句再细分后逐条要。 */
+    public void requireSql(long connectionId, String sql, com.example.dbadmin.service.SqlScriptDelimiter delimiter) {
+        List<SqlScriptSplitter.StatementSegment> segments = splitter.parse(sql, "generic", delimiter).segments();
+        List<SqlScriptSplitter.StatementSegment> statements = splitter.classificationUnits(segments, "generic", delimiter);
         if (statements.isEmpty()) {
             require(connectionId, ConnectionPermission.QUERY);
             return;

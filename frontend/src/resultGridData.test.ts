@@ -135,4 +135,11 @@ describe('列名宽度', () => {
   it('值比列名长时仍按值定宽，不跟着放大', () => {
     expect(suggestedColumnWidth('N', 'VARCHAR', ['x'.repeat(20)])).toBe(20 * 7 + 26);
   });
+
+  it('大写字母比数字宽，大写十六进制主键不会差出最后几个字符', () => {
+    // 11 个大写字母 + 18 个数字。全按 7px 估是 229，实测要 213px 文本 + 内边距，会被截成省略号。
+    const id = '8B210D0FD11F1AB2304E8921D4AC8';
+    expect(suggestedColumnWidth('ID', 'VARCHAR', [id])).toBe(Math.ceil(11 * 8.2 + 18 * 7) + 26);
+    expect(suggestedColumnWidth('ID', 'VARCHAR', [id.toLowerCase()])).toBe(29 * 7 + 26);
+  });
 });

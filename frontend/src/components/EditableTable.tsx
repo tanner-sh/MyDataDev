@@ -3,17 +3,18 @@ import { cellValidation } from '../tableEditing';
 import { cellDraftChanged } from '../cellDraft';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { fillerColumnWidth, isNumericColumnType, suggestedColumnWidth as sharedColumnWidth } from '../resultGridData';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { resizePreview, startColumnResizeInteraction } from '../columnResize';
 
 /** 表数据网格的列宽上下限：参考线与最终提交用同一组，免得线停在一个列到不了的位置。 */
 const MIN_EDITABLE_COLUMN_WIDTH = 88;
 const MAX_EDITABLE_COLUMN_WIDTH = 520;
-import { Button, Input, Modal, Table, Tooltip, Typography } from 'antd';
+import { Button, Dropdown, Input, Modal, Table, Tooltip, Typography, message } from 'antd';
 import { ColumnMetadataTooltip } from './ColumnMetadataTooltip';
 import type { ColumnsType, TableRef } from 'antd/es/table';
 import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
+import { useVirtualScrollGuard } from '../hooks/useVirtualScrollGuard';
 import type { TableColumn, TableData, TableRow } from '../types';
 import { canJumpToRelation, relationJumpTooltip, type RelationTarget } from '../relationNavigation';
 import {
@@ -23,9 +24,13 @@ import {
   shouldEditableCellUpdate,
   type EditableDisplayRow
 } from '../editableTableRows';
+import { cellDisplayKind, cellDraftText } from '../cellDraft';
+import { tableCellMenuItems, tableRowCopyText, type TableCellMenuAction } from '../tableCellMenu';
+import { copyText } from '../clipboard';
 
 type EditableTableProps = {
   metadataSource?: { connectionId: number; schemaName?: string; tableName: string };
+  dbType?: string;
   initialScrollTop?: number; onViewScroll?: (top: number) => void;
   data: TableData | null;
   rows: TableRow[];
@@ -38,7 +43,7 @@ type EditableTableProps = {
   onFollowRelation?: (target: RelationTarget, value: unknown) => void;
 };
 
-export const EditableTable = memo(function EditableTable({ metadataSource, initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
+export const EditableTable = memo(function EditableTable({ metadataSource, dbType, initialScrollTop = 0, onViewScroll, data, rows, readonly = false, loading = false, foreignKeys, onEdit, onDelete, onFollowRelation }: EditableTableProps) {
   const tableRef = useRef<TableRef>(null);
   const lastScrolledDataRef = useRef<TableData | null>(null);
   const [largeEditor, setLargeEditor] = useState<{ rowId: string; column: TableColumn; value: string }>();
@@ -48,6 +53,8 @@ export const EditableTable = memo(function EditableTable({ metadataSource, initi
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const resizeGuideRef = useRef<HTMLDivElement>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(data) });
+  const [messageApi, messageHolder] = message.useMessage();
+  useVirtualScrollGuard(viewportRef, Boolean(data));
 
   useEffect(() => {
     setActiveCell(null);
@@ -132,6 +139,62 @@ export const EditableTable = memo(function EditableTable({ metadataSource, initi
     resizeCleanupRef.current = cleanup;
     document.body.classList.add('is-resizing-column');
   }, [setColumnWidth, stopResize, viewportRef]);
+
+  /*
+    单元格右键菜单，做法与查询结果表格相同：整张表只挂一个 Dropdown，靠单元格上的
+    data-cell-row / data-cell-column 认出点的是哪一格，不给每格各挂一个（那会打穿
+    shouldEditableCellUpdate 守着的重渲染边界）。认不出（表头、操作列、正在编辑的输入框）
+    就放过事件，留给浏览器原生菜单 —— 输入框里要的正是原生的粘贴。
+  */
+  const [cellMenu, setCellMenu] = useState<{ rowId: string; column: string } | null>(null);
+  const pendingCellRef = useRef<{ rowId: string; column: string } | null>(null);
+  const captureCellTarget = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const cell = (event.target as Element | null)?.closest?.('[data-cell-row][data-cell-column]');
+    const rowId = cell?.getAttribute('data-cell-row');
+    const column = cell?.getAttribute('data-cell-column');
+    if (!rowId || !column) {
+      pendingCellRef.current = null;
+      event.stopPropagation();
+      return;
+    }
+    pendingCellRef.current = { rowId, column };
+  }, []);
+  const cellMenuTarget = useMemo(() => {
+    if (!cellMenu || !data) return null;
+    const row = displayRows.find((item) => item.id === cellMenu.rowId);
+    const column = data.columns.find((item) => item.name === cellMenu.column);
+    if (!row || !column) return null;
+    const isDefault = Boolean(row.inserted && !row.touchedColumns?.includes(column.name));
+    return { row, column, isDefault, value: row.values[column.name] };
+  }, [cellMenu, data, displayRows]);
+  const tableParts = useMemo(
+    () => metadataSource ? [metadataSource.schemaName, metadataSource.tableName].filter((part): part is string => Boolean(part)) : undefined,
+    [metadataSource]
+  );
+  const runCellMenuAction = useCallback((action: TableCellMenuAction) => {
+    setCellMenu(null);
+    if (!cellMenuTarget || !data) return;
+    const { row, column, value } = cellMenuTarget;
+    if (action === 'set-null' || action === 'set-empty') {
+      onEdit(row.id, column.name, action === 'set-null' ? null : '');
+      return;
+    }
+    let content: string;
+    let done: string;
+    try {
+      if (action === 'copy') { content = cellDraftText(value); done = '已复制单元格值'; }
+      else if (action === 'copy-column-name') { content = column.name; done = '已复制列名'; }
+      else if (action === 'copy-row') { content = tableRowCopyText('pipe', data.columns, row); done = '已复制整行（管道分隔）'; }
+      else { content = tableRowCopyText('sql', data.columns, row, { dbType, targetTableParts: tableParts }); done = '已复制 INSERT 语句'; }
+    } catch (error) {
+      void messageApi.error((error as Error).message);
+      return;
+    }
+    void copyText(content).then(
+      () => messageApi.success(done),
+      () => messageApi.error('复制失败，请手动选择内容')
+    );
+  }, [cellMenuTarget, data, dbType, messageApi, onEdit, tableParts]);
 
   const columns = useMemo<ColumnsType<EditableDisplayRow>>(() => {
     if (!data) return [];
@@ -241,6 +304,7 @@ export const EditableTable = memo(function EditableTable({ metadataSource, initi
     : columns;
   return (
     <div ref={viewportRef} className="editable-table-viewport">
+      {messageHolder}
       <Modal title={`编辑 ${largeEditor?.column.name || ''}`} open={Boolean(largeEditor)} onCancel={() => setLargeEditor(undefined)} width={720} okText="应用到待提交修改" cancelText="取消" onOk={() => {
         if (!largeEditor) return;
         const problem = cellValidation(largeEditor.column, largeEditor.value);
@@ -260,6 +324,28 @@ export const EditableTable = memo(function EditableTable({ metadataSource, initi
       {scrollY === undefined ? (
         <PanelLoading compact text="正在准备表格…" />
       ) : (
+        <Dropdown
+          trigger={['contextMenu']}
+          open={Boolean(cellMenu && cellMenuTarget)}
+          onOpenChange={(next) => setCellMenu(next ? pendingCellRef.current : null)}
+          menu={{
+            items: cellMenuTarget ? tableCellMenuItems({
+              editable: !isEditableCellDisabled(cellMenuTarget.row, cellMenuTarget.column),
+              isDefault: cellMenuTarget.isDefault,
+              displayKind: cellDisplayKind(cellMenuTarget.value),
+              dbType,
+              canInsert: Boolean(tableParts?.length)
+            }).map((item, index) => item.type === 'divider'
+              ? { type: 'divider' as const, key: `divider-${index}` }
+              : {
+                key: item.action,
+                disabled: item.disabled,
+                label: item.hint ? <Tooltip title={item.hint} placement="right"><span>{item.label}</span></Tooltip> : item.label
+              }) : [],
+            onClick: ({ key }) => runCellMenuAction(key as TableCellMenuAction)
+          }}
+        >
+        <div className="editable-grid-context-area" onContextMenuCapture={captureCellTarget}>
         <Table<EditableDisplayRow>
           ref={tableRef}
           size="small"
@@ -274,6 +360,8 @@ export const EditableTable = memo(function EditableTable({ metadataSource, initi
           rowClassName={rowClassName}
           scroll={{ x: scrollX, y: scrollY }}
         />
+        </div>
+        </Dropdown>
       )}
     </div>
   );
@@ -324,6 +412,8 @@ const EditableCell = memo(function EditableCell({ rowId, rowNumber, column, valu
     return (
       <div
         className={`editable-cell-display editable-cell-${mode}${disabled ? ' is-disabled' : ''}`}
+        data-cell-row={rowId}
+        data-cell-column={column.name}
         title={displayValue}
         tabIndex={disabled ? undefined : 0}
         role={disabled ? undefined : 'button'}

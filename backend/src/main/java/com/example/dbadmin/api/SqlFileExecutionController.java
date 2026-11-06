@@ -7,6 +7,8 @@ import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlFileExecutionStartRequest;
 import com.example.dbadmin.service.DataImportService;
 import com.example.dbadmin.service.SqlFileExecutionService;
+import com.example.dbadmin.service.SqlScriptDelimiter;
+import jakarta.validation.Valid;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -42,12 +44,26 @@ public class SqlFileExecutionController {
     public ResponseEntity<SqlFileExecutionResponse> upload(
             @RequestParam long connectionId,
             @RequestParam String fileName,
+            @RequestParam(required = false) String delimiterMode,
+            @RequestParam(required = false) String delimiter,
             @RequestHeader(value = "X-User", required = false) String actor,
             HttpServletRequest request
     ) throws Exception {
         access.requireAnyAccess(connectionId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(
-                service.upload(connectionId, fileName, request.getContentLengthLong(), request.getInputStream(), actor));
+                service.upload(connectionId, fileName, request.getContentLengthLong(), request.getInputStream(), actor,
+                        SqlScriptDelimiter.of(delimiterMode, delimiter)));
+    }
+
+    /** 把编辑器里的脚本交给后台执行；开始执行仍要在任务面板里确认，权限按分析出的语句种类在那一步校验。 */
+    @PostMapping("/scripts")
+    public ResponseEntity<SqlFileExecutionResponse> submitEditorScript(
+            @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlEditorScriptRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor
+    ) throws Exception {
+        access.requireAnyAccess(request.connectionId());
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.submitEditorScript(request.connectionId(), request.sql(), actor,
+                SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter())));
     }
 
     /**
