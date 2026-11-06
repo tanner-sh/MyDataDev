@@ -133,6 +133,7 @@ const ScheduledExportPanel = lazy(() => import('./components/ScheduledExportPane
 const SchemaDiffPanel = lazy(() => import('./components/SchemaDiffPanel').then((module) => ({ default: module.SchemaDiffPanel })));
 const DataDiffPanel = lazy(() => import('./components/DataDiffPanel').then((module) => ({ default: module.DataDiffPanel })));
 const SchemaSnapshotPanel = lazy(() => import('./components/SchemaSnapshotPanel').then((module) => ({ default: module.SchemaSnapshotPanel })));
+const SchemaExportPanel = lazy(() => import('./components/SchemaExportPanel').then((module) => ({ default: module.SchemaExportPanel })));
 const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
 const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
@@ -2880,6 +2881,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
+  const openSchemaExportEvent = useStableEvent(() => openManagement('schema-export'));
   const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
     if (kind === 'sqlFiles') {
       setActiveDrawer(null);
@@ -3284,6 +3286,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       namespaceLabel={namespaceLabel}
       onRefresh={refreshExplorer}
       onOpenDiagram={openDiagramEvent}
+      onOpenSchemaExport={openSchemaExportEvent}
       onClose={closeMobileExplorer}
       onOpenConnections={openConnectionsFromExplorer}
       onSchemaChange={changeExplorerSchema}
@@ -3718,6 +3721,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     connections={connections}
                     defaultConnectionId={selected?.id}
                     defaultSchema={activeSqlSchema}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'schema-export' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>对象定义批量导出</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载对象导出…" />}>
+                  <SchemaExportPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    defaultSchema={activeSqlSchema}
+                    onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>
               </div>

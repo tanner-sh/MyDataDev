@@ -22,7 +22,9 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // 未新增依赖，首屏、可输入工作台及编辑器预算保持不变。
 // 工作区标签条（左右箭头、滚轮横滑、中间截断）进了 App，表数据右键菜单进了懒加载的
 // TableWorkspace，合计约 2.8 KiB，实测 806.2 KiB；没有新增依赖，给 4 KiB 余量。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 808 * 1024;
+// 对象定义批量导出是一个新的懒加载管理面板（约 3.8 KiB），实测 810.3 KiB；同样没有新增依赖，
+// 首屏只多 0.1 KiB（资源管理器上的入口按钮）。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 814 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;

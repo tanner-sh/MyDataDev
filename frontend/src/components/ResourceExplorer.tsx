@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Button, Input, Segmented, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
-import { CloseOutlined, CodeOutlined, PartitionOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { CloseOutlined, CodeOutlined, ExportOutlined, PartitionOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import {
   explorerObjectCountLabel,
   explorerObjectKindLabel,
@@ -42,6 +42,8 @@ export type ResourceExplorerProps = {
   namespaceLabel: string;
   onRefresh: () => void;
   onOpenDiagram: () => void;
+  /** 批量导出对象定义（管理抽屉里的「对象导出」）。 */
+  onOpenSchemaExport?: () => void;
   onClose: () => void;
   onOpenConnections: () => void;
   onSchemaChange: (schema: string, kind: ExplorerObjectKind) => void;
@@ -76,6 +78,7 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   namespaceLabel,
   onRefresh,
   onOpenDiagram,
+  onOpenSchemaExport,
   onClose,
   onOpenConnections,
   onSchemaChange,
@@ -307,6 +310,12 @@ export const ResourceExplorer = memo(function ResourceExplorer({
             <Button type="text" size="small" icon={<PartitionOutlined />} disabled={!selected}
                     aria-label="打开 ER 图" onClick={onOpenDiagram}>ER 图</Button>
           </Tooltip>
+          {onOpenSchemaExport && (
+            <Tooltip title="批量导出表、视图、函数、存储过程等对象的定义，按依赖关系排序">
+              <Button type="text" size="small" icon={<ExportOutlined />} disabled={!selected}
+                      aria-label="批量导出对象定义" onClick={onOpenSchemaExport} />
+            </Tooltip>
+          )}
           <Tooltip title={`刷新${activeLabel}`}>
             <Button type="text" size="small" icon={<ReloadOutlined />} loading={activeLoading} disabled={!selected}
                     aria-label={`刷新${activeLabel}`} onClick={refreshCurrentKind}>刷新</Button>

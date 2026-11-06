@@ -57,6 +57,7 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SCHEMA_SNAPSHOT_TARGET_SAVE: { label: '保存结构快照采集任务', category: 'data' },
   SCHEMA_SNAPSHOT_TARGET_DELETE: { label: '删除结构快照采集任务', category: 'data' },
   SCHEMA_DRIFT: { label: '结构漂移对比', category: 'data' },
+  OBJECT_DDL_EXPORT: { label: '批量导出对象定义', category: 'data' },
   DATA_SEARCH: { label: '全库数据检索', category: 'data' },
   DATA_TRANSFER_READ: { label: '跨连接传输读取源数据', category: 'data' },
   DATA_TRANSFER_PREPARE: { label: '准备跨连接传输任务', category: 'data' },

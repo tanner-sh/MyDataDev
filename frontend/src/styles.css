@@ -5634,3 +5634,18 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .column-metadata-trigger { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .column-metadata-tooltip { display: grid; gap: 5px; max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .column-metadata-source { opacity: 0.75; font-size: 12px; }
+
+/* 对象导出的脚本预览：只读、等宽、限高滚动；完整内容走下载。 */
+.schema-export-preview {
+  max-height: 360px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: var(--text-sm);
+  white-space: pre;
+}

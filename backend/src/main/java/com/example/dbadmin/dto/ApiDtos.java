@@ -1377,4 +1377,38 @@ public final class ApiDtos {
 
     public record NativeToolsResponse(String detectedAt, List<NativeToolStatus> tools) {
     }
+
+    /**
+     * 对象定义批量导出。kind 是 TABLE 或 {@link com.example.dbadmin.core.SchemaObjectKind} 之一；
+     * 非表对象带 objectKey（与对象详情同一个键），表只认名字。
+     */
+    public record SchemaExportCandidate(String kind, String name, String displayName, @Schema(nullable = true) String objectKey) {
+    }
+
+    public record SchemaExportCandidates(String schemaName, List<SchemaExportCandidate> objects, boolean truncated, List<String> warnings) {
+    }
+
+    public record SchemaExportObject(@NotBlank String kind, @NotBlank String name, @Schema(nullable = true) String objectKey) {
+    }
+
+    public record SchemaExportRequest(
+            @Schema(nullable = true) String schemaName,
+            @NotNull @Size(min = 1, max = 500, message = "一次最多导出 500 个对象") List<@Valid SchemaExportObject> objects,
+            @Schema(nullable = true) Boolean stripDefiner
+    ) {
+    }
+
+    /** 脚本里的一项。dependsOn 只列本次导出范围内、排在它前面的对象。 */
+    public record SchemaExportItem(int order, String kind, String name, List<String> dependsOn) {
+    }
+
+    public record SchemaExportResponse(
+            String schemaName,
+            String script,
+            List<SchemaExportItem> items,
+            List<List<String>> cycles,
+            List<String> warnings,
+            int failed
+    ) {
+    }
 }

@@ -1051,3 +1051,16 @@ export type ScheduledExportRun = {
   id: string; taskId: number; connectionId: number; taskName: string; status: string; message: string;
   startedAt: string; finishedAt?: string; fileName?: string; fileSize: number; downloadable: boolean;
 };
+
+/** 对象定义批量导出。kind 是 TABLE 或 SchemaObjectKind 之一；非表对象带 objectKey。 */
+export type SchemaExportCandidate = { kind: string; name: string; displayName: string; objectKey: string | null };
+export type SchemaExportCandidates = { schemaName: string; objects: SchemaExportCandidate[]; truncated: boolean; warnings: string[] };
+export type SchemaExportItem = { order: number; kind: string; name: string; dependsOn: string[] };
+export type SchemaExportResponse = {
+  schemaName: string;
+  script: string;
+  items: SchemaExportItem[];
+  cycles: string[][];
+  warnings: string[];
+  failed: number;
+};
