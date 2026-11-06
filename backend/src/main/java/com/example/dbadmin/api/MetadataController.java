@@ -269,6 +269,22 @@ public class MetadataController {
         return schemaObjects.invoke(connectionId, request, actor, productionConfirmation);
     }
 
+    /**
+     * 后台调用：参数校验与前台相同，执行交给命令窗口那条后台任务（语句超时按后台任务的配置，可取消、可看进度）。
+     * 返回任务，日志用 {@code GET /api/sql-file-executions/{id}/command-log} 轮询。
+     */
+    @PostMapping("/{connectionId}/schema-objects/invoke-background")
+    public org.springframework.http.ResponseEntity<com.example.dbadmin.dto.ApiDtos.SqlFileExecutionResponse> invokeSchemaObjectInBackground(
+            @PathVariable long connectionId,
+            @Valid @RequestBody RoutineInvokeRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        access.require(connectionId, ConnectionPermission.DATA_WRITE);
+        return org.springframework.http.ResponseEntity.status(org.springframework.http.HttpStatus.ACCEPTED)
+                .body(schemaObjects.invokeInBackground(connectionId, request, actor, productionConfirmation));
+    }
+
     /** 对象定义批量导出的候选清单：表 + 方言支持的各类对象。 */
     @GetMapping("/{connectionId}/schema-export/candidates")
     public SchemaExportCandidates schemaExportCandidates(@PathVariable long connectionId, @RequestParam(required = false) String schemaName,

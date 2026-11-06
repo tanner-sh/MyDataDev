@@ -41,6 +41,21 @@ class ApiExceptionHandlerTest {
                 .contains(String.valueOf(body.get("traceId")));
     }
 
+    /** 超时要和「SQL 写错了」分开报：前者该看库慢在哪或换后台执行，后者该改语句。驱动原文保留。 */
+    @Test
+    void reportsStatementTimeoutsSeparatelyFromSqlErrors() {
+        var timeout = handler.sql(new java.sql.SQLTimeoutException("Statement cancelled due to timeout or client request", "HY000"));
+        assertThat(timeout.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(timeout.getBody()).containsEntry("code", "SQL_TIMEOUT").containsEntry("sqlState", "HY000");
+        assertThat(String.valueOf(timeout.getBody().get("message"))).startsWith("语句执行超时或被取消").endsWith("Statement cancelled due to timeout or client request");
+
+        var postgres = handler.sql(new SQLException("ERROR: canceling statement due to statement timeout", "57014"));
+        assertThat(postgres.getBody()).containsEntry("code", "SQL_TIMEOUT");
+
+        var syntax = handler.sql(new SQLException("ORA-00942: table or view does not exist", "42000", 942));
+        assertThat(syntax.getBody()).containsEntry("code", "SQL_ERROR").containsEntry("message", "ORA-00942: table or view does not exist");
+    }
+
     @Test
     void staysQuietWhenTheClientHungUpMidResponse() {
         // 浏览器刷新、切连接让 SSE 重连、代理掐掉空闲长连接都会走到这里。此前它落进兜底分支，

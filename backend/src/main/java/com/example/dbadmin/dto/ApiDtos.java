@@ -343,11 +343,18 @@ public final class ApiDtos {
     public record RoutineArgumentInput(@Min(0) int position, @Size(max = 240) String name, @Size(max = 1_000_000) String value, boolean nullValue) {
     }
 
+    /**
+     * @param executionId 前台调用可选：带上之后可以用 {@code POST /api/sql/executions/{id}/cancel} 取消；后台调用忽略它
+     */
     public record RoutineInvokeRequest(
             @NotBlank @Size(max = 4_000) String objectKey,
             @NotBlank @Size(max = 200) String structureVersion,
-            @Size(max = 256) List<@Valid RoutineArgumentInput> arguments
+            @Size(max = 256) List<@Valid RoutineArgumentInput> arguments,
+            @Size(max = 64) String executionId
     ) {
+        public RoutineInvokeRequest(String objectKey, String structureVersion, List<RoutineArgumentInput> arguments) {
+            this(objectKey, structureVersion, arguments, null);
+        }
     }
 
     public record RoutineOutParameter(String name, String typeName, Object value) {

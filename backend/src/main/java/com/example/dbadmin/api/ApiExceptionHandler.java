@@ -68,12 +68,15 @@ public class ApiExceptionHandler {
         boolean connectionFailure = sqlState.startsWith("08");
         HttpStatus status = connectionFailure ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_REQUEST;
         if (connectionFailure) log.warn("Target database unreachable sqlState={}", sqlState, e);
+        // 超时与「SQL 写错了」是两件事：前者该去看库慢在哪、或者换后台执行，后者该改语句。
+        // 驱动原文往往只是一句 "Statement cancelled"，不翻译的话用户看不出是超时。
+        boolean timeout = !connectionFailure && com.example.dbadmin.service.SqlTimeouts.isTimeout(e);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
-        body.put("code", connectionFailure ? "TARGET_DATABASE_UNAVAILABLE" : "SQL_ERROR");
+        body.put("code", connectionFailure ? "TARGET_DATABASE_UNAVAILABLE" : timeout ? "SQL_TIMEOUT" : "SQL_ERROR");
         // The driver's own text names the offending column or syntax, so it is
         // genuinely useful to the operator and is kept verbatim.
-        body.put("message", databaseMessage(e));
+        body.put("message", timeout ? "语句执行超时或被取消，数据库已中止执行；已经提交的部分不会回滚。数据库原文：" + databaseMessage(e) : databaseMessage(e));
         body.put("sqlState", sqlState);
         return ResponseEntity.status(status).body(body);
     }

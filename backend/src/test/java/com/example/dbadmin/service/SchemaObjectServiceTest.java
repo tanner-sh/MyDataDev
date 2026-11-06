@@ -151,6 +151,75 @@ class SchemaObjectServiceTest {
         assertThat(response.returnValue()).isEqualTo(5);
     }
 
+    /**
+     * 前台调用超时之后，用户要知道的是「超时了、已提交的不回滚、长过程该去哪跑」，而不是一句驱动原文。
+     * H2 的用户函数里直接抛超时异常，模拟驱动报上来的那一刻。
+     */
+    @Test
+    void reportsForegroundRoutineTimeoutsAndPointsToBackgroundExecution() throws Exception {
+        Fixture fixture = fixture(false, "dev");
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE ALIAS SLOW_JOB AS $$ int slowJob(int seconds) throws java.sql.SQLException { throw new java.sql.SQLTimeoutException(\"Query timeout\"); } $$");
+        }
+        var detail = fixture.service().detail(1L, fixture.service().list(1L, "PUBLIC", "FUNCTION", "SLOW_JOB", 0, 100, true).items().get(0).objectKey(), true);
+        var inputs = detail.parameters().stream()
+                .filter(parameter -> parameter.mode().equals("IN"))
+                .map(parameter -> new RoutineArgumentInput(parameter.position(), parameter.name(), "1", false))
+                .toList();
+
+        assertThatThrownBy(() -> fixture.service().invoke(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null))
+                .isInstanceOfSatisfying(com.example.dbadmin.api.ApiProblemException.class, problem -> {
+                    assertThat(problem.code()).isEqualTo("SQL_TIMEOUT");
+                    assertThat(problem.getMessage()).contains("1 分钟", "后台执行", "2 小时", "不会回滚");
+                });
+    }
+
+    /**
+     * 后台调用走命令窗口那条任务：参数照样绑定、返回值照样取回，写进日志；落盘与日志里的语句只有占位符。
+     */
+    @Test
+    void invokesRoutinesInTheBackgroundThroughACommandJob(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        Fixture fixture = fixture(false, "dev");
+        try (Connection connection = DriverManager.getConnection(fixture.url(), "sa", "")) {
+            connection.createStatement().execute("CREATE ALIAS ADD_NUM AS $$ int addNum(int left, int right) { return left + right; } $$");
+        }
+        var metadata = new org.springframework.jdbc.datasource.DriverManagerDataSource("jdbc:h2:mem:meta-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(new org.springframework.core.io.ClassPathResource("schema.sql")).execute(metadata);
+        var properties = new AppProperties();
+        properties.getSqlFile().setDirectory(directory.toString());
+        var coordinator = mock(SqlFileExecutionCoordinator.class);
+        org.mockito.Mockito.doAnswer(call -> {
+            try { ((Runnable) call.getArgument(1)).run(); } finally { ((Runnable) call.getArgument(2)).run(); }
+            return null;
+        }).when(coordinator).submit(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(Runnable.class), org.mockito.ArgumentMatchers.any(Runnable.class));
+        var files = new SqlFileExecutionService(new com.example.dbadmin.repo.SqlFileExecutionRepository(new org.springframework.jdbc.core.JdbcTemplate(metadata)),
+                fixture.connections(), new ExecutionGuard(), new SqlStatementClassifier(), new SqlScriptSplitter(), new DialectRegistry(),
+                mock(MetadataService.class), mock(AuditRepository.class), properties, coordinator, new BackgroundTaskControl(properties),
+                new LargeFileUploadGuard(properties));
+        files.setCommandRepository(new com.example.dbadmin.repo.SqlCommandRepository(new org.springframework.jdbc.core.JdbcTemplate(metadata)));
+        fixture.service().setSqlFileExecutions(files);
+
+        var detail = fixture.service().detail(1L, fixture.service().list(1L, "PUBLIC", "FUNCTION", "ADD_NUM", 0, 100, true).items().get(0).objectKey(), true);
+        var inputs = detail.parameters().stream()
+                .filter(parameter -> parameter.mode().equals("IN"))
+                .map(parameter -> new RoutineArgumentInput(parameter.position(), parameter.name(), parameter.position() == 1 ? "20" : "22", false))
+                .toList();
+        var job = fixture.service().invokeInBackground(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null);
+
+        assertThat(files.get(job.id()).status()).isEqualTo("SUCCESS");
+        List<String> log = files.commandView(job.id(), 0, 1000).entries().stream().map(entry -> entry.kind() + ":" + entry.text()).toList();
+        assertThat(log).anySatisfy(line -> assertThat(line).startsWith("STATEMENT:{? = call").doesNotContain("20").doesNotContain("22"));
+        assertThat(log).anySatisfy(line -> assertThat(line).startsWith("RESULT:调用完成").contains("返回值：42"));
+    }
+
+    @Test
+    void backgroundInvocationStillRequiresProductionConfirmation() throws Exception {
+        Fixture fixture = fixture(false, "prod");
+        fixture.service().setSqlFileExecutions(mock(SqlFileExecutionService.class));
+        assertThatThrownBy(() -> fixture.service().invokeInBackground(1L, new RoutineInvokeRequest("x", "v", List.of()), "tester", null))
+                .hasMessageContaining("生产连接");
+    }
+
     @Test
     void requiresProductionConnectionNameAndExactObjectConfirmation() throws Exception {
         Fixture fixture = fixture(false, "prod");
@@ -297,7 +366,7 @@ class SchemaObjectServiceTest {
                 new AppProperties(),
                 new SqlScriptSplitter()
         );
-        return new Fixture(url, service);
+        return new Fixture(url, service, connections);
     }
 
     private Fixture fixture(boolean readonly, String environment) throws Exception {
@@ -320,9 +389,9 @@ class SchemaObjectServiceTest {
                 new AppProperties(),
                 new SqlScriptSplitter()
         );
-        return new Fixture(url, service);
+        return new Fixture(url, service, connections);
     }
 
-    private record Fixture(String url, SchemaObjectService service) {
+    private record Fixture(String url, SchemaObjectService service, ConnectionService connections) {
     }
 }

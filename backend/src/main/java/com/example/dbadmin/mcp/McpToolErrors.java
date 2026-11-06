@@ -6,8 +6,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.SQLException;
-import java.sql.SQLTimeoutException;
-import java.util.Locale;
 
 /**
  * MCP 工具报错的统一形状：{@code [CODE] 中文说明}。
@@ -83,23 +81,9 @@ final class McpToolErrors {
         return translated;
     }
 
-    /**
-     * 超时的样子各家不同：标准驱动抛 {@link SQLTimeoutException}；PostgreSQL 是 SQLState 57014；
-     * Oracle 系驱动常以 ORA-01013（厂商码 1013）报出被中止的调用，OceanBase 的服务端超时是内部错误码 -4012。
-     * 只认这些明确的信号：连接池「request timed out」之类的连接问题由 {@link #isConnectionUnavailable} 先接走，
-     * 把它报成「语句超时、已请求取消」会让调用方以为语句跑过。
-     */
+    /** 判定见 {@link com.example.dbadmin.service.SqlTimeouts}：界面与 MCP 共用一份。 */
     static boolean isTimeout(Throwable error) {
-        for (Throwable current = error; current != null; current = current.getCause()) {
-            if (current instanceof SQLTimeoutException) return true;
-            if (current instanceof SQLException sql && !"HY008".equals(sql.getSQLState())) {
-                if ("57014".equals(sql.getSQLState()) || sql.getErrorCode() == 1013) return true;
-                String text = sql.getMessage() == null ? "" : sql.getMessage().toLowerCase(Locale.ROOT);
-                if (text.matches("(?s).*(?:-4012\\b|statement timeout|query timeout|timeout.*cancel|cancel.*timeout).*")) return true;
-            }
-            if (current == current.getCause()) break;
-        }
-        return false;
+        return com.example.dbadmin.service.SqlTimeouts.isTimeout(error);
     }
 
     /** 取不到连接（池满、超时）或连接中途断开：SQLState 08 类、JDBC 的连接异常类型。 */
