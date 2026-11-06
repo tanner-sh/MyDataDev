@@ -13,7 +13,8 @@
 /** 文档中的一段字符区间，端点是从 0 开始的偏移量。 */
 export type SqlRange = { start: number; end: number };
 
-export type SqlCompletionKind = 'table' | 'column' | 'schema' | 'keyword';
+/** join：推断出来的整条 JOIN 条件（`a.pk_org = b.pk_org`），见 joinInference.ts。 */
+export type SqlCompletionKind = 'table' | 'column' | 'schema' | 'keyword' | 'join';
 
 export type SqlCompletionItem = {
   label: string;

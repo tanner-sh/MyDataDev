@@ -1,7 +1,8 @@
-import { analyzeSqlCompletion, isSqlCompletionListIncomplete, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier } from './sqlCompletion';
+import { analyzeSqlCompletion, isSqlCompletionListIncomplete, joinConditionPosition, quoteSqlIdentifier, resolveSqlTableReference, shouldTriggerSqlConditionColumnCompletion, sqlTableQualifier } from './sqlCompletion';
 import type { SqlCompletionItem, SqlCompletionRequest, SqlCompletionResult } from './sqlEditorTypes';
 import type { CompletionCatalog, ObjectColumns } from './types';
 import { sqlKeywordCompletionItems } from './sqlKeywordSuggestions';
+import { inferJoinConditions, joinConditionText, type JoinTable } from './joinInference';
 
 export type SqlCompletionDependencies = {
   connectionId: number | null;
@@ -64,7 +65,7 @@ export async function provideSqlCompletions(request: SqlCompletionRequest, deps:
         }));
       });
       if (structures.some(result => result.status === 'rejected')) warning = '部分字段加载失败';
-      items = [...columns, ...items];
+      items = [...joinConditionItems(context, references, structures, prefix), ...columns, ...items];
     }
   }
   if (!current()) return null;
@@ -74,4 +75,45 @@ export async function provideSqlCompletions(request: SqlCompletionRequest, deps:
     incomplete: Boolean(warning) || isSqlCompletionListIncomplete(context, items.some(item => item.kind === 'column')),
     warning
   };
+}
+
+/**
+ * 停在 `JOIN 表 ON` 后面时，按命名推断出整条条件放在最前面（见 joinInference.ts）。
+ * 用的就是上面为字段候选加载的那几份列清单，不多打接口；读不到某张表的列就跳过那张表。
+ */
+function joinConditionItems(
+  context: ReturnType<typeof analyzeSqlCompletion>,
+  references: ReturnType<typeof analyzeSqlCompletion>['tables'],
+  structures: PromiseSettledResult<ObjectColumns>[],
+  prefix: string
+): SqlCompletionItem[] {
+  const position = joinConditionPosition(context);
+  if (!position) return [];
+  const toJoinTable = (reference: (typeof references)[number]): JoinTable | undefined => {
+    const index = references.indexOf(reference);
+    const structure = index >= 0 ? structures[index] : undefined;
+    if (!structure || structure.status !== 'fulfilled') return undefined;
+    return {
+      qualifier: sqlTableQualifier(reference),
+      name: structure.value.name,
+      columns: structure.value.columns.map(column => ({ name: column.name, type: column.type })),
+      primaryKeys: structure.value.primaryKeys ?? []
+    };
+  };
+  const joined = toJoinTable(position.joined);
+  if (!joined) return [];
+  const existing = position.existing.map(toJoinTable).filter((table): table is JoinTable => Boolean(table));
+  const quote = (identifier: string) => quoteSqlIdentifier(identifier, context.replacement.quoteStyle);
+  return inferJoinConditions(joined, existing)
+    .map((suggestion, index) => {
+      const text = joinConditionText(suggestion, quote);
+      return {
+        label: text,
+        kind: 'join' as const,
+        insertText: text,
+        detail: suggestion.explanation,
+        sortText: `00-${String(index).padStart(3, '0')}`
+      };
+    })
+    .filter(item => !prefix || item.label.toLowerCase().startsWith(prefix));
 }

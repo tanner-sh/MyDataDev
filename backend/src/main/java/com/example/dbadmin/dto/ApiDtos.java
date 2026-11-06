@@ -217,7 +217,14 @@ public final class ApiDtos {
         }
     }
 
-    public record ObjectColumns(String schemaName, String name, String type, String remarks, List<ColumnInfo> columns) {
+    /**
+     * primaryKeys：主键列（按键序）。补全拿它推断「这张表的主键被谁引用」—— 不建外键的库里，
+     * 同名的 pk_xxx / xxx_id 就是表之间唯一的关联线索。视图与读不到主键时为空列表。
+     */
+    public record ObjectColumns(String schemaName, String name, String type, String remarks, List<ColumnInfo> columns, List<String> primaryKeys) {
+        public ObjectColumns(String schemaName, String name, String type, String remarks, List<ColumnInfo> columns) {
+            this(schemaName, name, type, remarks, columns, List.of());
+        }
     }
 
     public record ObjectStructure(String schemaName, String name, String type, List<ColumnInfo> columns, List<IndexInfo> indexes, String remarks) {

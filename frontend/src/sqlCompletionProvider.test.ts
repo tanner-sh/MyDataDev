@@ -95,4 +95,26 @@ describe('SQL 补全数据通路', () => {
     reject(new Error('old connection failed'));
     expect(await pending).toBeNull();
   });
+
+  it('停在 JOIN … ON 后面时，按命名推断出整条条件排在最前面', async () => {
+    const tables: Record<string, ObjectColumns> = {
+      GL_VOUCHER: { schemaName: 'APP', name: 'GL_VOUCHER', type: 'TABLE', primaryKeys: ['PK_VOUCHER'], columns: [
+        { name: 'PK_VOUCHER', type: 'CHAR', size: 20, nullable: false }, { name: 'PK_ORG', type: 'CHAR', size: 20, nullable: true }
+      ] },
+      ORG_ORGS: { schemaName: 'APP', name: 'ORG_ORGS', type: 'TABLE', primaryKeys: ['PK_ORG'], columns: [
+        { name: 'PK_ORG', type: 'CHAR', size: 20, nullable: false }, { name: 'NAME', type: 'VARCHAR2', size: 200, nullable: true }
+      ] }
+    };
+    const dependencies = { ...deps(), loadColumns: vi.fn(async (_id: number, object: { name: string }) => tables[object.name]) };
+    const result = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on '), dependencies);
+    expect(result?.items[0]).toMatchObject({ kind: 'join', label: 'v.PK_ORG = o.PK_ORG', insertText: 'v.PK_ORG = o.PK_ORG' });
+    expect(result?.items[0].detail).toContain('主键同名');
+    // 写到条件中间（AND 后面）不再弹推断。
+    const later = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on v.PK_ORG = o.PK_ORG and '), dependencies);
+    expect(later?.items.some(item => item.kind === 'join')).toBe(false);
+    // 旧后端没有 primaryKeys：不报错，只是推断不出来。
+    const legacy = { ...dependencies, loadColumns: vi.fn(async (_id: number, object: { name: string }) => ({ ...tables[object.name], primaryKeys: undefined })) };
+    const fallback = await provideSqlCompletions(request('select * from GL_VOUCHER v join ORG_ORGS o on '), legacy);
+    expect(fallback?.items.some(item => item.kind === 'join')).toBe(false);
+  });
 });

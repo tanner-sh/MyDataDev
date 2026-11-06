@@ -85,6 +85,24 @@ class MetadataServiceTest {
     }
 
     @Test
+    void columnListCarriesPrimaryKeysInKeyOrderForJoinInference() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
+            connection.createStatement().execute("CREATE TABLE ORG_ORGS(PK_ORG VARCHAR(20) PRIMARY KEY, NAME VARCHAR(40))");
+            connection.createStatement().execute("CREATE TABLE ORDER_LINE(LINE_NO INT, ORDER_ID INT, PRIMARY KEY (ORDER_ID, LINE_NO))");
+            connection.createStatement().execute("CREATE VIEW ORG_VIEW AS SELECT PK_ORG FROM ORG_ORGS");
+        }
+        ConnectionService connections = mock(ConnectionService.class);
+        when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+
+        assertThat(service.objectColumns(1, "PUBLIC", "ORG_ORGS", false).primaryKeys()).containsExactly("PK_ORG");
+        assertThat(service.objectColumns(1, "PUBLIC", "ORDER_LINE", false).primaryKeys()).containsExactly("ORDER_ID", "LINE_NO");
+        assertThat(service.objectColumns(1, "PUBLIC", "ORG_VIEW", false).primaryKeys()).isEmpty();
+    }
+
+    @Test
     void returnsTableAndColumnRemarksWithoutRequiringIndexesAndRefreshesColumns() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {

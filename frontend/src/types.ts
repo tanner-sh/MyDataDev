@@ -144,7 +144,8 @@ export type TableLifecycleRequest = {
   confirmation?: string;
 };
 export type ObjectStructure = DbObject;
-export type ObjectColumns = Omit<DbObject, 'indexes'>;
+/** primaryKeys：主键列（按键序），JOIN 条件推断用；旧后端没有这个字段。 */
+export type ObjectColumns = Omit<DbObject, 'indexes'> & { primaryKeys?: string[] };
 export type Metadata = {
   schemas: string[];
   currentSchema: string;
