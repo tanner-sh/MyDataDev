@@ -496,7 +496,8 @@ try {
   const labels = JSON.parse(sections || '[]');
   // 断言「关键分区还在」而不是一个固定条数：分区会随功能增减，写死数字会让每加一个功能
   // 都要来改这里，改着改着这条检查就没人当回事了。少一个关键分区才是真的故障。
-  const requiredSections = ['连接管理', '结构对比', '数据对比'];
+  // 结构对比、结构快照、数据对比合进了导航上的「对比与漂移」，在里面用顶部标签切换。
+  const requiredSections = ['连接管理', '对比与漂移'];
   const missingSections = requiredSections.filter((name) => !labels.includes(name));
   check('关键管理分区都在', missingSections.length === 0,
     `缺少 ${missingSections.join('、')}；实际 ${labels.length} 个：${labels.join(' / ')}`);
@@ -523,6 +524,25 @@ try {
     `);
     check(`分区「${label}」有内容`, rendered);
     await page.shot(`02-${label}`);
+
+    // 合并入口：顶部标签逐个点开，每个分区都要真的渲染出来。
+    const entryTabs = JSON.parse(await page.evaluate(`JSON.stringify([...document.querySelectorAll('.management-entry-tabs .ant-segmented-item')]
+      .map((node) => ({ label: (node.textContent || '').trim(), disabled: node.classList.contains('ant-segmented-item-disabled') })))`) || '[]');
+    for (const tab of entryTabs.slice(1)) {
+      if (tab.disabled) {
+        console.log(`  – ${label} / ${tab.label}（不可用，已跳过）`);
+        continue;
+      }
+      await page.evaluate(`[...document.querySelectorAll('.management-entry-tabs .ant-segmented-item')].find((node) => (node.textContent || '').trim() === ${JSON.stringify(tab.label)})?.click()`);
+      await page.sleep(2200);
+      const tabRendered = await page.evaluate(`(() => {
+        const active = document.querySelector('.management-entry-tabs .ant-segmented-item-selected');
+        const body = document.querySelector('.management-body');
+        return (active?.textContent || '').trim() === ${JSON.stringify(tab.label)} && Boolean(body) && body.textContent.trim().length > ${JSON.stringify(tab.label)}.length + 40;
+      })()`);
+      check(`分区「${label} / ${tab.label}」有内容`, tabRendered);
+      await page.shot(`02-${label}-${tab.label}`);
+    }
   }
 
   // 「有内容」挡不住这一类：合并抽屉时把连接表单的 <Modal> 连带删掉过一次，六个分区照样

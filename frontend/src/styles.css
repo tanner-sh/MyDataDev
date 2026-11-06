@@ -5137,6 +5137,11 @@ body.is-resizing-column * {
   border-radius: var(--radius-md);
 }
 
+.management-entry-tabs {
+  align-self: flex-start;
+  margin-bottom: var(--space-3);
+}
+
 .management-section-header {
   display: flex;
   align-items: center;
