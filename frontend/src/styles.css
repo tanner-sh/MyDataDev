@@ -4116,6 +4116,25 @@ body.is-resizing-column * {
   background: var(--surface-subtle);
 }
 
+/* 推荐的持久化写法左侧一道绿边，临时写法一道橙边：扫一眼就分得出哪段该长期用。 */
+.mcp-code-card.is-persistent {
+  border-left: 3px solid var(--success);
+}
+
+.mcp-code-card.is-temporary {
+  border-left: 3px solid var(--warning);
+}
+
+.mcp-code-card-hint {
+  display: block;
+  padding: 6px 12px 0;
+  font-size: var(--text-xs);
+}
+
+.mcp-temporary-snippets {
+  margin-top: var(--space-3);
+}
+
 .mcp-code-card-header {
   min-height: 38px;
   padding: 6px 8px 6px 12px;

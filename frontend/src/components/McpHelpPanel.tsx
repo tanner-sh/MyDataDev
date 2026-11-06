@@ -80,7 +80,7 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
           items={[
             { title: '配置连接', content: '在连接管理中准备数据库连接' },
             { title: '创建 Agent', content: '选择连接白名单和生产权限' },
-            { title: '保存 Key', content: '完整凭据只显示一次' },
+            { title: '保存 Key', content: '完整凭据只显示一次；按下方命令存为用户环境变量，一次设置长期有效' },
             { title: '配置客户端', content: '选择下方对应的 AI Agent' },
             { title: '验证工具', content: '先调用 db_list_connections' }
           ]}
@@ -97,7 +97,7 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
         <Alert
           type="info"
           showIcon
-          title="先选择配置范围：全局配置会在所有项目中加载 MCP，项目级配置只在当前项目中加载。"
+          title="新手推荐全局配置：Key 保存为用户环境变量、MCP 注册到用户级配置，配一次所有项目都能用。项目级配置只在需要按项目隔离数据源时使用。"
           description="配置范围不会改变数据库权限；真正可访问的数据源由 MyDataDev Agent 的连接白名单决定。需要项目隔离时，应为每个项目创建独立 Agent、API Key 和环境变量。Web 示例统一使用 MYDATADEV_MCP_TOKEN，复制到项目后可改成项目专属名称。"
           className="mcp-section-alert"
         />
@@ -154,7 +154,7 @@ export function McpHelpPanel({ endpoint, enabled, agents, onOpenConfig, onCopy }
             {
               key: '401',
               label: '401 Unauthorized',
-              children: <Paragraph>检查完整凭据、Agent 是否启用以及 Key 是否已经轮换。环境变量必须传给实际启动 AI Agent 的进程。</Paragraph>
+              children: <Paragraph>检查完整凭据、Agent 是否启用以及 Key 是否已经轮换。最常见的原因是环境变量没传到客户端进程：用「仅当前终端有效」的写法设置后换了终端、或从桌面图标启动客户端，都读不到 Key。改用「保存 Key（长期有效）」的命令，并重开终端或客户端。</Paragraph>
             },
             {
               key: '503',

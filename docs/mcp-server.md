@@ -25,7 +25,7 @@ MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接�
 
 - 当前服务状态、可用 Agent 数量和五步接入流程。
 - Codex CLI、Claude Code、Claude Desktop、Cursor、Gemini CLI、Antigravity IDE 和通用 Streamable HTTP 配置，并明确区分全局与项目级范围。
-- macOS zsh、Linux bash 与 Windows PowerShell 的密钥环境变量示例。
+- macOS zsh、Linux bash 与 Windows PowerShell 的 Key 保存命令：默认给出「保存为用户环境变量、一次设置长期有效」的写法；只在当前终端有效的写法收在「临时试用」里，并标明关闭终端即失效。
 - 安全边界、可用工具清单和 401、503、网络、授权等常见问题处理。
 
 普通帮助页只显示 `<AGENT_API_KEY>` 等占位值。创建 Agent 或轮换 Key 后的一次性弹窗会使用刚生成的真实凭据输出各客户端配置；关闭弹窗后仍然无法找回完整 Key。
@@ -104,7 +104,43 @@ app:
 
 ## 客户端配置
 
-创建或轮换 Agent 后，Web 会生成可直接复制的多客户端配置。不同 MCP 客户端的字段名称略有区别，通用配置如下：
+创建或轮换 Agent 后，Web 会生成可直接复制的多客户端配置。**新手推荐：先把 Key 保存为用户环境变量（只需一次），再把 MCP 注册到客户端的用户级（全局）配置**，之后所有项目、新开的终端都能直接使用。
+
+### 第一步：保存 Key（推荐，一次设置长期有效）
+
+以下命令交互输入 Key（不会出现在 shell 历史里），轮换 Key 后重新运行一遍即可。
+
+macOS zsh（Linux bash 把 `read -s "MDD_KEY?…"` 换成 `read -rsp "请输入 Agent API Key: " MDD_KEY`，`~/.zshrc` 换成 `~/.bashrc`）：
+
+```bash
+mkdir -p ~/.config/mydatadev && chmod 700 ~/.config/mydatadev
+read -s "MDD_KEY?请输入 Agent API Key: " && echo
+(umask 077 && printf 'export MYDATADEV_MCP_TOKEN=%q\n' "$MDD_KEY" > ~/.config/mydatadev/mcp.env) && unset MDD_KEY
+grep -qs 'mydatadev/mcp.env' ~/.zshrc || echo '[ -f ~/.config/mydatadev/mcp.env ] && . ~/.config/mydatadev/mcp.env' >> ~/.zshrc
+. ~/.config/mydatadev/mcp.env
+```
+
+Key 单独存放在权限为 600 的 `~/.config/mydatadev/mcp.env`，`~/.zshrc` 里只有一行加载语句，因此 shell 配置文件本身可以照常同步或分享。
+
+Windows PowerShell（5.1 与 7 均可）：
+
+```powershell
+$secure = Read-Host "请输入 Agent API Key" -AsSecureString
+$key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+[Environment]::SetEnvironmentVariable('MYDATADEV_MCP_TOKEN', $key, 'User')
+$env:MYDATADEV_MCP_TOKEN = $key
+Remove-Variable key, secure
+```
+
+写入的是当前用户的环境变量；已经打开的终端和客户端需要重开一次才能读到。
+
+**桌面客户端的例外**：macOS 上从 Dock 或启动台打开的应用（Cursor、Claude Desktop、Antigravity 等）不会读取 `~/.zshrc`。可以在终端里用客户端自带的命令行启动（如 `cursor .`），或者把一次性弹窗生成的、含真实 Key 的配置保存到用户级全局配置文件（仅本机、权限 600、不进 Git）。Windows 写入用户环境变量后重启客户端即可。
+
+**只在当前终端有效的写法**（`export MYDATADEV_MCP_TOKEN=…`、`$env:MYDATADEV_MCP_TOKEN = …`）只适合临时试用：关掉终端窗口、新开终端或从桌面图标启动客户端都读不到，客户端会返回 401，容易被误判为 Key 错误。
+
+### 第二步：配置客户端
+
+不同 MCP 客户端的字段名称略有区别，通用配置如下：
 
 ```json
 {
@@ -122,7 +158,7 @@ app:
 
 ### 配置范围与数据源隔离
 
-全局配置会让当前用户的所有项目加载同一个 MCP Server；项目级配置只在对应项目中加载。配置范围只决定客户端在哪里加载 MCP，不决定数据库权限。真正可访问的数据源始终由 MyDataDev 中对应 Agent 的连接白名单控制。
+全局配置会让当前用户的所有项目加载同一个 MCP Server，配一次即可，是新手的首选；项目级配置只在对应项目中加载，适合需要按项目隔离数据源的场景。配置范围只决定客户端在哪里加载 MCP，不决定数据库权限。真正可访问的数据源始终由 MyDataDev 中对应 Agent 的连接白名单控制。
 
 如果不同项目需要访问不同数据源，应为每个项目创建独立的 MyDataDev Agent、API Key 和环境变量，并使用项目级配置。Web 示例统一使用 `MYDATADEV_MCP_TOKEN`，复制到项目后可改成项目专属名称，例如 `VALUATION_MYDATADEV_MCP_TOKEN`。`bearer_token_env_var` 等字段必须填写环境变量名称，不能直接填写完整 API Key。
 
@@ -137,7 +173,7 @@ app:
 
 ### Codex 静态 http_headers
 
-如果不希望每次启动 Codex 前设置环境变量，可以把 Bearer 凭据通过静态 `http_headers` 写入全局或项目级 `config.toml`：
+如果不想使用环境变量，可以把 Bearer 凭据通过静态 `http_headers` 写入全局或项目级 `config.toml`：
 
 ```toml
 [mcp_servers.mydatadev]
@@ -150,7 +186,7 @@ enabled = true
 
 Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通常要求公网可达并使用 OAuth。MyDataDev 默认面向私有网络并采用 Agent Bearer Key，因此 Web 帮助使用 `mcp-remote` 把 Desktop 的本地 stdio 请求桥接到 `/mcp`；HTTP 私网地址需要显式允许，跨主机仍应优先使用 HTTPS。
 
-不要把含真实 Key 的 JSON、终端命令或环境文件提交到 Git。使用环境变量时，必须确保实际启动 AI Agent 的终端或桌面进程能够继承该变量。
+不要把含真实 Key 的 JSON、终端命令或环境文件提交到 Git。使用环境变量时，必须确保实际启动 AI Agent 的终端或桌面进程能够继承该变量 —— 按上面「第一步」保存为用户环境变量即可覆盖终端场景，桌面客户端见其中的例外说明。
 
 本地开发时 Vite 会同时代理 `/api` 和 `/mcp`。生产环境若让前端与后端共用域名，反向代理也应同时转发这两个路径；若前端使用跨域的 `VITE_API_BASE_URL`，Web 会按该后端地址生成 MCP URL。
 

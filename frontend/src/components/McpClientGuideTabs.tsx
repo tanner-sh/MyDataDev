@@ -1,7 +1,7 @@
-import { Alert, Button, Space, Tabs, Tag, Typography } from 'antd';
+import { Alert, Button, Collapse, Space, Tabs, Tag, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { useMemo } from 'react';
-import { buildMcpClientGuides } from '../mcpClientConfig';
+import { buildMcpClientGuides, type McpConfigSnippet } from '../mcpClientConfig';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -14,6 +14,30 @@ type McpClientGuideTabsProps = {
 
 export function McpClientGuideTabs({ endpoint, credential, compact = false, onCopy }: McpClientGuideTabsProps) {
   const guides = useMemo(() => buildMcpClientGuides(endpoint, credential), [credential, endpoint]);
+
+  const renderSnippet = (snippet: McpConfigSnippet) => (
+    <section className={`mcp-code-card${snippet.kind ? ` is-${snippet.kind}` : ''}`} key={snippet.id}>
+      <div className="mcp-code-card-header">
+        <Space size={6} wrap>
+          <Text strong>{snippet.title}</Text>
+          {snippet.kind === 'persistent' && <Tag color="success">推荐 · 长期有效</Tag>}
+          {snippet.kind === 'temporary' && <Tag color="warning">关闭终端即失效</Tag>}
+          <Text type="secondary">{snippet.language}</Text>
+        </Space>
+        <Button
+          size="small"
+          type="text"
+          icon={<CopyOutlined />}
+          aria-label={`复制${snippet.title}`}
+          onClick={() => void onCopy(snippet.content, snippet.title)}
+        >
+          复制
+        </Button>
+      </div>
+      {snippet.hint && <Text type="secondary" className="mcp-code-card-hint">{snippet.hint}</Text>}
+      <pre><code>{snippet.content}</code></pre>
+    </section>
+  );
 
   return (
     <Tabs
@@ -52,28 +76,36 @@ export function McpClientGuideTabs({ endpoint, credential, compact = false, onCo
             <ul className="mcp-help-list">
               {guide.notes.map((note) => <li key={note}>{note}</li>)}
             </ul>
+            {/* 先「保存 Key」（一次设置长期有效），再客户端配置；只在当前终端有效的写法收在最后，
+                默认折叠并写明限制 —— 新手照着临时写法做完、换个终端就 401，还以为是 Key 错了。 */}
+            {guide.snippets.some((snippet) => snippet.kind === 'persistent') && (
+              <Title level={5}>第一步：保存 Key（只需一次）</Title>
+            )}
             <div className="mcp-snippet-list">
-              {guide.snippets.map((snippet) => (
-                <section className="mcp-code-card" key={snippet.id}>
-                  <div className="mcp-code-card-header">
-                    <Space size={6}>
-                      <Text strong>{snippet.title}</Text>
-                      <Text type="secondary">{snippet.language}</Text>
-                    </Space>
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<CopyOutlined />}
-                      aria-label={`复制${snippet.title}`}
-                      onClick={() => void onCopy(snippet.content, snippet.title)}
-                    >
-                      复制
-                    </Button>
-                  </div>
-                  <pre><code>{snippet.content}</code></pre>
-                </section>
-              ))}
+              {guide.snippets.filter((snippet) => snippet.kind === 'persistent').map(renderSnippet)}
             </div>
+            {guide.snippets.some((snippet) => snippet.kind === 'persistent') && (
+              <Title level={5}>第二步：配置客户端</Title>
+            )}
+            <div className="mcp-snippet-list">
+              {guide.snippets.filter((snippet) => !snippet.kind).map(renderSnippet)}
+            </div>
+            {guide.snippets.some((snippet) => snippet.kind === 'temporary') && (
+              <Collapse
+                size="small"
+                className="mcp-temporary-snippets"
+                items={[{
+                  key: 'temporary',
+                  label: '只想临时试一下？仅当前终端有效的写法',
+                  children: (
+                    <div className="mcp-snippet-list">
+                      <Alert type="warning" showIcon title="这种写法只在当前终端窗口有效：关掉窗口、新开终端或从桌面图标启动客户端都读不到 Key，会返回 401。长期使用请用上面的「保存 Key」。" />
+                      {guide.snippets.filter((snippet) => snippet.kind === 'temporary').map(renderSnippet)}
+                    </div>
+                  )
+                }]}
+              />
+            )}
             {!compact && (
               <div className="mcp-client-verify">
                 <Title level={5}>验证连接</Title>
