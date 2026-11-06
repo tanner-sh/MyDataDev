@@ -11,6 +11,7 @@ import { useEditableRows } from './hooks/useEditableRows';
 import { cellValidation, rebaseConflictRow } from './tableEditing';
 import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
+import { DocumentTabStrip } from './components/DocumentTabStrip';
 import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
@@ -3310,16 +3311,36 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     和操作按钮，一行装下，省掉 42px。三个工作区的工具栏结构相同，标签的位置不会随
     模式跳动。
   */
+  const connectionDocuments = useMemo(
+    () => selected ? resources.documents.filter(document => document.connectionId === selected.id) : [],
+    [resources.documents, selected]
+  );
+  const documentTabItems = useMemo(() => connectionDocuments.map(document => ({
+    key: document.key,
+    kind: document.kind,
+    schemaName: document.object.schemaName,
+    name: document.object.name,
+    dirty: document.dirty
+  })), [connectionDocuments]);
+  // ER 图没有对应的标签，此时没有任何一个标签是激活的。
+  const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : '';
   const documentTabs = selected ? (
-    <nav className="resource-document-tabs" aria-label="工作区标签">
-      <Button size="small" type={mode === 'sql' ? 'primary' : 'text'} onClick={() => setMode('sql')}>SQL 工作台</Button>
-      {resources.documents.filter(document => document.connectionId === selected.id).map(document => <span key={document.key} className="resource-document-tab">
-        <Button size="small" type={(mode === document.kind && (document.kind === 'table' ? tableDocumentKey : objectDocumentKey) === document.key) ? 'primary' : 'text'} disabled={tableLoading || objectDetailLoading} onClick={() => document.kind === 'table' ? void applyOpenTable(document.object) : void loadObjectDetail(document.object)}>
-          {document.dirty ? '● ' : ''}{document.object.schemaName ? `${document.object.schemaName}.` : ''}{document.object.name} · {document.kind === 'table' ? '数据' : '结构'}
-        </Button>
-        <Button size="small" type="text" disabled={tableLoading || objectDetailLoading} aria-label={`关闭 ${document.object.name} ${document.kind === 'table' ? '数据' : '结构'}标签`} onClick={() => closeResourceDocument(document)}>×</Button>
-      </span>)}
-    </nav>
+    <DocumentTabStrip
+      activeKey={activeDocumentTabKey}
+      documents={documentTabItems}
+      disabled={tableLoading || objectDetailLoading}
+      onSelectSql={() => setMode('sql')}
+      onSelect={key => {
+        const document = connectionDocuments.find(item => item.key === key);
+        if (!document) return;
+        if (document.kind === 'table') void applyOpenTable(document.object);
+        else void loadObjectDetail(document.object);
+      }}
+      onClose={key => {
+        const document = connectionDocuments.find(item => item.key === key);
+        if (document) closeResourceDocument(document);
+      }}
+    />
   ) : null;
 
   return (
@@ -3471,6 +3492,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               <TableWorkspace
                 documentTabs={documentTabs}
                 connectionId={selected?.id}
+                dbType={selected?.dbType}
                 key={tableDocumentKey}
                 initialScrollTop={resources.snapshots.current.get(tableDocumentKey)?.scrollTop || 0}
                 onViewScroll={top => { const snapshot = resources.snapshots.current.get(tableDocumentKey); if (snapshot) resources.snapshots.current.set(tableDocumentKey, { ...snapshot, scrollTop: top }); }}

@@ -7,6 +7,7 @@ import { CheckOutlined, CopyOutlined, DownOutlined, DownloadOutlined, FilterFill
 import type { ColumnsType, TableProps, TableRef } from 'antd/es/table';
 import type { FilterDropdownProps, SorterResult } from 'antd/es/table/interface';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
+import { useVirtualScrollGuard } from '../hooks/useVirtualScrollGuard';
 import { MAX_SQL_PAGE_SIZE } from '../hooks/useLayoutPreferences';
 import type { ExportFormat, ResultCopyFormat, ResultExportStage, ResultRow, SqlPageNavigation, SqlResult } from '../types';
 import {
@@ -45,6 +46,7 @@ import { cellDisplayKind, cellDraftChanged, cellDraftText } from '../cellDraft';
 import { cellValueMenuItems, type CellValueMenuAction } from '../cellValueMenu';
 import { describeCommitFailure, type CommitFailure } from '../commitFailure';
 import { SqlPreview } from './SqlPreview';
+import { copyText } from '../clipboard';
 import { finishWorkbenchTimingAfterPaint } from '../workbenchPerformance';
 
 const { Text } = Typography;
@@ -107,6 +109,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   const resizeGuideRef = useRef<HTMLDivElement>(null);
   const { viewportRef, scrollY, viewportWidth } = useTableViewportHeight({ enabled: Boolean(result?.resultSet), active });
+  useVirtualScrollGuard(viewportRef, Boolean(result?.resultSet));
   useEffect(() => {
     if (active && !pagingLoading && result?.resultSet && scrollY !== undefined) return finishWorkbenchTimingAfterPaint('result-ready');
   }, [active, pagingLoading, result, scrollY]);
@@ -1170,22 +1173,6 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest('button, a, input, textarea, select, .ant-checkbox, .ant-checkbox-wrapper, [role="button"], [role="checkbox"], [contenteditable="true"]'));
-}
-
-async function copyText(content: string) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(content);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = content;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand('copy');
-  textarea.remove();
-  if (!copied) throw new Error('浏览器未允许访问剪贴板');
 }
 
 const FILTER_OPTIONS: Array<{ value: ResultFilterOperator; label: string }> = [

@@ -94,6 +94,27 @@ const VALUE_UNIT_WIDTH = 7;
 const LABEL_UNIT_WIDTH = 8;
 
 /**
+ * 值的估算宽度（像素）。
+ *
+ * <p>大写字母比小写和数字宽一像素左右。按 7px 一个字符估，一列 30 位的大写十六进制主键
+ * （Oracle 系的 SYS_GUID、雪花 ID 转码）就差出两三个字符，右边明明还空着却被截成省略号 ——
+ * 用户反馈的「单元格内容显示不完整」就有这一种。只给大写字母加宽，小写与数字仍按原值。</p>
+ */
+function valueTextWidth(value: string, limit: number): number {
+  let width = 0;
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    width += code > 0x2e80 && code < 0xff61 || code >= 0xffe0 && code <= 0xffe6
+      ? VALUE_UNIT_WIDTH * 2
+      : code >= 65 && code <= 90 ? UPPERCASE_VALUE_WIDTH : VALUE_UNIT_WIDTH;
+    if (width >= limit) break;
+  }
+  return width;
+}
+
+const UPPERCASE_VALUE_WIDTH = 8.2;
+
+/**
  * 按内容估一个列宽。
  *
  * <p>类型下限只是「整列都是 NULL 时别缩成一条缝」的兜底，真正决定宽度的是内容 ——
@@ -105,14 +126,14 @@ export function suggestedColumnWidth(label: string, typeName: string, values: un
     : /DATE|TIME/.test(type) ? 140
       : isNumericColumnType(type) ? 92
         : 96;
-  const valueUnits = values.slice(0, 30).reduce(
-    (longest: number, value) => Math.max(longest, value == null ? 4 : textUnits(String(value), Math.ceil((320 - 26) / VALUE_UNIT_WIDTH))),
+  const valueWidth = values.slice(0, 30).reduce(
+    (widest: number, value) => Math.max(widest, value == null ? 4 * VALUE_UNIT_WIDTH : valueTextWidth(String(value), 320 - 26)),
     0
   );
   // 表头里的排序与筛选按钮占的是列宽，不是额外的地方 —— 不把它们算进去，「CUSTOMER」这种
   // 长度普通的列名会在一张还空着半屏的表里被截成「CUSTOM…」。
   const width = Math.max(
-    valueUnits * VALUE_UNIT_WIDTH + 26,
+    Math.ceil(valueWidth) + 26,
     textUnits(label, Math.ceil((320 - 26) / LABEL_UNIT_WIDTH)) * LABEL_UNIT_WIDTH + 26 + headerControlsWidth
   );
   return Math.max(MIN_RESULT_COLUMN_WIDTH, Math.min(320, Math.max(typeFloor, width)));
