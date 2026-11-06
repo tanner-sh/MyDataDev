@@ -16,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -45,7 +46,10 @@ class SqlFileScriptExecutionTest {
         var control = new BackgroundTaskControl(properties);
         service = new SqlFileExecutionService(jobs, connections, new ExecutionGuard(), new SqlStatementClassifier(), new SqlScriptSplitter(), new DialectRegistry(),
                 mock(MetadataService.class), mock(AuditRepository.class), properties, coordinator, control, new LargeFileUploadGuard(properties));
+        commands = new com.example.dbadmin.repo.SqlCommandRepository(new JdbcTemplate(source));
+        service.setCommandRepository(commands);
     }
+    private com.example.dbadmin.repo.SqlCommandRepository commands;
     @Test void analysisKeepsCommitAndRejectsWrongModeWithoutDeletingReadyFile() throws Exception {
         long id = upload("INSERT INTO t VALUES(1); COMMIT;");
         assertThat(service.get(id).transaction().controlCount()).isEqualTo(1);
@@ -290,6 +294,68 @@ class SqlFileScriptExecutionTest {
         assertThat(service.get(job.id()).statementDelimiter()).isNull();
         assertThat(service.start(job.id(), null, "tester").status()).isEqualTo("SUCCESS");
         assertThat(target.queryForObject("SELECT COUNT(*) FROM t WHERE id IN (41, 42)", Integer.class)).isEqualTo(2);
+    }
+
+    private List<String> commandLog(long id) {
+        return service.commandView(id, 0, 1000).entries().stream().map(entry -> entry.kind() + ":" + entry.text()).toList();
+    }
+
+    @Test void commandWindowStopsAtTheFirstErrorAndKeepsWhatAutocommitAlreadyWrote() throws Exception {
+        var job = service.submitCommand(1, "INSERT INTO t VALUES(1);\nINSERT INTO missing VALUES(2);\nINSERT INTO t VALUES(3);", "tester",
+                SqlScriptDelimiter.AUTO, "STOP", "AUTOCOMMIT", null, null);
+        var finished = service.get(job.id());
+        assertThat(finished.status()).isEqualTo("FAILED");
+        assertThat(finished.failedStatementIndex()).isEqualTo(2);
+        assertThat(target.queryForList("SELECT id FROM t", Integer.class)).containsExactly(1);
+        List<String> log = commandLog(job.id());
+        assertThat(log).first().asString().startsWith("INFO:开始执行：共 3 条；逐条自动提交；遇错停止");
+        assertThat(log).contains("STATEMENT:INSERT INTO t VALUES(1)", "RESULT:已插入 1 行。", "STATEMENT:INSERT INTO missing VALUES(2)");
+        assertThat(log).anySatisfy(line -> assertThat(line).startsWith("ERROR:").containsIgnoringCase("MISSING"));
+        assertThat(log).noneSatisfy(line -> assertThat(line).contains("VALUES(3)"));
+        assertThat(log).last().asString().startsWith("INFO:已停止：第 2 条失败（第 2–2 行）");
+    }
+
+    @Test void commandWindowCanContinuePastErrorsAndCountsThem() throws Exception {
+        var job = service.submitCommand(1, "INSERT INTO t VALUES(1);\nINSERT INTO missing VALUES(2);\nINSERT INTO t VALUES(3);\nSELECT id FROM t ORDER BY id;",
+                "tester", SqlScriptDelimiter.AUTO, "CONTINUE", "AUTOCOMMIT", null, null);
+        var finished = service.get(job.id());
+        assertThat(finished.status()).isEqualTo("SUCCESS");
+        assertThat(finished.phase()).isEqualTo("COMPLETED_WITH_ERRORS");
+        assertThat(finished.failedStatementIndex()).isEqualTo(2);
+        assertThat(target.queryForList("SELECT id FROM t ORDER BY id", Integer.class)).containsExactly(1, 3);
+        var view = service.commandView(job.id(), 0, 1000);
+        assertThat(view.command().failedCount()).isEqualTo(1);
+        assertThat(view.command().firstFailedIndex()).isEqualTo(2);
+        // 查询结果打成文本表，带行数。
+        assertThat(commandLog(job.id())).anySatisfy(line -> assertThat(line).startsWith("RESULT:ID").contains("\n1\n3").endsWith("已选择 共 2 行。"));
+        assertThat(commandLog(job.id())).last().asString().isEqualTo("INFO:执行完成：成功 3 条，失败 1 条。");
+    }
+
+    @Test void sqlPlusDirectivesShowUpInOrderAndWheneverSwitchesThePolicy() throws Exception {
+        String script = "PROMPT 第一步\nINSERT INTO t VALUES(1);\nWHENEVER SQLERROR CONTINUE\nINSERT INTO missing VALUES(2);\n"
+                + "SET DEFINE OFF\nPROMPT 第二步\nINSERT INTO t VALUES(3);\n";
+        var job = service.submitCommand(1, script, "tester", SqlScriptDelimiter.AUTO, "STOP", "AUTOCOMMIT", null, null);
+        assertThat(service.get(job.id()).status()).isEqualTo("SUCCESS");
+        List<String> log = commandLog(job.id());
+        assertThat(log.indexOf("PROMPT:第一步")).isLessThan(log.indexOf("STATEMENT:INSERT INTO t VALUES(1)"));
+        assertThat(log).contains("INFO:WHENEVER SQLERROR CONTINUE：之后遇错继续。", "INFO:已忽略 SQL*Plus 设置：SET DEFINE OFF");
+        assertThat(log.indexOf("PROMPT:第二步")).isGreaterThan(log.indexOf("INFO:已忽略 SQL*Plus 设置：SET DEFINE OFF"))
+                .isLessThan(log.indexOf("STATEMENT:INSERT INTO t VALUES(3)"));
+        assertThat(target.queryForList("SELECT id FROM t ORDER BY id", Integer.class)).containsExactly(1, 3);
+    }
+
+    @Test void scriptControlledTransactionsFollowTheScriptAndTheTailPolicy() throws Exception {
+        var job = service.submitCommand(1, "INSERT INTO t VALUES(1);\nCOMMIT;\nINSERT INTO t VALUES(2);\n", "tester",
+                SqlScriptDelimiter.AUTO, "STOP", "SCRIPT", "ROLLBACK", null);
+        assertThat(service.get(job.id()).status()).isEqualTo("SUCCESS");
+        assertThat(target.queryForList("SELECT id FROM t", Integer.class)).containsExactly(1);
+        assertThat(commandLog(job.id())).contains("RESULT:已提交。").last().asString().contains("剩余未提交事务已回滚");
+    }
+
+    @Test void plainFileTasksStillRejectWheneverContinue() throws Exception {
+        long id = upload("WHENEVER SQLERROR CONTINUE\nINSERT INTO t VALUES(1);\n");
+        assertThat(service.get(id).status()).isEqualTo("FAILED");
+        assertThat(service.get(id).message()).contains("命令窗口");
     }
 
     private long upload(String sql) throws Exception {

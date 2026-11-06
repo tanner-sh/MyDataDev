@@ -29,12 +29,15 @@ public class SqlFileExecutionController {
 
     private final DataImportService dataImports;
     private final ConnectionAccessService access;
+    private final com.example.dbadmin.service.SqlService sql;
 
     public SqlFileExecutionController(
             SqlFileExecutionService service,
             DataImportService dataImports,
-            ConnectionAccessService access
+            ConnectionAccessService access,
+            com.example.dbadmin.service.SqlService sql
     ) {
+        this.sql = sql;
         this.service = service;
         this.dataImports = dataImports;
         this.access = access;
@@ -53,6 +56,35 @@ public class SqlFileExecutionController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(
                 service.upload(connectionId, fileName, request.getContentLengthLong(), request.getInputStream(), actor,
                         SqlScriptDelimiter.of(delimiterMode, delimiter)));
+    }
+
+    /**
+     * 命令窗口：编辑器里的脚本立即交给后台逐条执行。与工作台执行脚本同一组闸门 —— 分隔符确认、按语句
+     * 要权限、无 WHERE 写操作确认、生产确认（开始执行那一步），一个不少。
+     */
+    @PostMapping("/commands")
+    public ResponseEntity<SqlFileExecutionResponse> submitCommand(
+            @Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlCommandRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        SqlScriptDelimiter delimiter = SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter());
+        access.requireAnyAccess(request.connectionId());
+        sql.requireDelimiterDecision(request.connectionId(), request.sql(), delimiter, request.delimiterChecked());
+        access.requireSql(request.connectionId(), request.sql(), delimiter);
+        if ("SCRIPT".equalsIgnoreCase(request.transactionMode())) access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
+        sql.requireUnscopedMutationConfirmation(request.connectionId(), actor, request.sql(), delimiter, request.unscopedMutationConfirmed());
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.submitCommand(request.connectionId(), request.sql(), actor, delimiter,
+                request.onError(), request.transactionMode(), request.endOfFileAction(), productionConfirmation));
+    }
+
+    /** 命令窗口的一次轮询：任务状态加 after 之后的日志。权限与查看任务相同。 */
+    @GetMapping("/{id}/command-log")
+    public SqlFileExecutionService.CommandView commandLog(@PathVariable long id,
+                                                          @RequestParam(defaultValue = "0") long after,
+                                                          @RequestParam(defaultValue = "500") int limit) {
+        access.requireSqlFileExecution(id);
+        return service.commandView(id, after, limit);
     }
 
     /** 把编辑器里的脚本交给后台执行；开始执行仍要在任务面板里确认，权限按分析出的语句种类在那一步校验。 */

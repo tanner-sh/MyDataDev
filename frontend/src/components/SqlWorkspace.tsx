@@ -1,10 +1,10 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Select, Space, Tabs, Tooltip, Typography } from 'antd';
-import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
+import { Alert, Button, Dropdown, Empty, Input, Layout, Modal, Popover, Segmented, Select, Space, Tabs, Tooltip, Typography } from 'antd';
+import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CodeOutlined, CopyOutlined, DownloadOutlined, DownOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
 } from '@ant-design/icons';
 import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
-import type { AiExecutionFailure, AiExecutionOutcome, AiExecutionPlan, Connection, ExportFormat, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
+import type { AiExecutionFailure, AiExecutionOutcome, AiExecutionPlan, Connection, ExportFormat, SqlCommandView, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { selectSqlTemplate } from '../sqlTemplates';
 import { resultShape, resultShapeText } from '../aiResultShape';
 import { ResultGrid } from './ResultGrid';
@@ -24,9 +24,13 @@ import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 import type { AiAskRequest } from './AiAssistantPanel';
 import { ScriptExecutionLog } from './ScriptExecutionLog';
+import { PanelLoading } from './PanelState';
+import { commandOptionsLabel, effectiveCommandOptions, supportsScriptTransaction, type CommandWindowOptions } from '../commandWindow';
 import { needsScriptLog, resolveResultTabKey, SCRIPT_LOG_KEY, tabbedResults } from '../scriptExecutionLog';
 import { customDelimiterProblem, DELIMITER_MODE_OPTIONS, type SqlDelimiterMode, type SqlDelimiterSetting } from '../scriptDelimiter';
 
+// 命令窗口只在跑过一次命令之后才出现：懒加载，不进可输入工作台的静态依赖。
+const CommandConsole = lazy(() => import('./CommandConsole').then((module) => ({ default: module.CommandConsole })));
 // AI 抽屉只在真的问了一次之后才需要，懒加载它才不会把这条链拉进 SQL 工作台的首屏预算。
 const AiAssistantPanel = lazy(() => import('./AiAssistantPanel').then((module) => ({ default: module.AiAssistantPanel })));
 const AiSqlChatPanel = lazy(() => import('./AiSqlChatPanel').then((module) => ({ default: module.AiSqlChatPanel })));
@@ -39,7 +43,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
   /** 工作区标签条，由 App 统一渲染后交给各工作区放进工具栏最左边。 */
   documentTabs?: ReactNode;
   draftSaveState?: string;
@@ -101,6 +105,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   onScriptTransactionModeChange: (mode: 'AUTO' | 'SCRIPT') => void;
   /** 当前标签页的语句分隔方式（分号 / 空行 / 自定义独占行符号），按标签页记。 */
   onDelimiterChange: (delimiter: SqlDelimiterSetting) => void;
+  /** 命令窗口：把当前或选中的脚本交给后台逐条执行，结果是滚动日志。 */
+  onExecuteCommand: (liveSql?: string) => void;
+  onCommandOptionsChange: (options: CommandWindowOptions) => void;
+  /** 日志里的行号（相对提交的那段文字）在编辑器里选中。 */
+  onLocateCommandLines: (startLine: number, endLine: number) => void;
+  onCloseCommand: () => void;
+  onCommandFinished: (view: SqlCommandView) => void;
   onScriptEndActionChange: (action: 'COMMIT' | 'ROLLBACK') => void;
   onBeginTransaction: () => void;
   onFinishTransaction: (commit: boolean) => void;
@@ -311,6 +322,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   const tabResults = useMemo(() => showScriptLog ? tabbedResults(activeTab.results) : activeTab.results, [activeTab.results, showScriptLog]);
   const tabKeys = useMemo(() => [...(showScriptLog ? [SCRIPT_LOG_KEY] : []), ...tabResults.map((result) => statementResultKey(result))],
     [showScriptLog, tabResults]);
+  const commandOptions = effectiveCommandOptions(activeTab.commandOptions, selected?.dbType);
   const activeResultKey = resolveResultTabKey(activeTab.activeResultKey || (activeTab.results[0] ? statementResultKey(activeTab.results[0]) : undefined), tabKeys);
   const activeResult = activeTab.results.find((result) => statementResultKey(result) === activeResultKey) || tabResults[0] || activeTab.results[0];
   const resultItems = useMemo(() => [...(showScriptLog ? [{
@@ -348,7 +360,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   const preferredSplitRatio = resolveEditorSplitRatio({
     touched: editorSplitRatioTouched,
     storedRatio: editorSplitRatio,
-    hasResults: activeTab.results.length > 0,
+    hasResults: activeTab.results.length > 0 || Boolean(activeTab.command),
     sql: draftSql,
     containerHeight: splitHeight
   });
@@ -546,6 +558,45 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
             </Tooltip>
           </Space>
           <Space size={4} className="sql-toolbar-group sql-toolbar-execution-group">
+            <Space.Compact>
+              <Tooltip title={`命令窗口：交给后台逐条执行，结果是一条滚动日志（${commandOptionsLabel(commandOptions)}）。适合几百上千条、带 PL/SQL 块或需要遇错继续的脚本。`}>
+                <Button className="sql-toolbar-button sql-command-button" size="small" icon={<CodeOutlined />}
+                  danger={selected?.environment === 'prod'}
+                  aria-label="在命令窗口执行当前或选中 SQL" disabled={!canExecute || loading}
+                  onClick={() => { commitDraft(); onExecuteCommand(draftRef.current); }}>
+                  <span className="sql-toolbar-label">命令窗口</span>
+                </Button>
+              </Tooltip>
+              <Popover trigger="click" placement="bottomRight" title="命令窗口选项" content={(
+                <div className="command-options">
+                  <Text type="secondary">遇到错误</Text>
+                  <Segmented size="small" value={commandOptions.onError}
+                    options={[{ value: 'STOP', label: '停止' }, { value: 'CONTINUE', label: '继续执行' }]}
+                    onChange={(value) => onCommandOptionsChange({ ...commandOptions, onError: value as CommandWindowOptions['onError'] })} />
+                  <Text type="secondary">事务</Text>
+                  <Segmented size="small" value={commandOptions.transactionMode}
+                    options={[
+                      { value: 'AUTOCOMMIT', label: '逐条提交' },
+                      { value: 'SCRIPT', label: '脚本控制', disabled: !supportsScriptTransaction(selected?.dbType) }
+                    ]}
+                    onChange={(value) => onCommandOptionsChange({ ...commandOptions, transactionMode: value as CommandWindowOptions['transactionMode'] })} />
+                  {commandOptions.transactionMode === 'SCRIPT' && <>
+                    <Text type="secondary">脚本结束时</Text>
+                    <Segmented size="small" value={commandOptions.endOfFileAction}
+                      options={[{ value: 'ROLLBACK', label: '回滚剩余事务' }, { value: 'COMMIT', label: '提交剩余事务' }]}
+                      onChange={(value) => onCommandOptionsChange({ ...commandOptions, endOfFileAction: value as CommandWindowOptions['endOfFileAction'] })} />
+                  </>}
+                  <Text type="secondary" className="command-options-hint">
+                    {commandOptions.transactionMode === 'SCRIPT'
+                      ? '按脚本里的 COMMIT / ROLLBACK 走；失败的那条由数据库回滚，事务本身保留。'
+                      : '每条成功即生效，失败的那条不生效。'}
+                    脚本里的 WHENEVER SQLERROR CONTINUE / EXIT 会在执行到那一行时改变遇错策略。
+                  </Text>
+                </div>
+              )}>
+                <Button className="sql-toolbar-button" size="small" icon={<DownOutlined />} aria-label="命令窗口选项" disabled={loading} />
+              </Popover>
+            </Space.Compact>
             <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
               {loading && cancellable ? (
                 <Button className="sql-toolbar-button sql-execute-button" size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel}>
@@ -644,7 +695,11 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
               onDiagnose={aiQueryAvailable ? askAiToDiagnose : undefined}
             />
           )}
-          {resultPaneMode === 'collapsed' && activeResult ? (
+          {activeTab.command ? (
+            <Suspense fallback={<PanelLoading compact text="正在打开命令窗口…" />}>
+              <CommandConsole jobId={activeTab.command.jobId} onLocate={onLocateCommandLines} onClose={onCloseCommand} onFinished={onCommandFinished} />
+            </Suspense>
+          ) : resultPaneMode === 'collapsed' && activeResult ? (
             <CollapsedResultHeader result={activeResult} paneMode={resultPaneMode} onPaneModeChange={setResultPaneMode} />
           ) : activeTab.results.length === 1 ? (
             <div className="single-result-panel">

@@ -368,3 +368,27 @@ CREATE TABLE IF NOT EXISTS audit_chain_state (
 );
 INSERT INTO audit_chain_state(id, anchor_hash)
 SELECT 1, NULL WHERE NOT EXISTS (SELECT 1 FROM audit_chain_state WHERE id = 1);
+
+-- 命令窗口（V28）：任务的遇错策略与失败计数，以及逐条执行日志。删任务时级联清理。
+CREATE TABLE IF NOT EXISTS sql_command_job (
+    job_id BIGINT PRIMARY KEY,
+    on_error VARCHAR(16) NOT NULL,
+    failed_count BIGINT NOT NULL DEFAULT 0,
+    first_failed_index BIGINT,
+    log_count BIGINT NOT NULL DEFAULT 0,
+    log_truncated BOOLEAN NOT NULL DEFAULT FALSE,
+    CONSTRAINT fk_sql_command_job_execution FOREIGN KEY (job_id) REFERENCES sql_file_execution(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS sql_command_log (
+    job_id BIGINT NOT NULL,
+    seq BIGINT NOT NULL,
+    kind VARCHAR(16) NOT NULL,
+    statement_index BIGINT,
+    start_line INT,
+    end_line INT,
+    elapsed_ms BIGINT,
+    text CLOB NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (job_id, seq),
+    CONSTRAINT fk_sql_command_log_execution FOREIGN KEY (job_id) REFERENCES sql_file_execution(id) ON DELETE CASCADE
+);

@@ -87,6 +87,12 @@ final class SqlFileStatementReader {
 
     static void readUnits(Path path, Charset charset, String dbType, SqlScriptDelimiter delimiter, int maxStatementChars,
                           SqlScriptParser.UnitConsumer consumer, ProgressConsumer progress) throws Exception {
+        readUnits(path, charset, dbType, delimiter, maxStatementChars, consumer, progress, null);
+    }
+
+    static void readUnits(Path path, Charset charset, String dbType, SqlScriptDelimiter delimiter, int maxStatementChars,
+                          SqlScriptParser.UnitConsumer consumer, ProgressConsumer progress,
+                          SqlScriptParser.DirectiveListener directives) throws Exception {
         try (CountingInputStream input = new CountingInputStream(Files.newInputStream(path));
              BufferedReader reader = new BufferedReader(new InputStreamReader(input, decoder(charset)), 128 * 1024)) {
             long[] lastProgress = {0};
@@ -96,7 +102,7 @@ final class SqlFileStatementReader {
                     lastProgress[0] = input.count();
                     progress.accept(lastProgress[0]);
                 }
-            });
+            }, directives);
             progress.accept(input.count());
         }
     }

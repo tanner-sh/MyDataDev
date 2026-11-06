@@ -496,6 +496,10 @@ export type SqlTab = {
   delimiter?: import('./scriptDelimiter').SqlDelimiterSetting;
   /** 上一次执行时解析器顺带说明的事（被忽略的 SQL*Plus 指令、PROMPT 文本、按哪种方式分的段）。 */
   scriptNotices?: string[];
+  /** 最近一次命令窗口运行；有它时结果区显示命令窗口日志。baseOffset 是提交的那段文字在编辑器里的起点。 */
+  command?: { jobId: number; connectionId: number; baseOffset: number };
+  /** 命令窗口的选项，按标签页记。 */
+  commandOptions?: import('./commandWindow').CommandWindowOptions;
 };
 /** SQL 执行统计：同一批历史数据的另一个视角。 */
 export type SqlHistoryStats = {
@@ -1069,4 +1073,22 @@ export type SchemaExportResponse = {
   cycles: string[][];
   warnings: string[];
   failed: number;
+};
+
+/** 命令窗口：一次运行的日志行与轮询结果（见后端 SqlFileExecutionService.CommandView）。 */
+export type SqlCommandLogKind = 'INFO' | 'STATEMENT' | 'RESULT' | 'OUTPUT' | 'PROMPT' | 'ERROR' | 'COMPILE';
+export type SqlCommandLogEntry = {
+  seq: number;
+  kind: SqlCommandLogKind;
+  statementIndex?: number | null;
+  startLine?: number | null;
+  endLine?: number | null;
+  elapsedMs?: number | null;
+  text: string;
+};
+export type SqlCommandView = {
+  job: SqlFileExecution;
+  command: { jobId: number; onError: 'STOP' | 'CONTINUE'; failedCount: number; firstFailedIndex?: number | null; logCount: number; logTruncated: boolean };
+  entries: SqlCommandLogEntry[];
+  hasMore: boolean;
 };

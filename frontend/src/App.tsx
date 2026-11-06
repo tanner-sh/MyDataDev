@@ -5,6 +5,7 @@ import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValu
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { delimiterRequestFields, scriptProblemOf, type SqlDelimiterSetting } from './scriptDelimiter';
+import { commandOptionsLabel, effectiveCommandOptions, lineRangeOffsets, type CommandWindowOptions } from './commandWindow';
 import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
 import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
 import { finishWorkbenchTimingAfterPaint, markWorkbenchResponse, startWorkbenchTiming } from './workbenchPerformance';
@@ -22,7 +23,7 @@ import { PERSIST_WORK_EVENT, isAuthenticationEnabled, isCurrentUserAdmin } from 
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
-import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCommandView, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
@@ -620,6 +621,115 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         )
       });
     });
+  }
+
+  /** 检测到独占行分隔符时问一句。返回 'use'（按它分段，并记到这个标签页）、'keep'（仍按分号）或 undefined（取消）。 */
+  function confirmDetectedDelimiter(problem: { delimiter: string; statementCount: number; message: string }) {
+    return requestChoice('检测到自定义语句分隔符', (
+      <Typography.Paragraph>
+        {problem.message}<br />
+        按它分段时分号不再起分隔作用，PL/SQL 块会完整保留；这个标签页之后也按它执行，可在工具栏的「分隔」里改回。
+      </Typography.Paragraph>
+    ), [
+      { key: 'keep' as const, label: '仍按分号' },
+      { key: 'use' as const, label: `按「${problem.delimiter}」分段（${problem.statementCount} 条）`, primary: true }
+    ]);
+  }
+
+  /**
+   * 命令窗口：把当前或选中的脚本交给后台逐条执行，结果区换成滚动日志。与普通执行同一组确认 ——
+   * 生产确认、分隔符确认、无 WHERE 写确认；后台跑起来之后工作台不被占住。
+   */
+  async function executeInCommandWindow(liveSql?: string) {
+    if (!selected) {
+      showInfo('请先选择一个数据库连接');
+      return;
+    }
+    const target = sqlExecutionTarget(liveSql);
+    if (!target.sql.trim()) {
+      updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
+      return;
+    }
+    if (transactionExecutePath(transactionState)) {
+      showInfo('命令窗口在独立的连接上执行，请先提交或回滚当前的手动事务');
+      return;
+    }
+    if (sqlBusyRef.current) {
+      showInfo('已有 SQL 操作正在处理，请等待完成后重试');
+      return;
+    }
+    sqlBusyRef.current = true;
+    const tabId = activeSqlTab.id;
+    const connection = selected;
+    try {
+      let productionConfirmation: string | undefined;
+      if (connection.environment === 'prod') {
+        productionConfirmation = await requestProductionConfirmation('在命令窗口执行脚本');
+        if (!productionConfirmation) {
+          updateSqlTab(tabId, { message: '已取消生产 SQL 操作', statusKind: 'info' });
+          return;
+        }
+      }
+      const options = effectiveCommandOptions(activeSqlTab.commandOptions, connection.dbType);
+      let delimiter = activeSqlTab.delimiter;
+      let delimiterChecked = false;
+      let unscopedConfirmed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const job = await api<SqlFileExecution>('/sql-file-executions/commands', {
+            method: 'POST',
+            headers: productionConfirmationHeaders(productionConfirmation),
+            body: JSON.stringify({
+              connectionId: connection.id,
+              sql: target.sql,
+              ...delimiterRequestFields(delimiter),
+              delimiterChecked,
+              onError: options.onError,
+              transactionMode: options.transactionMode,
+              endOfFileAction: options.endOfFileAction,
+              unscopedMutationConfirmed: unscopedConfirmed
+            })
+          });
+          if (job.status === 'FAILED') {
+            // 解析就没过（比如 @文件 这类不支持的指令）：任务不会开始，把原因放到结果区。
+            updateSqlTab(tabId, { message: job.message, statusKind: 'error', errorDetail: job.message });
+            return;
+          }
+          updateSqlTab(tabId, {
+            command: { jobId: job.id, connectionId: connection.id, baseOffset: target.baseOffset },
+            message: `命令窗口已开始执行（${commandOptionsLabel(options)}）`,
+            statusKind: 'info',
+            errorDetail: undefined
+          });
+          return;
+        } catch (error) {
+          const problem = scriptProblemOf(error);
+          if (problem?.kind === 'delimiter-detected' && !delimiterChecked) {
+            const choice = await confirmDetectedDelimiter(problem);
+            if (!choice) { updateSqlTab(tabId, { message: '已取消执行', statusKind: 'info' }); return; }
+            if (choice === 'use') {
+              delimiter = { mode: 'CUSTOM', token: problem.delimiter };
+              updateSqlTab(tabId, { delimiter });
+            }
+            delimiterChecked = true;
+            continue;
+          }
+          if (error instanceof ApiError && error.code === 'UNSCOPED_MUTATION_CONFIRMATION_REQUIRED' && !unscopedConfirmed) {
+            const confirmed = await requestUnscopedMutationConfirmation(error.statements || []);
+            if (!confirmed) { updateSqlTab(tabId, { message: '已取消无 WHERE 条件的 UPDATE/DELETE', statusKind: 'info' }); return; }
+            unscopedConfirmed = true;
+            continue;
+          }
+          throw error;
+        }
+      }
+    } catch (error) {
+      const errorMessage = localizeError(error);
+      updateSqlTab(tabId, { message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
+      toastApi.error(errorMessage);
+    } finally {
+      sqlBusyRef.current = false;
+    }
   }
 
   /** 把编辑器里的脚本交给后台任务，然后打开任务面板落在这个任务上；开始执行在那里确认。 */
@@ -1459,15 +1569,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             const problem = scriptProblemOf(error);
             if (problem?.kind === 'delimiter-detected' && !delimiterChecked) {
               setSqlCancellable(false);
-              const choice = await requestChoice('检测到自定义语句分隔符', (
-                <Typography.Paragraph>
-                  {problem.message}<br />
-                  按它分段时分号不再起分隔作用，PL/SQL 块会完整保留；这个标签页之后也按它执行，可在工具栏的「分隔」里改回。
-                </Typography.Paragraph>
-              ), [
-                { key: 'keep', label: '仍按分号' },
-                { key: 'use', label: `按「${problem.delimiter}」分段（${problem.statementCount} 条）`, primary: true }
-              ]);
+              const choice = await confirmDetectedDelimiter(problem);
               if (!choice) { updateActiveSqlTab({ message: '已取消执行', statusKind: 'info' }); return; }
               if (choice === 'use') {
                 scriptDelimiter = { mode: 'CUSTOM', token: problem.delimiter };
@@ -1520,6 +1622,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           // 耗时，两个数字本来就不该相等，不说明就会被当成哪里算错了。
           : `已执行 ${successCount} 条 SQL，返回 ${returnedRows} 行${truncated ? '（已达到服务端结果大小上限，结果可能不完整）' : ''}，用时 ${data.elapsedMs}ms（含往返）${noticeSuffix}`;
         updateActiveSqlTab({
+          command: undefined,
           scriptNotices: notices,
           results: data.results,
           activeResultKey: statementResultKey(failed || firstResultSet || data.results[0]),
@@ -3177,6 +3280,26 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const selectSqlFileEvent = useStableEvent((file: File) => selectSqlFile(file));
   const openSqlFileTasksEvent = useStableEvent(() => openSqlFileTasks());
   const changeSqlDelimiterEvent = useStableEvent((delimiter: SqlDelimiterSetting) => updateActiveSqlTab({ delimiter }));
+  const executeCommandEvent = useStableEvent((liveSql?: string) => { void executeInCommandWindow(liveSql); });
+  const changeCommandOptionsEvent = useStableEvent((commandOptions: CommandWindowOptions) => updateActiveSqlTab({ commandOptions }));
+  const closeCommandEvent = useStableEvent(() => updateActiveSqlTab({ command: undefined }));
+  const locateCommandLinesEvent = useStableEvent((startLine: number, endLine: number) => {
+    const command = activeSqlTab.command;
+    const text = editorRef.current?.getValue();
+    if (!command || text == null) return;
+    // 行号相对提交的那段文字；那段文字从 baseOffset 开始（选中执行时不是 0）。
+    const range = lineRangeOffsets(text.slice(command.baseOffset), startLine, endLine, command.baseOffset);
+    selectStatementRange(range.start, range.end);
+  });
+  const commandFinishedEvent = useStableEvent((view: SqlCommandView) => {
+    const tab = sqlTabsRef.current.find((item) => item.command?.jobId === view.job.id);
+    if (tab) {
+      const failed = view.job.status !== 'SUCCESS' || view.command.failedCount > 0;
+      updateSqlTab(tab.id, { message: view.job.message, statusKind: view.job.status === 'CANCELLED' ? 'info' : failed ? 'error' : 'success' });
+    }
+    if (view.job.metadataChanged && selected?.id === view.job.connectionId) void loadMetadata(selected, { page: 0, refresh: true, background: true });
+    if (sqlHistoryState.open) void sqlHistoryState.refreshQuietly();
+  });
   const openSnippetsEvent = useStableEvent(() => {
     setSnippetDraft(undefined);
     setSnippetsOpen(true);
@@ -3591,6 +3714,11 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onScriptTransactionModeChange={setScriptTransactionMode}
                 onScriptEndActionChange={setScriptEndAction}
                 onDelimiterChange={changeSqlDelimiterEvent}
+                onExecuteCommand={executeCommandEvent}
+                onCommandOptionsChange={changeCommandOptionsEvent}
+                onLocateCommandLines={locateCommandLinesEvent}
+                onCloseCommand={closeCommandEvent}
+                onCommandFinished={commandFinishedEvent}
                 onBeginTransaction={beginTransactionEvent}
                 onFinishTransaction={finishTransactionEvent}
               />

@@ -40,6 +40,7 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -88,6 +89,13 @@ public class SqlFileExecutionService {
     }
 
     private java.util.function.IntSupplier scriptConcurrencyLimit = () -> 1;
+    /** 命令窗口任务的设置与日志；为空时（部分单测）没有命令窗口。 */
+    private com.example.dbadmin.repo.SqlCommandRepository commands;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setCommandRepository(com.example.dbadmin.repo.SqlCommandRepository commands) {
+        this.commands = commands;
+    }
 
     @org.springframework.beans.factory.annotation.Autowired
     void setMcpConfiguration(com.example.dbadmin.mcp.McpConfigurationService configuration) {
@@ -151,7 +159,7 @@ public class SqlFileExecutionService {
 
         SqlScriptDelimiter resolved = resolveDelimiter(target, connection.dbType(), delimiter);
         return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
-                actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size + delimiterAuditSuffix(resolved), false, resolved);
+                actor, "SQL_FILE_UPLOAD", fileName + "; size=" + size + delimiterAuditSuffix(resolved), false, resolved, null);
     }
 
     /**
@@ -164,6 +172,63 @@ public class SqlFileExecutionService {
         return uploadScript(connectionId, "workbench-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".sql",
                 bytes.length, writer -> { writer.write(sql); return "source=workbench"; }, actor, "SQL_FILE_UPLOAD", "editor script",
                 false, delimiter == null ? SqlScriptDelimiter.AUTO : delimiter, true);
+    }
+
+    /**
+     * 命令窗口：编辑器里的脚本交给后台逐条执行，结果是一条滚动日志。与 {@link #submitScript} 一样落盘、
+     * 当场分析、立即开始 —— 生产确认在这一步就要带上；分析失败或开始失败时任务不会留在等待确认的状态。
+     *
+     * @param onError        STOP（遇错停止）或 CONTINUE（遇错继续）；脚本里的 WHENEVER SQLERROR 会在执行中途改它
+     * @param transactionMode AUTOCOMMIT（逐条提交）或 SCRIPT（Oracle 系，按脚本里的 COMMIT/ROLLBACK）
+     */
+    public SqlFileExecutionResponse submitCommand(long connectionId, String sql, String actor, SqlScriptDelimiter delimiter,
+                                                  String onError, String transactionMode, String endOfFileAction,
+                                                  String productionConfirmation) throws Exception {
+        if (commands == null) throw new IllegalStateException("命令窗口不可用。");
+        if (sql == null || sql.isBlank()) throw new IllegalArgumentException("请输入要执行的 SQL");
+        String policy = onError == null ? "STOP" : onError.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("STOP", "CONTINUE").contains(policy)) throw new IllegalArgumentException("不支持的遇错策略：" + onError);
+        String mode = transactionMode == null ? "AUTOCOMMIT" : transactionMode.trim().toUpperCase(Locale.ROOT);
+        if (!Set.of("AUTOCOMMIT", "SCRIPT").contains(mode)) throw new IllegalArgumentException("命令窗口的事务方式只能是逐条提交或脚本控制。");
+        byte[] bytes = sql.getBytes(StandardCharsets.UTF_8);
+        var job = uploadScript(connectionId, "command-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".sql",
+                bytes.length, writer -> { writer.write(sql); return "source=command-window; onError=" + policy; }, actor, "SQL_FILE_UPLOAD", "command window",
+                true, delimiter == null ? SqlScriptDelimiter.AUTO : delimiter, false, id -> commands.insert(id, policy));
+        if (!"READY".equals(job.status())) return job;
+        try {
+            return start(job.id(), productionConfirmation, actor, mode, "SCRIPT".equals(mode) ? endOfFileAction : "COMMIT");
+        } catch (Exception error) {
+            SqlFileExecution draft = require(job.id());
+            if ("READY".equals(draft.status())) {
+                jobs.markTerminal(draft.id(), "FAILED", "NOT_STARTED", 0, 0, 0, null, null,
+                        "命令未开始执行：" + (error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage()));
+                deleteFileQuietly(draft);
+            }
+            throw error;
+        }
+    }
+
+    /** 命令窗口的一次轮询：任务状态、失败计数，加上 afterSeq 之后的日志。 */
+    public CommandView commandView(long id, long afterSeq, int limit) {
+        if (commands == null) throw new IllegalStateException("命令窗口不可用。");
+        var command = commands.find(id).orElseThrow(() -> new IllegalArgumentException("不是命令窗口任务：" + id));
+        int size = Math.min(Math.max(limit, 1), 1000);
+        var entries = commands.logs(id, Math.max(afterSeq, 0), size + 1);
+        boolean hasMore = entries.size() > size;
+        if (hasMore) entries = entries.subList(0, size);
+        return new CommandView(response(require(id)), command, List.copyOf(entries), hasMore);
+    }
+
+    public record CommandView(SqlFileExecutionResponse job, com.example.dbadmin.repo.SqlCommandRepository.CommandJob command,
+                              List<com.example.dbadmin.repo.SqlCommandRepository.LogEntry> entries, boolean hasMore) { }
+
+    private boolean isCommand(long id) {
+        return commands != null && commands.isCommand(id);
+    }
+
+    /** 命令窗口任务在分析、开始前校验时也要允许 WHENEVER SQLERROR，否则还没执行就被当成不支持的指令拒掉。 */
+    private SqlScriptParser.DirectiveListener directivesFor(SqlFileExecution job) {
+        return isCommand(job.id()) ? ignored -> { } : null;
     }
 
     /** 自动模式下识别独占行分隔符；识别不出或用户已经指定了方式时原样返回。只读文件开头，符号都是 ASCII，编码不影响判断。 */
@@ -221,6 +286,15 @@ public class SqlFileExecutionService {
                                                  ScriptWriter writer, String actor, String auditAction,
                                                  String auditDetailPrefix, boolean inlineAnalysis,
                                                  SqlScriptDelimiter delimiter, boolean detectDelimiter) throws Exception {
+        return uploadScript(connectionId, rawFileName, estimatedBytes, writer, actor, auditAction, auditDetailPrefix,
+                inlineAnalysis, delimiter, detectDelimiter, null);
+    }
+
+    private SqlFileExecutionResponse uploadScript(long connectionId, String rawFileName, long estimatedBytes,
+                                                 ScriptWriter writer, String actor, String auditAction,
+                                                 String auditDetailPrefix, boolean inlineAnalysis,
+                                                 SqlScriptDelimiter delimiter, boolean detectDelimiter,
+                                                 java.util.function.LongConsumer onRegistered) throws Exception {
         String auditDetail = auditDetailPrefix;
         DbConnection connection = connections.require(connectionId);
         String fileName = safeFileName(rawFileName);
@@ -257,7 +331,7 @@ public class SqlFileExecutionService {
         }
         SqlScriptDelimiter resolved = detectDelimiter ? resolveDelimiter(target, connection.dbType(), delimiter) : delimiter;
         return register(connection, fileName, target, size, HexFormat.of().formatHex(digest.digest()),
-                actor, auditAction, auditDetail + delimiterAuditSuffix(resolved), inlineAnalysis, resolved);
+                actor, auditAction, auditDetail + delimiterAuditSuffix(resolved), inlineAnalysis, resolved, onRegistered);
     }
 
     /**
@@ -277,7 +351,7 @@ public class SqlFileExecutionService {
 
     private SqlFileExecutionResponse register(DbConnection connection, String fileName, Path target, long size,
                                               String checksum, String actor, String auditAction, String auditDetail, boolean inlineAnalysis,
-                                              SqlScriptDelimiter delimiter) throws Exception {
+                                              SqlScriptDelimiter delimiter, java.util.function.LongConsumer onRegistered) throws Exception {
         Instant expiresAt = Instant.now().plus(Math.max(1, properties.getSqlFile().getReadyTtlHours()), ChronoUnit.HOURS);
         SqlFileExecution draft = new SqlFileExecution(0, connection.id(), connection.name(), connection.dbType(), fileName,
                 target.toString(), size, checksum, null, "ANALYZING", "DETECTING_ENCODING",
@@ -292,6 +366,8 @@ public class SqlFileExecutionService {
         }
         try {
             if (delimiter != null && !delimiter.isAuto()) jobs.updateStatementDelimiter(id, delimiter.encode());
+            // 分析之前就要知道它是不是命令窗口任务：命令窗口允许 WHENEVER SQLERROR CONTINUE，普通任务不允许。
+            if (onRegistered != null) onRegistered.accept(id);
             analyzedSources.put(id, fingerprint(Files.readAttributes(target, BasicFileAttributes.class)));
             taskControl.clear(sqlFileOperationKey(id));
             if (inlineAnalysis) analyze(id);
@@ -351,10 +427,12 @@ public class SqlFileExecutionService {
                                                 String transactionMode, String endOfFileAction) throws Exception {
         String mode = transactionMode == null ? "BATCH" : transactionMode.toUpperCase(Locale.ROOT);
         String ending = endOfFileAction == null ? ("SCRIPT".equals(mode) ? "ROLLBACK" : "COMMIT") : endOfFileAction.toUpperCase(Locale.ROOT);
-        if (!Set.of("BATCH", "SCRIPT").contains(mode) || !Set.of("COMMIT", "ROLLBACK").contains(ending)) {
+        boolean command = isCommand(id);
+        // 逐条提交只给命令窗口：普通文件任务按批提交是为了吞吐，逐条提交对它没有好处。
+        if (!(Set.of("BATCH", "SCRIPT").contains(mode) || (command && "AUTOCOMMIT".equals(mode))) || !Set.of("COMMIT", "ROLLBACK").contains(ending)) {
             throw new IllegalArgumentException("不支持的事务模式或文件结束策略。");
         }
-        if ("BATCH".equals(mode) && !"COMMIT".equals(ending)) throw new IllegalArgumentException("分批提交模式必须提交尾批。");
+        if (!"SCRIPT".equals(mode) && !"COMMIT".equals(ending)) throw new IllegalArgumentException("分批提交模式必须提交尾批。");
         SqlFileExecution job = require(id);
         if (!"READY".equals(job.status())) throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_NOT_READY", "SQL 文件尚未完成解析或已经执行。");
         if (job.expiresAt().isBefore(Instant.now())) throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_FILE_EXPIRED", "SQL 文件已过期，请重新选择文件。");
@@ -368,8 +446,8 @@ public class SqlFileExecutionService {
         }
         if ("SCRIPT".equals(mode)) {
             connections.requireNoManualTransaction(job.connectionId());
-            SqlFileStatementReader.read(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
-                    properties.getSqlFile().getMaxStatementChars(), (index, sql) -> SqlScriptSyntax.validateScriptControl(sql), ignored -> { });
+            SqlFileStatementReader.readUnits(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
+                    properties.getSqlFile().getMaxStatementChars(), unit -> SqlScriptSyntax.validateScriptControl(unit.sql()), ignored -> { }, directivesFor(job));
         }
         boolean mutation = job.mutationCount() + job.ddlCount() + job.unknownCount() > 0;
         if (mutation || "SCRIPT".equals(mode)) guard.requireMutationAllowed(connection, productionConfirmation);
@@ -515,7 +593,8 @@ public class SqlFileExecutionService {
         boolean[] flags = new boolean[2];
         long[] lastProgressNanos = {0};
         SqlScriptDelimiter delimiter = delimiterOf(job);
-        SqlFileStatementReader.read(path, charset, job.targetDbType(), delimiter, properties.getSqlFile().getMaxStatementChars(), (index, sql) -> {
+        SqlFileStatementReader.readUnits(path, charset, job.targetDbType(), delimiter, properties.getSqlFile().getMaxStatementChars(), unit -> {
+            String sql = unit.sql();
             ensureNotCancelled(job.id());
             // GO batches may contain multiple ordinary SQL statements; PL/SQL bodies must remain opaque.
             boolean sqlServer = Set.of("sqlserver", "sql-server", "mssql").contains(job.targetDbType().toLowerCase(Locale.ROOT));
@@ -540,11 +619,12 @@ public class SqlFileExecutionService {
             if (progressDue(lastProgressNanos)) {
                 jobs.updateAnalysisProgress(job.id(), Math.min(bytes, job.fileSize()));
             }
-        });
+        }, directivesFor(job));
         return new FileAnalysis(counts, flags);
     }
 
     private void execute(long id) {
+        if (isCommand(id)) { executeCommandJob(id); return; }
         if ("SCRIPT".equals(require(id).transaction().mode())) { executeScriptJob(id); return; }
         SqlFileExecution job = require(id);
         long[] current = {0};
@@ -777,6 +857,244 @@ public class SqlFileExecutionService {
         }
     }
 
+    private static final int COMMAND_PREVIEW_ROWS = 20;
+    private static final int COMMAND_MAX_COUNTED_ROWS = 100_000;
+    private static final int COMMAND_LOG_LIMIT = 20_000;
+    private static final int COMMAND_ERROR_LIMIT = 5_000;
+    private static final int COMMAND_OUTPUT_LINES = 500;
+
+    /**
+     * 命令窗口的执行：逐条执行、逐条记日志，遇错按策略停或继续。
+     *
+     * <p>与 {@link #execute} 的分批提交不同，这里不用 JDBC batch —— 批里哪一条失败、每条影响几行，
+     * 驱动给得并不可靠，而这两件事正是命令窗口要显示的。事务两种：逐条提交（autocommit，每条成功即
+     * 生效，失败的那条不生效，遇错继续时语义最清楚），或 Oracle 系的脚本控制事务（沿用
+     * {@link SqlScriptTransaction}，与 SQL*Plus 一致：按脚本里的 COMMIT/ROLLBACK 走，失败的那条由数据库
+     * 做语句级回滚，事务本身还在，所以遇错继续也成立）。连接断了不管什么策略都停：后面每条都会失败。</p>
+     */
+    private void executeCommandJob(long id) {
+        SqlFileExecution job = require(id);
+        var settings = commands.find(id).orElseThrow();
+        boolean[] continueOnError = {"CONTINUE".equals(settings.onError())};
+        boolean scriptTx = "SCRIPT".equals(job.transaction().mode());
+        boolean commitAtEnd = "COMMIT".equals(job.transaction().endOfFileAction());
+        CommandLog out = new CommandLog(id);
+        long[] current = {0}, success = {0}, failed = {0}, queryRows = {0}, lastProgress = {0};
+        Long[] firstFailed = {null};
+        String[] firstFailedSql = {null};
+        CompilationCollector[] compiled = {null};
+        SqlScriptTransaction[] scope = {null};
+        SqlScriptParser.Unit[] currentUnit = {null};
+        Runnable persist = () -> {
+            var tx = scope[0];
+            if (tx != null) jobs.updateTransactionProgress(id, tx.commits, tx.rollbacks, tx.lastCommit, tx.outcome,
+                    currentUnit[0] == null ? null : currentUnit[0].startLine(),
+                    currentUnit[0] == null ? null : currentUnit[0].endLine());
+        };
+        try {
+            jobs.markRunning(id);
+            ensureNotCancelled(id);
+            verifyUnchanged(job);
+            DbConnection target = connections.require(job.connectionId());
+            DatabaseDialect dialect = dialects.dialectFor(target);
+            if (scriptTx) connections.requireNoManualTransaction(job.connectionId());
+            out.info("开始执行：共 " + job.statementTotal() + " 条；"
+                    + (scriptTx ? "脚本控制事务（结束时" + (commitAtEnd ? "提交" : "回滚") + "剩余事务）" : "逐条自动提交")
+                    + "；遇错" + (continueOnError[0] ? "继续" : "停止") + "。");
+            boolean executionCompleted = false;
+            String cleanupWarning = "";
+            try (Connection connection = connections.open(job.connectionId());
+                 SqlScriptTransaction tx = scriptTx ? new SqlScriptTransaction(connection, persist) : null) {
+                if (job.sessionChanged()) connections.discardOnClose(connection);
+                if (!scriptTx) connection.setAutoCommit(true);
+                scope[0] = tx;
+                try (Statement statement = connection.createStatement()) {
+                    runningStatements.put(id, statement);
+                    dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
+                    compiled[0] = new CompilationCollector(id, dialect);
+                    RoutineOutput.enable(connection, dialect);
+                    SqlFileStatementReader.readUnits(checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), delimiterOf(job),
+                            properties.getSqlFile().getMaxStatementChars(), unit -> {
+                        ensureNotCancelled(id);
+                        currentUnit[0] = unit;
+                        current[0] = unit.index();
+                        out.add("STATEMENT", unit, null, SqlCommandOutput.summary(unit.sql()));
+                        long started = System.nanoTime();
+                        try {
+                            statement.clearWarnings();
+                            try { connection.clearWarnings(); } catch (Exception ignored) { }
+                            boolean result = tx != null ? tx.execute(statement, unit.sql(), unit.index()) : statement.execute(unit.sql());
+                            List<String> outcome = new ArrayList<>();
+                            while (true) {
+                                if (result) {
+                                    try (ResultSet rows = statement.getResultSet()) {
+                                        var rendered = SqlCommandOutput.render(rows, COMMAND_PREVIEW_ROWS, COMMAND_MAX_COUNTED_ROWS, () -> ensureNotCancelled(id));
+                                        queryRows[0] += rendered.rows();
+                                        outcome.add(rendered.text());
+                                    }
+                                } else {
+                                    int count = statement.getUpdateCount();
+                                    if (count == -1) break;
+                                    outcome.add(SqlCommandOutput.updateText(unit.sql(), count));
+                                }
+                                result = statement.getMoreResults();
+                            }
+                            out.add("RESULT", unit, elapsedMillis(started), outcome.isEmpty() ? "执行成功。" : String.join("\n", outcome));
+                            for (String line : RoutineOutput.read(connection, dialect, statement, COMMAND_OUTPUT_LINES)) out.add("OUTPUT", unit, null, line);
+                            List<String> compileErrors = compiled[0].collectNew(connection, unit.sql());
+                            if (!compileErrors.isEmpty()) out.add("COMPILE", unit, null, "对象已创建但编译失败：\n" + String.join("\n", compileErrors));
+                            success[0]++;
+                        } catch (CancelledException cancelled) {
+                            throw cancelled;
+                        } catch (Exception error) {
+                            failed[0]++;
+                            if (firstFailed[0] == null) { firstFailed[0] = unit.index(); firstFailedSql[0] = unit.sql(); }
+                            try { commands.recordFailure(id, unit.index()); } catch (Exception ignored) { }
+                            // 出错之前 PUT_LINE 的内容往往正是定位问题的线索，先打出来。
+                            for (String line : RoutineOutput.read(connection, dialect, statement, COMMAND_OUTPUT_LINES)) out.add("OUTPUT", unit, null, line);
+                            out.add("ERROR", unit, elapsedMillis(started), safeMessage(error));
+                            if (!continueOnError[0] || connectionLost(error)) throw new StatementFailure(unit.index(), unit.sql(), error);
+                        }
+                        if (progressDue(lastProgress)) {
+                            out.flush();
+                            jobs.updateExecutionProgress(id, current[0], success[0], queryRows[0], "已执行第 " + current[0] + " / " + job.statementTotal() + " 条"
+                                    + (failed[0] > 0 ? "，失败 " + failed[0] + " 条" : "") + "。");
+                        }
+                    }, ignored -> ensureNotCancelled(id), directive -> {
+                        switch (directive.kind()) {
+                            case PROMPT -> out.add("PROMPT", directive.line(), directive.text());
+                            case NOTICE -> out.add("INFO", directive.line(), directive.text());
+                            case ON_ERROR_CONTINUE -> {
+                                continueOnError[0] = true;
+                                out.add("INFO", directive.line(), directive.text() + "：之后遇错继续。");
+                            }
+                            case ON_ERROR_EXIT -> {
+                                continueOnError[0] = false;
+                                out.add("INFO", directive.line(), directive.text() + "：之后遇错停止。");
+                            }
+                        }
+                    });
+                    ensureNotCancelled(id);
+                    currentUnit[0] = null;
+                    if (tx != null) tx.finish(commitAtEnd, current[0]);
+                    executionCompleted = true;
+                } catch (Exception error) {
+                    if (tx != null) tx.fail(error);
+                    throw error;
+                } finally {
+                    runningStatements.remove(id);
+                }
+            } catch (Exception error) {
+                if (!executionCompleted) throw error;
+                cleanupWarning = cleanupWarning(job, error);
+            }
+            String summary = "执行完成：成功 " + success[0] + " 条" + (failed[0] > 0 ? "，失败 " + failed[0] + " 条" : "") + "。"
+                    + (scriptTx && scope[0] != null ? scope[0].summary() : "")
+                    + (compiled[0] == null ? "" : compiled[0].summary()) + cleanupWarning;
+            out.info(summary);
+            out.flush();
+            jobs.markTerminal(id, "SUCCESS", failed[0] > 0 ? "COMPLETED_WITH_ERRORS" : "COMPLETED", current[0], success[0], queryRows[0],
+                    firstFailed[0], firstFailedSql[0] == null ? null : preview(firstFailedSql[0]), summary);
+            audit.onConnection(job.actor(), "SQL_FILE_SUCCESS", job.connectionId(), "job=" + id + "; mode=COMMAND; statements=" + success[0] + "; failed=" + failed[0]);
+        } catch (Exception error) {
+            boolean cancelled = error instanceof CancelledException || cancellationRequested(id);
+            var unit = currentUnit[0];
+            String transaction = scriptTx && scope[0] != null ? "；" + scope[0].summary() : "";
+            String detail = cancelled ? "已取消：成功 " + success[0] + " 条" + (failed[0] > 0 ? "，失败 " + failed[0] + " 条" : "") + "。" + transaction
+                    : (error instanceof StatementFailure failure
+                        ? "已停止：第 " + failure.index + " 条失败" + (unit == null ? "" : "（第 " + unit.startLine() + "–" + unit.endLine() + " 行）")
+                            + "，此前成功 " + success[0] + " 条。" + transaction
+                        : "执行中断：" + safeMessage(error) + transaction);
+            out.info(detail);
+            out.flush();
+            Throwable cause = error instanceof StatementFailure failure ? failure.getCause() : error;
+            jobs.markTerminal(id, cancelled ? "CANCELLED" : "FAILED", cancelled ? "CANCELLED" : "EXECUTION_FAILED", current[0], success[0], queryRows[0],
+                    unit == null ? firstFailed[0] : Long.valueOf(unit.index()), unit == null ? null : preview(unit.sql()),
+                    cancelled ? detail : detail + " " + safeMessage(cause));
+            audit.onConnection(job.actor(), cancelled ? "SQL_FILE_CANCELLED" : "SQL_FILE_FAILED", job.connectionId(), "job=" + id + "; mode=COMMAND; " + detail);
+        } finally {
+            out.flush();
+            runningStatements.remove(id);
+            analyzedSources.remove(id);
+            if (job.metadataChanged()) metadata.invalidateConnection(job.connectionId());
+            deleteFileQuietly(job);
+        }
+    }
+
+    private static long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    private static boolean connectionLost(Throwable error) {
+        return error instanceof java.sql.SQLRecoverableException || error instanceof java.sql.SQLNonTransientConnectionException
+                || (error instanceof java.sql.SQLException sqlError && sqlError.getSQLState() != null && sqlError.getSQLState().startsWith("08"));
+    }
+
+    /**
+     * 命令窗口日志的缓冲写入：攒一批或隔 300ms 落一次库，不在每条语句后各写一次。
+     *
+     * <p>日志有上限：超过 {@link #COMMAND_LOG_LIMIT} 行后只再记错误（最多 {@link #COMMAND_ERROR_LIMIT} 条），
+     * 并在截断处写一行说明。几万条 INSERT 的脚本，成功的那几万行谁也不会去看，失败的那几条一条都不能丢。
+     * 写日志本身失败不影响执行：日志是旁路信息。</p>
+     */
+    private final class CommandLog {
+        private final long id;
+        private final List<com.example.dbadmin.repo.SqlCommandRepository.LogEntry> buffer = new ArrayList<>();
+        private long seq;
+        private long accepted;
+        private int errorsAfterLimit;
+        private boolean truncated;
+        private boolean pendingTruncation;
+        private long lastFlush = System.nanoTime();
+
+        CommandLog(long id) {
+            this.id = id;
+        }
+
+        void info(String text) {
+            add("INFO", null, null, null, null, text);
+        }
+
+        void add(String kind, SqlScriptParser.Unit unit, Long elapsed, String text) {
+            add(kind, unit.index(), unit.startLine(), unit.endLine(), elapsed, text);
+        }
+
+        void add(String kind, int line, String text) {
+            add(kind, null, line, line, null, text);
+        }
+
+        void add(String kind, Long statementIndex, Integer startLine, Integer endLine, Long elapsed, String text) {
+            boolean important = "ERROR".equals(kind) || "INFO".equals(kind) && statementIndex == null && startLine == null;
+            if (accepted >= COMMAND_LOG_LIMIT) {
+                if (!truncated) {
+                    truncated = true;
+                    pendingTruncation = true;
+                    buffer.add(new com.example.dbadmin.repo.SqlCommandRepository.LogEntry(++seq, "INFO", null, null, null, null,
+                            "日志已超过 " + COMMAND_LOG_LIMIT + " 行，之后只记录错误与结束信息。"));
+                }
+                if (!important || errorsAfterLimit >= COMMAND_ERROR_LIMIT) return;
+                errorsAfterLimit++;
+            }
+            accepted++;
+            String value = text == null ? "" : text.length() > SqlCommandOutput.MAX_TEXT ? text.substring(0, SqlCommandOutput.MAX_TEXT) + "…" : text;
+            buffer.add(new com.example.dbadmin.repo.SqlCommandRepository.LogEntry(++seq, kind,
+                    statementIndex, startLine, endLine, elapsed, value));
+            if (buffer.size() >= 100 || System.nanoTime() - lastFlush > 300_000_000L) flush();
+        }
+
+        void flush() {
+            lastFlush = System.nanoTime();
+            if (buffer.isEmpty() && !pendingTruncation) return;
+            try {
+                commands.append(id, List.copyOf(buffer), pendingTruncation);
+            } catch (Exception error) {
+                log.warn("Command window log write failed: taskId={}", id, error);
+            }
+            buffer.clear();
+            pendingTruncation = false;
+        }
+    }
+
     private String cleanupWarning(SqlFileExecution job, Exception error) {
         log.warn("SQL file resource cleanup failed after execution completed: taskId={}, connectionId={}, mode={}",
                 job.id(), job.connectionId(), job.transaction().mode(), error);
@@ -904,13 +1222,20 @@ public class SqlFileExecutionService {
         }
 
         void collect(Connection connection, String sql) {
-            if (dialect.compilationErrorsSql() == null) return;
+            collectNew(connection, sql);
+        }
+
+        /** 与 collect 相同，另外返回这条语句新增的编译错误行，命令窗口把它们紧跟在语句后面打出来。 */
+        List<String> collectNew(Connection connection, String sql) {
+            if (dialect.compilationErrorsSql() == null) return List.of();
             var target = CompilationDiagnostics.target(sql);
-            if (target.isEmpty()) return;
+            if (target.isEmpty()) return List.of();
             var errors = CompilationDiagnostics.read(connection, dialect, sql, null, properties.getSql().getTimeoutSeconds());
-            if (!log.record(target.get(), errors)) return;
-            List<String> lines = log.lines();
-            try { jobs.updateCompilationErrors(id, lines.isEmpty() ? null : String.join("\n", lines)); } catch (Exception ignored) { }
+            if (log.record(target.get(), errors)) {
+                List<String> lines = log.lines();
+                try { jobs.updateCompilationErrors(id, lines.isEmpty() ? null : String.join("\n", lines)); } catch (Exception ignored) { }
+            }
+            return errors.stream().map(error -> CompilationDiagnostics.describe(target.get(), error)).toList();
         }
 
         String summary() { return log.summary(); }

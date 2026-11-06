@@ -788,6 +788,16 @@ public final class ApiDtos {
         }
     }
 
+    /**
+     * 命令窗口：onError 为 STOP/CONTINUE，transactionMode 为 AUTOCOMMIT（逐条提交）或 SCRIPT（Oracle 系脚本控制事务）。
+     * 分隔方式与 delimiterChecked、unscopedMutationConfirmed 的含义与工作台执行脚本相同。
+     */
+    public record SqlCommandRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql,
+                                    @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter, boolean delimiterChecked,
+                                    @Size(max = 16) String onError, @Size(max = 16) String transactionMode, @Size(max = 16) String endOfFileAction,
+                                    boolean unscopedMutationConfirmed) {
+    }
+
     public record SqlEditorScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql,
                                          @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter) {
     }
