@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DRAWER_WIDTH } from '../constants';
 import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Tooltip, Typography, Upload } from 'antd';
 import type { ReactNode } from 'react';
@@ -31,6 +31,7 @@ import type { TableQuery } from '../tableQuery';
 import { TableQueryBuilder } from './TableQueryBuilder';
 import { TableBatchBar } from './TableBatchBar';
 import { liveSelection } from '../tableBatchEdit';
+import { tableToolbarCollapsed } from '../tableToolbarLayout';
 
 const { Header } = Layout;
 const { Text } = Typography;
@@ -140,12 +141,15 @@ export const TableWorkspace = memo(function TableWorkspace({
   // App already ran buildChanges over every row to produce this list; recomputing
   // it here meant diffing the whole table twice on each keystroke.
   const changeSummary = useMemo(() => summarizeRowChanges(pendingChanges), [pendingChanges]);
+  const { elementRef: workspaceRef, width: workspaceWidth } = useElementWidth();
+  const toolbarCollapsed = tableToolbarCollapsed(workspaceWidth, pendingCount > 0);
   const secondaryMenu: MenuProps = {
     items: [
-      { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading || !onBackupTable },
-      // 导出在工具栏上自己是一个下拉，收进「更多」时得跟着进来成为子菜单 ——
+      // 备份此表是低频操作（对象树右键、对象详情里也有），只放在「更多」里，不常驻工具栏。
+      ...(onBackupTable ? [{ key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading }] : []),
+      // 工具栏收窄时，浏览类操作整组收进来；导出在工具栏上自己是一个下拉，进来时成为子菜单 ——
       // 少了它，工具栏一收窄，导出就整个没有入口了。
-      {
+      ...(!toolbarCollapsed ? [] : [...(onBackupTable ? [{ type: 'divider' as const }] : []), {
         key: 'export',
         icon: <DownloadOutlined />,
         label: '导出',
@@ -155,6 +159,7 @@ export const TableWorkspace = memo(function TableWorkspace({
       { key: 'reload', icon: <ReloadOutlined />, label: '刷新数据', disabled: !activeTable || loading },
       { key: 'add', icon: <PlusOutlined />, label: '新增行', disabled: !tableData || loading || editingDisabled },
       { key: 'import', icon: <UploadOutlined />, label: '导入数据', disabled: !tableData || loading || editingDisabled }
+      ])
     ],
     onClick: ({ key }) => {
       if (key.startsWith('export:')) onExport?.(key.slice('export:'.length) as ExportFormat);
@@ -179,7 +184,7 @@ export const TableWorkspace = memo(function TableWorkspace({
   }, [previewSql.length, loading]);
 
   return (
-    <div className="workspace table-workspace">
+    <div ref={workspaceRef} className="workspace table-workspace">
       <Header className="workspace-toolbar">
         {/* 表名由标签条给出（那里还带着「· 数据」和未提交标记），标题里不再写第二遍。 */}
         {documentTabs}
@@ -204,8 +209,7 @@ export const TableWorkspace = memo(function TableWorkspace({
         */}
         <div className="table-toolbar-actions" data-pending={pendingCount > 0 ? 'true' : undefined}>
           <TableQueryBuilder columns={tableData?.columns || []} value={tableQuery} disabled={!tableData || loading} onApply={onTableQueryChange} />
-          <Space size={8} className="table-secondary-actions">
-            <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading || !onBackupTable} onClick={onBackupTable}>备份此表</Button>
+          {!toolbarCollapsed && <Space size={8} className="table-secondary-actions">
             {/*
               导出走的是浏览那条查询（服务端去掉分页重跑），所以导出的内容与屏幕上看到的
               筛选、排序完全一致 —— 以前要先切到 SQL 手写一条 SELECT。
@@ -234,10 +238,10 @@ export const TableWorkspace = memo(function TableWorkspace({
                 <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
               </Tooltip>
             </Upload>
-          </Space>
-          <Dropdown menu={secondaryMenu} trigger={['click']}>
+          </Space>}
+          {(secondaryMenu.items?.length ?? 0) > 0 && <Dropdown menu={secondaryMenu} trigger={['click']}>
             <Button className="table-more-actions" size="small" icon={<MoreOutlined />} aria-label="更多表格操作">更多</Button>
-          </Dropdown>
+          </Dropdown>}
           {/*
             这五个按钮只在有待提交修改时才有事可做。常驻的话，工具栏右侧四百来像素长年是
             一排灰按钮 —— 灰按钮教不了任何东西，只是噪音，还把「导出/刷新/新增行/导入」
@@ -399,3 +403,22 @@ export const TableWorkspace = memo(function TableWorkspace({
     </div>
   );
 });
+
+/** 量元素宽度（ResizeObserver）。隐藏时（不在当前标签页）保留上一次的值，不清零。 */
+function useElementWidth() {
+  const elementRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number>();
+  useLayoutEffect(() => {
+    const element = elementRef.current;
+    if (!element) return;
+    const measure = () => {
+      const next = element.getBoundingClientRect().width;
+      if (next > 0) setWidth((current) => current === next ? current : next);
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => observer?.disconnect();
+  }, []);
+  return { elementRef, width };
+}

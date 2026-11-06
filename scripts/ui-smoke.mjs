@@ -885,7 +885,10 @@ try {
     await page.sleep(500);
     await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal-confirm button')].find(node => node.textContent.replace(/\\s/g, '') === '关闭标签')?.click(); })()`);
     await page.sleep(500);
-    await page.evaluate(`(() => { [...document.querySelectorAll('.sql-tabs button')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
+    // 「找回关闭的 SQL」收进了标签栏右侧的「标签操作」下拉。
+    await page.evaluate(`document.querySelector('.sql-tabs button[aria-label="标签操作"]')?.click()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
     await page.sleep(800);
     check('可以找回关闭的 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
 
@@ -952,6 +955,19 @@ try {
     check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
     await page.shot('09-查询结果');
     await auditLayout('查询结果');
+
+    // 命令窗口、本地 SQL 文件、分隔方式与命令窗口选项都收进了执行按钮右侧的下拉。
+    await page.evaluate(`document.querySelector('button[aria-label="更多执行方式与选项"]')?.click()`);
+    await page.sleep(400);
+    const executionMenu = await page.evaluate(`(() => {
+      const popover = [...document.querySelectorAll('.ant-popover:not(.ant-popover-hidden)')].find(node => node.querySelector('.execution-menu'));
+      const text = popover?.textContent || '';
+      return { open: Boolean(popover), command: text.includes('在命令窗口执行'), file: text.includes('执行本地 SQL 文件'), delimiter: text.includes('语句分隔') };
+    })()`);
+    check('执行下拉包含命令窗口、本地文件与分隔方式', executionMenu.open && executionMenu.command && executionMenu.file && executionMenu.delimiter, JSON.stringify(executionMenu));
+    await page.shot('09a-执行方式与选项');
+    await page.evaluate(`document.querySelector('button[aria-label="更多执行方式与选项"]')?.click()`);
+    await page.sleep(300);
 
     // 结果编辑曾因重建整批行记录触发 scrollTo(0)。滚到中间再改一格，保留当前位置。
     const editScroll = await page.evaluate(`(() => {
