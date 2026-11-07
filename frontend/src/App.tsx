@@ -2251,6 +2251,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       setTablePage(cached.page); setTableCursorStack(cached.cursors); setTableQuery(cached.query);
       layoutPreferences.setTablePageSize(cached.pageSize); setPreviewSql(cached.preview);
       setTableRowCount(cached.rowCount); setActiveTableRelations(cached.relations); setMode('table');
+      // 状态栏是各标签共用的一行：切回来时要换成这张表的，否则还挂着上一张表的「已加载 xxx」。
+      if (cached.data) setWorkspaceStatus({ kind: 'success', text: `已加载 ${cached.table.tableName}` });
       if (!cached.data) await loadTable(cached.table, { page: 0, pageSize: cached.pageSize, reset: true, query: cached.query });
       return;
     }
@@ -2373,7 +2375,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     if (existing && !options.refresh) {
       setActiveObjectTarget(existing.object); setActiveObjectDetail(existing.detail || null);
       updateObjectDesignDirty(existing.dirty); setMode('object');
-      if (existing.detail) return;
+      if (existing.detail) {
+        setWorkspaceStatus({ kind: 'success', text: `已加载对象详情：${existing.detail.name}` });
+        return;
+      }
     }
     if (!resources.ensure({ key: documentKey, connectionId, kind: 'object', object, detail: existing?.detail, dirty: existing?.dirty || false })) {
       showInfo('最多打开 20 个表或对象标签，请先关闭不需要的标签。'); return;
