@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DatabaseFamily;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.ResultSourceTable;
@@ -438,8 +439,12 @@ public class SqlService {
                             result = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
                         }
                         results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
-                        // SQL Server GO preserves a batch; consume all its results instead of losing later SELECTs.
-                        if (java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbConnection.dbType().toLowerCase(java.util.Locale.ROOT))) {
+                        // 一条语句可能交回多个结果：SQL Server 的 GO 批次、MySQL 的 CALL（过程里每个 SELECT 一个结果集）、
+                        // Oracle 12c 起的隐式结果集（DBMS_SQL.RETURN_RESULT）。原来只有 SQL Server 读后续结果，
+                        // 别的库上 CALL 一个返回两个结果集的过程只看得到第一个，第二个悄无声息地丢了。
+                        // SQL Server 之外，后续的更新计数只会是 MySQL 在 CALL 末尾附带的那个状态计数，读掉但不列出来。
+                        boolean batchCounts = DatabaseFamily.of(dbConnection.dbType()).equals("sqlserver");
+                        {
                             while (true) {
                                 boolean more = jdbc.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
                                 if (!more && jdbc.getUpdateCount() == -1) break;
@@ -453,7 +458,9 @@ public class SqlService {
                                         returnedCells += nextResult.rows().size() * nextResult.columns().size();
                                         returnedTextChars += SqlResultReader.textChars(nextResult);
                                     }
-                                } else nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
+                                } else if (batchCounts) {
+                                    nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
+                                } else continue;
                                 results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, nextResult));
                             }
                         }
@@ -511,9 +518,13 @@ public class SqlService {
             boolean confirmed
     ) {
         List<Map<String, Object>> unsafeStatements = new ArrayList<>();
+        // T-SQL 不写分号时，一个批次里藏在 SELECT 后面的 UPDATE/DELETE 只看开头是认不出来的，与 MCP 那条路同一个判定。
+        boolean sqlServer = DatabaseFamily.of(connections.require(connectionId).dbType()).equals("sqlserver");
         for (int index = 0; index < statements.size(); index++) {
             StatementSegment statement = statements.get(index);
-            if (!classifier.requiresUnscopedMutationConfirmation(statement.sql())) continue;
+            boolean unsafe = sqlServer ? classifier.requiresSqlServerBatchConfirmation(statement.sql())
+                    : classifier.requiresUnscopedMutationConfirmation(statement.sql());
+            if (!unsafe) continue;
             unsafeStatements.add(Map.of(
                     "index", index + 1,
                     "sql", abbreviate(statement.sql())

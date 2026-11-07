@@ -20,7 +20,7 @@ final class MySqlObjectSql implements SchemaObjectSql {
                     ? Query.of("SELECT TABLE_SCHEMA AS schema_name, TABLE_NAME AS object_name, TABLE_NAME AS specific_name, TABLE_TYPE AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'SEQUENCE'", schema)
                     : null;
             case TRIGGER -> Query.of("SELECT TRIGGER_SCHEMA AS schema_name, TRIGGER_NAME AS object_name, TRIGGER_NAME AS specific_name, CONCAT(ACTION_TIMING, ' ', EVENT_MANIPULATION, ' ON ', EVENT_OBJECT_TABLE) AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.TRIGGERS WHERE TRIGGER_SCHEMA = ?", schema);
-            case PROCEDURE, FUNCTION -> Query.of("SELECT ROUTINE_SCHEMA AS schema_name, ROUTINE_NAME AS object_name, SPECIFIC_NAME AS specific_name, '' AS subtype, ROUTINE_TYPE AS object_status FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = ?", schema, kind.name());
+            case PROCEDURE, FUNCTION -> Query.of("SELECT ROUTINE_SCHEMA AS schema_name, ROUTINE_NAME AS object_name, SPECIFIC_NAME AS specific_name, '' AS subtype, '' AS object_status FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ? AND ROUTINE_TYPE = ?", schema, kind.name());
         };
     }
 
