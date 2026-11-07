@@ -127,6 +127,12 @@ body {
   width: 100%;
 }
 
+/* 归档导入结果里 MCP 部分的逐条说明。 */
+.archive-mcp-notes {
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
 /* 次要说明文字（连接池占用、计数等）。原来是十几处 style={{ fontSize: 'var(--text-xs)' }}。 */
 .text-xs {
   font-size: var(--text-xs);

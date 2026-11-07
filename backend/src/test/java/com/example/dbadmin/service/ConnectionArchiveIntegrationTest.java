@@ -7,6 +7,14 @@ import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveImportRequest;
 import com.example.dbadmin.dto.ApiDtos.ConnectionRequest;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
 import com.example.dbadmin.dto.ApiDtos.SshTunnelRequest;
+import com.example.dbadmin.dto.McpAdminDtos.McpAgentCreateRequest;
+import com.example.dbadmin.dto.McpAdminDtos.McpAgentGrant;
+import com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest;
+import com.example.dbadmin.dto.McpAdminDtos.McpLimits;
+import com.example.dbadmin.mcp.McpAccessLevel;
+import com.example.dbadmin.mcp.McpApiKeyRegistry;
+import com.example.dbadmin.mcp.McpConfigurationService;
+import com.example.dbadmin.mcp.McpRuntimeConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +46,8 @@ class ConnectionArchiveIntegrationTest {
     @Autowired ConnectionService connections;
     @Autowired ConfigArchiveCrypto crypto;
     @Autowired JdbcTemplate jdbc;
+    @Autowired McpConfigurationService mcp;
+    @Autowired McpApiKeyRegistry mcpKeys;
 
     @Test
     void exportsAndReimportsConnectionsIncludingSecrets() {
@@ -135,6 +145,152 @@ class ConnectionArchiveIntegrationTest {
     void refusesWeakPassphraseBeforeTouchingAnySecret() {
         assertThatThrownBy(() -> archives.export(new ArchiveExportRequest("short", List.of()), "admin"))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void mcpAgentsTravelWithTheirKeysAndGrantsFollowConnectionNames() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ConnectionResponse source = connections.create(new ConnectionRequest(
+                "mcp-src-" + suffix, "H2", "jdbc:h2:mem:m" + suffix, "sa", "secret", "dev", false), "admin");
+        var credential = mcp.createAgent(new McpAgentCreateRequest("agent-" + suffix,
+                List.of(new McpAgentGrant(source.id(), "DATA_WRITE")), false), "admin");
+
+        ArchiveEnvelope envelope = archives.export(
+                new ArchiveExportRequest(PASSPHRASE, List.of(source.id()), true), "admin");
+        // 归档里只有哈希；原始 Key 本来就不在服务端，更不该出现在文件里。
+        assertThat(envelope.payload()).doesNotContain(credential.credential());
+
+        // 模拟换装机：Agent 与连接都不在了。
+        mcp.deleteAgent(credential.agent().id(), "admin");
+        connections.delete(source.id(), "admin");
+
+        var result = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, envelope, ArchiveConflictMode.SKIP), "admin");
+
+        assertThat(result.mcp()).isNotNull();
+        assertThat(result.mcp().importedAgents()).containsExactly("agent-" + suffix);
+        assertThat(result.mcp().droppedGrants()).isEmpty();
+        Long restoredId = connections.list().stream()
+                .filter(connection -> connection.name().equals("mcp-src-" + suffix))
+                .map(ConnectionResponse::id).findFirst().orElseThrow();
+        McpRuntimeConfig.Agent agent = mcp.snapshot().agents().get("agent-" + suffix);
+        // 授权挂到了新连接 id 上，档位原样保留。
+        assertThat(agent.connectionLevels()).containsExactlyEntriesOf(java.util.Map.of(restoredId, McpAccessLevel.DATA_WRITE));
+        // 这是整个功能的目的：AI 客户端里那把 Key 不用换。
+        assertThat(mcpKeys.authenticate(credential.credential())).isPresent();
+        assertThat(countAudit("MCP_AGENT_IMPORT")).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void grantsAreNeverAttachedToALocalConnectionThatMerelySharesTheName() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ConnectionResponse kept = connections.create(new ConnectionRequest(
+                "mcp-kept-" + suffix, "H2", "jdbc:h2:mem:k" + suffix, "sa", "secret", "dev", false), "admin");
+        ConnectionResponse moved = connections.create(new ConnectionRequest(
+                "mcp-moved-" + suffix, "H2", "jdbc:h2:mem:v" + suffix, "sa", "secret", "dev", false), "admin");
+        var credential = mcp.createAgent(new McpAgentCreateRequest("agent-dup-" + suffix, List.of(
+                new McpAgentGrant(kept.id(), "READ_ONLY"),
+                new McpAgentGrant(moved.id(), "READ_ONLY")), false), "admin");
+        ArchiveEnvelope envelope = archives.export(
+                new ArchiveExportRequest(PASSPHRASE, List.of(kept.id(), moved.id()), true), "admin");
+
+        mcp.deleteAgent(credential.agent().id(), "admin");
+        connections.delete(moved.id(), "admin");
+        // kept 仍在本机：导入时因重名被跳过，它的授权不能挂到本机这条上。
+        var result = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, envelope, ArchiveConflictMode.SKIP), "admin");
+
+        assertThat(result.skippedNames()).containsExactly("mcp-kept-" + suffix);
+        assertThat(result.mcp().importedAgents()).containsExactly("agent-dup-" + suffix);
+        assertThat(result.mcp().droppedGrants()).singleElement().asString().contains("mcp-kept-" + suffix);
+        McpRuntimeConfig.Agent agent = mcp.snapshot().agents().get("agent-dup-" + suffix);
+        assertThat(agent.connectionLevels()).doesNotContainKey(kept.id()).hasSize(1);
+    }
+
+    @Test
+    void existingAgentIsNotOverwrittenSoItsCurrentKeyKeepsWorking() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ConnectionResponse source = connections.create(new ConnectionRequest(
+                "mcp-own-" + suffix, "H2", "jdbc:h2:mem:o" + suffix, "sa", "secret", "dev", false), "admin");
+        var credential = mcp.createAgent(new McpAgentCreateRequest("agent-own-" + suffix,
+                List.of(new McpAgentGrant(source.id(), "READ_ONLY")), false), "admin");
+        ArchiveEnvelope envelope = archives.export(
+                new ArchiveExportRequest(PASSPHRASE, List.of(source.id()), true), "admin");
+        var rotated = mcp.rotateAgentKey(credential.agent().id(), "admin");
+
+        var result = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, envelope, ArchiveConflictMode.RENAME), "admin");
+
+        assertThat(result.mcp().importedAgents()).isEmpty();
+        assertThat(result.mcp().skippedAgents()).singleElement().asString().contains("本机已有同名 Agent");
+        assertThat(mcpKeys.authenticate(rotated.credential())).isPresent();
+        assertThat(mcpKeys.authenticate(credential.credential())).isEmpty();
+    }
+
+    @Test
+    void mcpIsLeftAloneUnlessRequestedOnBothSides() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ConnectionResponse source = connections.create(new ConnectionRequest(
+                "mcp-opt-" + suffix, "H2", "jdbc:h2:mem:p" + suffix, "sa", "secret", "dev", false), "admin");
+        var credential = mcp.createAgent(new McpAgentCreateRequest("agent-opt-" + suffix,
+                List.of(new McpAgentGrant(source.id(), "READ_ONLY")), false), "admin");
+
+        // 导出时没勾：归档里没有 MCP 段。
+        ArchiveEnvelope withoutMcp = archives.export(new ArchiveExportRequest(PASSPHRASE, List.of(source.id())), "admin");
+        ArchiveEnvelope withMcp = archives.export(new ArchiveExportRequest(PASSPHRASE, List.of(source.id()), true), "admin");
+        mcp.deleteAgent(credential.agent().id(), "admin");
+        connections.delete(source.id(), "admin");
+
+        var plain = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, withoutMcp, ArchiveConflictMode.SKIP), "admin");
+        assertThat(plain.mcp()).isNull();
+
+        // 导入时取消勾选：即使归档里有，也不碰本机 MCP 配置。
+        var declined = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, withMcp, ArchiveConflictMode.RENAME, false), "admin");
+        assertThat(declined.mcp()).isNull();
+        assertThat(mcp.snapshot().agents()).doesNotContainKey("agent-opt-" + suffix);
+    }
+
+    @Test
+    void globalSettingsAreAppliedOnlyWhereNoAgentExistsYet() {
+        McpRuntimeConfig.Settings original = mcp.snapshot().settings();
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        ConnectionResponse source = connections.create(new ConnectionRequest(
+                "mcp-set-" + suffix, "H2", "jdbc:h2:mem:s" + suffix, "sa", "secret", "dev", false), "admin");
+        var credential = mcp.createAgent(new McpAgentCreateRequest("agent-set-" + suffix,
+                List.of(new McpAgentGrant(source.id(), "READ_ONLY")), false), "admin");
+        mcp.updateConfig(new McpConfigUpdateRequest(List.of(), limits(original, 77)), "admin");
+        ArchiveEnvelope envelope = archives.export(
+                new ArchiveExportRequest(PASSPHRASE, List.of(source.id()), true), "admin");
+        mcp.updateConfig(new McpConfigUpdateRequest(List.of(), limits(original, original.defaultQueryRows())), "admin");
+
+        // 本机还有 Agent：设置保持本机的。
+        var withAgents = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, envelope, ArchiveConflictMode.SKIP), "admin");
+        assertThat(withAgents.mcp().settingsApplied()).isFalse();
+        assertThat(mcp.snapshot().settings().defaultQueryRows()).isEqualTo(original.defaultQueryRows());
+
+        // 全新装机：清空 Agent 后再导入，设置随归档过来。
+        mcp.snapshot().agentList().forEach(agent -> mcp.deleteAgent(agent.id(), "admin"));
+        connections.delete(source.id(), "admin");
+        var fresh = archives.importArchive(
+                new ArchiveImportRequest(PASSPHRASE, envelope, ArchiveConflictMode.SKIP), "admin");
+        assertThat(fresh.mcp().settingsApplied()).isTrue();
+        assertThat(mcp.snapshot().settings().defaultQueryRows()).isEqualTo(77);
+        assertThat(mcpKeys.authenticate(credential.credential())).isPresent();
+
+        mcp.updateConfig(new McpConfigUpdateRequest(List.of(), limits(original, original.defaultQueryRows())), "admin");
+    }
+
+    private static McpLimits limits(McpRuntimeConfig.Settings settings, int defaultQueryRows) {
+        return new McpLimits(
+                defaultQueryRows, Math.max(settings.maxQueryRows(), defaultQueryRows), settings.maxResultCells(),
+                settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(),
+                settings.queryTimeoutSeconds(), settings.metadataPageSize(), settings.maxMetadataPageSize(),
+                settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes(),
+                settings.maxScriptsPerConnection(), settings.executeTimeoutSeconds()
+        );
     }
 
     private int countAudit(String action) {

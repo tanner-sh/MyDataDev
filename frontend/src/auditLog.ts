@@ -124,6 +124,8 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   MCP_AGENT_UPDATE: { label: '修改 MCP Agent', category: 'mcp' },
   MCP_AGENT_DELETE: { label: '删除 MCP Agent', category: 'mcp', dangerous: true },
   MCP_AGENT_ROTATE_KEY: { label: '轮换 MCP 密钥', category: 'mcp' },
+  MCP_AGENT_IMPORT: { label: '导入 MCP Agent', category: 'mcp' },
+  MCP_CONFIG_IMPORT: { label: '导入 MCP 设置', category: 'mcp' },
   MCP_CONFIG_UPDATE: { label: '修改 MCP 配置', category: 'mcp' },
   STORAGE_PROFILE_CREATE: { label: '新建存储配置', category: 'storage' },
   STORAGE_PROFILE_UPDATE: { label: '修改存储配置', category: 'storage' },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   archiveImportSummary,
+  archiveMcpImportNotes,
   archivePassphraseError,
   ARCHIVE_FORMAT,
   isConfigArchive,
@@ -73,5 +74,38 @@ describe('导入结果说明', () => {
   it('改名的条数单独说明', () => {
     expect(archiveImportSummary({ imported: 2, skipped: 0, renamed: 2, importedNames: [], skippedNames: [] }))
       .toContain('其中 2 条因重名已改名');
+  });
+});
+
+describe('MCP 导入说明', () => {
+  const base = {
+    settingsApplied: true,
+    settingsNote: '已套用归档里的全局设置，MCP 已启用',
+    importedAgents: ['claude-code'],
+    skippedAgents: [],
+    droppedGrants: []
+  };
+
+  it('导入了 Agent 时告诉用户只改地址、不换 Key', () => {
+    const notes = archiveMcpImportNotes(base, 'http://127.0.0.1:5173/mcp');
+    expect(notes[0]).toBe('MCP Agent 导入 1 个：claude-code');
+    expect(notes[notes.length - 1]).toBe('AI 客户端里的 Key 不用换，只需把 MCP 地址改成 http://127.0.0.1:5173/mcp');
+  });
+
+  it('跳过的 Agent 与丢掉的授权逐条点名', () => {
+    const notes = archiveMcpImportNotes({
+      ...base,
+      importedAgents: [],
+      skippedAgents: ['old-agent：本机已有同名 Agent，保留本机的'],
+      droppedGrants: ['claude-code → prod-1：这条连接本次没有导入（通常是本机已有同名连接）'],
+      settingsApplied: false,
+      settingsNote: '本机已有 MCP Agent，保留本机的全局设置'
+    }, 'http://127.0.0.1:5173/mcp');
+    expect(notes).toEqual([
+      'MCP Agent 没有导入任何一个',
+      '跳过 Agent old-agent：本机已有同名 Agent，保留本机的',
+      '未挂上的授权 claude-code → prod-1：这条连接本次没有导入（通常是本机已有同名连接）',
+      '本机已有 MCP Agent，保留本机的全局设置'
+    ]);
   });
 });

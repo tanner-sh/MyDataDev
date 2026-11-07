@@ -2,6 +2,10 @@ package com.example.dbadmin.mcp;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.ApiDtos.ConnectionResponse;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveMcpImportResult;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedMcpAgent;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedMcpConfig;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedMcpGrant;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentCreateRequest;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentGrant;
 import com.example.dbadmin.dto.McpAdminDtos.McpAgentResponse;
@@ -25,6 +29,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.net.URI;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -237,19 +242,176 @@ public class McpConfigurationService {
             ConnectionResponse connection = id == null ? null : available.get(id);
             if (connection == null) throw new IllegalArgumentException("连接不存在：" + id);
             McpAccessLevel level = McpAccessLevel.parse(grant.accessLevel());
-            boolean production = "prod".equalsIgnoreCase(connection.environment());
-            if (production && !allowProduction) {
-                throw new IllegalArgumentException("授权生产连接必须开启生产环境访问权限");
-            }
-            if (level != McpAccessLevel.READ_ONLY && connection.readonly()) {
-                throw new IllegalArgumentException(
-                        "连接「" + connection.name() + "」是只读连接，只能授予只读档位。");
-            }
+            String problem = grantProblem(connection, level, allowProduction);
+            if (problem != null) throw new IllegalArgumentException(problem);
             if (grants.putIfAbsent(id, level) != null) {
                 throw new IllegalArgumentException("连接重复授权：" + connection.name());
             }
         }
         return grants;
+    }
+
+    /** 一条授权本身是否成立；返回 null 表示成立。界面保存与归档导入共用这份判定。 */
+    private static String grantProblem(ConnectionResponse connection, McpAccessLevel level, boolean allowProduction) {
+        boolean production = "prod".equalsIgnoreCase(connection.environment());
+        if (production && !allowProduction) return "授权生产连接必须开启生产环境访问权限";
+        if (level != McpAccessLevel.READ_ONLY && connection.readonly()) {
+            return "连接「" + connection.name() + "」是只读连接，只能授予只读档位。";
+        }
+        return null;
+    }
+
+    /**
+     * 把 MCP 配置打进连接归档。
+     *
+     * <p>授权只保留 {@code connectionNames} 里的连接（即这次一起导出的那些）：连接没进归档，
+     * 目标端就不会有它，按名字带过去只会在导入时被丢掉，或者更糟 —— 挂到目标端一条恰好同名的连接上。</p>
+     *
+     * @param connectionNames 本次导出的连接 id → 连接名
+     */
+    public ArchivedMcpConfig exportForArchive(Map<Long, String> connectionNames) {
+        McpRuntimeConfig config = snapshot();
+        List<ArchivedMcpAgent> agents = new ArrayList<>();
+        for (Agent agent : config.agentList()) {
+            List<ArchivedMcpGrant> grants = agent.connectionLevels().entrySet().stream()
+                    .filter(entry -> connectionNames.containsKey(entry.getKey()))
+                    .sorted(Map.Entry.comparingByKey())
+                    .map(entry -> new ArchivedMcpGrant(connectionNames.get(entry.getKey()), entry.getValue().name()))
+                    .toList();
+            agents.add(new ArchivedMcpAgent(
+                    agent.agentId(), agent.keyHash(), agent.enabled(), agent.allowProduction(), grants));
+        }
+        return new ArchivedMcpConfig(config.settings().enabled(), toLimits(config.settings()), agents);
+    }
+
+    /**
+     * 从连接归档导入 MCP 配置。
+     *
+     * <p>四条规则：</p>
+     * <ul>
+     *   <li><b>Key 原样保留</b>：写入的是归档里的 BCrypt 哈希，AI 客户端里的 Key 不用改。</li>
+     *   <li><b>同名 Agent 跳过</b>：覆盖会让本机那个 Agent 手里的 Key 立刻失效。</li>
+     *   <li><b>授权只挂到这次导入新建的连接上</b>（{@code importedConnections}）。因重名被跳过的连接，
+     *       本机那条同名连接不一定是同一个库，挂上去等于给 Agent 开一条没人确认过的连接。</li>
+     *   <li><b>全局设置只在本机还没有任何 Agent 时套用</b>：已经在用 MCP 的装机，上限是那边的人定的。</li>
+     * </ul>
+     *
+     * <p>逐条跳过而不是整体失败：连接此时已经导入完了，因为一个 Agent 的问题让整次导入报错，
+     * 用户看到的会是「失败」，而库里其实已经多了一批连接。</p>
+     *
+     * @param importedConnections 归档里的连接名 → 本次导入新建的连接 id
+     */
+    public ArchiveMcpImportResult importFromArchive(
+            ArchivedMcpConfig archived, Map<String, Long> importedConnections, String actor
+    ) {
+        McpRuntimeConfig before = snapshot();
+        Map<Long, ConnectionResponse> available = connections.list().stream()
+                .collect(java.util.stream.Collectors.toMap(ConnectionResponse::id, connection -> connection));
+
+        Settings settings = null;
+        String settingsNote;
+        if (!before.agents().isEmpty()) {
+            settingsNote = "本机已有 MCP Agent，保留本机的全局设置";
+        } else if (archived.limits() == null) {
+            settingsNote = "归档里没有全局设置";
+        } else {
+            Settings candidate = fromLimits(archived.enabled(), archived.limits(), before.settings());
+            try {
+                validateSettings(candidate);
+                settings = candidate;
+                settingsNote = archived.enabled() ? "已套用归档里的全局设置，MCP 已启用" : "已套用归档里的全局设置，MCP 保持关闭";
+            } catch (IllegalArgumentException invalid) {
+                settingsNote = "归档里的全局设置无效（" + invalid.getMessage() + "），保留本机设置";
+            }
+        }
+
+        List<String> imported = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        List<String> dropped = new ArrayList<>();
+        List<PendingAgent> pending = new ArrayList<>();
+        Set<String> taken = new LinkedHashSet<>(before.agents().keySet());
+        for (ArchivedMcpAgent agent : archived.agents() == null ? List.<ArchivedMcpAgent>of() : archived.agents()) {
+            String agentId = agent == null || agent.agentId() == null ? "" : agent.agentId().trim();
+            if (!AGENT_ID.matcher(agentId).matches()) {
+                skipped.add((agentId.isEmpty() ? "(未命名)" : agentId) + "：Agent ID 不合法");
+                continue;
+            }
+            if (taken.contains(agentId)) {
+                skipped.add(agentId + "：本机已有同名 Agent，保留本机的");
+                continue;
+            }
+            String hash = agent.keyHash() == null ? "" : agent.keyHash().trim();
+            if (!BCRYPT.matcher(hash).matches()) {
+                skipped.add(agentId + "：Key 哈希无效");
+                continue;
+            }
+            Map<Long, McpAccessLevel> grants = new LinkedHashMap<>();
+            for (ArchivedMcpGrant grant : agent.grants() == null ? List.<ArchivedMcpGrant>of() : agent.grants()) {
+                String name = grant == null || grant.connectionName() == null ? "" : grant.connectionName().trim();
+                Long connectionId = importedConnections.get(name);
+                ConnectionResponse connection = connectionId == null ? null : available.get(connectionId);
+                if (connection == null) {
+                    dropped.add(agentId + " → " + name + "：这条连接本次没有导入（通常是本机已有同名连接）");
+                    continue;
+                }
+                McpAccessLevel level;
+                try {
+                    level = McpAccessLevel.parse(grant.accessLevel());
+                } catch (IllegalArgumentException invalid) {
+                    dropped.add(agentId + " → " + name + "：访问档位无效");
+                    continue;
+                }
+                String problem = grantProblem(connection, level, agent.allowProduction());
+                if (problem != null) {
+                    dropped.add(agentId + " → " + name + "：" + problem);
+                    continue;
+                }
+                grants.putIfAbsent(connectionId, level);
+            }
+            if (grants.isEmpty()) {
+                skipped.add(agentId + "：没有可以挂上的连接授权");
+                continue;
+            }
+            taken.add(agentId);
+            pending.add(new PendingAgent(agentId, hash, agent.enabled(), agent.allowProduction(), grants));
+        }
+
+        Settings applied = settings;
+        transactions.executeWithoutResult(ignored -> {
+            if (applied != null) repository.updateSettings(applied);
+            for (PendingAgent agent : pending) {
+                repository.insertAgent(agent.agentId(), agent.keyHash(), agent.enabled(), agent.allowProduction(), agent.grants());
+            }
+        });
+        reload();
+
+        if (applied != null) {
+            audit.global(actor, "MCP_CONFIG_IMPORT", "mcp", "enabled=" + applied.enabled() + ";source=archive");
+        }
+        for (PendingAgent agent : pending) {
+            imported.add(agent.agentId());
+            // 与新建 Agent 一样写清档位；另注明 Key 沿用归档里的哈希 —— 这个 Agent 的 Key 不是在本机发出的。
+            audit.global(actor, "MCP_AGENT_IMPORT", "mcp-agent:" + agent.agentId(),
+                    "connections=" + agent.grants().size() + ";" + grantSummary(agent.grants()) + ";key=archived-hash");
+        }
+        return new ArchiveMcpImportResult(applied != null, settingsNote, imported, skipped, dropped);
+    }
+
+    private record PendingAgent(
+            String agentId, String keyHash, boolean enabled, boolean allowProduction, Map<Long, McpAccessLevel> grants
+    ) {
+    }
+
+    private static Settings fromLimits(boolean enabled, McpLimits limits, Settings fallback) {
+        return new Settings(
+                enabled,
+                limits.defaultQueryRows(), limits.maxQueryRows(), limits.maxResultCells(),
+                limits.maxResultTextChars(), limits.maxCellTextChars(), limits.maxSqlChars(),
+                limits.queryTimeoutSeconds(), limits.metadataPageSize(), limits.maxMetadataPageSize(),
+                limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes(),
+                limits.maxScriptsPerConnection() == null ? fallback.maxScriptsPerConnection() : limits.maxScriptsPerConnection(),
+                limits.executeTimeoutSeconds() == null ? fallback.executeTimeoutSeconds() : limits.executeTimeoutSeconds()
+        );
     }
 
     private Agent requireAgent(long id) {
