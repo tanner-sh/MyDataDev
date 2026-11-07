@@ -31,6 +31,7 @@ import com.example.dbadmin.service.ObjectSearchService;
 import com.example.dbadmin.service.SchemaDiagramService;
 import com.example.dbadmin.service.SchemaExportService;
 import com.example.dbadmin.service.TableDesignService;
+import com.example.dbadmin.service.RoutineInvocationService;
 import com.example.dbadmin.service.SchemaObjectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -45,10 +46,12 @@ public class MetadataController {
     private final ConnectionAccessService access;
     private final SchemaExportService schemaExport;
     private final TableDesignService tableDesign;
+    private final RoutineInvocationService routines;
 
     public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch,
                               SchemaDiagramService diagrams, ConnectionAccessService access, SchemaExportService schemaExport,
-                              TableDesignService tableDesign) {
+                              TableDesignService tableDesign, RoutineInvocationService routines) {
+        this.routines = routines;
         this.schemaExport = schemaExport;
         this.tableDesign = tableDesign;
         this.service = service;
@@ -270,7 +273,7 @@ public class MetadataController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         access.require(connectionId, ConnectionPermission.DATA_WRITE);
-        return schemaObjects.invoke(connectionId, request, actor, productionConfirmation);
+        return routines.invoke(connectionId, request, actor, productionConfirmation);
     }
 
     /**
@@ -286,7 +289,7 @@ public class MetadataController {
     ) throws Exception {
         access.require(connectionId, ConnectionPermission.DATA_WRITE);
         return org.springframework.http.ResponseEntity.status(org.springframework.http.HttpStatus.ACCEPTED)
-                .body(schemaObjects.invokeInBackground(connectionId, request, actor, productionConfirmation));
+                .body(routines.invokeInBackground(connectionId, request, actor, productionConfirmation));
     }
 
     /** 对象定义批量导出的候选清单：表 + 方言支持的各类对象。 */
