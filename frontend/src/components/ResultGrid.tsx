@@ -37,7 +37,7 @@ import {
   type ResultEditState
 } from '../resultEditing';
 import { timestamp } from '../utils';
-import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, resultExportMenuItems, serializeCopiedRows, writeResultCopyFormat } from '../queryResultExport';
 import { exportResult } from '../resultExport';
 import { canChartResult } from '../resultChart';
 import { replaceResultRowSelection, resolveResultGridKeyboardAction, updateResultRowSelection, type ResultRowSelection } from '../resultRowSelection';
@@ -856,16 +856,11 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
       <div className="result-grid-toolbar">
         <div className="result-local-actions">
           <Dropdown disabled={Boolean(exportStage)} trigger={['click']} menu={{
-            items: resultExportGroups({
+            items: resultExportMenuItems(resultExportGroups({
               loadedRows: rows.length,
               selectedRows: selectedRows.length,
               fullAvailable: Boolean(onExportFull),
               narrowed: Object.values(columnFilters).some(Boolean) || Boolean(sortState) || Boolean(serverSort?.sortColumn) || Boolean(result?.page?.filters?.length)
-            }).map((group) => ({
-              type: 'group' as const,
-              key: group.scope,
-              label: group.label,
-              children: group.formats.map((item) => ({ key: item.key, label: item.label }))
             })),
             onClick: ({ key }) => {
               const parsed = parseResultExportKey(key);
