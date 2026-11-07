@@ -7,7 +7,6 @@ import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.core.SchemaObjectKind;
 import com.example.dbadmin.core.SchemaObjectOperation;
-import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.RoutineArgumentInput;
 import com.example.dbadmin.dto.ApiDtos.RoutineInvokeRequest;
 import com.example.dbadmin.dto.ApiDtos.RoutineInvokeResponse;
@@ -29,7 +28,6 @@ import java.sql.CallableStatement;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.LocalDate;
@@ -58,11 +56,10 @@ import static com.example.dbadmin.service.SchemaObjectService.value;
 public class RoutineInvocationService {
     /** 例程消息条数上限：一个循环里的 PUT_LINE 能刷出几十万行。 */
     private static final int MAX_ROUTINE_MESSAGES = 500;
+    /** 每个结果集最多返回的行数；单元格数与字符数上限沿用 SqlResultReader。 */
     private static final int MAX_RESULT_ROWS = 500;
-    private static final int MAX_RESULT_CELLS = 200_000;
+    /** 返回值与 OUT 参数的上限（结果集的上限在 SqlResultReader 里）。CLOB 先读回多少字符用于判断截断，与 SQL 工作台同值。 */
     private static final int MAX_CELL_TEXT = 100_000;
-    private static final long MAX_RESULT_TEXT = 20_000_000;
-    /** CLOB 先读回多少字符用于判断截断。与 SQL 工作台那条路同值：例程结果就显示在同一张网格里。 */
     private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
 
     /** 前台调用的取消登记；为空时（部分单测）调用不可取消。 */
@@ -333,7 +330,7 @@ public class RoutineInvocationService {
             for (int index = 0; index < inputParameters.size(); index++) {
                 bind(statement, index + 1, inputParameters.get(index), inputs.get(inputParameters.get(index).position()));
             }
-            List<RoutineResultItem> results = readResults(statement, statement.execute(), started);
+            List<RoutineResultItem> results = readResults(statement, statement.execute(), started, dialect);
             Object returnValue = kind == SchemaObjectKind.FUNCTION && !results.isEmpty() && results.get(0).result() != null
                     && !results.get(0).result().rows().isEmpty() && !results.get(0).result().rows().get(0).isEmpty()
                     ? results.get(0).result().rows().get(0).get(0) : null;
@@ -381,7 +378,7 @@ public class RoutineInvocationService {
             // Some drivers (notably H2) expose a function return value through the
             // current result set and make it unavailable after getMoreResults().
             Object returnValue = hasReturn ? serializable(statement.getObject(1), MAX_CELL_TEXT) : null;
-            List<RoutineResultItem> results = readResults(statement, hasResult, started);
+            List<RoutineResultItem> results = readResults(statement, hasResult, started, dialect);
             List<RoutineOutParameter> out = new ArrayList<>();
             for (Map.Entry<SchemaObjectParameter, Integer> entry : positions.entrySet()) {
                 SchemaObjectParameter parameter = entry.getKey();
@@ -395,13 +392,18 @@ public class RoutineInvocationService {
         }
     }
 
-    private List<RoutineResultItem> readResults(Statement statement, boolean hasResult, long started) throws Exception {
+    /**
+     * 例程返回的结果集与更新计数。结果集走 {@link SqlResultReader}：与 SQL 工作台同一套上限、二进制描述与截断说法 ——
+     * 例程结果就显示在同一张结果网格里。原来那份自写的读取在单元格文本被截断时不标 truncated、也不给截断原因，
+     * 截掉一半的长文本在界面上看起来就是完整值；只能从流里读的二进制列也没有单独处理。
+     */
+    static List<RoutineResultItem> readResults(Statement statement, boolean hasResult, long started, DatabaseDialect dialect) throws Exception {
         List<RoutineResultItem> results = new ArrayList<>();
         int resultCount = 0;
         while (resultCount++ < 20) {
             if (hasResult) {
                 try (ResultSet rs = statement.getResultSet()) {
-                    results.add(new RoutineResultItem("RESULT_SET", readResult(rs, started), null));
+                    results.add(new RoutineResultItem("RESULT_SET", SqlResultReader.readResult(rs, started, MAX_RESULT_ROWS, dialect), null));
                 }
             } else {
                 int updateCount = statement.getUpdateCount();
@@ -411,35 +413,6 @@ public class RoutineInvocationService {
             hasResult = statement.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
         }
         return results;
-    }
-
-    private SqlResult readResult(ResultSet rs, long started) throws Exception {
-        ResultSetMetaData metadata = rs.getMetaData();
-        int columnCount = metadata.getColumnCount();
-        List<ResultColumn> columns = new ArrayList<>();
-        for (int index = 1; index <= columnCount; index++) {
-            columns.add(new ResultColumn("c" + index, metadata.getColumnLabel(index), metadata.getColumnTypeName(index)));
-        }
-        int effectiveRows = Math.min(MAX_RESULT_ROWS, MAX_RESULT_CELLS / Math.max(columnCount, 1));
-        List<List<Object>> rows = new ArrayList<>();
-        long textChars = 0;
-        boolean payloadLimit = false;
-        while (rows.size() < effectiveRows && rs.next()) {
-            List<Object> row = new ArrayList<>(columnCount);
-            for (int index = 1; index <= columnCount; index++) {
-                int remaining = (int) Math.min(MAX_CELL_TEXT, Math.max(0, MAX_RESULT_TEXT - textChars));
-                Object value = serializable(rs.getObject(index), remaining);
-                row.add(value);
-                if (value instanceof CharSequence text) textChars += text.length();
-            }
-            rows.add(row);
-            if (textChars >= MAX_RESULT_TEXT) {
-                payloadLimit = true;
-                break;
-            }
-        }
-        boolean truncated = payloadLimit || rs.next();
-        return new SqlResult(columns, rows, -1, elapsed(started), true, effectiveRows, truncated);
     }
 
     private void bind(PreparedStatement statement, int index, SchemaObjectParameter parameter, RoutineArgumentInput input) throws Exception {
