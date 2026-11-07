@@ -387,6 +387,36 @@ async function startServer() {
  */
 const FILLER_TABLE_COUNT = 16;
 
+/**
+ * 在结果区导出菜单里点一项：先悬停展开标题以 groupPrefix 开头的子菜单，再按菜单项的 key 点。
+ *
+ * 按 key（rc-menu 写在 data-menu-id 末尾）而不是按文字找：两个子菜单里的格式名完全一样，
+ * 按文字点很容易点到另一组去，而两组一个走前端、一个走服务端，测错了组就等于没测。
+ */
+async function clickExportMenuItem(page, groupPrefix, itemKey) {
+  const title = await page.evaluate(`(() => {
+    const node = [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-submenu-title')]
+      .find(item => item.textContent.trim().startsWith(${JSON.stringify(groupPrefix)}));
+    if (!node) return null;
+    const box = node.getBoundingClientRect();
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  })()`);
+  if (!title) return false;
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: title.x, y: title.y, pointerType: 'mouse' });
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const clicked = await page.evaluate(`(() => {
+      const item = [...document.querySelectorAll('.ant-dropdown-menu-item')]
+        .find(node => (node.getAttribute('data-menu-id') || '').endsWith(${JSON.stringify('-' + itemKey)}));
+      if (!item) return false;
+      item.click();
+      return true;
+    })()`);
+    if (clicked) return true;
+    await page.sleep(100);
+  }
+  return false;
+}
+
 async function seedSmokeData() {
   console.log('播种一条 H2 连接、240 行数据与若干张填充表…');
   const post = async (path, body) => {
@@ -1311,10 +1341,11 @@ try {
       document.querySelector('button[aria-label="导出查询结果"]')?.click();
     })()`);
     await page.sleep(300);
-    // 导出菜单分两组：当前批次（前端序列化）在前，重新执行原 SQL（服务端）在后。这里测的是前一组。
-    const exportGroups = await page.evaluate(`[...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group-title')].map(node => node.textContent.trim())`);
+    // 导出菜单分两组：当前批次（前端序列化）在前，重新执行原 SQL（服务端）在后。两组都可用时各是一个
+    // 子菜单（平铺的十四行会被视口切掉），子菜单靠悬停展开，所以这里发真实的鼠标移动而不是 click()。
+    const exportGroups = await page.evaluate(`[...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-submenu-title')].map(node => node.textContent.trim())`);
     check('结果导出菜单含当前批次与重新执行两组', exportGroups.length === 2 && exportGroups[0].startsWith('当前批次') && exportGroups[1].startsWith('重新执行原 SQL'), JSON.stringify(exportGroups));
-    await page.evaluate(`(() => { const group = document.querySelector('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(group?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
+    await clickExportMenuItem(page, '当前批次', 'loaded:xlsx');
     for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
     const exported = await page.evaluate(`(async () => {
       const blob = window.__exportBlob;
@@ -1328,7 +1359,7 @@ try {
     // 第二组走服务端：重新执行产生这份结果的 SQL（不是编辑器里此刻的内容）。
     await page.evaluate(`(() => { window.__exportBlob = null; document.querySelector('button[aria-label="导出查询结果"]')?.click(); })()`);
     await page.sleep(300);
-    await page.evaluate(`(() => { const groups = document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(groups[1]?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'CSV')?.click(); })()`);
+    await clickExportMenuItem(page, '重新执行原 SQL', 'full:csv');
     for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
     const reExported = await page.evaluate(`(async () => {
       const blob = window.__exportBlob;
