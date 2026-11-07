@@ -57,6 +57,7 @@ import {
 import { useBackgroundTasks } from './hooks/useBackgroundTasks';
 import { useSqlHistory } from './hooks/useSqlHistory';
 import {
+  canUseAdminFeatures,
   managementNavigation,
   managementNavItemOf,
   isManagementSectionAvailable,
@@ -3698,8 +3699,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <Text strong>连接管理</Text>
                   <Space size={8}>
                     {/* 归档里有全部连接的密码，只对管理员开放；后端也独立校验，这里只是别把入口摆出来。 */}
-                    {isCurrentUserAdmin() && (
-                      <Tooltip title="把连接配置导出成一个口令加密的文件，或从这样的文件导入">
+                    {canUseAdminFeatures(isCurrentUserAdmin(), isAuthenticationEnabled()) && (
+                      <Tooltip title="把连接与 MCP 配置导出成一个口令加密的文件，或从这样的文件导入">
                         <Button size="small" icon={<SwapOutlined />} onClick={() => setArchivePanelOpen(true)}>导出 / 导入</Button>
                       </Tooltip>
                     )}
