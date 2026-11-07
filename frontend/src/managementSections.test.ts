@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canUseAdminFeatures,
   isManagementSectionAvailable,
   MANAGEMENT_GROUPS,
   MANAGEMENT_SECTIONS,
@@ -99,5 +100,16 @@ describe('management sections', () => {
   it('入口里只剩一个可见分区时用分区自己的名字', () => {
     // 认证关闭时用户与访问控制都不可见，整项消失；这里验证非合并项与合并项的命名规则一致。
     expect(managementNavigation(true, false).flatMap((group) => group.items).some((item) => item.key === 'identity')).toBe(false);
+  });
+});
+
+describe('管理员功能入口', () => {
+  it('认证关闭时（桌面版）没有角色，入口照常出现', () => {
+    expect(canUseAdminFeatures(false, false)).toBe(true);
+  });
+
+  it('认证开启时只有管理员能看到', () => {
+    expect(canUseAdminFeatures(true, true)).toBe(true);
+    expect(canUseAdminFeatures(false, true)).toBe(false);
   });
 });

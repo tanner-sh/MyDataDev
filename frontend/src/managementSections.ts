@@ -98,11 +98,22 @@ export function managementSectionLabel(section: ManagementSection): string {
   return MANAGEMENT_SECTIONS.find((item) => item.key === section)?.label ?? '管理';
 }
 
+/**
+ * 管理员才能用的功能，当前这个人能不能用。
+ *
+ * <p>认证关闭（桌面版，或显式 APP_AUTH_MODE=DISABLED 的 Web 部署）时没有「角色」这回事，
+ * 后端那条过滤链对所有请求放行，前端也必须一视同仁 —— 只认 {@code role === 'ADMIN'} 的话，
+ * 认证关闭的装机上这类入口永远不出现（连接归档的「导出 / 导入」就是这样在桌面版上消失的）。</p>
+ */
+export function canUseAdminFeatures(isAdmin: boolean, authenticationEnabled: boolean): boolean {
+  return !authenticationEnabled || isAdmin;
+}
+
 export function isManagementSectionVisible(section: ManagementSection, isAdmin = true, authenticationEnabled = true): boolean {
   const meta = MANAGEMENT_SECTIONS.find((item) => item.key === section);
   return Boolean(meta)
     && (!meta?.requiresAuthentication || authenticationEnabled)
-    && (!meta?.requiresAdmin || !authenticationEnabled || isAdmin);
+    && (!meta?.requiresAdmin || canUseAdminFeatures(isAdmin, authenticationEnabled));
 }
 
 export function isManagementSectionAvailable(
