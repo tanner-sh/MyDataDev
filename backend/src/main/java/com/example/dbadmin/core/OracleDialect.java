@@ -47,6 +47,11 @@ public class OracleDialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return OracleObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("ORACLE_EXP"), List.of("ORACLE_IMP"), SchemaObjectCapabilities.oracleFamily());
     }

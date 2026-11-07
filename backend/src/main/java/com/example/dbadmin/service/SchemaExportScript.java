@@ -1,5 +1,7 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.core.SchemaObjectSql;
+
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -40,15 +42,15 @@ public final class SchemaExportScript {
         };
     }
 
-    /** 一条定义在脚本里的完整写法，带好分隔符。family 与 {@code SchemaObjectCatalog.family} 同一套取值。 */
-    public static String statement(String family, String kind, String definition) {
+    /** 一条定义在脚本里的完整写法，带好分隔符。收尾写法由方言给出（{@code SchemaObjectSql.scriptBlockStyle}）。 */
+    public static String statement(SchemaObjectSql.ScriptBlockStyle style, String kind, String definition) {
         String body = stripTrailingTerminators(definition);
         boolean routine = isRoutineBlock(kind);
-        return switch (family == null ? "" : family) {
-            case "oracle" -> routine ? oracleBlock(kind, body) : body + ";";
-            case "mysql", "mariadb" -> routine ? "DELIMITER ;;\n" + body + ";;\nDELIMITER ;" : body + ";";
-            case "sqlserver" -> body + "\nGO";
-            default -> body + ";";
+        return switch (style == null ? SchemaObjectSql.ScriptBlockStyle.PLAIN : style) {
+            case ORACLE -> routine ? oracleBlock(kind, body) : body + ";";
+            case MYSQL -> routine ? "DELIMITER ;;\n" + body + ";;\nDELIMITER ;" : body + ";";
+            case SQL_SERVER -> body + "\nGO";
+            case PLAIN -> body + ";";
         };
     }
 

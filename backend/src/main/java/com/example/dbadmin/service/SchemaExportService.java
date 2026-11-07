@@ -54,16 +54,14 @@ public class SchemaExportService {
     private final DialectRegistry dialects;
     private final MetadataService metadata;
     private final SchemaObjectService schemaObjects;
-    private final SchemaObjectCatalog catalog;
     private final AuditRepository audit;
 
     public SchemaExportService(ConnectionService connections, DialectRegistry dialects, MetadataService metadata,
-                               SchemaObjectService schemaObjects, SchemaObjectCatalog catalog, AuditRepository audit) {
+                               SchemaObjectService schemaObjects, AuditRepository audit) {
         this.connections = connections;
         this.dialects = dialects;
         this.metadata = metadata;
         this.schemaObjects = schemaObjects;
-        this.catalog = catalog;
         this.audit = audit;
     }
 
@@ -144,12 +142,11 @@ public class SchemaExportService {
     public SchemaExportResponse export(long connectionId, SchemaExportRequest request, String actor) throws Exception {
         DbConnection configured = connections.require(connectionId);
         DatabaseDialect dialect = dialects.dialectFor(configured);
-        String family = catalog.family(configured);
         String schema = resolveSchema(connectionId, request.schemaName());
         List<SchemaExportObject> requested = distinct(request.objects());
         if (requested.isEmpty()) throw new IllegalArgumentException("请至少选择一个要导出的对象。");
         if (requested.size() > MAX_OBJECTS) throw new IllegalArgumentException("一次最多导出 " + MAX_OBJECTS + " 个对象，请分批导出。");
-        boolean stripDefiner = !Boolean.FALSE.equals(request.stripDefiner()) && Set.of("mysql", "mariadb").contains(family);
+        boolean stripDefiner = !Boolean.FALSE.equals(request.stripDefiner()) && dialect.schemaObjects().definitionsCarryDefiner();
 
         long started = System.nanoTime();
         List<String> warnings = new ArrayList<>();
@@ -233,7 +230,7 @@ public class SchemaExportService {
             items.add(new SchemaExportItem(order, definition.kind(), definition.name(), dependsOn));
             script.append("-- ").append(order).append(". ").append(label(definition.kind())).append(' ').append(definition.name());
             if (!dependsOn.isEmpty()) script.append("（依赖：").append(String.join(", ", dependsOn)).append('）');
-            script.append('\n').append(SchemaExportScript.statement(family, definition.kind(), definition.sql())).append("\n\n");
+            script.append('\n').append(SchemaExportScript.statement(dialect.schemaObjects().scriptBlockStyle(), definition.kind(), definition.sql())).append("\n\n");
             order++;
         }
 

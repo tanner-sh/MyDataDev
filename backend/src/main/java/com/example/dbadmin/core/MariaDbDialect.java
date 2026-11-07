@@ -14,6 +14,11 @@ public class MariaDbDialect extends MySqlDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return MySqlObjectSql.MARIADB;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("MYSQLDUMP"), List.of("MYSQL"), SchemaObjectCapabilities.mariaDb());
     }

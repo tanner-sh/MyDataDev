@@ -62,7 +62,7 @@ class SchemaObjectCatalogSourceTest {
     }
 
     private String readSource() throws Exception {
-        return catalog.source(jdbc, configured, new DialectRegistry().dialectFor(configured), SchemaObjectKind.PROCEDURE,
+        return catalog.source(jdbc, new DialectRegistry().dialectFor(configured), SchemaObjectKind.PROCEDURE,
                 new SchemaObjectCatalog.CatalogObject("ETL", "SP_LONG", "1", "", "VALID"));
     }
 }

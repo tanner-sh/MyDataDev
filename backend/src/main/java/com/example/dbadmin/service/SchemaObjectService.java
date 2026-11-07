@@ -7,6 +7,7 @@ import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.core.SchemaObjectKind;
 import com.example.dbadmin.core.SchemaObjectOperation;
+import com.example.dbadmin.core.SchemaObjectSql;
 import com.example.dbadmin.dto.ApiDtos.DatabaseCapabilities;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.RoutineArgumentInput;
@@ -187,7 +188,7 @@ public class SchemaObjectService {
         String schema = normalizeObjectSchema(configured, kind, schemaName);
         if (!schema.isBlank()) validateIdentifier(schema, "Schema/数据库名");
         DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
-        return new SchemaObjectTemplateResponse(kind.name(), schema, objectName, catalog.template(configured, dialect, kind, schema, objectName));
+        return new SchemaObjectTemplateResponse(kind.name(), schema, objectName, catalog.template(dialect, kind, schema, objectName));
     }
 
     public SchemaObjectLifecycleResponse preview(long connectionId, SchemaObjectLifecycleRequest request) throws Exception {
@@ -209,7 +210,7 @@ public class SchemaObjectService {
         }
         long started = System.nanoTime();
         try (Connection connection = connections.open(connectionId)) {
-            if (!plan.schemaName().isBlank() && Set.of("mysql", "mariadb").contains(catalog.family(configured))) {
+            if (!plan.schemaName().isBlank() && objectSql(configured).definitionsResolveInCurrentNamespace()) {
                 connection.setCatalog(plan.schemaName());
             }
             try (Statement statement = connection.createStatement()) {
@@ -351,7 +352,7 @@ public class SchemaObjectService {
     /** 一次调用要用到的全部东西：解析好的对象与参数、方言、写进历史的那句（只有占位符，没有参数值）。 */
     private record InvocationPlan(
             DatabaseDialect dialect,
-            String family,
+            boolean asQuery,
             SchemaObjectKind kind,
             SchemaObjectSummary object,
             List<SchemaObjectParameter> parameters,
@@ -388,18 +389,18 @@ public class SchemaObjectService {
                 throw new IllegalArgumentException("请填写参数：" + parameterLabel(parameter));
             }
         }
-        String family = catalog.family(configured);
+        boolean asQuery = dialect.schemaObjects().invokesRoutinesAsQuery();
         String auditDetail = parameters.stream()
                 .map(parameter -> parameterLabel(parameter) + ":" + value(parameter.typeName()) + ":" + parameter.mode())
                 .reduce((left, right) -> left + ", " + right).orElse("无参数");
-        return new InvocationPlan(dialect, family, reference.kind(), resolved.object(), parameters, Map.copyOf(inputs),
-                routineSql(dialect, family, reference.kind(), resolved.object(), parameters),
+        return new InvocationPlan(dialect, asQuery, reference.kind(), resolved.object(), parameters, Map.copyOf(inputs),
+                routineSql(dialect, asQuery, reference.kind(), resolved.object(), parameters),
                 "object:" + confirmationTarget(live.object()), auditDetail);
     }
 
     private RoutineInvokeResponse runInvocation(Connection connection, InvocationPlan plan, StatementHook hook,
                                                 int timeoutSeconds, long started) throws Exception {
-        return plan.family().equals("postgresql") || plan.family().equals("clickhouse")
+        return plan.asQuery()
                 ? invokePrepared(connection, plan.dialect(), plan.kind(), plan.object(), plan.parameters(), plan.inputs(), hook, timeoutSeconds, started)
                 : invokeCallable(connection, plan.dialect(), plan.kind(), plan.object(), plan.parameters(), plan.inputs(), hook, timeoutSeconds, started);
     }
@@ -439,10 +440,10 @@ public class SchemaObjectService {
 
         if (operation == SchemaObjectOperation.CREATE) {
             if (request.objectKey() != null && !request.objectKey().isBlank()) throw new IllegalArgumentException("新建对象不能携带已有对象标识。");
-            String source = requireDefinitionSource(request.source(), operation, kind, schema, request.objectName(), catalog.family(configured));
+            String source = requireDefinitionSource(request.source(), operation, kind, schema, request.objectName(), objectSql(configured));
             try (Connection connection = connections.open(connectionId)) {
                 boolean exists = catalog.existsByName(
-                        connection, configured, dialect, schema, kind, request.objectName(),
+                        connection, dialect, schema, kind, request.objectName(),
                         Math.max(properties.getSql().getTimeoutSeconds(), 1)
                 );
                 if (exists) throw new ApiProblemException(HttpStatus.CONFLICT, "SCHEMA_OBJECT_ALREADY_EXISTS", "目标对象已存在：" + qualifiedName(schema, request.objectName()));
@@ -460,9 +461,9 @@ public class SchemaObjectService {
             requireFresh(request.structureVersion(), live.structureVersion());
             if (!resolved.object().name().equals(request.objectName())) throw new IllegalArgumentException("对象名称与对象标识不匹配。");
             String sql = switch (operation) {
-                case REPLACE -> requireDefinitionSource(request.source(), operation, kind, reference.schemaName(), resolved.object().name(), catalog.family(configured));
-                case DROP -> catalog.dropSql(configured, dialect, kind, resolved.catalogObject());
-                case REFRESH, ENABLE, DISABLE -> catalog.specialOperationSql(configured, dialect, operation, kind, resolved.catalogObject());
+                case REPLACE -> requireDefinitionSource(request.source(), operation, kind, reference.schemaName(), resolved.object().name(), objectSql(configured));
+                case DROP -> catalog.dropSql(dialect, kind, resolved.catalogObject());
+                case REFRESH, ENABLE, DISABLE -> catalog.specialOperationSql(dialect, operation, kind, resolved.catalogObject());
                 default -> throw new IllegalArgumentException("不支持的对象操作。");
             };
             return new LifecyclePlan(operation, kind, reference.schemaName(), resolved.object().name(), sql, confirmationTarget(live.object()));
@@ -475,14 +476,14 @@ public class SchemaObjectService {
         String loadedSource = null;
         String sourceError = null;
         try {
-            loadedSource = catalog.source(connection, configured, dialect, kind, resolved.catalogObject());
+            loadedSource = catalog.source(connection, dialect, kind, resolved.catalogObject());
         } catch (Exception error) {
             sourceError = error(error);
         }
         List<SchemaObjectParameter> parameters = List.of();
         String parameterError = null;
         try {
-            parameters = catalog.parameters(connection, configured, dialect, kind, resolved.catalogObject());
+            parameters = catalog.parameters(connection, dialect, kind, resolved.catalogObject());
         } catch (Exception error) {
             parameterError = error(error);
         }
@@ -491,7 +492,7 @@ public class SchemaObjectService {
         String dependencyError = dependenciesAvailable ? null : "当前数据库方言没有可靠的依赖元数据。";
         if (dependenciesAvailable) {
             try {
-                dependencies = catalog.dependencies(connection, configured, kind, resolved.catalogObject());
+                dependencies = catalog.dependencies(connection, dialect, kind, resolved.catalogObject());
             } catch (Exception error) {
                 dependenciesAvailable = false;
                 dependencyError = error(error);
@@ -505,7 +506,7 @@ public class SchemaObjectService {
                 .filter(operation -> !operation.equals(SchemaObjectOperation.ENABLE.name()) || "DISABLED".equalsIgnoreCase(resolved.object().status()))
                 .filter(operation -> !operation.equals(SchemaObjectOperation.DISABLE.name()) || !"DISABLED".equalsIgnoreCase(resolved.object().status()))
                 .filter(operation -> !operation.equals(SchemaObjectOperation.REFRESH.name())
-                        || !catalog.family(configured).equals("clickhouse")
+                        || !objectSql(configured).refreshRequiresRefreshClause()
                         || source != null && source.toUpperCase(Locale.ROOT).contains("REFRESH"))
                 .toList();
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -544,7 +545,7 @@ public class SchemaObjectService {
             DatabaseDialect dialect = dialectRegistry.dialectFor(configured);
             try (Connection connection = connections.open(connectionId)) {
                 SchemaObjectCatalog.CatalogPage loaded = catalog.page(
-                        connection, configured, dialect, schema, kind, keyword, page, pageSize,
+                        connection, dialect, schema, kind, keyword, page, pageSize,
                         Math.max(properties.getSql().getTimeoutSeconds(), 1)
                 );
                 MetadataCacheService.SchemaObjectPageValue pageValue = new MetadataCacheService.SchemaObjectPageValue(
@@ -571,7 +572,7 @@ public class SchemaObjectService {
 
     private ResolvedObject resolve(Connection connection, DbConnection configured, ObjectRef reference) throws Exception {
         List<SchemaObjectCatalog.CatalogObject> matches = catalog.find(
-                connection, configured, dialectRegistry.dialectFor(configured), reference.schemaName(), reference.kind(),
+                connection, dialectRegistry.dialectFor(configured), reference.schemaName(), reference.kind(),
                 reference.name(), reference.specificName(), Math.max(properties.getSql().getTimeoutSeconds(), 1)
         );
         if (matches.size() != 1) {
@@ -817,11 +818,11 @@ public class SchemaObjectService {
         return CellSerializer.serialize(value, maxText, MAX_CLOB_WINDOW_CHARS);
     }
 
-    private String routineSql(DatabaseDialect dialect, String family, SchemaObjectKind kind, SchemaObjectSummary object, List<SchemaObjectParameter> parameters) {
+    private String routineSql(DatabaseDialect dialect, boolean asQuery, SchemaObjectKind kind, SchemaObjectSummary object, List<SchemaObjectParameter> parameters) {
         int inputCount = (int) parameters.stream().filter(parameter -> parameter.mode().equals("IN") || parameter.mode().equals("INOUT")).count();
         String placeholders = String.join(", ", java.util.Collections.nCopies(inputCount, "?"));
         String qualified = dialect.qualifiedName(object.schemaName(), object.name());
-        if (family.equals("postgresql") || family.equals("clickhouse")) {
+        if (asQuery) {
             return kind == SchemaObjectKind.PROCEDURE ? "CALL " + qualified + "(" + placeholders + ")" : "SELECT * FROM " + qualified + "(" + placeholders + ")";
         }
         return "{" + (kind == SchemaObjectKind.FUNCTION ? "? = " : "") + "call " + qualified + "(" + placeholders + ")}";
@@ -836,26 +837,24 @@ public class SchemaObjectService {
         String normalized = source.stripLeading();
         String upper = normalized.toUpperCase(Locale.ROOT);
         if (upper.startsWith("CREATE OR REPLACE") || upper.startsWith("CREATE OR ALTER") || upper.startsWith("ALTER ")) return source;
-        String family = catalog.family(configured);
         if (upper.startsWith("CREATE ")) {
-            String replacement = family.equals("sqlserver") ? "CREATE OR ALTER " : "CREATE OR REPLACE ";
-            return source.substring(0, source.indexOf(normalized)) + replacement + normalized.substring("CREATE ".length());
+            return source.substring(0, source.indexOf(normalized)) + objectSql(configured).replacePrefix() + normalized.substring("CREATE ".length());
         }
         return source;
     }
 
-    private String requireDefinitionSource(String source, SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String objectName, String family) {
+    private String requireDefinitionSource(String source, SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String objectName, SchemaObjectSql objects) {
         if (source == null || source.isBlank()) throw new IllegalArgumentException("对象源码不能为空。");
         if (source.length() > 2_000_000) throw new IllegalArgumentException("对象源码不能超过 200 万字符。");
         if (CLIENT_BATCH_SEPARATOR.matcher(source).find()) {
             throw new IllegalArgumentException("源码不能包含 DELIMITER、GO 或单独的 / 等客户端批处理分隔符。");
         }
-        requireSingleDefinition(source, kind, family);
-        validateDefinitionTarget(source, operation, kind, schemaName, objectName, family);
+        requireSingleDefinition(source, kind, objects);
+        validateDefinitionTarget(source, operation, kind, schemaName, objectName, objects);
         return source.trim();
     }
 
-    private void validateDefinitionTarget(String source, SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String objectName, String family) {
+    private void validateDefinitionTarget(String source, SchemaObjectOperation operation, SchemaObjectKind kind, String schemaName, String objectName, SchemaObjectSql objects) {
         String remainder = stripLeadingComments(source);
         var actionMatcher = DEFINITION_ACTION.matcher(remainder);
         if (!actionMatcher.find()) {
@@ -878,7 +877,7 @@ public class SchemaObjectService {
         }
 
         String expectedKind = kind == SchemaObjectKind.MATERIALIZED_VIEW ? "MATERIALIZED VIEW" : kind.name();
-        String declarationKind = kind == SchemaObjectKind.FUNCTION && family.equals("h2") && startsWithWord(remainder, "ALIAS")
+        String declarationKind = kind == SchemaObjectKind.FUNCTION && objects.functionsMayBeAliases() && startsWithWord(remainder, "ALIAS")
                 ? "ALIAS" : expectedKind;
         if (!startsWithWord(remainder, declarationKind)) {
             throw new IllegalArgumentException("源码定义的对象类型与当前目标不匹配。");
@@ -897,9 +896,9 @@ public class SchemaObjectService {
         if (declaredSchema != null && (schemaName == null || schemaName.isBlank() || !sameDefinitionIdentifier(declaredSchema, schemaName))) {
             throw new IllegalArgumentException("源码定义的命名空间与当前目标不匹配。");
         }
-        boolean globalObject = family.equals("clickhouse") && kind == SchemaObjectKind.FUNCTION;
+        boolean globalObject = objects.functionsAreGlobal() && kind == SchemaObjectKind.FUNCTION;
         if (declaredSchema == null && schemaName != null && !schemaName.isBlank()
-                && !Set.of("mysql", "mariadb").contains(family) && !globalObject) {
+                && !objects.definitionsResolveInCurrentNamespace() && !globalObject) {
             throw new IllegalArgumentException("对象源码必须使用当前命名空间限定对象名：" + schemaName + "." + objectName);
         }
     }
@@ -918,7 +917,7 @@ public class SchemaObjectService {
         return quoted ? value.equals(expected) : value.equalsIgnoreCase(expected);
     }
 
-    private void requireSingleDefinition(String source, SchemaObjectKind kind, String family) {
+    private void requireSingleDefinition(String source, SchemaObjectKind kind, SchemaObjectSql objects) {
         List<SqlScriptSplitter.StatementSegment> statements = scriptSplitter.split(source);
         if (statements.size() <= 1) return;
         boolean procedural = kind == SchemaObjectKind.TRIGGER || kind == SchemaObjectKind.PROCEDURE || kind == SchemaObjectKind.FUNCTION;
@@ -930,7 +929,7 @@ public class SchemaObjectService {
         // ends at the native END marker. Appended statements remain outside
         // that marker and are rejected. PostgreSQL/H2 dollar-quoted bodies are
         // already treated as one statement by SqlScriptSplitter.
-        if (!Set.of("mysql", "mariadb", "oracle", "sqlserver").contains(family)
+        if (!objects.proceduralBodiesEndWithEnd()
                 || !effective.matches("(?s).*\\bEND\\s*;?\\s*$")) {
             throw new IllegalArgumentException("对象源码只能包含一个顶层定义语句。");
         }
@@ -1055,9 +1054,13 @@ public class SchemaObjectService {
         return value;
     }
 
+    private SchemaObjectSql objectSql(DbConnection configured) {
+        return dialectRegistry.dialectFor(configured).schemaObjects();
+    }
+
     private String normalizeObjectSchema(DbConnection configured, SchemaObjectKind kind, String schema) {
         String normalized = normalizeSchema(schema);
-        return catalog.family(configured).equals("clickhouse") && kind == SchemaObjectKind.FUNCTION ? "" : normalized;
+        return objectSql(configured).functionsAreGlobal() && kind == SchemaObjectKind.FUNCTION ? "" : normalized;
     }
 
     private void validateIdentifier(String identifier, String label) {

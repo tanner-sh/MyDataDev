@@ -21,6 +21,11 @@ public class ClickHouseDialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return ClickHouseObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, false, false, true, List.of(), List.of(), SchemaObjectCapabilities.clickHouse());
     }
