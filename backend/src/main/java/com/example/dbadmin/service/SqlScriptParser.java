@@ -480,8 +480,9 @@ final class SqlScriptParser {
                 return true;
             }
             if (SQLPLUS_SET.matcher(upper).matches()) {
+                // 有指令监听器的只有命令窗口，它总是把 DBMS_OUTPUT 读出来写进日志 —— 那里说「不显示」就是错的。
                 notice(upper.matches("SET\\s+SERVEROUT(?:PUT)?\\b.*")
-                        ? "已忽略 " + command + "：SQL 工作台暂不显示 DBMS_OUTPUT"
+                        ? "已忽略 " + command + (directives != null ? "：命令窗口总会显示 DBMS_OUTPUT，无需开启" : "：SQL 工作台暂不显示 DBMS_OUTPUT")
                         : "已忽略 SQL*Plus 设置：" + command);
                 return true;
             }

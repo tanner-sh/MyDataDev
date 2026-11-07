@@ -7,7 +7,8 @@ import {
   formatCompilationError,
   normalizeExplorerObjectKind,
   schemaObjectCapabilities,
-  schemaObjectConfirmationTarget
+  schemaObjectConfirmationTarget,
+  schemaObjectOperationLabels
 } from './schemaObjectModel';
 
 describe('schema object model', () => {
@@ -89,5 +90,12 @@ describe('编译错误', () => {
   it('多条错误时给出条数并仍然指向第一条的位置', () => {
     expect(compilationErrorSummary([{ line: 3, text: 'x' }, { line: 9, text: 'y' }]))
       .toBe('对象已创建但编译未通过，共 2 条错误，从第 3 行开始，当前不可用。');
+  });
+});
+
+describe('schemaObjectOperationLabels', () => {
+  it('shows operations in Chinese, drops the ones every object has, and keeps unknown codes', () => {
+    expect(schemaObjectOperationLabels(['LIST', 'DETAIL', 'SOURCE', 'INVOKE', 'DROP', 'COMPILE']))
+      .toEqual(['查看源码', '调用', '删除', 'COMPILE']);
   });
 });

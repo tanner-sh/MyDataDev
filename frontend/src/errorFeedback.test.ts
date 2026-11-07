@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeFailure, diagnosticText, isPromptCode, mayChangeData, redactDiagnostic } from './errorFeedback';
+import { describeFailure, diagnosticText, isPromptCode, isReportableFailure, mayChangeData, redactDiagnostic } from './errorFeedback';
 
 describe('actionable error feedback', () => {
   it('redacts credentials and omits query parameters in copied diagnostics', () => {
@@ -25,5 +25,12 @@ describe('prompts are not failures', () => {
     }
     expect(isPromptCode('SQL_FAILED')).toBe(false);
     expect(isPromptCode(undefined)).toBe(false);
+  });
+
+  it('does not report a cancellation the user asked for as an operation problem', () => {
+    expect(isReportableFailure('SQL_CANCELLED')).toBe(false);
+    expect(isReportableFailure('PRODUCTION_CONFIRMATION_REQUIRED')).toBe(false);
+    expect(isReportableFailure('SQL_TIMEOUT')).toBe(true);
+    expect(isReportableFailure(undefined)).toBe(true);
   });
 });

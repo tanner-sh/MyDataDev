@@ -188,6 +188,8 @@ public class SqlService {
                     metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
                     return result;
                 }
+            } catch (Exception error) {
+                throw executions.translateCancel(registeredId, statement, error);
             } finally {
                 executions.unregister(registeredId, statement);
             }
@@ -458,7 +460,8 @@ public class SqlService {
                     } catch (Exception e) {
                         if (tx != null) tx.fail(e);
                         long elapsedMs = elapsed(statementStarted);
-                        errorMessage = (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + (tx == null ? "" : "；" + tx.summary());
+                        errorMessage = (executions.cancelRequested(registeredId, jdbc) ? "执行已取消，数据库已中止这条语句。"
+                                : e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + (tx == null ? "" : "；" + tx.summary());
                         results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), emptyResult(-1, elapsedMs, maxRows)));
                         status = "FAILED";
                         break;
@@ -645,6 +648,8 @@ public class SqlService {
                     metrics.success(SqlExecutionMetrics.KIND_PAGE, started);
                     return result;
                 }
+            } catch (Exception error) {
+                throw executions.translateCancel(registeredId, statement, error);
             } finally {
                 executions.unregister(registeredId, statement);
             }

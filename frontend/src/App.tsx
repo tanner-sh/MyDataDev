@@ -1607,9 +1607,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         // 服务端已经把事务回收了（多半是空闲超时自动回滚）。不清掉本地状态的话，之后每次
         // 执行都会继续发到这个不存在的事务上，连切换连接都会被「有未结束的事务」拦住。
         releaseTransactionIfGone(e);
-        // 结果区也要拿到原文：状态栏只有一行，长错误会被截断且无法复制。
-        updateActiveSqlTab({ message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
-        toastApi.error(errorMessage);
+        // 用户自己点的取消不是错误：状态栏给一句说明就够了，不弹红色提示、不占结果区。
+        if (e instanceof ApiError && e.code === 'SQL_CANCELLED') {
+          updateActiveSqlTab({ message: errorMessage, statusKind: 'info', errorDetail: undefined });
+        } else {
+          // 结果区也要拿到原文：状态栏只有一行，长错误会被截断且无法复制。
+          updateActiveSqlTab({ message: errorMessage, statusKind: 'error', errorDetail: errorMessage });
+          toastApi.error(errorMessage);
+        }
         if (sqlHistoryState.open) await sqlHistoryState.refreshQuietly();
       } finally {
         if (sqlExecutionIdRef.current === executionId) sqlExecutionIdRef.current = null;

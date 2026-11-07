@@ -21,7 +21,7 @@ class CompilationErrorLogTest {
         // 同一对象换了大小写写法、这次编译通过：从账本里移除。
         assertThat(log.record(new CompilationDiagnostics.Target("etl", "sp_a", "PROCEDURE"), List.of())).isTrue();
         assertThat(log.lines()).containsExactly("sp_b（PROCEDURE） 第 1 行第 1 列：PLS-00103");
-        assertThat(log.summary()).isEqualTo("其中 1 个对象编译失败（INVALID）：sp_b（PROCEDURE）；明细见 compilationErrors。");
+        assertThat(log.summary()).isEqualTo("其中 1 个对象编译失败（INVALID）：sp_b（PROCEDURE）；出错的行号与原因见执行日志或任务详情。");
 
         // 一直是好的对象不需要落库。
         assertThat(log.record(new CompilationDiagnostics.Target(null, "SP_OK", "PROCEDURE"), List.of())).isFalse();

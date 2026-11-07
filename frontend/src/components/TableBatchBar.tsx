@@ -6,6 +6,7 @@ import { cellValidation } from '../tableEditing';
 import { copyText } from '../clipboard';
 import { createUuid } from '../createUuid';
 import {
+  batchValueModes,
   canBatchEditColumn,
   duplicateRowsAsInserts,
   markRowsDeleted,
@@ -13,10 +14,11 @@ import {
   setColumnForRows,
   summarizeSelection
 } from '../tableBatchEdit';
+import type { BatchValueMode } from '../tableBatchEdit';
 
 const { Text } = Typography;
 
-type ValueMode = 'value' | 'null' | 'empty';
+type ValueMode = BatchValueMode;
 
 /**
  * 勾选了行之后出现在表格上方的一条操作栏。所有操作只改待提交变更（进撤销栈、要点「提交」才落库），
@@ -74,6 +76,8 @@ export function TableBatchBar({ data, rows, selected, editingDisabled, dbType, t
     const keyHint = data.keyColumns.length ? `，${data.keyColumns.join(', ')} 留空待填（原样复制必然撞主键）` : '';
     void messageApi.success(`已在顶部新增 ${added.length} 行${keyHint}`);
   }
+
+  const valueModes = batchValueModes(data.columns.find((item) => item.name === column));
 
   function openValueEditor() {
     setColumn((current) => current && editableColumns.some((item) => item.name === current) ? current : editableColumns[0]?.name);
@@ -139,11 +143,20 @@ export function TableBatchBar({ data, rows, selected, editingDisabled, dbType, t
             aria-label="要修改的列"
             style={{ width: '100%' }}
             value={column}
-            onChange={(value) => { setColumn(value); setProblem(''); }}
+            onChange={(value) => {
+              setColumn(value);
+              setProblem('');
+              // 换到的列不接受当前选的取值方式（例如从可空列换到非空列时选着 NULL）就退回「指定值」。
+              if (batchValueModes(data.columns.find((item) => item.name === value))[mode]) setMode('value');
+            }}
             options={editableColumns.map((item: TableColumn) => ({ value: item.name, label: `${item.name} · ${item.typeName}${item.nullable ? '' : ' · 非空'}` }))}
           />
           <Radio.Group value={mode} onChange={(event) => { setMode(event.target.value as ValueMode); setProblem(''); }}
-            options={[{ value: 'value', label: '指定值' }, { value: 'null', label: 'NULL' }, { value: 'empty', label: '空字符串' }]} />
+            options={[
+              { value: 'value', label: '指定值' },
+              { value: 'null', label: 'NULL', disabled: Boolean(valueModes.null), title: valueModes.null },
+              { value: 'empty', label: '空字符串', disabled: Boolean(valueModes.empty), title: valueModes.empty }
+            ]} />
           {mode === 'value' && (
             <Input.TextArea autoSize={{ minRows: 1, maxRows: 6 }} aria-label="新的列值" value={text}
               onChange={(event) => { setText(event.target.value); setProblem(''); }} placeholder="输入新值，按原样写入（日期按库能识别的格式填）" />

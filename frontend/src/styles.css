@@ -214,9 +214,10 @@ body {
   gap: 6px;
 }
 
+/* 最后两列是收藏开关与刷新按钮。刷新从顶栏挪到这里时只有四列，它被挤到第二行孤零零占一整行。 */
 .connection-list-filters {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 112px 112px 32px;
+  grid-template-columns: minmax(0, 1fr) 112px 112px auto auto;
   gap: 6px;
 }
 
@@ -4425,7 +4426,7 @@ body.is-resizing-column * {
   }
 
   .connection-list-filters {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   }
 
   .connection-list-filters > .ant-input-search {

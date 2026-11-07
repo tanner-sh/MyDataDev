@@ -27,8 +27,15 @@ export function isPromptCode(code: string | undefined): boolean {
   return PROMPT_CODES.includes(code || '');
 }
 
+/** 用户自己让它停的：调用或查询被取消。界面上已经有对应的说明，记成「操作问题」只会让人以为出了故障。 */
+const USER_INITIATED_CODES = ['SQL_CANCELLED'];
+
+export function isReportableFailure(code: string | undefined): boolean {
+  return !isPromptCode(code) && !USER_INITIATED_CODES.includes(code || '');
+}
+
 export function reportFailure(error: Parameters<typeof describeFailure>[0], path?: string) {
-  if (isPromptCode(error.code)) return;
+  if (!isReportableFailure(error.code)) return;
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(API_FAILURE_EVENT, { detail: describeFailure(error, path) }));
 }
 

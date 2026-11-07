@@ -66,6 +66,25 @@ export function canBatchEditColumn(column: TableColumn, keyColumns: readonly str
   return column.editable !== false && !column.truncated && !keyColumns.includes(column.name);
 }
 
+export type BatchValueMode = 'value' | 'null' | 'empty';
+
+/** 字符类 JDBC 类型：CHAR、VARCHAR、LONGVARCHAR、NCHAR、NVARCHAR、LONGNVARCHAR、CLOB、NCLOB。 */
+const TEXT_JDBC_TYPES = new Set([1, 12, -1, -15, -9, -16, 2005, 2011]);
+
+/**
+ * 「设置列值」里这一列能选哪几种值。非空列给 NULL、数字或日期列给「空字符串」都是提交时注定失败的选项 ——
+ * 先让人点了再报错，不如一开始就不给。返回每种取值是否可选，以及不可选时的原因（做成提示）。
+ */
+export function batchValueModes(column: TableColumn | undefined): Record<BatchValueMode, string | undefined> {
+  if (!column) return { value: undefined, null: undefined, empty: undefined };
+  const text = TEXT_JDBC_TYPES.has(column.jdbcType) || /char|text|clob|string/i.test(column.typeName);
+  return {
+    value: undefined,
+    null: column.nullable ? undefined : `${column.name} 不允许为空`,
+    empty: text ? undefined : `${column.name} 不是字符类型`
+  };
+}
+
 /**
  * 把勾选行的某一列设成同一个值。value 为 null 即设为 NULL。
  *
