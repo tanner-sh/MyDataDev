@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.core.DatabaseFamily;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ActiveOperations;
@@ -220,7 +221,7 @@ public class RestoreService {
         if ("SQL".equals(source.format())) {
             warnings.add("SQL 恢复不再分批提交；数据库支持事务的语句会在失败或取消时统一回滚。");
             if ("OVERWRITE".equals(mode)) warnings.add("覆盖模式只会删除预检识别到的目标基础表，请确认目标连接和表清单。");
-            if (ddlMayImplicitlyCommit(target.dbType())) {
+            if (dialectRegistry.dialectFor(target).ddlCommitsImplicitly()) {
                 warnings.add("目标数据库可能在 DDL（建表、删表、索引）前后隐式提交；失败或取消时，结构变更仍可能无法回滚。");
             }
             if ("APPEND".equals(mode)) warnings.add("追加模式忽略输入文件中的建表和索引语句，仅执行 INSERT。");
@@ -415,12 +416,6 @@ public class RestoreService {
         CommitOutcomeUnknownException(Throwable cause) { super("恢复提交结果未知，请核对目标数据后再决定是否重试。", cause); }
     }
 
-    private boolean ddlMayImplicitlyCommit(String dbType) {
-        if (dbType == null) return true;
-        return Set.of("mysql", "mariadb", "oceanbase-mysql", "oracle", "oceanbase-oracle", "dm", "dameng")
-                .contains(dbType.toLowerCase(Locale.ROOT));
-    }
-
     private void runNative(RestoreJob job, String toolPath, String extraArgs) throws Exception {
         if (toolPath == null || toolPath.isBlank()) throw new IllegalArgumentException("原生恢复需要填写工具路径。");
         // mysql / pg_restore / imp 都是独立进程，用不上连接池里的隧道，得为这次恢复单独开一条。
@@ -550,7 +545,8 @@ public class RestoreService {
     }
 
     private boolean tableExists(DatabaseMetaData meta, DbConnection target, String namespace, String table) throws Exception {
-        boolean catalogBased = Set.of("mysql", "mariadb", "oceanbase-mysql").contains(target.dbType().toLowerCase(Locale.ROOT));
+        // 「库」落在 JDBC 的 catalog 还是 schema 上归方言管（MySQL 系是 catalog）；原来这里另写了一份类型清单。
+        boolean catalogBased = dialectRegistry.dialectFor(target).namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG;
         try (ResultSet rows = meta.getTables(catalogBased ? namespace : null, catalogBased ? null : namespace, table, new String[]{"TABLE"})) {
             return rows.next();
         }
@@ -808,12 +804,10 @@ public class RestoreService {
         return normalizeFormat(fallback, null);
     }
 
+    /** 原生备份格式只认这三类；家族映射见 {@link DatabaseFamily}。 */
     private String family(String dbType) {
-        String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        if (Set.of("mysql", "mariadb", "oceanbase-mysql").contains(type)) return "MYSQL";
-        if (Set.of("oracle", "oceanbase-oracle", "dm").contains(type)) return "ORACLE";
-        if (Set.of("postgresql", "postgres", "pg").contains(type)) return "POSTGRESQL";
-        return type.toUpperCase(Locale.ROOT);
+        if (DatabaseFamily.isMySqlCompatible(dbType)) return "MYSQL";
+        return DatabaseFamily.of(dbType).toUpperCase(Locale.ROOT);
     }
 
     private MysqlTarget mysqlTarget(String jdbcUrl) {

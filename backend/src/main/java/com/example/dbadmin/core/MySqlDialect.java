@@ -14,6 +14,12 @@ import java.util.Locale;
 import java.util.Optional;
 
 public class MySqlDialect extends DefaultDialect {
+    /** DDL 前后隐式提交（见 {@link DatabaseDialect#ddlCommitsImplicitly()}）。 */
+    @Override
+    public boolean ddlCommitsImplicitly() {
+        return true;
+    }
+
     private static final String IDENTIFIER_QUOTE = String.valueOf((char) 96);
 
 

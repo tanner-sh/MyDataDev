@@ -16,6 +16,12 @@ import java.util.List;
 import java.util.Locale;
 
 public class DamengDialect extends DefaultDialect {
+    /** DDL 前后隐式提交（见 {@link DatabaseDialect#ddlCommitsImplicitly()}）。 */
+    @Override
+    public boolean ddlCommitsImplicitly() {
+        return true;
+    }
+
     /** 达梦沿用 Oracle 那套折叠规则。 */
     @Override
     public String foldUnquotedIdentifier(String identifier) {

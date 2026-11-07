@@ -3,7 +3,6 @@ package com.example.dbadmin.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
-import java.time.ZoneId;
 
 /**
  * 一个定期采集结构快照的目标。
@@ -24,19 +23,10 @@ public record SchemaSnapshotTarget(
         String lastMessage,
         Instant createdAt,
         Instant updatedAt
-) {
+) implements CronScheduled {
     @JsonProperty("zoneId")
     public String zoneId() {
         return scheduleZoneId().getId();
     }
 
-    /** 时区无效时退回服务器默认值，而不是让整个调度停摆 —— 与定时导出同一条规矩。 */
-    public ZoneId scheduleZoneId() {
-        if (scheduleZone == null || scheduleZone.isBlank()) return ZoneId.systemDefault();
-        try {
-            return ZoneId.of(scheduleZone.trim());
-        } catch (Exception ignored) {
-            return ZoneId.systemDefault();
-        }
-    }
 }

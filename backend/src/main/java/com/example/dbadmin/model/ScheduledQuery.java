@@ -3,7 +3,6 @@ package com.example.dbadmin.model;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.Instant;
-import java.time.ZoneId;
 
 /**
  * 一条定时导出：按 cron 跑一条查询，把结果写成文件。
@@ -28,19 +27,10 @@ public record ScheduledQuery(
         String lastFile,
         Instant createdAt,
         Instant updatedAt
-) {
+) implements CronScheduled {
     @JsonProperty("zoneId")
     public String zoneId() {
         return scheduleZoneId().getId();
     }
 
-    /** 时区无效时退回服务器默认值，而不是让整个调度停摆。 */
-    public ZoneId scheduleZoneId() {
-        if (scheduleZone == null || scheduleZone.isBlank()) return ZoneId.systemDefault();
-        try {
-            return ZoneId.of(scheduleZone.trim());
-        } catch (Exception ignored) {
-            return ZoneId.systemDefault();
-        }
-    }
 }

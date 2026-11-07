@@ -10,6 +10,7 @@ import com.example.dbadmin.dto.ApiDtos.SchemaDriftTable;
 import com.example.dbadmin.dto.ApiDtos.SchemaSnapshotCaptureResponse;
 import com.example.dbadmin.dto.ApiDtos.SchemaSnapshotSummary;
 import com.example.dbadmin.dto.ApiDtos.SchemaSnapshotTargetRequest;
+import com.example.dbadmin.model.CronSchedules;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.model.SchemaSnapshot;
 import com.example.dbadmin.model.SchemaSnapshotTarget;
@@ -20,7 +21,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -279,12 +279,10 @@ public class SchemaSnapshotService {
     public SchemaSnapshotTarget saveTarget(SchemaSnapshotTargetRequest request, String actor) throws Exception {
         connections.require(request.connectionId());
         String schema = resolveSchema(request.connectionId(), request.schemaName());
-        // cron 写错就在保存时报出来，而不是等到某天凌晨发现从来没跑过。
-        try {
-            CronExpression.parse(request.cron().trim());
-        } catch (Exception error) {
-            throw new IllegalArgumentException("cron 表达式无法解析：" + request.cron());
-        }
+        // cron 与时区写错就在保存时报出来，而不是等到某天凌晨发现从来没跑过。时区原来不校验，
+        // 写错了会悄悄按服务器时区跑。
+        CronSchedules.requireValidCron(request.cron());
+        CronSchedules.normalizeZone(request.scheduleZone());
         int keep = Math.min(Math.max(request.keepSnapshots() == null ? DEFAULT_KEEP_SNAPSHOTS : request.keepSnapshots(), 1),
                 MAX_KEEP_SNAPSHOTS);
         repository.upsertTarget(new SchemaSnapshotTarget(0, request.connectionId(), schema, request.cron().trim(),

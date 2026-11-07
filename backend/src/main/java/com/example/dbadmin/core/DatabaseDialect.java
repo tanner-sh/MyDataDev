@@ -171,6 +171,17 @@ public interface DatabaseDialect {
     }
 
     /**
+     * DDL（建表、删表、建索引）会不会隐式提交当前事务。
+     *
+     * <p>MySQL 系与 Oracle 系会：一段「先删表再建表再插数据」的恢复脚本在中途失败或被取消时，
+     * 已经执行的结构变更回滚不了。恢复预检据此提醒用户。原来是 RestoreService 里一份写死的类型清单 ——
+     * 和备份那份让导入漏掉 Oracle 的清单是同一种写法，新增方言时没人会想起去改它。</p>
+     */
+    default boolean ddlCommitsImplicitly() {
+        return false;
+    }
+
+    /**
      * 把一个表达式转成文本，供大小写无关的模糊筛选使用。
      *
      * <p>结果网格的列筛选按文本语义工作（包含、等于、为空），而列本身可能是数字、时间或布尔。
