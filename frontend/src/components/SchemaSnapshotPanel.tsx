@@ -158,11 +158,11 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
   ];
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Alert
         type="info"
         showIcon
-        message="快照是一份记录，不是一份可以回放的期望状态"
+        title="快照是一份记录，不是一份可以回放的期望状态"
         description="这里只告诉你结构什么时候变的、变了什么，不生成「改回去」的脚本 —— 一个字段可能是上周有人有意加的，照着旧快照删掉它才是真正的事故。要迁移脚本请用「结构对比」，拿一个真正的基准环境作源端。"
       />
 
@@ -194,15 +194,15 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon message="操作失败" description={error} />}
+      {error && <Alert type="error" showIcon title="操作失败" description={error} />}
 
       {capture && (
         <Alert
           type={capture.changed ? 'success' : 'info'}
           showIcon
-          message={captureResultMessage(capture)}
+          title={captureResultMessage(capture)}
           description={capture.warnings.length > 0 && (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               {capture.warnings.map((warning) => <Text key={warning} type="warning">{warning}</Text>)}
             </Space>
           )}
@@ -313,9 +313,9 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
           <Alert
             type={drift.tables.length === 0 ? 'success' : 'warning'}
             showIcon
-            message={driftSummary(drift)}
+            title={driftSummary(drift)}
             description={
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <Text type="secondary">对比到：{drift.targetLabel}</Text>
                 <Text type="secondary">{driftAuditNotice(drift)}</Text>
                 {drift.warnings.map((warning) => <Text key={warning} type="warning">{warning}</Text>)}
@@ -359,7 +359,7 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
                   render: (_: unknown, row) => row.items.length === 0
                     ? <Text type="secondary">整张表</Text>
                     : (
-                      <Space direction="vertical" size={2}>
+                      <Space orientation="vertical" size={2}>
                         {row.items.map((item) => (
                           <Tooltip key={`${item.category}:${item.name}`} title={`${item.source ?? '—'} → ${item.target ?? '—'}`}>
                             <Text>

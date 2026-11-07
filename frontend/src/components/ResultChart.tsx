@@ -130,7 +130,7 @@ export const ResultChart = memo(function ResultChart({ columns, rows }: {
       </Space>
 
       {model.notices.map((notice) => (
-        <Alert key={notice} type="info" showIcon className="result-chart-notice" message={notice} />
+        <Alert key={notice} type="info" showIcon className="result-chart-notice" title={notice} />
       ))}
 
       {model.series.length === 0 || model.categories.length === 0 ? (

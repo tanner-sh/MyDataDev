@@ -133,7 +133,7 @@ export function TableBatchBar({ data, rows, selected, editingDisabled, dbType, t
         onCancel={() => setValueOpen(false)}
         destroyOnHidden
       >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space className="full-width" orientation="vertical" size={12}>
           <Select
             showSearch
             aria-label="要修改的列"

@@ -61,7 +61,7 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
           <ConnectionField label="源连接" connections={connections} value={form.sourceConnectionId} placeholder="选择源连接"
@@ -109,7 +109,7 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon message="对比失败" description={error} />}
+      {error && <Alert type="error" showIcon title="对比失败" description={error} />}
 
       {result && (
         <>
@@ -117,9 +117,9 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
             type={result.summary.onlyInSource + result.summary.onlyInTarget + result.summary.different === 0
               ? 'success' : 'info'}
             showIcon
-            message={summarizeDataDiff(result)}
+            title={summarizeDataDiff(result)}
             description={
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <Text type="secondary">
                   {describeTable(result, 'source')} → {describeTable(result, 'target')}
                   {' · '}匹配字段 {result.keyColumns.join(', ')}
@@ -154,7 +154,7 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
                   render: (columns: string[], row) => (columns.length === 0
                     ? <Text type="secondary">整行</Text>
                     : (
-                      <Space direction="vertical" size={2}>
+                      <Space orientation="vertical" size={2}>
                         {columns.map((column) => {
                           const pair = cellPair(result, row, column);
                           return (
@@ -174,7 +174,7 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
           )}
 
           {script && (
-            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            <Space className="full-width" orientation="vertical" size={6}>
               <Space size={6}>
                 <Button
                   size="small"

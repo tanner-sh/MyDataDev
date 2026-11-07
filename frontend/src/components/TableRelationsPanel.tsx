@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { CheckOutlined, CloseOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
-import { localizeError } from '../utils';
+import { localizeError, formatDateTime } from '../utils';
 import { hasConnectionPermission } from '../accessControl';
 import { filterRelations, invalidateRelationKnowledge, manualRelationProblem, pairKey, relationText } from '../tableRelations';
 import type { Connection, MinedTableRelation, TableRelation, TableRelationPair, TableRelationSource, TableRelationStatus, TableRelationsResponse } from '../types';
@@ -13,7 +13,7 @@ const SOURCE_LABELS: Record<TableRelationSource, string> = { HISTORY: '执行历
 const EMPTY_PAIR: TableRelationPair = { leftTable: '', leftColumn: '', rightTable: '', rightColumn: '' };
 
 function formatTime(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : '—';
+  return formatDateTime(value) || '—';
 }
 
 /**
@@ -88,7 +88,7 @@ export const TableRelationsPanel = memo(function TableRelationsPanel({ connectio
   const decided = filterRelations(data?.decided ?? [], keyword);
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Paragraph type="secondary" className="table-relations-intro">
         在 SQL 编辑器里写到 <Text code>JOIN 表 ON</Text> 时，补全会给出整条关联条件。这里管理它的来源：确认的排在最前，
         否决的不再提示（包括按命名推断出来的错误条件）。候选来自这条连接上最近成功执行过的 SQL，只统计「表.列 = 表.列」，不保存也不显示 SQL 原文。
@@ -103,7 +103,7 @@ export const TableRelationsPanel = memo(function TableRelationsPanel({ connectio
         </Tooltip>
         {data && <Text type="secondary">扫描了最近 {data.scannedStatements} 条成功执行的 SQL</Text>}
       </Space>
-      {error && <Alert type="error" showIcon message={error} closable onClose={() => setError('')} />}
+      {error && <Alert type="error" showIcon title={error} closable onClose={() => setError('')} />}
 
       <section>
         <Text strong>执行历史里的候选（{mined.length}）</Text>

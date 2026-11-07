@@ -22,6 +22,7 @@ import {
   rememberRecentObject,
   writeFavoriteObjectKeys
 } from '../workspacePreferences';
+import { formatClockTime } from '../utils';
 
 const { Text } = Typography;
 const SchemaObjectManager = lazy(() => import('./SchemaObjectManager').then((module) => ({ default: module.SchemaObjectManager })));
@@ -289,9 +290,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
     ? `已加载 ${activeCount.loaded}${activeCount.total != null ? ` / ${activeCount.total}` : activeCount.hasMore ? '+' : ''} 个${activeLabel}对象`
     : `尚未加载${activeLabel}`;
   const cacheStatus = activeCount?.cachedAt
-    ? ` · ${activeCount.cacheHit ? '缓存数据' : '刚刚刷新'} · ${new Date(activeCount.cachedAt).toLocaleTimeString()}`
+    ? ` · ${activeCount.cacheHit ? '缓存数据' : '刚刚刷新'} · ${formatClockTime(activeCount.cachedAt)}`
     : activeKind === 'TABLE' && metadata?.cachedAt
-      ? ` · ${metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · ${new Date(metadata.cachedAt).toLocaleTimeString()}`
+      ? ` · ${metadata.cacheHit ? '缓存数据' : '刚刚刷新'} · ${formatClockTime(metadata.cachedAt)}`
       : '';
 
   return (

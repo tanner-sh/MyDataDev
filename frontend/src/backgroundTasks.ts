@@ -85,3 +85,18 @@ export function backgroundTaskCompletionMessage(
     ? `${detail}已结束，可在管理中的备份与恢复或定时导出中查看结果。`
     : `${detail}已结束。`;
 }
+
+/**
+ * 顶栏「后台任务」点进去落在哪：SQL 文件任务有自己的抽屉，导出在「导出与传输 / 定时导出」，
+ * 备份与恢复在同一个分区的不同标签。
+ */
+export type BackgroundTaskTarget =
+  | { kind: 'sql-files' }
+  | { kind: 'management'; section: 'scheduled-exports' }
+  | { kind: 'management'; section: 'backups'; backupTab: 'history' | 'restore' };
+
+export function backgroundTaskTarget(kind: BackgroundTaskKind): BackgroundTaskTarget {
+  if (kind === 'sqlFiles') return { kind: 'sql-files' };
+  if (kind === 'exports') return { kind: 'management', section: 'scheduled-exports' };
+  return { kind: 'management', section: 'backups', backupTab: kind === 'restores' ? 'restore' : 'history' };
+}

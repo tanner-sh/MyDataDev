@@ -469,7 +469,7 @@ export function McpSettingsPanel() {
               if (selected.length === 0) return null;
               return (
                 <Form.Item label="访问档位" extra="档位按连接单独授予；只读连接只能是只读。写档位仍受生产确认、未限定范围写确认与审计约束。">
-                  <Space orientation="vertical" size={4} style={{ width: '100%' }}>
+                  <Space className="full-width" orientation="vertical" size={4}>
                     {selected.map((connectionId) => {
                       const connection = connectionById.get(connectionId);
                       const options = allowedLevelsFor(connection);
@@ -524,7 +524,7 @@ export function McpSettingsPanel() {
         footer={<Button type="primary" onClick={() => setCredential(undefined)}>我已安全保存</Button>}
       >
         {credential && (
-          <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+          <Space className="full-width" orientation="vertical" size="middle">
             <Alert type="warning" showIcon title="完整凭据只显示这一次。关闭后无法找回，只能重新轮换 Key。" />
             <Input.TextArea value={credential.credential} readOnly autoSize={{ minRows: 2, maxRows: 4 }} />
             <Button icon={<CopyOutlined />} onClick={() => void copyText(credential.credential, '完整凭据')}>复制完整凭据</Button>

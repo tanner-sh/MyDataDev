@@ -119,19 +119,36 @@ export function backupMethodLabel(method?: string) {
   return method;
 }
 
-export function formatFileSize(size?: number) {
-  if (!size || size <= 0) return '';
-  if (size < 1024) return `${size} B`;
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
-  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+/**
+ * 字节数的统一写法。原来有三份（备份、SQL 文件、导入），一份不认 GB、一份 KB 取整、一份 0 字节显示成空，
+ * 同一个 1.5 GB 的文件在三个面板里能写成三种样子。不知道大小时（null / undefined / 负数）返回空串，
+ * 由调用方决定要不要显示这一项；0 就是「0 B」。
+ */
+export function formatBytes(bytes?: number | null): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-export function formatHistoryTime(value: string) {
+/**
+ * 服务端时间戳的统一写法（24 小时制、本地时区）。原来另有六处各自 `new Date(x).toLocaleString()`，
+ * 有的 12 小时制、有的没处理下面这个后缀 —— 带后缀的串在那几处直接显示成 Invalid Date。
+ */
+export function formatDateTime(value?: string | null) {
   if (!value) return '';
   // Java ZonedDateTime may append a region suffix such as "[Asia/Shanghai]",
   // which browsers do not accept even though the preceding offset is valid ISO-8601.
   const parsed = new Date(value.replace(/\[[^\]]+\]$/, ''));
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString('zh-CN', { hour12: false });
+}
+
+/** 只要时刻（状态栏里的「刚刚刷新 · 08:36:34」这种），规则同上。 */
+export function formatClockTime(value?: string | number | null) {
+  if (value == null || value === '') return '';
+  const parsed = new Date(typeof value === 'string' ? value.replace(/\[[^\]]+\]$/, '') : value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleTimeString('zh-CN', { hour12: false });
 }
 
 export function dbTypeLabel(dbType: string) {

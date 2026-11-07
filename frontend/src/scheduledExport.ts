@@ -1,4 +1,5 @@
 import type { ScheduledExportTask } from './types';
+import { formatDateTime } from './utils';
 
 /**
  * 定时导出的纯逻辑。
@@ -78,5 +79,5 @@ export function scheduledExportStatus(task: Pick<ScheduledExportTask, 'enabled' 
 export function nextRunLabel(task: Pick<ScheduledExportTask, 'enabled' | 'cron'>, nextRunAt?: string | null): string {
   if (!task.enabled) return '已停用';
   if (!nextRunAt) return task.cron?.trim() ? 'cron 无法解析' : '未设置周期';
-  return new Date(nextRunAt).toLocaleString('zh-CN', { hour12: false });
+  return formatDateTime(nextRunAt);
 }

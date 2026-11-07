@@ -5,7 +5,7 @@ import { DownloadOutlined, RedoOutlined, ReloadOutlined } from '@ant-design/icon
 import { api, downloadFromUrl } from '../api';
 import { API } from '../constants';
 import type { BackupHistory, BackupHistoryPage, Connection } from '../types';
-import { backupStatusLabel, formatFileSize, formatHistoryTime } from '../utils';
+import { backupStatusLabel, formatBytes, formatDateTime } from '../utils';
 
 const { Text } = Typography;
 
@@ -64,8 +64,8 @@ export function BackupHistoryCenter({ selected, onRestore }: { selected: Connect
           <Button key="download" size="small" type="text" icon={<DownloadOutlined />} disabled={!fileAvailable} onClick={() => downloadFromUrl(`${API}/backups/${history.taskId}/history/${history.id}/download`)}>下载</Button>,
           <Button key="restore" size="small" type="primary" ghost icon={<RedoOutlined />} disabled={!restorable} onClick={() => onRestore(history)}>恢复到…</Button>
         ]}>
-          <List.Item.Meta title={<Space wrap><Tag color={statusColor(history.status)}>{backupStatusLabel(history.status)}</Tag><span>{history.fileFormat || history.backupMethod || 'SQL 备份'}</span><Text type="secondary">{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text></Space>}
-            description={<Space orientation="vertical" size={1}><Text type="secondary">{history.sourceDbType || '未知源类型'} · {formatFileSize(history.fileSize || 0)} · {history.storageType && history.storageType !== 'LOCAL' ? `${history.storageProfileName || `文件服务 #${history.storageProfileId}`} · ${history.storageType}` : '本地存储'}{history.checksumSha256 ? ` · SHA-256 ${history.checksumSha256.slice(0, 12)}…` : ''}</Text>{history.stagingExpiresAt && history.phase === 'UPLOAD_FAILED' && <Text type="warning">本地暂存文件保留至 {formatHistoryTime(history.stagingExpiresAt)}</Text>}{history.message && <Text type="secondary">{history.message}</Text>}</Space>} />
+          <List.Item.Meta title={<Space wrap><Tag color={statusColor(history.status)}>{backupStatusLabel(history.status)}</Tag><span>{history.fileFormat || history.backupMethod || 'SQL 备份'}</span><Text type="secondary">{formatDateTime(history.finishedAt || history.startedAt || '')}</Text></Space>}
+            description={<Space orientation="vertical" size={1}><Text type="secondary">{history.sourceDbType || '未知源类型'} · {formatBytes(history.fileSize)} · {history.storageType && history.storageType !== 'LOCAL' ? `${history.storageProfileName || `文件服务 #${history.storageProfileId}`} · ${history.storageType}` : '本地存储'}{history.checksumSha256 ? ` · SHA-256 ${history.checksumSha256.slice(0, 12)}…` : ''}</Text>{history.stagingExpiresAt && history.phase === 'UPLOAD_FAILED' && <Text type="warning">本地暂存文件保留至 {formatDateTime(history.stagingExpiresAt)}</Text>}{history.message && <Text type="secondary">{history.message}</Text>}</Space>} />
         </List.Item>;
       }} />}
     </Spin>

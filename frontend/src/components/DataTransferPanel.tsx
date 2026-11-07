@@ -79,11 +79,11 @@ export const DataTransferPanel = memo(function DataTransferPanel({
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Alert
         type="info"
         showIcon
-        message="传输会先生成一个待执行的后台任务"
+        title="传输会先生成一个待执行的后台任务"
         description="点击后先读源端并生成写入脚本，你会看到要写多少行；真正写库要到「SQL 文件执行」里再确认一次，那一步照常做生产确认与审计。"
       />
 
@@ -157,18 +157,18 @@ export const DataTransferPanel = memo(function DataTransferPanel({
       </Form>
 
       {isSelfCopy(form) && (
-        <Alert type="warning" showIcon message="源表和目标表是同一张表，这样传输只会让行数翻倍。" />
+        <Alert type="warning" showIcon title="源表和目标表是同一张表，这样传输只会让行数翻倍。" />
       )}
 
-      {error && <Alert type="error" showIcon message="传输任务创建失败" description={error} />}
+      {error && <Alert type="error" showIcon title="传输任务创建失败" description={error} />}
 
       {job && (
         <Alert
           type="success"
           showIcon
-          message={`已生成传输任务：${job.fileName}`}
+          title={`已生成传输任务：${job.fileName}`}
           description={
-            <Space direction="vertical" size={4}>
+            <Space orientation="vertical" size={4}>
               <Text type="secondary">脚本已就绪，还没有写入目标库。到「SQL 文件执行」里核对语句数量后再开始执行。</Text>
               <Button size="small" onClick={() => onOpenTasks(job.connectionId)}>查看并执行</Button>
             </Space>

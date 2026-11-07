@@ -140,7 +140,7 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
 
   const summary = result ? schemaExportSummary(result) : undefined;
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="end">
           <ConnectionField connections={connections} value={connectionId} onChange={setConnectionId} />
@@ -153,15 +153,15 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon message={error} />}
+      {error && <Alert type="error" showIcon title={error} />}
 
       {!candidates ? (
         <PanelEmpty title="选择连接与 Schema 后加载对象" description="可以批量导出表、视图、物化视图、序列、函数、存储过程与触发器的定义（以当前数据库支持的为准），脚本按依赖关系排好顺序。" />
       ) : (
         <>
-          {candidates.warnings.map((warning) => <Alert key={warning} type="warning" showIcon message={warning} />)}
+          {candidates.warnings.map((warning) => <Alert key={warning} type="warning" showIcon title={warning} />)}
           {emptyNotice && <Text type="secondary">{emptyNotice}</Text>}
-          {searchNotice && <Alert type="info" showIcon closable message={searchNotice} onClose={() => setSearchNotice('')} />}
+          {searchNotice && <Alert type="info" showIcon closable title={searchNotice} onClose={() => setSearchNotice('')} />}
           <Space size={8} wrap>
             <Segmented
               size="small"
@@ -214,11 +214,11 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
       )}
 
       {result && summary && (
-        <Space direction="vertical" size="small" style={{ width: '100%' }}>
+        <Space className="full-width" orientation="vertical" size="small">
           <Alert
             type={summary.type}
             showIcon
-            message={summary.text}
+            title={summary.text}
             description={result.warnings.length > 0 ? (
               <List size="small" dataSource={result.warnings} renderItem={(warning) => <List.Item>{warning}</List.Item>} />
             ) : '被依赖的对象排在前面，脚本可以在空库里从头执行到尾。'}

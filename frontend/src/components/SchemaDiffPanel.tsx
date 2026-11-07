@@ -137,7 +137,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon className="schema-diff-alert" message={error} />}
+      {error && <Alert type="error" showIcon className="schema-diff-alert" title={error} />}
       {loading && <PanelLoading text="正在读取两侧结构…" />}
 
       {result && !loading && (
@@ -146,7 +146,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
             type={result.summary.onlyInSource + result.summary.onlyInTarget + result.summary.different === 0 ? 'success' : 'info'}
             showIcon
             className="schema-diff-alert"
-            message={summarizeSchemaDiff(result)}
+            title={summarizeSchemaDiff(result)}
             description={
               <>
                 <Text type="secondary">

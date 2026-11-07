@@ -128,7 +128,7 @@ export function AccessManagementPanel({ connections }: { connections: Connection
   const groupTab = (
     <Card size="small" loading={loading} extra={<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openGroup('new')}>新建用户组</Button>}>
       <Table<UserGroup> rowKey="id" size="small" pagination={false} dataSource={groups} columns={[
-        { title: '用户组', dataIndex: 'name', render: (_, group) => <Space direction="vertical" size={0}><Text strong>{group.name}</Text><Text type="secondary">{group.description || '无备注'}</Text></Space> },
+        { title: '用户组', dataIndex: 'name', render: (_, group) => <Space orientation="vertical" size={0}><Text strong>{group.name}</Text><Text type="secondary">{group.description || '无备注'}</Text></Space> },
         { title: '成员', width: 110, render: (_, group) => `${group.memberUserIds.length} 人` },
         { title: '操作', width: 140, render: (_, group) => <Space><Button type="link" size="small" onClick={() => openGroup(group)}>编辑</Button><Popconfirm title={`删除用户组 ${group.name}？`} onConfirm={() => void deleteGroup(group)}><Button danger type="link" size="small">删除</Button></Popconfirm></Space> }
       ]} />
@@ -138,7 +138,7 @@ export function AccessManagementPanel({ connections }: { connections: Connection
   const policyTab = (
     <div className="access-policy-editor">
       <Card size="small" loading={policyLoading}>
-        <Space direction="vertical" size={14} className="full-width">
+        <Space orientation="vertical" size={14} className="full-width">
           <Select className="full-width" placeholder="选择连接" value={selectedConnectionId} onChange={setSelectedConnectionId}
             options={connections.map((connection) => ({ value: connection.id, label: connection.name }))} />
           {policy && <>
@@ -150,9 +150,9 @@ export function AccessManagementPanel({ connections }: { connections: Connection
               onChange={(ownerUserId) => setPolicy({ ...policy, ownerUserId })}
               options={enabledUsers.map((user) => ({ value: user.id, label: `${user.displayName} (${user.username})` }))} />
             {policy.accessMode === 'RESTRICTED' && <>
-              <Space direction="vertical" className="full-width" size={8}>
+              <Space orientation="vertical" className="full-width" size={8}>
                 {policy.grants.map((grant, index) => <Card size="small" key={`${grant.granteeType}:${grant.granteeId}:${index}`}>
-                  <Space direction="vertical" className="full-width">
+                  <Space orientation="vertical" className="full-width">
                     <Space.Compact block>
                       <Select className="full-width" value={`${grant.granteeType}:${grant.granteeId}`} options={principalOptions} onChange={(value) => {
                         const [granteeType, id] = value.split(':');
@@ -193,7 +193,7 @@ export function AccessManagementPanel({ connections }: { connections: Connection
   return <div className="management-section">
     {messageContext}
     <header className="management-section-header"><div><Text strong>访问控制</Text><div><Text type="secondary">用户组用于批量授权，所有权限均由后端强制执行。</Text></div></div></header>
-    {error && <Alert type="error" showIcon message={error} closable onClose={() => setError('')} />}
+    {error && <Alert type="error" showIcon title={error} closable onClose={() => setError('')} />}
     <Tabs items={[{ key: 'groups', label: '用户组', children: groupTab }, { key: 'connections', label: '连接权限', children: policyTab }]} />
     <Modal open={Boolean(editingGroup)} title={editingGroup === 'new' ? '新建用户组' : '编辑用户组'} okText="保存" cancelText="取消" confirmLoading={saving}
       onOk={() => void saveGroup()} onCancel={() => setEditingGroup(undefined)} destroyOnHidden>

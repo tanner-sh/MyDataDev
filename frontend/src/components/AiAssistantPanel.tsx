@@ -122,13 +122,13 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
         </Space>
       }
     >
-      {state.error && <Alert type="error" showIcon message="AI 调用失败" description={state.error} style={{ marginBottom: 12 }} />}
+      {state.error && <Alert type="error" showIcon title="AI 调用失败" description={state.error} style={{ marginBottom: 12 }} />}
       {!state.text && !state.done && !state.error && <PanelLoading text="模型正在回答…" />}
       {state.text && (
         <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{state.text}</Paragraph>
       )}
       {check?.warning && (
-        <Alert type="warning" showIcon message={check.warning} style={{ marginBottom: 8 }} />
+        <Alert type="warning" showIcon title={check.warning} style={{ marginBottom: 8 }} />
       )}
       {state.done && !state.error && (
         <Text type="secondary">

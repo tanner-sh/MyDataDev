@@ -66,7 +66,7 @@ export function AuthGate() {
       <ConfigProvider locale={zhCN}>
         <main className="auth-page">
           <Card className="auth-card" variant="borderless">
-            <Alert type="error" showIcon message="无法连接 MyDataDev" description={error} />
+            <Alert type="error" showIcon title="无法连接 MyDataDev" description={error} />
             <Button block type="primary" className="auth-retry" onClick={() => window.location.reload()}>重新连接</Button>
           </Card>
         </main>
@@ -83,7 +83,7 @@ export function AuthGate() {
           <div className="auth-brand"><DatabaseOutlined /></div>
           <Typography.Title level={3}>登录 MyDataDev</Typography.Title>
           <Typography.Paragraph type="secondary">使用分配给你的个人账号进入数据库工作台</Typography.Paragraph>
-          {error && <Alert type="error" showIcon message={error} className="auth-error" />}
+          {error && <Alert type="error" showIcon title={error} className="auth-error" />}
           {status.passwordLogin === false ? (
             <Button block type="primary" href={status.loginUrl || '/api/auth/sso/login'}>使用单点登录</Button>
           ) : <Form<LoginFields> layout="vertical" initialValues={{ username: 'admin' }} requiredMark={false} onFinish={submit}>

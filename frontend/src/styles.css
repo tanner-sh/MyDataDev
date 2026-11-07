@@ -127,6 +127,11 @@ body {
   width: 100%;
 }
 
+/* 次要说明文字（连接池占用、计数等）。原来是十几处 style={{ fontSize: 'var(--text-xs)' }}。 */
+.text-xs {
+  font-size: var(--text-xs);
+}
+
 .sql-file-upload-card,
 .sql-file-confirm-card {
   padding: 14px;

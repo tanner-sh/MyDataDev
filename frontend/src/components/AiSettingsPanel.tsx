@@ -233,9 +233,9 @@ export function AiSettingsPanel() {
   if (loading) return <PanelLoading text="正在加载 AI 设置…" />;
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       {messageContext}
-      {error && <Alert type="error" showIcon message={error} />}
+      {error && <Alert type="error" showIcon title={error} />}
 
       <Card size="small" title="模型服务">
         <Form layout="vertical" size="small" className="settings-form">
@@ -271,7 +271,7 @@ export function AiSettingsPanel() {
               ? '已保存。留空表示沿用，填入新值即覆盖 —— 已保存的 Key 任何人都读不回来。'
               : meta.requiresApiKey ? '启用前必填。' : '本地模型通常不需要。'}
           >
-            <Space.Compact style={{ width: '100%' }}>
+            <Space.Compact className="full-width">
               <Input.Password
                 value={form.apiKey}
                 placeholder={settings?.apiKeyConfigured ? '已保存（留空即沿用）' : '粘贴 API Key'}
@@ -302,7 +302,7 @@ export function AiSettingsPanel() {
             label="每日 token 预算"
             extra="按服务器本地自然日计，跨零点清零；0 表示不限制。额度只在请求开始前检查，所以最后一次请求可能小幅超出。"
           >
-            <Space.Compact style={{ width: '100%' }}>
+            <Space.Compact className="full-width">
               <InputNumber
                 style={{ width: '50%' }}
                 min={0}
@@ -333,7 +333,7 @@ export function AiSettingsPanel() {
             style={{ marginTop: 12 }}
             type={probe.ok ? 'success' : 'error'}
             showIcon
-            message={probe.ok ? `连接正常（${probe.model}，${probe.latencyMs} ms）` : '连接失败'}
+            title={probe.ok ? `连接正常（${probe.model}，${probe.latencyMs} ms）` : '连接失败'}
             description={probe.ok ? undefined : probe.message}
           />
         )}
@@ -510,7 +510,7 @@ function AiUsageCard({ usage }: { usage: AiUsage }) {
       title="token 用量"
       extra={<Text type="secondary">最近 {usage.days} 天</Text>}
     >
-      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+      <Space className="full-width" orientation="vertical" size={4}>
         <Text>
           今日全站 <Text strong>{formatTokens(usage.usedToday)}</Text>
           {usage.dailyTokenBudget > 0 ? ` / ${formatTokens(usage.dailyTokenBudget)}` : '（未设预算）'}

@@ -78,7 +78,7 @@ export const DataSearchPanel = memo(function DataSearchPanel({
   const notice = result ? incompleteNotice(result) : '';
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
           <ConnectionField connections={connections} value={form.connectionId} onChange={(value) => setForm({ ...form, connectionId: value })} />
@@ -153,17 +153,17 @@ export const DataSearchPanel = memo(function DataSearchPanel({
         </Button>
       </Form>
 
-      {error && <Alert type="error" showIcon message="检索失败" description={error} />}
+      {error && <Alert type="error" showIcon title="检索失败" description={error} />}
 
       {result && (
         <>
-          {notice && <Alert type="warning" showIcon message="这次扫描没有跑完" description={notice} />}
+          {notice && <Alert type="warning" showIcon title="这次扫描没有跑完" description={notice} />}
           <Alert
             type={result.matchedTables === 0 ? 'info' : 'success'}
             showIcon
-            message={summarizeDataSearch(result)}
+            title={summarizeDataSearch(result)}
             description={result.warnings.length > 0 && (
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 {result.warnings.map((warning) => <Text key={warning} type="secondary">{warning}</Text>)}
               </Space>
             )}

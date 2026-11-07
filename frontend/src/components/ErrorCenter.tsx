@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { MODAL_WIDTH } from '../constants';
 import { Alert, Button, Modal, Space, Typography } from 'antd';
 import { API_FAILURE_EVENT, diagnosticText, type FailureInfo } from '../errorFeedback';
+import { formatClockTime } from '../utils';
 
 export function ErrorCenter() {
   const [failures, setFailures] = useState<FailureInfo[]>([]);
@@ -19,12 +20,12 @@ export function ErrorCenter() {
   return <>
     {failures.length > 0 && <Button className="error-center-trigger" size="small" onClick={() => setOpen(true)}>查看操作问题 · {failures.length}</Button>}
     <Modal title="最近的操作问题" open={open} onCancel={() => setOpen(false)} footer={<Button onClick={() => { setFailures([]); setOpen(false); }}>清空记录</Button>} width={MODAL_WIDTH.wide}>
-      <Space orientation="vertical" style={{ width: '100%' }}>
+      <Space className="full-width" orientation="vertical">
         {failures.map((failure, index) => <Alert key={`${failure.time}:${index}`} type={failure.code === 'OPERATION_RESULT_UNKNOWN' ? 'warning' : 'error'} showIcon
           title={failure.title} description={<>
             <Typography.Paragraph>{failure.advice}</Typography.Paragraph>
             <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{failure.message}</Typography.Paragraph>
-            <Typography.Text type="secondary">{failure.code} · {failure.requestId || '无请求编号'} · {new Date(failure.time).toLocaleTimeString()}</Typography.Text>
+            <Typography.Text type="secondary">{failure.code} · {failure.requestId || '无请求编号'} · {formatClockTime(failure.time)}</Typography.Text>
             <div><Button size="small" onClick={() => void Promise.resolve().then(() => navigator.clipboard.writeText(diagnosticText(failure))).then(() => setCopyStatus('诊断信息已复制')).catch(() => setCopyStatus('复制失败，可手动选择详情文本'))}>复制诊断信息</Button></div>
           </>} />)}
         <Typography.Text role="status">{copyStatus}</Typography.Text>
