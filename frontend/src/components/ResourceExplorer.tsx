@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Button, Input, Segmented, Select, Space, Spin, Tooltip, Typography } from 'antd';
-import { CloseOutlined, CodeOutlined, PartitionOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Input, Segmented, Select, Space, Spin, Tooltip, Typography } from 'antd';
+import { CloseOutlined, CodeOutlined, MoreOutlined, PartitionOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import {
   explorerObjectCountLabel,
   explorerObjectKindLabel,
@@ -303,14 +303,18 @@ export const ResourceExplorer = memo(function ResourceExplorer({
           <Text type="secondary">数据库对象</Text>
         </div>
         <Space size={2}>
-          <Tooltip title="按当前 Schema 的外键画实体关系图">
-            <Button type="text" size="small" icon={<PartitionOutlined />} disabled={!selected}
-                    aria-label="打开 ER 图" onClick={onOpenDiagram}>ER 图</Button>
-          </Tooltip>
           <Tooltip title={`刷新${activeLabel}`}>
             <Button type="text" size="small" icon={<ReloadOutlined />} loading={activeLoading} disabled={!selected}
                     aria-label={`刷新${activeLabel}`} onClick={refreshCurrentKind}>刷新</Button>
           </Tooltip>
+          {/* ER 图是偶尔才用的整库视图，不值得在侧栏标题上常驻一个文字按钮；收进「更多」，
+              仍挨着 Schema 选择 —— 它画的就是这里选中的那个 Schema。 */}
+          <Dropdown trigger={['click']} disabled={!selected} menu={{
+            items: [{ key: 'diagram', icon: <PartitionOutlined />, label: 'ER 图（按当前 Schema 的外键）' }],
+            onClick: ({ key }) => { if (key === 'diagram') onOpenDiagram(); }
+          }}>
+            <Button type="text" size="small" icon={<MoreOutlined />} disabled={!selected} aria-label="资源管理器更多操作" />
+          </Dropdown>
           {compactLayout && (
             <Tooltip title="关闭资源管理器">
               <Button type="text" size="small" icon={<CloseOutlined />} aria-label="关闭资源管理器" onClick={onClose} />
