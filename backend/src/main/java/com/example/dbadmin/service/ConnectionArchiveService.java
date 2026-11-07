@@ -10,9 +10,12 @@ import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveEnvelope;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveExportRequest;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveImportRequest;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveImportResult;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchiveMcpImportResult;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivePayload;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedConnection;
+import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedMcpConfig;
 import com.example.dbadmin.dto.ConfigArchiveDtos.ArchivedSshTunnel;
+import com.example.dbadmin.mcp.McpConfigurationService;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.model.SshTunnelSettings;
 import com.example.dbadmin.repo.AuditRepository;
@@ -21,9 +24,11 @@ import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -36,6 +41,10 @@ import java.util.Set;
  * 本机托管的主密钥加密，目标端根本解不开。所以导出必然是一次「解密后重新加密」，
  * 而口令是唯一能跨装机的共享秘密。正因如此，这个接口只对管理员开放，两端都写审计，
  * 并且拒绝弱口令。</p>
+ *
+ * <p>可选地连同 MCP 配置一起搬（见 {@link McpConfigurationService#exportForArchive} /
+ * {@link McpConfigurationService#importFromArchive}）：从 Web 换到桌面版时，Agent 的 Key 不变，
+ * AI 客户端只需要改一下地址。</p>
  */
 @Service
 public class ConnectionArchiveService {
@@ -46,6 +55,7 @@ public class ConnectionArchiveService {
     private final ConnectionService connections;
     private final ConnectionAccessService access;
     private final ConfigArchiveCrypto archiveCrypto;
+    private final McpConfigurationService mcp;
     private final AuditRepository audit;
     private final ObjectMapper mapper;
 
@@ -53,12 +63,14 @@ public class ConnectionArchiveService {
             ConnectionService connections,
             ConnectionAccessService access,
             ConfigArchiveCrypto archiveCrypto,
+            McpConfigurationService mcp,
             AuditRepository audit,
             ObjectMapper mapper
     ) {
         this.connections = connections;
         this.access = access;
         this.archiveCrypto = archiveCrypto;
+        this.mcp = mcp;
         this.audit = audit;
         this.mapper = mapper;
     }
@@ -75,6 +87,7 @@ public class ConnectionArchiveService {
         if (visible.isEmpty()) throw new IllegalArgumentException("没有可导出的连接。");
 
         List<ArchivedConnection> archived = new ArrayList<>();
+        Map<Long, String> exportedNames = new LinkedHashMap<>();
         for (ConnectionResponse summary : visible) {
             DbConnection connection = connections.require(summary.id());
             archived.add(new ArchivedConnection(
@@ -92,12 +105,15 @@ public class ConnectionArchiveService {
                     connection.description(),
                     archivedTunnel(connection.sshTunnel())
             ));
+            exportedNames.put(connection.id(), connection.name());
             audit.onConnection(actor, "CONNECTION_ARCHIVE_EXPORT", connection.id(), connection.name(),
                     "含密码与 SSH 密钥材料");
         }
-        ArchivePayload payload = new ArchivePayload(Instant.now(), actor, null, archived);
+        ArchivedMcpConfig mcpConfig = request.mcpIncluded() ? mcp.exportForArchive(exportedNames) : null;
+        ArchivePayload payload = new ArchivePayload(Instant.now(), actor, null, archived, mcpConfig);
         ArchiveEnvelope envelope = archiveCrypto.seal(serialize(payload), request.passphrase().toCharArray());
-        audit.global(actor, "CONNECTION_ARCHIVE_EXPORT", "connections", "connections=" + archived.size());
+        audit.global(actor, "CONNECTION_ARCHIVE_EXPORT", "connections", "connections=" + archived.size()
+                + (mcpConfig == null ? "" : ";mcpAgents=" + mcpConfig.agents().size()));
         return envelope;
     }
 
@@ -114,6 +130,8 @@ public class ConnectionArchiveService {
 
         List<String> imported = new ArrayList<>();
         List<String> skipped = new ArrayList<>();
+        // 归档里的原名 → 本次新建的连接 id；MCP 授权按它重新挂（改了名的仍是归档里那条连接）。
+        Map<String, Long> createdByArchivedName = new LinkedHashMap<>();
         int renamed = 0;
         for (ArchivedConnection archived : payload.connections()) {
             String name = archived.name() == null ? "" : archived.name().trim();
@@ -134,12 +152,16 @@ public class ConnectionArchiveService {
             access.initializeNewConnection(created.id());
             existing.add(fold(targetName));
             imported.add(targetName);
+            createdByArchivedName.put(name, created.id());
             audit.onConnection(actor, "CONNECTION_ARCHIVE_IMPORT", created.id(), targetName,
                     name.equals(targetName) ? "新建" : "重名改为：" + targetName);
         }
         audit.global(actor, "CONNECTION_ARCHIVE_IMPORT", "connections",
                 "imported=" + imported.size() + ";skipped=" + skipped.size() + ";renamed=" + renamed);
-        return new ArchiveImportResult(imported.size(), skipped.size(), renamed, imported, skipped);
+        ArchiveMcpImportResult mcpResult = payload.mcp() != null && request.mcpRequested()
+                ? mcp.importFromArchive(payload.mcp(), createdByArchivedName, actor)
+                : null;
+        return new ArchiveImportResult(imported.size(), skipped.size(), renamed, imported, skipped, mcpResult);
     }
 
     private ConnectionRequest toRequest(ArchivedConnection archived, String name) {

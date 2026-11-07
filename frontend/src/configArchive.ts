@@ -22,12 +22,25 @@ export type ArchiveEnvelope = {
   payload: string;
 };
 
+/** 与后端 ConfigArchiveDtos.ArchiveMcpImportResult 一致。 */
+export type ArchiveMcpImportResult = {
+  settingsApplied: boolean;
+  settingsNote: string;
+  importedAgents: string[];
+  /** 「agentId：原因」。 */
+  skippedAgents: string[];
+  /** 「agentId → 连接名：原因」。 */
+  droppedGrants: string[];
+};
+
 export type ArchiveImportResult = {
   imported: number;
   skipped: number;
   renamed: number;
   importedNames: string[];
   skippedNames: string[];
+  /** 没有导入 MCP 配置（归档里没有，或导入时取消勾选）时为空。 */
+  mcp?: ArchiveMcpImportResult | null;
 };
 
 /**
@@ -71,4 +84,27 @@ export function archiveImportSummary(result: ArchiveImportResult): string {
     parts.push(`跳过 ${result.skipped} 条重名连接：${names}${more}`);
   }
   return parts.join('；') + '。';
+}
+
+/**
+ * MCP 部分导入结果的逐条说明。
+ *
+ * <p>Agent 被跳过、授权被丢掉都要带原因点名：用户以为 Agent 的权限原样搬过来了，实际有一条连接因重名
+ * 没进来、授权也就没挂上，不说清楚的话他会在 AI 客户端里撞上「无权访问」才发现。</p>
+ *
+ * <p>导入了 Agent 时最后一条告诉用户 AI 客户端要改什么：Key 沿用，只有地址变了。
+ * {@code mcpEndpoint} 由调用方传入本机的 MCP 地址（通常是 {@code location.origin + '/mcp'}）。</p>
+ */
+export function archiveMcpImportNotes(mcp: ArchiveMcpImportResult, mcpEndpoint: string): string[] {
+  const notes: string[] = [];
+  notes.push(mcp.importedAgents.length > 0
+    ? `MCP Agent 导入 ${mcp.importedAgents.length} 个：${mcp.importedAgents.join('、')}`
+    : 'MCP Agent 没有导入任何一个');
+  for (const skipped of mcp.skippedAgents) notes.push(`跳过 Agent ${skipped}`);
+  for (const dropped of mcp.droppedGrants) notes.push(`未挂上的授权 ${dropped}`);
+  notes.push(mcp.settingsNote);
+  if (mcp.importedAgents.length > 0) {
+    notes.push(`AI 客户端里的 Key 不用换，只需把 MCP 地址改成 ${mcpEndpoint}`);
+  }
+  return notes;
 }

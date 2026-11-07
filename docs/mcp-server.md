@@ -78,6 +78,8 @@ API Key 会出现在每次请求的 `Authorization` 请求头中。跨主机部�
 
 Web 配置保存在 MyDataDev 自身的 H2 元数据库中，包括服务状态、Agent、BCrypt 哈希、连接白名单、生产权限、Origin 和资源限制。数据库中一旦存在 MCP 配置，后续启动都以数据库为准。
 
+在 Web 与桌面版之间迁移时，可以用「管理 → 连接管理 → 导出 / 导入」把 MCP 配置连同连接一起带走：Agent 的 Key 哈希原样迁移，AI 客户端不用换 Key，只需改 MCP 地址。规则见 [Web 部署说明的「连同 MCP 配置一起迁移」](web-deploy.md#连同-mcp-配置一起迁移)。
+
 为兼容早期版本，升级后首次启动会将已有 `app.mcp` YAML 配置导入数据库一次。例如旧部署仍可保留：
 
 ```yaml

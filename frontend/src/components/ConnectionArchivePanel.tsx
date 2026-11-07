@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { MODAL_WIDTH } from '../constants';
-import { Alert, Input, Modal, Radio, Select, Space, Typography, Upload, message } from 'antd';
+import { Alert, Checkbox, Input, Modal, Radio, Select, Space, Typography, Upload, message } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
 
 import {
   ARCHIVE_FILE_PREFIX,
   archiveImportSummary,
+  archiveMcpImportNotes,
   archivePassphraseError,
   isConfigArchive,
   MIN_ARCHIVE_PASSPHRASE_LENGTH,
@@ -44,6 +45,8 @@ export function ConnectionArchivePanel({
   const [archive, setArchive] = useState<ArchiveEnvelope>();
   const [archiveName, setArchiveName] = useState('');
   const [onConflict, setOnConflict] = useState<'SKIP' | 'RENAME'>('SKIP');
+  const [includeMcp, setIncludeMcp] = useState(false);
+  const [importMcp, setImportMcp] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<ArchiveImportResult>();
@@ -57,6 +60,8 @@ export function ConnectionArchivePanel({
     setArchiveName('');
     setError('');
     setResult(undefined);
+    setIncludeMcp(false);
+    setImportMcp(true);
   }
 
   async function runExport() {
@@ -70,7 +75,7 @@ export function ConnectionArchivePanel({
     try {
       const envelope = await api<ArchiveEnvelope>('/admin/connections/archive/export', {
         method: 'POST',
-        body: JSON.stringify({ passphrase, connectionIds: selectedIds })
+        body: JSON.stringify({ passphrase, connectionIds: selectedIds, includeMcp })
       });
       const stamp = new Date().toISOString().slice(0, 10);
       downloadBlob(new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' }),
@@ -99,7 +104,7 @@ export function ConnectionArchivePanel({
     try {
       const imported = await api<ArchiveImportResult>('/admin/connections/archive/import', {
         method: 'POST',
-        body: JSON.stringify({ passphrase, archive, onConflict })
+        body: JSON.stringify({ passphrase, archive, onConflict, importMcp })
       });
       setResult(imported);
       onImported();
@@ -113,7 +118,7 @@ export function ConnectionArchivePanel({
   return (
     <Modal
       open={open}
-      title="连接配置导出 / 导入"
+      title="连接与 MCP 配置导出 / 导入"
       okText={mode === 'export' ? '导出' : '导入'}
       cancelText="关闭"
       confirmLoading={busy}
@@ -161,6 +166,16 @@ export function ConnectionArchivePanel({
                   label: `${connection.name} · ${connection.environment}`
                 }))}
               />
+            </div>
+            <div>
+              <Checkbox checked={includeMcp} onChange={(event) => setIncludeMcp(event.target.checked)}>
+                同时导出 MCP 配置（Agent 与全局上限）
+              </Checkbox>
+              <div>
+                <Text type="secondary">
+                  Agent 的 Key 以哈希形式随归档带走，导入后 AI 客户端不用换 Key，只需改地址。只带上述连接的授权；允许的 Origin 不导出。
+                </Text>
+              </div>
             </div>
             <Input.Password
               placeholder={`设置归档口令（至少 ${MIN_ARCHIVE_PASSPHRASE_LENGTH} 位）`}
@@ -220,7 +235,24 @@ export function ConnectionArchivePanel({
                 style={{ display: 'block', marginTop: 4 }}
               />
             </div>
+            <Checkbox checked={importMcp} onChange={(event) => setImportMcp(event.target.checked)}>
+              归档里有 MCP 配置时一并导入（同名 Agent 跳过，不覆盖本机的）
+            </Checkbox>
             {result && <Alert type="success" showIcon title={archiveImportSummary(result)} />}
+            {result?.mcp && (
+              <Alert
+                type={result.mcp.skippedAgents.length > 0 || result.mcp.droppedGrants.length > 0 ? 'warning' : 'info'}
+                showIcon
+                title="MCP 配置"
+                description={(
+                  <ul className="archive-mcp-notes">
+                    {archiveMcpImportNotes(result.mcp, `${window.location.origin}/mcp`).map((note) => (
+                      <li key={note}>{note}</li>
+                    ))}
+                  </ul>
+                )}
+              />
+            )}
           </>
         )}
 
