@@ -25,6 +25,11 @@ public class SqliteDialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return SqliteObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, false, true, List.of(), List.of(), SchemaObjectCapabilities.sqlite(), false);
     }

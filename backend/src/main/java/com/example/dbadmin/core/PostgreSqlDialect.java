@@ -58,6 +58,11 @@ public class PostgreSqlDialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return PostgreSqlObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of("PG_DUMP"), List.of("PG_RESTORE"), SchemaObjectCapabilities.postgresql());
     }

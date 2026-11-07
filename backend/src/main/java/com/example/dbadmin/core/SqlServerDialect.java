@@ -32,6 +32,11 @@ public class SqlServerDialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return SqlServerObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of(), List.of(), SchemaObjectCapabilities.sqlServer(), true);
     }

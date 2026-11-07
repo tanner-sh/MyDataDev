@@ -37,6 +37,11 @@ public interface DatabaseDialect {
 
     boolean supports(String dbType, String jdbcUrl);
 
+    /** 可编程对象（视图、序列、触发器、过程、函数）在这种数据库上怎么列、怎么取定义、怎么生成语句，见 {@link SchemaObjectSql}。 */
+    default SchemaObjectSql schemaObjects() {
+        return SchemaObjectSql.NONE;
+    }
+
     default DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, false, false, List.of());
     }

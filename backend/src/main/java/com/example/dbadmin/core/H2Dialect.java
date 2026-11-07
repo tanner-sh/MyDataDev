@@ -43,6 +43,11 @@ public class H2Dialect extends DefaultDialect {
     }
 
     @Override
+    public SchemaObjectSql schemaObjects() {
+        return H2ObjectSql.INSTANCE;
+    }
+
+    @Override
     public DatabaseCapabilities capabilities() {
         return new DatabaseCapabilities(true, true, true, true, List.of(), List.of(), SchemaObjectCapabilities.h2());
     }
