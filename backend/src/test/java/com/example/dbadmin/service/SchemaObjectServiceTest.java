@@ -145,7 +145,7 @@ class SchemaObjectServiceTest {
                 .map(parameter -> new RoutineArgumentInput(parameter.position(), parameter.name(), parameter.position() == 1 ? "2" : "3", false))
                 .toList();
 
-        var response = fixture.service().invoke(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null);
+        var response = fixture.routines().invoke(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null);
 
         assertThat(response.status()).isEqualTo("SUCCESS");
         assertThat(response.returnValue()).isEqualTo(5);
@@ -167,7 +167,7 @@ class SchemaObjectServiceTest {
                 .map(parameter -> new RoutineArgumentInput(parameter.position(), parameter.name(), "1", false))
                 .toList();
 
-        assertThatThrownBy(() -> fixture.service().invoke(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null))
+        assertThatThrownBy(() -> fixture.routines().invoke(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null))
                 .isInstanceOfSatisfying(com.example.dbadmin.api.ApiProblemException.class, problem -> {
                     assertThat(problem.code()).isEqualTo("SQL_TIMEOUT");
                     assertThat(problem.getMessage()).contains("1 分钟", "后台执行", "2 小时", "不会回滚");
@@ -197,14 +197,14 @@ class SchemaObjectServiceTest {
                 mock(MetadataService.class), mock(AuditRepository.class), properties, coordinator, new BackgroundTaskControl(properties),
                 new LargeFileUploadGuard(properties));
         files.setCommandRepository(new com.example.dbadmin.repo.SqlCommandRepository(new org.springframework.jdbc.core.JdbcTemplate(metadata)));
-        fixture.service().setSqlFileExecutions(files);
+        fixture.routines().setSqlFileExecutions(files);
 
         var detail = fixture.service().detail(1L, fixture.service().list(1L, "PUBLIC", "FUNCTION", "ADD_NUM", 0, 100, true).items().get(0).objectKey(), true);
         var inputs = detail.parameters().stream()
                 .filter(parameter -> parameter.mode().equals("IN"))
                 .map(parameter -> new RoutineArgumentInput(parameter.position(), parameter.name(), parameter.position() == 1 ? "20" : "22", false))
                 .toList();
-        var job = fixture.service().invokeInBackground(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null);
+        var job = fixture.routines().invokeInBackground(1L, new RoutineInvokeRequest(detail.object().objectKey(), detail.structureVersion(), inputs), "tester", null);
 
         assertThat(files.get(job.id()).status()).isEqualTo("SUCCESS");
         List<String> log = files.commandView(job.id(), 0, 1000).entries().stream().map(entry -> entry.kind() + ":" + entry.text()).toList();
@@ -215,8 +215,8 @@ class SchemaObjectServiceTest {
     @Test
     void backgroundInvocationStillRequiresProductionConfirmation() throws Exception {
         Fixture fixture = fixture(false, "prod");
-        fixture.service().setSqlFileExecutions(mock(SqlFileExecutionService.class));
-        assertThatThrownBy(() -> fixture.service().invokeInBackground(1L, new RoutineInvokeRequest("x", "v", List.of()), "tester", null))
+        fixture.routines().setSqlFileExecutions(mock(SqlFileExecutionService.class));
+        assertThatThrownBy(() -> fixture.routines().invokeInBackground(1L, new RoutineInvokeRequest("x", "v", List.of()), "tester", null))
                 .hasMessageContaining("生产连接");
     }
 
@@ -355,18 +355,21 @@ class SchemaObjectServiceTest {
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
         DialectRegistry registry = mock(DialectRegistry.class);
         when(registry.dialectFor(org.mockito.ArgumentMatchers.any())).thenReturn(dialect);
+        MetadataCacheService cache = new MetadataCacheService();
         SchemaObjectService service = new SchemaObjectService(
                 connections,
                 registry,
                 new SchemaObjectCatalog(new AppProperties()),
-                new MetadataCacheService(),
+                cache,
                 new ExecutionGuard(),
                 mock(AuditRepository.class),
                 mock(SqlHistoryRepository.class),
                 new AppProperties(),
                 new SqlScriptSplitter()
         );
-        return new Fixture(url, service, connections);
+        RoutineInvocationService routines = new RoutineInvocationService(connections, registry, new ExecutionGuard(),
+                mock(AuditRepository.class), mock(SqlHistoryRepository.class), cache, new AppProperties(), service);
+        return new Fixture(url, service, routines, connections);
     }
 
     private Fixture fixture(boolean readonly, String environment) throws Exception {
@@ -378,20 +381,24 @@ class SchemaObjectServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.require(1L)).thenReturn(configured);
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
+        DialectRegistry dialects = new DialectRegistry();
+        MetadataCacheService cache = new MetadataCacheService();
         SchemaObjectService service = new SchemaObjectService(
                 connections,
-                new DialectRegistry(),
+                dialects,
                 new SchemaObjectCatalog(new AppProperties()),
-                new MetadataCacheService(),
+                cache,
                 new ExecutionGuard(),
                 mock(AuditRepository.class),
                 mock(SqlHistoryRepository.class),
                 new AppProperties(),
                 new SqlScriptSplitter()
         );
-        return new Fixture(url, service, connections);
+        RoutineInvocationService routines = new RoutineInvocationService(connections, dialects, new ExecutionGuard(),
+                mock(AuditRepository.class), mock(SqlHistoryRepository.class), cache, new AppProperties(), service);
+        return new Fixture(url, service, routines, connections);
     }
 
-    private record Fixture(String url, SchemaObjectService service, ConnectionService connections) {
+    private record Fixture(String url, SchemaObjectService service, RoutineInvocationService routines, ConnectionService connections) {
     }
 }
