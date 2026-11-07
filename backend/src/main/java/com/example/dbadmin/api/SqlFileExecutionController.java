@@ -71,9 +71,10 @@ public class SqlFileExecutionController {
         SqlScriptDelimiter delimiter = SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter());
         access.requireAnyAccess(request.connectionId());
         sql.requireDelimiterDecision(request.connectionId(), request.sql(), delimiter, request.delimiterChecked());
-        access.requireSql(request.connectionId(), request.sql(), delimiter);
+        var statements = sql.gateUnits(request.connectionId(), request.sql(), delimiter);
+        access.requireStatements(request.connectionId(), statements);
         if ("SCRIPT".equalsIgnoreCase(request.transactionMode())) access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
-        sql.requireUnscopedMutationConfirmation(request.connectionId(), actor, request.sql(), delimiter, request.unscopedMutationConfirmed());
+        sql.requireUnscopedMutationConfirmation(request.connectionId(), actor, statements, request.unscopedMutationConfirmed());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.submitCommand(request.connectionId(), request.sql(), actor, delimiter,
                 request.onError(), request.transactionMode(), request.endOfFileAction(), productionConfirmation));
     }
@@ -95,7 +96,7 @@ public class SqlFileExecutionController {
     ) throws Exception {
         access.requireAnyAccess(request.connectionId());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.submitEditorScript(request.connectionId(), request.sql(), actor,
-                SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter())));
+                SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter()), request.delimiterChecked()));
     }
 
     /**

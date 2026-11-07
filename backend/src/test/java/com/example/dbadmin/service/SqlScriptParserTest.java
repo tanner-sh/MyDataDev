@@ -133,8 +133,14 @@ class SqlScriptParserTest {
                         first -> assertThat(first).startsWith("CREATE OR REPLACE PROCEDURE A.P1").endsWith("END P1;"),
                         // 块后面的注释跟着下一条走，不粘在 P1 的源码末尾。
                         second -> assertThat(second).startsWith("-- next\nCREATE OR REPLACE PROCEDURE A.P2").endsWith("END;"));
-        // 包体带初始化段：最外层 END 收的是两层，深度回不到 0 —— 判断不了块在哪结束时仍然拒绝，而不是猜。
-        String unbalanced = "CREATE OR REPLACE PACKAGE BODY A.PK AS\n  PROCEDURE X IS BEGIN NULL; END;\nBEGIN\n  NULL;\nEND PK;\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
+        // 包体带初始化段：初始化段的 BEGIN 和包共用最后那个 END，深度照样回到 0，没写 / 也能切开。
+        String withInit = "CREATE OR REPLACE PACKAGE BODY A.PK AS\n  PROCEDURE X IS BEGIN NULL; END;\nBEGIN\n  NULL;\nEND PK;\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
+        assertThat(splitter.split(withInit, "oceanbase-oracle")).extracting(SqlScriptSplitter.StatementSegment::sql)
+                .satisfiesExactly(
+                        first -> assertThat(first).startsWith("CREATE OR REPLACE PACKAGE BODY A.PK").endsWith("END PK;"),
+                        second -> assertThat(second).startsWith("CREATE OR REPLACE PROCEDURE A.P2").endsWith("END;"));
+        // 真没配平（少一个 END）：判断不了块在哪结束时仍然拒绝，而不是猜。
+        String unbalanced = "CREATE OR REPLACE PROCEDURE A.P1 AS\nBEGIN\n  BEGIN NULL;\nEND P1;\n-- next\nCREATE OR REPLACE PROCEDURE A.P2 AS\nBEGIN\n  NULL;\nEND;\n/";
         assertThatThrownBy(() -> splitter.split(unbalanced, "oceanbase-oracle")).hasMessageContaining("第 6 行").hasMessageContaining("缺少独占行 /");
         // 例程正文里的 CREATE 只会出现在字符串或注释里，不能被当成漏写分隔符。
         assertThat(splitter.split("BEGIN\n  NULL;\nEXECUTE IMMEDIATE '\nCREATE TABLE T (A NUMBER)';\nEND;\n/", "oracle")).hasSize(1);

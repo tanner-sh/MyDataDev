@@ -18,14 +18,30 @@ public class SqlScriptSplitter {
 
     /** 带分隔方式的拆分，同时带回解析时的说明（被忽略的 SQL*Plus 指令、PROMPT 文本等）。 */
     public Split parse(String script, String dbType, SqlScriptDelimiter delimiter) {
+        return parse(script, dbType, delimiter, null);
+    }
+
+    private Split parse(String script, String dbType, SqlScriptDelimiter delimiter, SqlScriptParser.DirectiveListener directives) {
         List<StatementSegment> result = new ArrayList<>();
         if (script == null || script.isBlank()) return new Split(result, List.of());
         try {
             var summary = SqlScriptParser.read(new StringReader(script), dbType, Math.max(1, script.length()), delimiter, unit ->
-                    result.add(new StatementSegment(unit.sql(), Math.toIntExact(unit.startOffset()), Math.toIntExact(unit.endOffset()))));
+                    result.add(new StatementSegment(unit.sql(), Math.toIntExact(unit.startOffset()), Math.toIntExact(unit.endOffset()))),
+                    directives);
             return new Split(result, summary.notices());
         } catch (RuntimeException e) { throw e; }
         catch (Exception e) { throw new IllegalArgumentException(e.getMessage(), e); }
+    }
+
+    /**
+     * 闸门（权限、无 WHERE 写操作确认）用的切分：按连接的真实库类型切，SQL*Plus 指令（含 WHENEVER
+     * SQLERROR CONTINUE）在这里只是被跳过 —— 某个入口允不允许这条指令由执行那一步的解析判定，闸门
+     * 只关心「会发给数据库的语句是哪几条」。按 "generic" 切的话，Oracle 连接上的 PROMPT / WHENEVER
+     * 会在闸门这一步就被当成不支持的指令拒掉，命令窗口的 SQL*Plus 支持从接口进来根本走不到。
+     */
+    public List<StatementSegment> gateUnits(String script, String dbType, SqlScriptDelimiter delimiter) {
+        SqlScriptDelimiter mode = delimiter == null ? SqlScriptDelimiter.AUTO : delimiter;
+        return classificationUnits(parse(script, dbType, mode, ignored -> { }).segments(), dbType, mode);
     }
     /**
      * 交互式执行入口用的拆分：分隔方式是「自动」而脚本里又有独占一行的分隔符（DBeaver 的 !）时，

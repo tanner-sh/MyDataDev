@@ -25,6 +25,16 @@ class SqlJoinMiningTest {
     }
 
     @Test
+    void setAssignmentsAreValueCopiesNotJoinKeys() {
+        // SQL Server 的 UPDATE … SET … FROM … JOIN：t.name = s.name 两侧都是限定列，长得和关联条件一样。
+        assertThat(keys("UPDATE t SET t.name = s.name, t.code = s.code FROM t JOIN s ON t.id = s.id WHERE t.flag = s.flag"))
+                .containsExactly("s.id=t.id", "s.flag=t.flag");
+        // SET 里的子查询整个跳过（宁可漏认），出了 SET 子句照常认。
+        assertThat(keys("UPDATE t SET t.total = (SELECT SUM(d.amount) FROM d WHERE d.order_id = t.id) FROM t JOIN c ON c.id = t.customer_id"))
+                .containsExactly("c.id=t.customer_id");
+    }
+
+    @Test
     void sameJoinWrittenEitherWayIsOnePair() {
         List<JoinPair> pairs = SqlJoinMining.extract("select 1 from a join b on a.x = b.y join b b2 on b2.y = a.x");
         assertThat(pairs).hasSize(1);

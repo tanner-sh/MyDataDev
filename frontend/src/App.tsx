@@ -708,12 +708,13 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   /** 把编辑器里的脚本交给后台任务，然后打开任务面板落在这个任务上；开始执行在那里确认。 */
-  async function submitScriptToBackground(sql: string, delimiter: SqlDelimiterSetting | undefined) {
+  async function submitScriptToBackground(sql: string, delimiter: SqlDelimiterSetting | undefined, delimiterChecked: boolean) {
     if (!selected) return;
     try {
       const job = await api<SqlFileExecution>('/sql-file-executions/scripts', {
         method: 'POST',
-        body: JSON.stringify({ connectionId: selected.id, sql, ...delimiterRequestFields(delimiter) })
+        // 工作台里已经对识别出的分隔符表过态时，后台任务按这次的选择切分，不再自己识别一次。
+        body: JSON.stringify({ connectionId: selected.id, sql, ...delimiterRequestFields(delimiter), delimiterChecked })
       });
       updateActiveSqlTab({ message: '已交给后台执行：解析完成后在任务面板里确认并开始执行', statusKind: 'info' });
       openSqlFileTasks(selected.id, job.id);
@@ -1550,7 +1551,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   后台执行会先解析脚本，在任务面板里确认后开始；执行期间可以继续使用工作台。
                 </Typography.Paragraph>
               ), choices);
-              if (choice === 'background') { await submitScriptToBackground(target.sql, scriptDelimiter); return; }
+              if (choice === 'background') { await submitScriptToBackground(target.sql, scriptDelimiter, delimiterChecked); return; }
               if (choice !== 'here') { updateActiveSqlTab({ message: '已取消执行', statusKind: 'info' }); return; }
               largeScriptConfirmed = true;
               setSqlCancellable(true);

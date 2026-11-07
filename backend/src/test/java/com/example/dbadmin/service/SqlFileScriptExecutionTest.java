@@ -296,6 +296,16 @@ class SqlFileScriptExecutionTest {
         assertThat(target.queryForObject("SELECT COUNT(*) FROM t WHERE id IN (41, 42)", Integer.class)).isEqualTo(2);
     }
 
+    @Test void editorScriptKeepsAutoWhenTheUserAlreadyDeclinedTheDetectedDelimiter() throws Exception {
+        // 工作台里用户看到「识别到 !」后选了保持自动，再因为脚本大转到后台：后台不能再自己识别一次改成按 ! 切。
+        String sql = "INSERT INTO t VALUES(51);\nINSERT INTO t VALUES(52);\n!\n";
+        var declined = service.submitEditorScript(1, sql, "tester", SqlScriptDelimiter.AUTO, true);
+        assertThat(service.get(declined.id()).statementDelimiter()).isNull();
+
+        var undecided = service.submitEditorScript(1, sql, "tester", SqlScriptDelimiter.AUTO, false);
+        assertThat(service.get(undecided.id()).statementDelimiter()).isEqualTo("独占行 !");
+    }
+
     private List<String> commandLog(long id) {
         return service.commandView(id, 0, 1000).entries().stream().map(entry -> entry.kind() + ":" + entry.text()).toList();
     }

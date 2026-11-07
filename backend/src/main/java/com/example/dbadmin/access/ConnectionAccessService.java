@@ -16,6 +16,7 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionAccessRepository;
+import com.example.dbadmin.repo.ConnectionRepository;
 import com.example.dbadmin.repo.RestoreJobRepository;
 import com.example.dbadmin.repo.RestoreUploadRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
@@ -56,6 +57,7 @@ public class ConnectionAccessService {
     private final SqlFileExecutionRepository sqlFiles;
     private final SqlTransactionRegistry transactions;
     private final SqlExecutionRegistry executions;
+    private final ConnectionRepository connections;
 
     public ConnectionAccessService(
             ConnectionAccessRepository repository,
@@ -68,7 +70,8 @@ public class ConnectionAccessService {
             RestoreUploadRepository restoreUploads,
             SqlFileExecutionRepository sqlFiles,
             SqlTransactionRegistry transactions,
-            SqlExecutionRegistry executions
+            SqlExecutionRegistry executions,
+            ConnectionRepository connections
     ) {
         this.repository = repository;
         this.audit = audit;
@@ -81,6 +84,12 @@ public class ConnectionAccessService {
         this.sqlFiles = sqlFiles;
         this.transactions = transactions;
         this.executions = executions;
+        this.connections = connections;
+    }
+
+    private boolean unrestricted() {
+        WebIdentity identity = currentIdentity().orElse(null);
+        return identity == null || "ADMIN".equals(identity.role());
     }
 
     public void require(long connectionId, ConnectionPermission permission) {
@@ -101,10 +110,22 @@ public class ConnectionAccessService {
         requireSql(connectionId, sql, com.example.dbadmin.service.SqlScriptDelimiter.AUTO);
     }
 
-    /** 与执行用同一种分隔方式切分后逐条要权限；自定义分隔符下一段里的多条语句再细分后逐条要。 */
+    /**
+     * 与执行用同一种分隔方式、同一个库类型切分后逐条要权限；自定义分隔符下一段里的多条语句再细分后逐条要。
+     * 不受限的身份（桌面 / 开发模式、管理员）每条都会放行，不必把脚本再解析一遍。
+     */
     public void requireSql(long connectionId, String sql, com.example.dbadmin.service.SqlScriptDelimiter delimiter) {
-        List<SqlScriptSplitter.StatementSegment> segments = splitter.parse(sql, "generic", delimiter).segments();
-        List<SqlScriptSplitter.StatementSegment> statements = splitter.classificationUnits(segments, "generic", delimiter);
+        if (unrestricted()) return;
+        String dbType = connections.findById(connectionId).map(connection -> connection.dbType()).orElse("generic");
+        requireStatements(connectionId, splitter.gateUnits(sql, dbType, delimiter));
+    }
+
+    /**
+     * 已经切好的语句逐条要权限。脚本入口先用 {@code SqlService.gateUnits} 切一次，再把同一份结果交给这里
+     * 和无 WHERE 写操作确认 —— 一份 2 MB 的脚本不必在请求线程上为每道闸门各解析一遍。
+     */
+    public void requireStatements(long connectionId, List<SqlScriptSplitter.StatementSegment> statements) {
+        if (unrestricted()) return;
         if (statements.isEmpty()) {
             require(connectionId, ConnectionPermission.QUERY);
             return;

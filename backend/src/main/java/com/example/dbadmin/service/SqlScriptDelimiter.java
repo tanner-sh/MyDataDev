@@ -1,13 +1,17 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.core.DatabaseFamily;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 脚本的语句分隔方式。
@@ -99,8 +103,8 @@ public record SqlScriptDelimiter(Mode mode, String token) {
         return !(dollarQuoting && trimmed.indexOf('$') >= 0);
     }
 
-    /** 只跟踪块注释与单引号字符串：独占行的符号出现在它们里面时不是分隔符。 */
-    private static void scan(String line, boolean[] state) {
+    /** 只跟踪块注释与单引号字符串：独占行的符号出现在它们里面时不是分隔符。MySQL 系的 # 与 -- 一样是行注释。 */
+    private static void scan(String line, boolean[] state, boolean hashComments) {
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             char next = i + 1 < line.length() ? line.charAt(i + 1) : '\0';
@@ -109,7 +113,7 @@ public record SqlScriptDelimiter(Mode mode, String token) {
             } else if (state[1]) {
                 if (c == '\'' && next == '\'') i++;
                 else if (c == '\'') state[1] = false;
-            } else if (c == '-' && next == '-') {
+            } else if ((c == '-' && next == '-') || (hashComments && c == '#')) {
                 return;
             } else if (c == '/' && next == '*') {
                 state[0] = true;
@@ -137,22 +141,35 @@ public record SqlScriptDelimiter(Mode mode, String token) {
      * 建议：工作台会先问用户，文件任务会在开始执行前把它写在任务说明里。</p>
      */
     public static Optional<String> detect(Reader source, String dbType) throws IOException {
-        String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        boolean dollarQuoting = type.startsWith("postgres") || type.equals("h2");
+        String family = DatabaseFamily.of(dbType);
+        boolean dollarQuoting = family.equals("postgresql") || family.equals("h2");
+        // MySQL 系：# 开头的一行是注释（mysqldump 与很多手写脚本的横幅就是 # 拼的）；DELIMITER $$ 声明过的
+        // 符号是 AUTO 本来就认的分隔符，独占一行的 $$ 正是它在收尾，不能再被当成「自定义分隔符」。
+        boolean mysql = DatabaseFamily.isMySqlCompatible(dbType);
         Map<String, Integer> counts = new LinkedHashMap<>();
+        Set<String> declared = new HashSet<>();
         BufferedReader reader = source instanceof BufferedReader buffered ? buffered : new BufferedReader(source);
         String line;
         int lines = 0;
         boolean[] state = new boolean[2]; // [0] 块注释内，[1] 单引号字符串内
         while ((line = reader.readLine()) != null && lines++ < DETECTION_LINE_LIMIT) {
             String trimmed = line.strip();
-            if (!state[0] && !state[1] && isCandidate(trimmed, dollarQuoting)) {
+            boolean clean = !state[0] && !state[1];
+            if (mysql && clean) {
+                if (trimmed.startsWith("#")) continue;
+                if (trimmed.regionMatches(true, 0, "DELIMITER ", 0, "DELIMITER ".length())) {
+                    declared.add(trimmed.substring("DELIMITER".length()).trim());
+                    continue;
+                }
+            }
+            if (clean && isCandidate(trimmed, dollarQuoting)) {
                 counts.merge(trimmed, 1, Integer::sum);
                 continue;
             }
-            scan(line, state);
+            scan(line, state, mysql);
         }
         return counts.entrySet().stream()
+                .filter(entry -> !declared.contains(entry.getKey()))
                 .max(Map.Entry.comparingByValue())
                 .map(Map.Entry::getKey);
     }

@@ -255,6 +255,96 @@ class SqlScriptDelimiterTest {
             assertThat(SqlScriptDelimiter.detect("SELECT '\n!\n' FROM dual;\n", "oracle")).isEmpty();
             assertThat(SqlScriptDelimiter.detect("CREATE FUNCTION f() RETURNS int AS\n$$\nSELECT 1\n$$ LANGUAGE sql;\n", "postgresql")).isEmpty();
         }
+
+        @Test
+        void mysqlHashCommentBannersAreComments() {
+            String dump = "#\n# Table structure for table `t`\n#\nCREATE TABLE t (id int);\n#\n# Dumping data\n#\nINSERT INTO t VALUES (1); # trailing\n";
+            assertThat(SqlScriptDelimiter.detect(dump, "mysql")).isEmpty();
+            assertThat(SqlScriptDelimiter.detect(dump, "mariadb")).isEmpty();
+            assertThat(SqlScriptDelimiter.detect(dump, "oceanbase-mysql")).isEmpty();
+        }
+
+        @Test
+        void tokensDeclaredByMysqlDelimiterAreNotCustomDelimiters() {
+            String script = "DELIMITER $$\nCREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND\n$$\nDELIMITER ;\nSELECT 2;\n";
+            assertThat(SqlScriptDelimiter.detect(script, "mysql")).isEmpty();
+            // 而且 AUTO 本来就切得对：DELIMITER 交给 AUTO 处理。
+            assertThat(split(script, "mysql")).containsExactly("CREATE PROCEDURE p()\nBEGIN\n  SELECT 1;\nEND", "SELECT 2");
+            // 没有 DELIMITER 声明的独占行符号照旧识别。
+            assertThat(SqlScriptDelimiter.detect("SELECT 1\n$$\nSELECT 2\n$$\n", "mysql")).contains("$$");
+        }
+    }
+
+    @Nested
+    class TrailingSemicolonUnderCustomDelimiter {
+        @Test
+        void oracleQQuotesDoNotHideTheRealLastCharacter() {
+            assertThat(split("INSERT INTO t VALUES (q'[it's]'); -- note\n!\nSELECT 1 FROM dual\n", "oracle", SqlScriptDelimiter.custom("!")))
+                    .containsExactly("INSERT INTO t VALUES (q'[it's]') -- note", "SELECT 1 FROM dual");
+        }
+
+        @Test
+        void mysqlBackslashEscapesAndPostgresDollarBodiesToo() {
+            assertThat(split("INSERT INTO t VALUES ('it\\'s'); -- note\n!\n", "mysql", SqlScriptDelimiter.custom("!")))
+                    .containsExactly("INSERT INTO t VALUES ('it\\'s') -- note");
+            assertThat(split("SELECT $x$ it's; $x$; /* tail */\n!\n", "postgresql", SqlScriptDelimiter.custom("!")))
+                    .containsExactly("SELECT $x$ it's; $x$ /* tail */");
+        }
+
+        @Test
+        void aSemicolonInsideAStringOrCommentIsNotRemoved() {
+            assertThat(split("SELECT 'a;' FROM dual\n!\nSELECT 1 FROM dual -- done;\n!\n", "oracle", SqlScriptDelimiter.custom("!")))
+                    .containsExactly("SELECT 'a;' FROM dual", "SELECT 1 FROM dual -- done;");
+        }
+    }
+
+    @Nested
+    class PackageBodies {
+        @Test
+        void initializationSectionEndsTheBodyWithoutSlash() {
+            String script = """
+                    CREATE OR REPLACE PACKAGE BODY p AS
+                      PROCEDURE fwd;
+                      g_ready BOOLEAN;
+                      PROCEDURE a IS
+                        v NUMBER;
+                      BEGIN
+                        BEGIN NULL; END;
+                      END a;
+                      PROCEDURE fwd IS BEGIN NULL; END fwd;
+                    BEGIN
+                      g_ready := TRUE;
+                    END p;
+                    CREATE TABLE x (id NUMBER);
+                    """;
+            List<String> statements = split(script, "oracle");
+            assertThat(statements).hasSize(2);
+            assertThat(statements.get(0)).startsWith("CREATE OR REPLACE PACKAGE BODY p AS").endsWith("END p;");
+            assertThat(statements.get(1)).isEqualTo("CREATE TABLE x (id NUMBER)");
+        }
+
+        @Test
+        void bodiesWithoutInitializationStillWork() {
+            String script = "CREATE PACKAGE BODY p AS PROCEDURE a IS BEGIN NULL; END; END p;\nCREATE TABLE x (id NUMBER);\n";
+            assertThat(split(script, "oracle")).containsExactly(
+                    "CREATE PACKAGE BODY p AS PROCEDURE a IS BEGIN NULL; END; END p;", "CREATE TABLE x (id NUMBER)");
+            String withInit = "CREATE PACKAGE BODY p AS PROCEDURE a IS BEGIN NULL; END; BEGIN init; END p;\nCREATE TABLE x (id NUMBER);\n";
+            assertThat(split(withInit, "oracle")).containsExactly(
+                    "CREATE PACKAGE BODY p AS PROCEDURE a IS BEGIN NULL; END; BEGIN init; END p;", "CREATE TABLE x (id NUMBER)");
+        }
+    }
+
+    @Nested
+    class GateSplitting {
+        @Test
+        void sqlPlusDirectivesAreSkippedOnOracleButStatementsAreKept() {
+            String script = "PROMPT step 1\nWHENEVER SQLERROR CONTINUE\nSET SERVEROUTPUT ON\nDELETE FROM t WHERE id = 1;\n";
+            assertThat(splitter.gateUnits(script, "oracle", SqlScriptDelimiter.AUTO))
+                    .extracting(SqlScriptSplitter.StatementSegment::sql)
+                    .containsExactly("DELETE FROM t WHERE id = 1");
+            // 不认 SQL*Plus 的库照旧拒绝：那几行发给数据库只会是语法错误。
+            assertThatThrownBy(() -> splitter.gateUnits(script, "mysql", SqlScriptDelimiter.AUTO)).hasMessageContaining("客户端指令");
+        }
     }
 
     @Test
