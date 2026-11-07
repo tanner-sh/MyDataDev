@@ -4668,9 +4668,17 @@ body.is-resizing-column * {
   margin-bottom: 0;
 }
 
-.schema-diff-connection {
-  min-width: 220px;
+/* 表单本身带这个类时（数据检索、数据传输、数据对比、结构快照、对象导出），各行字段之间要有行距；
+   Form.Item 的下边距被上面那条清零了，不补的话「源」「目标」两行会贴在一起。 */
+form.schema-diff-endpoints {
+  display: grid;
+  gap: var(--space-3);
 }
+
+/* 设置类表单（AI、MCP）：管理抽屉的内容区有 900 多 px 宽，模型名、API Key 一个输入框铺满整行
+   既难读也不像一个表单。限住宽度，下面的用量表、连接共享表照常占满。 */
+.settings-form { max-width: 640px; }
+
 
 .schema-diff-alert,
 .schema-diff-actions {

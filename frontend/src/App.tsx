@@ -149,6 +149,7 @@ const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then
 const AiSettingsPanel = lazy(() => import('./components/AiSettingsPanel').then((module) => ({ default: module.AiSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
 const AccessManagementPanel = lazy(() => import('./components/AccessManagementPanel').then((module) => ({ default: module.AccessManagementPanel })));
+const DatabaseServerInfoPanel = lazy(() => import('./components/DatabaseServerInfoPanel').then((module) => ({ default: module.DatabaseServerInfoPanel })));
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
 const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
 const ObjectSearchPalette = lazy(() => import('./components/ObjectSearchPalette').then((module) => ({ default: module.ObjectSearchPalette })));
@@ -3948,9 +3949,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openNewConnectionEditor}>新建连接</Button>
                   </Space>
                 </header>
-                <Suspense fallback={null}>
-                  <ConnectionPoolPanel open={activeDrawer === 'connections'} />
-                </Suspense>
                 <Suspense fallback={<PanelLoading text="正在加载连接管理…" />}>
                   <ConnectionList
                     connections={connections}
@@ -4121,6 +4119,18 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <AiSettingsPanel />
                 </Suspense>
               </div>
+            )}
+
+            {activeDrawer === 'pool' && (
+              <Suspense fallback={<PanelLoading text="正在读取连接池…" />}>
+                <ConnectionPoolPanel open />
+              </Suspense>
+            )}
+
+            {activeDrawer === 'server-info' && selected && (
+              <Suspense fallback={<PanelLoading text="正在读取服务端信息…" />}>
+                <DatabaseServerInfoPanel connection={selected} />
+              </Suspense>
             )}
 
             {activeDrawer === 'sessions' && (

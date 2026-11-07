@@ -1,8 +1,9 @@
 import { memo, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Collapse, Form, Input, List, Segmented, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Checkbox, Collapse, Form, Input, List, Segmented, Space, Table, Tag, Typography } from 'antd';
 import { DownloadOutlined, ExportOutlined, ReloadOutlined } from '@ant-design/icons';
 import { PanelEmpty } from './PanelState';
 import { api, downloadBlob } from '../api';
+import { ConnectionField, SchemaField } from './ConnectionScopeFields';
 import { localizeError, timestamp } from '../utils';
 import {
   buildSchemaExportRequest,
@@ -53,10 +54,6 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
   const [searchNotice, setSearchNotice] = useState('');
 
   const connection = connections.find((item) => item.id === connectionId);
-  const connectionOptions = useMemo(() => connections.map((item) => ({
-    value: item.id,
-    label: `${item.name}（${item.dbType}${item.environment === 'prod' ? ' · 生产' : ''}）`
-  })), [connections]);
   const objects = candidates?.objects ?? [];
   const counts = useMemo(() => kindCounts(objects, selected, candidates?.kinds, candidates?.truncatedKinds),
     [objects, selected, candidates?.kinds, candidates?.truncatedKinds]);
@@ -146,12 +143,8 @@ export const SchemaExportPanel = memo(function SchemaExportPanel({ connections, 
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="end">
-          <Form.Item label="连接">
-            <Select style={{ width: 240 }} value={connectionId} options={connectionOptions} placeholder="选择连接" onChange={setConnectionId} />
-          </Form.Item>
-          <Form.Item label="Schema" tooltip="留空则用连接当前所在的 Schema/数据库。">
-            <Input style={{ width: 180 }} value={schemaName} placeholder="默认" onChange={(event) => setSchemaName(event.target.value)} onPressEnter={() => void load()} />
-          </Form.Item>
+          <ConnectionField connections={connections} value={connectionId} onChange={setConnectionId} />
+          <SchemaField connectionId={connectionId} value={schemaName} onChange={setSchemaName} />
           <Form.Item>
             <Button icon={<ReloadOutlined />} loading={loading} disabled={!connectionId} onClick={() => void load()}>
               {candidates ? '重新加载对象' : '加载对象'}

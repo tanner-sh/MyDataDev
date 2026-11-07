@@ -1,7 +1,8 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useState } from 'react';
 import { Alert, Button, Form, Input, Radio, Select, Space, Typography } from 'antd';
 import { SwapOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { ConnectionField, SchemaField, TableField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import { IMPORT_CONFLICT_OPTIONS, type ImportConflictMode } from '../dataImport';
 import {
@@ -45,13 +46,6 @@ export const DataTransferPanel = memo(function DataTransferPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({
-      value: connection.id,
-      label: `${connection.name}（${connection.dbType}${connection.environment === 'prod' ? ' · 生产' : ''}）`
-    })),
-    [connections]
-  );
   const conflictHint = IMPORT_CONFLICT_OPTIONS.find((option) => option.value === form.conflictMode)?.hint;
 
   async function run() {
@@ -95,23 +89,10 @@ export const DataTransferPanel = memo(function DataTransferPanel({
 
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="源连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.sourceConnectionId}
-              options={connectionOptions}
-              placeholder="选择源连接"
-              onChange={(value) => setForm({ ...form, sourceConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="源 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 150 }}
-              value={form.sourceSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, sourceSchema: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="源连接" connections={connections} value={form.sourceConnectionId} placeholder="选择源连接"
+            onChange={(value) => setForm({ ...form, sourceConnectionId: value })} />
+          <SchemaField label="源 Schema" connectionId={form.sourceConnectionId} value={form.sourceSchema}
+            onChange={(value) => setForm({ ...form, sourceSchema: value })} />
           <Form.Item label="取数方式">
             <Radio.Group
               size="small"
@@ -122,14 +103,8 @@ export const DataTransferPanel = memo(function DataTransferPanel({
             />
           </Form.Item>
           {form.sourceMode === 'table' && (
-            <Form.Item label="源表" required>
-              <Input
-                style={{ width: 180 }}
-                value={form.sourceTable}
-                placeholder="orders"
-                onChange={(event) => setForm(withSourceTable(form, event.target.value))}
-              />
-            </Form.Item>
+            <TableField label="源表" required connectionId={form.sourceConnectionId} schemaName={form.sourceSchema}
+              value={form.sourceTable} placeholder="orders" onChange={(value) => setForm(withSourceTable(form, value))} />
           )}
         </Space>
 
@@ -149,31 +124,12 @@ export const DataTransferPanel = memo(function DataTransferPanel({
         )}
 
         <Space size={12} wrap align="start">
-          <Form.Item label="目标连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.targetConnectionId}
-              options={connectionOptions}
-              placeholder="选择目标连接"
-              onChange={(value) => setForm({ ...form, targetConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 150 }}
-              value={form.targetSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, targetSchema: event.target.value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标表" required tooltip="目标表必须已经存在，且字段名要能对上源端的列名">
-            <Input
-              style={{ width: 180 }}
-              value={form.targetTable}
-              placeholder="orders"
-              onChange={(event) => setForm({ ...form, targetTable: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="目标连接" connections={connections} value={form.targetConnectionId} placeholder="选择目标连接"
+            onChange={(value) => setForm({ ...form, targetConnectionId: value })} />
+          <SchemaField label="目标 Schema" connectionId={form.targetConnectionId} value={form.targetSchema}
+            onChange={(value) => setForm({ ...form, targetSchema: value })} />
+          <TableField label="目标表" required tooltip="目标表必须已经存在，且字段名要能对上源端的列名" connectionId={form.targetConnectionId}
+            schemaName={form.targetSchema} value={form.targetTable} placeholder="orders" onChange={(value) => setForm({ ...form, targetTable: value })} />
           <Form.Item label="遇到重复主键" tooltip={conflictHint}>
             <Select<ImportConflictMode>
               style={{ width: 180 }}
@@ -195,7 +151,8 @@ export const DataTransferPanel = memo(function DataTransferPanel({
           >
             生成传输任务
           </Button>
-          <Text type="secondary">{describeTransfer(form, connections)}</Text>
+          {/* 填完之前这句全是「（未填）」，只是噪音；填好了它才是一句有用的复核。 */}
+          {canRunTransfer(form) && <Text type="secondary">{describeTransfer(form, connections)}</Text>}
         </Space>
       </Form>
 

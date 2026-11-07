@@ -6,7 +6,7 @@ import type { ConnectionPermission } from './accessControl';
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'table-relations' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
+export type ManagementSection = 'connections' | 'backups' | 'pool' | 'server-info' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'table-relations' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
 
 /**
  * 分区的分组。
@@ -32,11 +32,16 @@ export const MANAGEMENT_GROUPS: ReadonlyArray<{ key: ManagementGroup; label: str
  * 先后加进来。合并只发生在导航这一层：分区的 key、权限判断、命令面板里的「打开 xxx」都不变，
  * 所以 openManagement('data-diff') 这类调用照常落到对应的标签上。
  */
-export type ManagementEntry = 'compare' | 'identity';
+export type ManagementEntry = 'compare' | 'identity' | 'status' | 'export';
 
 const MANAGEMENT_ENTRY_LABELS: Record<ManagementEntry, string> = {
   compare: '对比与漂移',
-  identity: '用户与权限'
+  identity: '用户与权限',
+  // 「这个库现在怎么样」：会话、服务端版本与能力、连接池占用。连接池原来压在连接列表上面，
+  // 服务端信息藏在连接卡片的「⋯」里，会话又单独一项 —— 回答的是同一个问题。
+  status: '运行状态',
+  // 把定义或数据带出这条连接的三条路。定时导出原来在「连接与运维」组，另两个在「数据与结构」组。
+  export: '导出与传输'
 };
 
 export type ManagementSectionMeta = {
@@ -61,23 +66,27 @@ export type ManagementSectionMeta = {
 export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'connections', label: '连接管理', group: 'operations' },
   { key: 'backups', label: '备份与恢复', group: 'operations', requiresConnection: true, requiresPermission: 'BACKUP_RESTORE' },
-  // 定时导出把数据带出系统，与手动导出同档：EXPORT 之外还要 QUERY。
-  { key: 'scheduled-exports', label: '定时导出', group: 'operations', requiresPermission: 'EXPORT' },
-  { key: 'sessions', label: '活动会话', group: 'operations', requiresConnection: true, requiresPermission: 'VIEW_METADATA' },
+  { key: 'sessions', label: '活动会话', group: 'operations', entry: 'status', requiresConnection: true, requiresPermission: 'VIEW_METADATA' },
+  // 服务端信息要连上去读版本与能力，与原先连接卡片菜单里的判定一致：要 QUERY。
+  { key: 'server-info', label: '服务端信息', group: 'operations', entry: 'status', requiresConnection: true, requiresPermission: 'QUERY' },
+  // 连接池是全局的（所有连接的池），不需要先选连接；调整设置的按钮在面板里另按管理员判定。
+  { key: 'pool', label: '连接池', group: 'operations', entry: 'status' },
   { key: 'schema-diff', label: '结构对比', group: 'data', entry: 'compare' },
   // 快照与漂移只读元数据，与结构对比同档。
   { key: 'schema-snapshots', label: '结构快照', group: 'data', entry: 'compare', requiresPermission: 'VIEW_METADATA' },
   // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
   { key: 'data-diff', label: '数据对比', group: 'data', entry: 'compare', requiresPermission: 'QUERY' },
   // 只读定义、只生成文本，与查看单个对象的 DDL 同档；执行仍要走 SQL 工作台那条路。
-  { key: 'schema-export', label: '对象导出', group: 'data', requiresPermission: 'VIEW_METADATA' },
+  { key: 'schema-export', label: '对象导出', group: 'data', entry: 'export', requiresPermission: 'VIEW_METADATA' },
+  // 定时导出把数据带出系统，与手动导出同档：EXPORT 之外还要 QUERY。
+  { key: 'scheduled-exports', label: '定时导出', group: 'data', entry: 'export', requiresPermission: 'EXPORT' },
+  // 传输把数据搬出源连接，与导出同档。两端的真正授权在服务端逐条连接校验（源端 EXPORT +
+  // QUERY、目标端 DATA_WRITE）—— 这里只是入口的可见性，因为面板里选的连接未必是当前选中的这条。
+  { key: 'data-transfer', label: '数据传输', group: 'data', entry: 'export', requiresPermission: 'EXPORT' },
   // 表关系的候选来自执行历史（只给名字对），判断影响所有人的 JOIN 补全：与看历史同档，要 QUERY。
   { key: 'table-relations', label: '表关系', group: 'data', requiresPermission: 'QUERY' },
   // 检索读的是业务数据本身，所以要 QUERY 而不是 VIEW_METADATA。
   { key: 'data-search', label: '数据检索', group: 'data', requiresPermission: 'QUERY' },
-  // 传输把数据搬出源连接，与导出同档。两端的真正授权在服务端逐条连接校验（源端 EXPORT +
-  // QUERY、目标端 DATA_WRITE）—— 这里只是入口的可见性，因为面板里选的连接未必是当前选中的这条。
-  { key: 'data-transfer', label: '数据传输', group: 'data', requiresPermission: 'EXPORT' },
   { key: 'mcp', label: 'MCP Server', group: 'integrations', requiresAdmin: true },
   { key: 'ai', label: 'AI 助手', group: 'integrations', requiresAdmin: true },
   { key: 'audit', label: '审计日志', group: 'governance', requiresAdmin: true },

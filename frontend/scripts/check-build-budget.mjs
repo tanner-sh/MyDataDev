@@ -30,7 +30,10 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // 补全在可输入工作台的静态链上，那边同样多约 1.1 KiB、仍在原预算内；首屏不变。给 3 KiB 余量。
 // 表关系：新的懒加载管理面板（TableRelationsPanel 约 2.9 KiB，经 App 的动态导入计入这条链）加上补全接入
 // 确认 / 否决 / 历史挖掘（约 1 KiB），实测 828.3 KiB；没有新增依赖，首屏不变。给 4 KiB 余量。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 832 * 1024;
+// 管理面板公用的连接 / Schema / 表字段（ConnectionScopeFields，用到项目里已有的 antd AutoComplete）与
+// 独立成分区的服务端信息面板，都在懒加载的管理面板里，实测 832.9 KiB；没有新增依赖，首屏仍是 240.4 KiB，
+// 可输入工作台只多 0.2 KiB。给 4 KiB 余量。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 836 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;

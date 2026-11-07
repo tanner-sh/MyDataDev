@@ -394,7 +394,7 @@ export function McpSettingsPanel() {
                 </Card>
 
                 <Card title="Origin 与资源限制">
-        <Form<ConfigForm> form={configForm} layout="vertical" onFinish={(values) => void saveConfig(values)}>
+        <Form<ConfigForm> form={configForm} layout="vertical" className="settings-form" onFinish={(values) => void saveConfig(values)}>
           <Form.Item
             name="allowedOrigins"
             label="允许的浏览器 Origin"

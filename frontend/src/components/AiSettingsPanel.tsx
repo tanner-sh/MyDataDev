@@ -238,7 +238,7 @@ export function AiSettingsPanel() {
       {error && <Alert type="error" showIcon message={error} />}
 
       <Card size="small" title="模型服务">
-        <Form layout="vertical" size="small">
+        <Form layout="vertical" size="small" className="settings-form">
           <Form.Item label="启用 AI 助手" extra="关闭后所有 AI 入口在界面上隐藏，接口一律拒绝。">
             <Switch checked={form.enabled} onChange={(enabled) => setForm({ ...form, enabled })} />
           </Form.Item>

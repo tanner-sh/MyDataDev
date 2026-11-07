@@ -1,8 +1,9 @@
-import { memo, useMemo, useState } from 'react';
-import { Alert, Button, Collapse, Form, Input, InputNumber, List, Radio, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { memo, useState } from 'react';
+import { Alert, Button, Collapse, Form, Input, InputNumber, List, Radio, Space, Tag, Tooltip, Typography } from 'antd';
 import { ExportOutlined, SearchOutlined } from '@ant-design/icons';
 import { PanelEmpty } from './PanelState';
 import { api } from '../api';
+import { ConnectionField, SchemaField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import {
   buildDataSearchRequest,
@@ -50,13 +51,6 @@ export const DataSearchPanel = memo(function DataSearchPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({
-      value: connection.id,
-      label: `${connection.name}（${connection.dbType}${connection.environment === 'prod' ? ' · 生产' : ''}）`
-    })),
-    [connections]
-  );
   const modeHint = DATA_SEARCH_MODE_OPTIONS.find((option) => option.value === form.mode)?.hint;
 
   async function run() {
@@ -87,23 +81,9 @@ export const DataSearchPanel = memo(function DataSearchPanel({
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.connectionId}
-              options={connectionOptions}
-              placeholder="选择连接"
-              onChange={(value) => setForm({ ...form, connectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="Schema" tooltip="留空则用连接当前所在的 Schema/数据库。范围越小扫得越完整。">
-            <Input
-              style={{ width: 160 }}
-              value={form.schemaName}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, schemaName: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField connections={connections} value={form.connectionId} onChange={(value) => setForm({ ...form, connectionId: value })} />
+          <SchemaField tooltip="留空则用连接当前所在的 Schema/数据库。范围越小扫得越完整。" connectionId={form.connectionId} value={form.schemaName}
+            onChange={(value) => setForm({ ...form, schemaName: value })} />
           <Form.Item label="要找的内容" required tooltip={modeHint}>
             <Input
               style={{ width: 240 }}

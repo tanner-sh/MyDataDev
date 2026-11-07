@@ -1,8 +1,9 @@
-import { memo, useMemo, useState } from 'react';
-import { Alert, Button, Checkbox, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { memo, useState } from 'react';
+import { Alert, Button, Checkbox, Form, Input, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { CopyOutlined, DiffOutlined, ExportOutlined } from '@ant-design/icons';
 import { PanelEmpty } from './PanelState';
 import { api } from '../api';
+import { ConnectionField, SchemaField, TableField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import {
   buildDataDiffRequest,
@@ -41,10 +42,6 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({ value: connection.id, label: `${connection.name}（${connection.dbType}）` })),
-    [connections]
-  );
   const script = result ? buildSyncScript(result) : '';
 
   async function run() {
@@ -67,58 +64,20 @@ export const DataDiffPanel = memo(function DataDiffPanel({ connections, defaultC
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="源连接">
-            <Select
-              style={{ width: 220 }}
-              value={form.sourceConnectionId}
-              options={connectionOptions}
-              placeholder="选择源连接"
-              onChange={(value) => setForm({ ...form, sourceConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="源 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 160 }}
-              value={form.sourceSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, sourceSchema: event.target.value })}
-            />
-          </Form.Item>
-          <Form.Item label="源表" required>
-            <Input
-              style={{ width: 180 }}
-              value={form.sourceTable}
-              placeholder="orders"
-              onChange={(event) => setForm({ ...form, sourceTable: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="源连接" connections={connections} value={form.sourceConnectionId} placeholder="选择源连接"
+            onChange={(value) => setForm({ ...form, sourceConnectionId: value })} />
+          <SchemaField label="源 Schema" connectionId={form.sourceConnectionId} value={form.sourceSchema}
+            onChange={(value) => setForm({ ...form, sourceSchema: value })} />
+          <TableField label="源表" required connectionId={form.sourceConnectionId} schemaName={form.sourceSchema} value={form.sourceTable}
+            placeholder="orders" onChange={(value) => setForm({ ...form, sourceTable: value })} />
         </Space>
         <Space size={12} wrap align="start">
-          <Form.Item label="目标连接">
-            <Select
-              style={{ width: 220 }}
-              value={form.targetConnectionId}
-              options={connectionOptions}
-              placeholder="选择目标连接"
-              onChange={(value) => setForm({ ...form, targetConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 160 }}
-              value={form.targetSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, targetSchema: event.target.value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标表" tooltip="留空表示与源表同名">
-            <Input
-              style={{ width: 180 }}
-              value={form.targetTable}
-              placeholder="同源表"
-              onChange={(event) => setForm({ ...form, targetTable: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="目标连接" connections={connections} value={form.targetConnectionId} placeholder="选择目标连接"
+            onChange={(value) => setForm({ ...form, targetConnectionId: value })} />
+          <SchemaField label="目标 Schema" connectionId={form.targetConnectionId} value={form.targetSchema}
+            onChange={(value) => setForm({ ...form, targetSchema: value })} />
+          <TableField label="目标表" tooltip="留空表示与源表同名" connectionId={form.targetConnectionId} schemaName={form.targetSchema}
+            value={form.targetTable} placeholder="同源表" onChange={(value) => setForm({ ...form, targetTable: value })} />
           <Form.Item label="匹配字段" tooltip="留空则用主键；多个字段用逗号分隔">
             <Input
               style={{ width: 200 }}

@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Collapse, Form, Input, InputNumber, List, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import { CameraOutlined, HistoryOutlined, SaveOutlined } from '@ant-design/icons';
 import { PanelEmpty } from './PanelState';
 import { api } from '../api';
+import { ConnectionField, SchemaField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import {
   canCaptureSnapshot,
@@ -61,13 +62,6 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({
-      value: connection.id,
-      label: `${connection.name}（${connection.dbType}${connection.environment === 'prod' ? ' · 生产' : ''}）`
-    })),
-    [connections]
-  );
 
   const load = useCallback(async () => {
     if (!form.connectionId) return;
@@ -174,23 +168,9 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
 
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.connectionId}
-              options={connectionOptions}
-              placeholder="选择连接"
-              onChange={(value) => { setForm({ ...form, connectionId: value }); setDrift(undefined); setCapture(undefined); }}
-            />
-          </Form.Item>
-          <Form.Item label="Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 160 }}
-              value={form.schemaName}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, schemaName: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField connections={connections} value={form.connectionId}
+            onChange={(value) => { setForm({ ...form, connectionId: value }); setDrift(undefined); setCapture(undefined); }} />
+          <SchemaField connectionId={form.connectionId} value={form.schemaName} onChange={(value) => setForm({ ...form, schemaName: value })} />
           <Form.Item label="备注" tooltip="给这份快照起个名字，例如「v2.3 上线前」">
             <Input
               style={{ width: 200 }}

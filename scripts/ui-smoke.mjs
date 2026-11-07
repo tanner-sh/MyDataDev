@@ -496,8 +496,9 @@ try {
   const labels = JSON.parse(sections || '[]');
   // 断言「关键分区还在」而不是一个固定条数：分区会随功能增减，写死数字会让每加一个功能
   // 都要来改这里，改着改着这条检查就没人当回事了。少一个关键分区才是真的故障。
-  // 结构对比、结构快照、数据对比合进了导航上的「对比与漂移」，在里面用顶部标签切换。
-  const requiredSections = ['连接管理', '对比与漂移'];
+  // 合并入口在里面用顶部标签切换：对比与漂移（结构对比 / 快照 / 数据对比）、运行状态（会话 / 服务端信息 /
+  // 连接池）、导出与传输（对象导出 / 定时导出 / 数据传输）。
+  const requiredSections = ['连接管理', '运行状态', '对比与漂移', '导出与传输'];
   const missingSections = requiredSections.filter((name) => !labels.includes(name));
   check('关键管理分区都在', missingSections.length === 0,
     `缺少 ${missingSections.join('、')}；实际 ${labels.length} 个：${labels.join(' / ')}`);
@@ -1469,12 +1470,15 @@ try {
                 separate: boxes.every((box, index) => index === 0 || box.left >= boxes[index - 1].right - 1),
                 oneRow: boxes.every(box => Math.abs(box.top - boxes[0].top) <= 1),
                 bounded: nav.getBoundingClientRect().right <= window.innerWidth + 1,
-                canScroll: nav.scrollWidth > nav.clientWidth
+                // 要的是「每一项都够得着」：放得下就不必滚，放不下必须能横向滚。导航项合并之后，
+                // 窄屏上一行可能就放下了，此时还要求可滚动反而是错的。
+                reachable: nav.scrollWidth > nav.clientWidth
+                  || boxes.every(box => box.right <= nav.getBoundingClientRect().right + 1)
               };
             })()`);
-            check(`${theme} / ${width}px 管理导航文字完整、无重叠且可横向滚动`,
+            check(`${theme} / ${width}px 管理导航文字完整、无重叠且每项都够得着`,
               navigation.present && navigation.fitsText && navigation.separate && navigation.oneRow
-              && navigation.bounded && navigation.canScroll, JSON.stringify(navigation));
+              && navigation.bounded && navigation.reachable, JSON.stringify(navigation));
           }
           await auditLayout(`${theme} / ${width}px 管理抽屉`);
           await page.shot(`12-${theme}-${width}-管理抽屉`);
