@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Collapse, Drawer, Input, Space, Spin, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, CheckOutlined, CopyOutlined, ImportOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
-import { API } from '../constants';
+import { API, DRAWER_WIDTH } from '../constants';
 import { api, apiErrorCode } from '../api';
 import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
@@ -298,7 +298,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     <Drawer
       open={open}
       title="AI SQL 助手"
-      width={640}
+      size={DRAWER_WIDTH.browse}
       onClose={() => { stopCurrent(false); onClose(); }}
       extra={(
         <Space size={4}>

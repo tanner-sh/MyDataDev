@@ -43,6 +43,16 @@ export const DRAWER_WIDTH = {
   workspace: 1100
 } as const;
 
+/**
+ * 弹窗宽度，与 DRAWER_WIDTH 同理只给两档，不要再现拍新值。
+ * 以前 560 / 640 / 680 / 720 / 840 / 920 六种宽度并存，相邻两个弹窗打开时宽窄不一，看起来像两个产品。
+ * form 给表单与命令面板，wide 给要并排看语句、日志、表格的弹窗。
+ */
+export const MODAL_WIDTH = {
+  form: 640,
+  wide: 880
+} as const;
+
 export const SSH_AUTH_MODE_OPTIONS = [
   { value: 'PASSWORD', label: '口令' },
   { value: 'PRIVATE_KEY', label: '私钥' }

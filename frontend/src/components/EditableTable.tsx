@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { cellValidation } from '../tableEditing';
 import { cellDraftChanged } from '../cellDraft';
 import { PanelEmpty, PanelLoading } from './PanelState';
@@ -12,7 +13,7 @@ const MAX_EDITABLE_COLUMN_WIDTH = 520;
 import { Button, Dropdown, Input, Modal, Table, Tooltip, Typography, message } from 'antd';
 import { ColumnMetadataTooltip } from './ColumnMetadataTooltip';
 import type { ColumnsType, TableRef } from 'antd/es/table';
-import { DeleteOutlined, LinkOutlined, UndoOutlined } from '@ant-design/icons';
+import { LinkOutlined } from '@ant-design/icons';
 import { useTableViewportHeight } from '../hooks/useTableViewportHeight';
 import { useVirtualScrollGuard } from '../hooks/useVirtualScrollGuard';
 import type { TableColumn, TableData, TableRow } from '../types';
@@ -25,7 +26,7 @@ import {
   type EditableDisplayRow
 } from '../editableTableRows';
 import { cellDisplayKind, cellDraftText } from '../cellDraft';
-import { tableCellMenuItems, tableRowCopyText, type TableCellMenuAction } from '../tableCellMenu';
+import { tableCellMenuItems, tableRowCopyText, tableRowDeleteAction, type TableCellMenuAction } from '../tableCellMenu';
 import { copyText } from '../clipboard';
 
 type EditableTableProps = {
@@ -181,6 +182,10 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
     setCellMenu(null);
     if (!cellMenuTarget || !data) return;
     const { row, column, value } = cellMenuTarget;
+    if (action === 'toggle-delete') {
+      onDelete(row.id);
+      return;
+    }
     if (action === 'set-null' || action === 'set-empty') {
       onEdit(row.id, column.name, action === 'set-null' ? null : '');
       return;
@@ -200,34 +205,11 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
       () => messageApi.success(done),
       () => messageApi.error('复制失败，请手动选择内容')
     );
-  }, [cellMenuTarget, data, dbType, messageApi, onEdit, tableParts]);
+  }, [cellMenuTarget, data, dbType, messageApi, onDelete, onEdit, tableParts]);
 
   const columns = useMemo<ColumnsType<EditableDisplayRow>>(() => {
     if (!data) return [];
     return [
-      {
-        title: '操作',
-        key: 'action',
-        fixed: 'left',
-        width: 58,
-        align: 'center',
-        shouldCellUpdate: shouldEditableCellUpdate,
-        render: (_, row, rowIndex) => (
-          <Tooltip title={row.deleted ? '撤销删除' : row.inserted ? '移除新增行' : '标记为删除'}>
-            <Button
-              size="small"
-              type="text"
-              // 不再默认用 danger：一屏 100 行就是 100 个红色图标，整屏最强的颜色给了
-              // 最低频、最危险的操作。改成中性色，hover/focus 时才变红（见 styles.css）。
-              className={row.deleted ? 'editable-row-action is-undo' : 'editable-row-action'}
-              icon={row.deleted ? <UndoOutlined /> : <DeleteOutlined />}
-              disabled={row.rowDisabled}
-              aria-label={row.deleted ? `撤销删除第 ${rowIndex + 1} 行` : row.inserted ? `移除新增的第 ${rowIndex + 1} 行` : `标记删除第 ${rowIndex + 1} 行`}
-              onClick={() => onDelete(row.id)}
-            />
-          </Tooltip>
-        )
-      },
       ...data.columns.map((column) => ({
         title: (
           <div className="resizable-column-title">
@@ -290,7 +272,7 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
   // activeCell, readonly and loading are deliberately absent: they reach the
   // cells through the record, which is what shouldCellUpdate compares.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [beginResize, columnWidths, data, foreignKeys, metadataSource, onDelete, onEdit, onFollowRelation, setColumnWidth, suggestedWidths]);
+  }, [beginResize, columnWidths, data, foreignKeys, metadataSource, onEdit, onFollowRelation, setColumnWidth, suggestedWidths]);
 
   useLayoutEffect(() => {
     if (!data || scrollY === undefined || !tableRef.current) return;
@@ -312,7 +294,7 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
   return (
     <div ref={viewportRef} className="editable-table-viewport">
       {messageHolder}
-      <Modal title={`编辑 ${largeEditor?.column.name || ''}`} open={Boolean(largeEditor)} onCancel={() => setLargeEditor(undefined)} width={720} okText="应用到待提交修改" cancelText="取消" onOk={() => {
+      <Modal title={`编辑 ${largeEditor?.column.name || ''}`} open={Boolean(largeEditor)} onCancel={() => setLargeEditor(undefined)} width={MODAL_WIDTH.wide} okText="应用到待提交修改" cancelText="取消" onOk={() => {
         if (!largeEditor) return;
         const problem = cellValidation(largeEditor.column, largeEditor.value);
         if (problem) { setLargeError(problem); return; }
@@ -341,7 +323,8 @@ export const EditableTable = memo(function EditableTable({ metadataSource, dbTyp
               isDefault: cellMenuTarget.isDefault,
               displayKind: cellDisplayKind(cellMenuTarget.value),
               dbType,
-              canInsert: Boolean(tableParts?.length)
+              canInsert: Boolean(tableParts?.length),
+              rowAction: tableRowDeleteAction(cellMenuTarget.row)
             }).map((item, index) => item.type === 'divider'
               ? { type: 'divider' as const, key: `divider-${index}` }
               : {

@@ -3,7 +3,6 @@ import { MySqlTablePropertiesPanel } from './MySqlTablePropertiesPanel';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { Alert, Button, Dropdown, Input, Layout, Modal, Popconfirm, Space, Spin, Table, Tabs, Tag, Typography } from 'antd';
-import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ArrowRightOutlined, CloudDownloadOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, MoreOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons';
@@ -38,7 +37,6 @@ type IndexRow = { key: string; name: string; columns: string[]; unique: boolean;
 
 export interface ObjectDetailWorkspaceProps {
   /** 工作区标签条，渲染在工具栏最左边，兼作这个工作区的标题。 */
-  documentTabs?: ReactNode;
   active?: boolean;
   connectionId?: number;
   dbType?: string;
@@ -60,7 +58,6 @@ export interface ObjectDetailWorkspaceProps {
 }
 
 export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
-  documentTabs,
   active = true,
   connectionId,
   dbType,
@@ -124,8 +121,6 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
   return (
     <div className="workspace object-workspace">
       <Header className="workspace-toolbar">
-        {/* 对象名由标签条给出（那里还带着「· 结构」和未提交标记），标题里不再写第二遍。 */}
-        {documentTabs}
         <div className="toolbar-title">
           <Space size={8} className="object-title-line">
             {displayObject && <Tag color="blue">{objectTypeLabel(displayObject.type)}</Tag>}
@@ -223,7 +218,7 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
 });
 
 type ObjectDocumentPanelProps = Pick<ObjectDetailWorkspaceProps,
-  'documentTabs' | 'status' | 'loading' | 'onOpenTable' | 'onReloadDetail' | 'onBackupTable' | 'onRenameTable' | 'onDropTable' | 'onOpenRelation'> & {
+  'status' | 'loading' | 'onOpenTable' | 'onReloadDetail' | 'onBackupTable' | 'onRenameTable' | 'onDropTable' | 'onOpenRelation'> & {
   document: ResourceDocument;
   connection?: Connection;
   active: boolean;

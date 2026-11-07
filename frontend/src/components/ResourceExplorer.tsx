@@ -1,6 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
-import { Button, Input, Segmented, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Button, Input, Segmented, Select, Space, Spin, Tooltip, Typography } from 'antd';
 import { CloseOutlined, CodeOutlined, PartitionOutlined, PlusOutlined, ReloadOutlined, TableOutlined } from '@ant-design/icons';
 import {
   explorerObjectCountLabel,
@@ -11,7 +11,6 @@ import {
 } from '../schemaObjectModel';
 import type { ExplorerObjectCount, ExplorerObjectKind } from '../schemaObjectModel';
 import type { Connection, DbObject, Metadata, SchemaObjectKind } from '../types';
-import { dbTypeLabel } from '../utils';
 import { ObjectTree } from './ObjectTree';
 import { useStableEvent } from '../hooks/useStableEvent';
 import type { SchemaObjectListSummary } from './SchemaObjectManager';
@@ -319,16 +318,9 @@ export const ResourceExplorer = memo(function ResourceExplorer({
         </Space>
       </div>
 
-      {selected ? (
-        <Tooltip title={selected.jdbcUrl} placement="right">
-          <div className="explorer-connection-summary">
-            <span className="connection-dot" aria-hidden="true" />
-            <Text strong ellipsis>{selected.name}</Text>
-            <Tag variant="filled" color="blue">{dbTypeLabel(selected.dbType)}</Tag>
-            {selected.readonly && <Tag variant="filled" color="orange">只读</Tag>}
-          </div>
-        </Tooltip>
-      ) : (
+      {/* 当前连接在顶栏的连接选择器里已经写全了（名称、类型、环境、只读），侧栏不再复述一遍。
+          只保留没选连接时的入口：那时顶栏只有一个占位提示，这一行是最近的去处。 */}
+      {!selected && (
         <button className="explorer-empty-connection" onClick={onOpenConnections}>尚未选择连接，打开连接管理</button>
       )}
 

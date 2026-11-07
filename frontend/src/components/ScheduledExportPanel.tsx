@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import {
   Alert,
   Button,
@@ -227,7 +228,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
   return (
     <div className="management-section">
       {holder}
-      <Modal title="导出执行历史 · 最近 50 次" open={historyTask != null} onCancel={() => setHistoryTask(undefined)} footer={null} width={840}>
+      <Modal title="导出执行历史 · 最近 50 次" open={historyTask != null} onCancel={() => setHistoryTask(undefined)} footer={null} width={MODAL_WIDTH.wide}>
         {historyError && <Alert type="error" showIcon title={historyError} />}
         <Table rowKey="id" size="small" dataSource={runs} pagination={{ pageSize: 10 }} columns={[
           { title: '开始时间', dataIndex: 'startedAt', render: value => formatHistoryTime(value) },
@@ -360,7 +361,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
         confirmLoading={saving}
         okText="保存"
         cancelText="取消"
-        width={640}
+        width={MODAL_WIDTH.form}
         destroyOnHidden
       >
         <Form form={form} layout="vertical" size="small">

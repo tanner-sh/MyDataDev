@@ -134,7 +134,7 @@ SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuer
 
 管理类面板（连接、备份与恢复、结构对比、MCP、活动会话、审计）**共用一个带左侧导航的抽屉**，分区定义在 `src/managementSections.ts`。新增管理面板 = 往那份清单里加一项 + 在抽屉里加一个分支，不要再开一个新的 `<Drawer>`。所有重型面板（`SqlWorkspace`、`ObjectDetailWorkspace`、`BackupPanel`、`McpSettingsPanel` 等）通过 `React.lazy` 懒加载 —— 这是构建体积预算能通过的前提。
 
-样式走 `src/styles.css` 顶部的令牌：间距 `--space-*`、圆角 `--radius-*`、字号 `--text-*`。**`App.tsx` 里 `ConfigProvider` 的 `borderRadius` / `fontSize` 必须和 `--radius-md` / `--text-md` 保持同值**——两套尺度一旦分叉，就会退回到用 `!important` 互相覆盖。字号下限是 11px（`--text-xs`），中文在更小的字号下笔画会糊。抽屉宽度只有 `DRAWER_WIDTH` 的三档，不要再现拍新值。空状态与加载态一律用 `components/PanelState.tsx` 的 `PanelEmpty` / `PanelLoading`，不要各自再写一套骨架。
+样式走 `src/styles.css` 顶部的令牌：间距 `--space-*`、圆角 `--radius-*`、字号 `--text-*`。**`App.tsx` 里 `ConfigProvider` 的 `borderRadius` / `fontSize` 必须和 `--radius-md` / `--text-md` 保持同值**——两套尺度一旦分叉，就会退回到用 `!important` 互相覆盖。字号下限是 11px（`--text-xs`），中文在更小的字号下笔画会糊。抽屉宽度只有 `DRAWER_WIDTH` 的三档、弹窗宽度只有 `MODAL_WIDTH` 的两档，不要再现拍新值。空状态与加载态一律用 `components/PanelState.tsx` 的 `PanelEmpty` / `PanelLoading`，不要各自再写一套骨架。
 
 有状态但与界面无关的子系统抽成 `src/hooks/` 下的自定义 hook（`useBackgroundTasks`、`useSqlHistory`、`useVisiblePolling`、`useLayoutPreferences`、`useProductionConfirmation`），hook 内部依赖的纯逻辑再落到 `src/` 下的同名模块（`backgroundTaskStream.ts`、`sqlHistoryQuery.ts`、`productionConfirmation.ts`）。新增「一组状态 + 一条取数路径」时优先走这条路，而不是继续往 `App.tsx` 里加 `useState`。
 

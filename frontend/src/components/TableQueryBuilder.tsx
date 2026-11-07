@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DRAWER_WIDTH } from '../constants';
 import { Button, Divider, Drawer, Empty, Input, Select, Space, Typography } from 'antd';
 import { DeleteOutlined, FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import type { TableColumn } from '../types';
@@ -44,7 +45,7 @@ export function TableQueryBuilder({ columns, value, disabled, onApply }: {
       <Button size="small" icon={<FilterOutlined />} disabled={disabled || columns.length === 0} onClick={() => setOpen(true)}>
         筛选 / 排序{tableQueryRuleCount(value) ? ` (${tableQueryRuleCount(value)})` : ''}
       </Button>
-      <Drawer title="服务端筛选与排序" width={600} open={open} onClose={() => setOpen(false)}
+      <Drawer title="服务端筛选与排序" size={DRAWER_WIDTH.browse} open={open} onClose={() => setOpen(false)}
         extra={<Space><Button onClick={() => setDraft(EMPTY_TABLE_QUERY)}>清空</Button><Button type="primary" onClick={apply}>应用</Button></Space>}>
         <Space direction="vertical" size={12} className="table-query-section">
           <Space>

@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import type { KeyboardEvent } from 'react';
 import { Empty, Input, Modal, Tag, Typography } from 'antd';
 import { ThunderboltOutlined } from '@ant-design/icons';
@@ -81,7 +82,7 @@ export const CommandPalette = memo(function CommandPalette({
       title={null}
       footer={null}
       closable={false}
-      width={640}
+      width={MODAL_WIDTH.form}
       rootClassName="command-palette-modal"
       onCancel={onClose}
       focusTriggerAfterClose={false}

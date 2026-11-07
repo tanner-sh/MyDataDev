@@ -1,5 +1,5 @@
 import Editor from './SqlEditor';
-import { DRAWER_WIDTH } from '../constants';
+import { DRAWER_WIDTH, MODAL_WIDTH } from '../constants';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import {
   ApiOutlined,
@@ -618,7 +618,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       <Modal
         title={`${pending ? lifecycleLabel(pending.operation) : '对象操作'}确认`}
         open={Boolean(pending)}
-        width={720}
+        width={MODAL_WIDTH.wide}
         okText="确认执行"
         okButtonProps={{
           danger: pending?.operation === 'DROP' || pending?.operation === 'DISABLE',
@@ -641,7 +641,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       <Modal
         title={`调用 ${detail?.object.displayName || ''}`}
         open={invokeOpen}
-        width={640}
+        width={MODAL_WIDTH.form}
         okText={invokeMode === 'background' ? '提交后台执行' : '执行调用'}
         confirmLoading={invoking}
         okButtonProps={{ disabled: production && invokeProductionConfirmation !== connection.name }}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { PanelEmpty } from './PanelState';
 import { Alert, Button, Checkbox, Collapse, Divider, Dropdown, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Tag, Tabs, Tooltip, Typography, message } from 'antd';
 import {
@@ -760,7 +761,7 @@ function BackupTasksPanel({
       <Modal
         title={editingId ? '编辑备份任务' : '新建备份任务'}
         open={editorOpen}
-        width={680}
+        width={MODAL_WIDTH.form}
         forceRender
         confirmLoading={loading}
         onCancel={requestCloseEditor}

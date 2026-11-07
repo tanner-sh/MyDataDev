@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Space, Typography } from 'antd';
 import { CheckOutlined, CopyOutlined, ImportOutlined, StopOutlined } from '@ant-design/icons';
-import { API } from '../constants';
+import { API, DRAWER_WIDTH } from '../constants';
 import { authHeaders } from '../auth';
 import { applyStreamEvent, consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
 import { checkSqlSuggestion } from '../sqlSuggestion';
@@ -97,7 +97,7 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
     <Drawer
       open={Boolean(request)}
       title={request?.title || 'AI 助手'}
-      width={520}
+      size={DRAWER_WIDTH.form}
       onClose={() => { abortRef.current?.abort(); onClose(); }}
       extra={
         <Space size={4}>

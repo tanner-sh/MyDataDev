@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import {
   Alert,
   Button,
@@ -195,7 +196,7 @@ export function StorageProfilePanel({ profiles, loading, onReload }: StorageProf
       </div>}
     </Spin>
 
-    <Modal title={editing ? '编辑文件服务' : '新建文件服务'} open={editorOpen} width={680} forceRender confirmLoading={saving}
+    <Modal title={editing ? '编辑文件服务' : '新建文件服务'} open={editorOpen} width={MODAL_WIDTH.form} forceRender confirmLoading={saving}
       okText="保存" cancelText="取消" onOk={() => form.submit()} onCancel={() => !saving && setEditorOpen(false)}
       footer={(_, { OkBtn, CancelBtn }) => <Space><Button icon={<ApiOutlined />} loading={testingId !== null} disabled={saving} onClick={() => void testDraftOrSaved()}>{editing ? '测试已保存配置' : '测试连接'}</Button><CancelBtn /><OkBtn /></Space>}>
       <Form form={form} layout="vertical" size="small" disabled={saving} onFinish={save} initialValues={emptyProfile()}>

@@ -14,7 +14,13 @@ import { cellValueMenuItems } from './cellValueMenu';
 import { serializeCopiedRows } from './queryResultExport';
 import type { TableColumn } from './types';
 
-export type TableCellMenuAction = 'copy' | 'copy-row' | 'copy-row-insert' | 'copy-column-name' | 'set-null' | 'set-empty';
+export type TableCellMenuAction = 'copy' | 'copy-row' | 'copy-row-insert' | 'copy-column-name' | 'set-null' | 'set-empty' | 'toggle-delete';
+
+/**
+ * 这一行能做的删除类操作。每行一个删除图标的「操作」列去掉之后，单行删除走这里，多行走勾选后的批量栏。
+ * 不能动这一行（只读连接、加载中、无行定位的存量行）时为 undefined。
+ */
+export type TableRowDeleteAction = 'delete' | 'undo-delete' | 'remove-inserted';
 
 export type TableCellMenuItem =
   | { type: 'divider' }
@@ -29,6 +35,13 @@ export type TableCellMenuContext = {
   dbType?: string;
   /** 能不能生成 INSERT：缺表名时为 false。 */
   canInsert: boolean;
+  rowAction?: TableRowDeleteAction;
+};
+
+const ROW_ACTION_LABELS: Record<TableRowDeleteAction, string> = {
+  delete: '标记删除此行',
+  'undo-delete': '撤销删除此行',
+  'remove-inserted': '移除这条新增行'
 };
 
 export function tableCellMenuItems(context: TableCellMenuContext): TableCellMenuItem[] {
@@ -43,15 +56,23 @@ export function tableCellMenuItems(context: TableCellMenuContext): TableCellMenu
     },
     { action: 'copy-column-name', label: '复制列名' }
   ];
-  if (!context.editable) return items;
-  const editItems = cellValueMenuItems({ editable: true, displayKind: context.displayKind, dbType: context.dbType, selectedRowCount: 0 })
-    .filter((item) => item.action === 'set-null' || item.action === 'set-empty');
-  if (editItems.length === 0) return items;
-  return [
-    ...items,
-    { type: 'divider' },
-    ...editItems.map((item) => ({ action: item.action as TableCellMenuAction, label: item.label, hint: item.hint, disabled: item.disabled }))
-  ];
+  const editItems = context.editable
+    ? cellValueMenuItems({ editable: true, displayKind: context.displayKind, dbType: context.dbType, selectedRowCount: 0 })
+      .filter((item) => item.action === 'set-null' || item.action === 'set-empty')
+    : [];
+  if (editItems.length > 0) {
+    items.push({ type: 'divider' }, ...editItems.map((item) => ({ action: item.action as TableCellMenuAction, label: item.label, hint: item.hint, disabled: item.disabled })));
+  }
+  // 删除放在最后、单独一组：最危险的一项不该挨着「复制」被误点。
+  if (context.rowAction) items.push({ type: 'divider' }, { action: 'toggle-delete', label: ROW_ACTION_LABELS[context.rowAction] });
+  return items;
+}
+
+/** 由行状态推出删除类操作；与原先「操作」列按钮的三种状态一一对应。 */
+export function tableRowDeleteAction(row: { deleted?: boolean; inserted?: boolean; rowDisabled?: boolean }): TableRowDeleteAction | undefined {
+  if (row.rowDisabled) return undefined;
+  if (row.deleted) return 'undo-delete';
+  return row.inserted ? 'remove-inserted' : 'delete';
 }
 
 export type TableRowCopySource = {

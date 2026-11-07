@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { Alert, Button, Modal, Space, Typography } from 'antd';
 import { API_FAILURE_EVENT, diagnosticText, type FailureInfo } from '../errorFeedback';
 
@@ -17,7 +18,7 @@ export function ErrorCenter() {
   }, []);
   return <>
     {failures.length > 0 && <Button className="error-center-trigger" size="small" onClick={() => setOpen(true)}>查看操作问题 · {failures.length}</Button>}
-    <Modal title="最近的操作问题" open={open} onCancel={() => setOpen(false)} footer={<Button onClick={() => { setFailures([]); setOpen(false); }}>清空记录</Button>} width={720}>
+    <Modal title="最近的操作问题" open={open} onCancel={() => setOpen(false)} footer={<Button onClick={() => { setFailures([]); setOpen(false); }}>清空记录</Button>} width={MODAL_WIDTH.wide}>
       <Space orientation="vertical" style={{ width: '100%' }}>
         {failures.map((failure, index) => <Alert key={`${failure.time}:${index}`} type={failure.code === 'OPERATION_RESULT_UNKNOWN' ? 'warning' : 'error'} showIcon
           title={failure.title} description={<>

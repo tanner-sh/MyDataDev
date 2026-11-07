@@ -1,7 +1,7 @@
 import { Alert, Button, Card, Dropdown, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
 import { DatabaseServerInfoPanel } from './DatabaseServerInfoPanel';
 import { PanelEmpty, PanelLoading } from './PanelState';
-import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, ReloadOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useMemo, useState } from 'react';
 import type { Connection } from '../types';
@@ -10,7 +10,7 @@ import { availableTags, connectionProfileSummary, groupConnections, matchesKeywo
 
 const { Text } = Typography;
 
-export function ConnectionList({ connections, favoriteConnectionIds, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSwitch, onEdit, onTest, onDuplicate, onDelete, onToggleFavorite }: {
+export function ConnectionList({ connections, favoriteConnectionIds, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSwitch, onEdit, onTest, onDuplicate, onDelete, onToggleFavorite, onRefresh }: {
   connections: Connection[];
   favoriteConnectionIds: number[];
   selectedId?: number;
@@ -24,6 +24,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   onDuplicate: (connection: Connection) => void;
   onDelete: (connection: Connection) => void;
   onToggleFavorite: (connectionId: number) => void;
+  onRefresh?: () => void;
 }) {
   const [infoConnection, setInfoConnection] = useState<Connection | null>(null);
   const [keyword, setKeyword] = useState('');
@@ -106,6 +107,13 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
             onClick={() => setFavoriteOnly((current) => !current)}
           />
         </Tooltip>
+        {/* 刷新连接列表原本在顶栏，常驻却极少用到，而且和资源管理器的「刷新」只隔一个侧栏，
+            不看提示分不清刷的是哪一个。挪到这份列表旁边，作用对象一目了然。 */}
+        {onRefresh && (
+          <Tooltip title="重新读取连接列表">
+            <Button icon={<ReloadOutlined />} aria-label="刷新连接" loading={connectionsLoading} onClick={onRefresh} />
+          </Tooltip>
+        )}
       </div>
       <Text type="secondary" className="connection-filter-summary">显示 {visibleConnections.length} / {connections.length} 个连接，当前连接与收藏连接优先排列</Text>
       <div className="connection-list">

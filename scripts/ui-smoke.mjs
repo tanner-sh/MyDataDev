@@ -787,8 +787,8 @@ try {
       button?.click();
     })()`);
     await page.sleep(1200);
-    check('切回表标签保留未提交修改', await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户') && document.querySelector('.resource-document-tabs').textContent.includes('●')`));
-    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    check('切回表标签保留未提交修改', await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户') && [...document.querySelectorAll('.resource-document-tab')].some(node => node.textContent.includes('●'))`));
+    await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(500);
     await page.evaluate(`document.querySelector('button[aria-label="关闭 SMOKE_OTHER 数据标签"]')?.click()`);
     await page.sleep(500);
@@ -799,7 +799,8 @@ try {
     await page.shot('06a-多标签与待提交修改');
     if (AUTH) {
       await page.send('Network.clearBrowserCookies');
-      await page.evaluate(`document.querySelector('button[aria-label="刷新连接"]')?.click()`);
+      // 随便打一个接口就能让过期会话现形；顶栏不再有「刷新连接」，用资源管理器的刷新。
+      await page.evaluate(`document.querySelector('button[aria-label="刷新表"]')?.click()`);
       await page.sleep(1500);
       check('会话过期显示登录页并遮住工作区', await page.evaluate(`document.body.dataset.sessionLocked === 'true' && Boolean(document.querySelector('.auth-page')) && Boolean(document.querySelector('[hidden] .app-shell'))`));
       await page.shot('06b-会话过期');
@@ -883,7 +884,7 @@ try {
   if (SERVE) {
     await cancelPaletteAndCheck('首次懒加载的表格单元格', firstPaletteFocus);
     await cancelPaletteAndCheck('表格工具栏', await openPaletteFrom('.table-workspace .workspace-toolbar button:not([disabled])'));
-    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(1800);
     const draft = 'select 1 as draft_survives_reload;';
     await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
@@ -899,14 +900,14 @@ try {
     check('刷新后恢复 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
     check('显示草稿保存状态', await page.evaluate(`document.body.textContent.includes('草稿已保存')`));
     await page.shot('07-SQL草稿恢复');
-    await page.evaluate(`document.querySelector('.sql-tabs .ant-tabs-nav-add')?.click()`);
+    await page.evaluate(`document.querySelector('.document-tab-bar button[aria-label="新建 SQL 标签页"]')?.click()`);
     await page.sleep(500);
-    await page.evaluate(`document.querySelector('.sql-tabs .ant-tabs-tab .ant-tabs-tab-remove')?.click()`);
+    await page.evaluate(`document.querySelector('.document-tab-item.is-sql-item .document-tab-close')?.click()`);
     await page.sleep(500);
     await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal-confirm button')].find(node => node.textContent.replace(/\\s/g, '') === '关闭标签')?.click(); })()`);
     await page.sleep(500);
-    // 「找回关闭的 SQL」收进了标签栏右侧的「标签操作」下拉。
-    await page.evaluate(`document.querySelector('.sql-tabs button[aria-label="标签操作"]')?.click()`);
+    // 「找回关闭的 SQL」在统一标签条右端的「标签操作」下拉里。
+    await page.evaluate(`document.querySelector('.document-tab-bar button[aria-label="标签操作"]')?.click()`);
     await page.sleep(300);
     await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
     await page.sleep(800);
@@ -1277,17 +1278,17 @@ try {
     await page.evaluate(`(() => { const input = document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]'); input?.focus(); input?.select(); })()`);
     await page.send('Input.insertText', { text: 'DRAFT_IDENTIFIER' });
     await page.sleep(800);
-    check('表设计修改标记为未保存', await page.evaluate(`document.querySelector('.resource-document-tabs').textContent.includes('●') && document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER'`));
-    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    check('表设计修改标记为未保存', await page.evaluate(`[...document.querySelectorAll('.resource-document-tab')].some(node => node.textContent.includes('●')) && document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER'`));
+    await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(600);
     await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tab button')].find(node => /smoke_orders/i.test(node.textContent) && node.textContent.includes('结构'))?.click(); })()`);
     await page.sleep(800);
-    check('切回对象标签保留设计稿与当前分区', await page.evaluate(`document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER' && document.querySelector('.resource-document-tabs').textContent.includes('●')`));
+    check('切回对象标签保留设计稿与当前分区', await page.evaluate(`document.querySelector('.resource-document-panel:not([hidden]) input[aria-label="字段名"]')?.value === 'DRAFT_IDENTIFIER' && [...document.querySelectorAll('.resource-document-tab')].some(node => node.textContent.includes('●'))`));
     check('设计表格在可见区域内且有可用高度', await page.evaluate(`(() => { const panel = document.querySelector('.resource-document-panel:not([hidden]) .table-designer'); const input = panel?.querySelector('input[aria-label="字段名"]'); const r = panel?.getBoundingClientRect(); const i = input?.getBoundingClientRect(); return r?.height > 200 && i?.height > 0 && i.top >= r.top && i.bottom <= r.bottom; })()`));
     await page.shot('08-对象设计草稿保留');
 
     // 使用真实 Worker 导出长文本快照，并捕获下载 Blob 核对，不重新查询数据库。
-    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(800);
     await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: modifier });
@@ -1372,7 +1373,7 @@ try {
     // 一切正常，只有只读连接坏 —— 只测一条连接的话，这种问题只能等用户来报。
     const readonlyPick = await pickConnection(SEED_READONLY_CONNECTION_NAME);
     check('可以切到只读连接', readonlyPick.picked === true);
-    await page.evaluate(`(() => { [...document.querySelectorAll('.resource-document-tabs button')].find(node => node.textContent.trim() === 'SQL 工作台')?.click(); })()`);
+    await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(1800);
     // 量的是「露出来多少」而不是元素自己的高度：.editor 有 min-height: 120px，分栏塌掉时
     // 它的 getBoundingClientRect 照样是 120，只是被 overflow: hidden 的 .sql-split 裁成一行。

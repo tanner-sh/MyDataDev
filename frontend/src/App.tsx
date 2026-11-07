@@ -5,7 +5,7 @@ import { reconcileParameters, type SqlParameterDefinition, type SqlParameterValu
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { delimiterRequestFields, scriptProblemOf, type SqlDelimiterSetting } from './scriptDelimiter';
-import { commandOptionsLabel, effectiveCommandOptions, lineRangeOffsets, type CommandWindowOptions } from './commandWindow';
+import { commandOptionsLabel, effectiveCommandOptions, isCommandTab, lineRangeOffsets, type CommandWindowOptions } from './commandWindow';
 import { useResourceWorkspaces } from './hooks/useResourceWorkspaces';
 import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
 import { finishWorkbenchTimingAfterPaint, markWorkbenchResponse, startWorkbenchTiming } from './workbenchPerformance';
@@ -15,14 +15,14 @@ import { cellValidation, rebaseConflictRow } from './tableEditing';
 import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { DocumentTabStrip } from './components/DocumentTabStrip';
-import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Segmented, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Segmented, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme, type MenuProps } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
+import { CodeOutlined, CopyOutlined, EditOutlined, PlusOutlined, SwapOutlined, UndoOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
 import { PERSIST_WORK_EVENT, isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
-import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH } from './constants';
+import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH, MODAL_WIDTH } from './constants';
 import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCommandView, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createCommandTab, createSqlTab, localizeError, localizeMessage, sleep, timestamp } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
@@ -2677,7 +2677,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       });
       setTableRows(data.rows.map((row, index) => ({ id: `row-${requestedPage}-${index}`, values: { ...row }, original: { ...row }, keyToken: data.rowKeyTokens?.[index] })));
       setPreviewSql([]);
-      setWorkspaceStatus({ kind: 'success', text: `已从 ${table.tableName} 加载第 ${requestedPage + 1} 页，共 ${data.rows.length} 行${data.hasMore ? '，还有下一页' : ''}${data.navigationMode === 'OFFSET' ? requestedQuery.sorts.length ? '；自定义排序采用偏移分页' : '；当前表无稳定行键，深页浏览受限' : ''}` });
+      // 页码、本页行数和偏移分页的说明分别在分页栏和工具栏里，状态栏只说「加载完了」，不再复述一遍。
+      setWorkspaceStatus({ kind: 'success', text: `已加载 ${table.tableName}` });
     } catch (e) {
       if ((e as Error).name === 'AbortError') return;
       if (requestId === tableRequestSeqRef.current) showError(localizeError(e));
@@ -3127,7 +3128,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     ? setMobileExplorerOpen((current) => !current)
     : layoutPreferences.toggleExplorer());
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
-  const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
   const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
     if (kind === 'sqlFiles') {
@@ -3180,12 +3180,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       return next;
     });
   });
-  const addSqlTabEvent = useStableEvent(() => addSqlTab());
-  const addCommandTabEvent = useStableEvent(() => addCommandTab());
   const openInCommandTabEvent = useStableEvent((sql: string) => addCommandTab(sql, activeSqlTab.commandOptions));
-  const closeSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => closeSqlTab(tabId, liveSql));
-  const renameSqlTabEvent = useStableEvent((tabId: string) => renameSqlTab(tabId));
-  const duplicateSqlTabEvent = useStableEvent((tabId: string, liveSql?: string) => duplicateSqlTab(tabId, liveSql));
   const changeSqlEvent = useStableEvent((connectionId: number | null, tabId: string, sql: string) => {
     if (sqlSessionConnectionIdRef.current !== connectionId) return;
     updateSqlTab(tabId, { sql });
@@ -3605,12 +3600,39 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   // ER 图没有对应的标签，此时没有任何一个标签是激活的。
   const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : '';
   const activeManagementNavItem = activeDrawer ? managementNavItemOf(activeDrawer, isCurrentUserAdmin(), isAuthenticationEnabled()) : undefined;
+  const sqlDocumentTabs = useMemo(() => sqlTabs.map(tab => ({ id: tab.id, title: tab.title, dirty: tab.dirty, command: isCommandTab(tab) })), [sqlTabs]);
+  const sqlTabMenu: MenuProps = {
+    items: [
+      { key: 'new-command', icon: <CodeOutlined />, label: '新建命令窗口' },
+      { key: 'restore-closed', icon: <UndoOutlined />, label: '找回关闭的 SQL' },
+      { type: 'divider' as const },
+      { key: 'rename-tab', icon: <EditOutlined />, label: '重命名当前查询标签' },
+      { key: 'duplicate-tab', icon: <CopyOutlined />, label: '复制当前查询标签' }
+    ],
+    onClick: ({ key }) => {
+      setMode('sql');
+      if (key === 'new-command') addCommandTab();
+      else if (key === 'restore-closed') reopenSqlTab();
+      else if (key === 'rename-tab') renameSqlTab(activeSqlTab.id);
+      else if (key === 'duplicate-tab') duplicateSqlTab(activeSqlTab.id, mode === 'sql' ? editorRef.current?.getValue() : undefined);
+    }
+  };
+  // 一条标签条放在工作区最上方，SQL、表、对象、ER 图共用 —— 以前每个工作区各把它塞进自己的工具栏，
+  // SQL 工作台下面还有第二层查询标签。
   const documentTabs = selected ? (
     <DocumentTabStrip
       activeKey={activeDocumentTabKey}
+      sqlTabs={sqlDocumentTabs}
+      activeSqlTabId={activeSqlTab.id}
       documents={documentTabItems}
       disabled={tableLoading || objectDetailLoading}
-      onSelectSql={() => setMode('sql')}
+      addSqlTabHint={`新建 SQL 标签页（${SHORTCUT_HINTS.newSqlTab}），${SHORTCUT_HINTS.selectSqlTab} 切换标签页`}
+      sqlTabMenu={sqlTabMenu}
+      onSelectSql={tabId => { setActiveSqlTabId(tabId); setMode('sql'); }}
+      onAddSql={() => { addSqlTab(); setMode('sql'); }}
+      // 关的是编辑器里那个标签时，带上编辑器里的现值：草稿要 300ms 才同步回标签，关闭后还得能「找回」。
+      onCloseSql={tabId => closeSqlTab(tabId, mode === 'sql' && tabId === activeSqlTab.id ? editorRef.current?.getValue() : undefined)}
+      onRenameSql={renameSqlTab}
       onSelect={key => {
         const document = connectionDocuments.find(item => item.key === key);
         if (!document) return;
@@ -3678,7 +3700,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           themeMode={layoutPreferences.themeMode}
           onToggleExplorer={toggleExplorerFromHeader}
           onSelectConnection={selectConnectionFromHeader}
-          onRefreshConnections={refreshConnectionsFromHeader}
           onOpenManagement={openManagementFromHeader}
           onOpenBackgroundTasks={openBackgroundTasksFromHeader}
           onToggleTheme={toggleThemeFromHeader}
@@ -3703,6 +3724,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           )}
 
           <main className="app-content">
+            {documentTabs && <div className="document-tab-bar">{documentTabs}</div>}
             <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
             {mode === 'sql' && !selected ? (
               <div className="empty-state empty-state-fill">
@@ -3714,9 +3736,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               </div>
             ) : mode === 'sql' ? (
               <SqlWorkspace
-                documentTabs={documentTabs}
                 draftSaveState={draftSaveState}
-                onRestoreClosedTab={reopenSqlTab}
                 key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
                 aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
                 aiSampleAllowed={isAiSampleAllowedForConnection(aiStatus, selected?.id)}
@@ -3739,13 +3759,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 editorSplitRatio={layoutPreferences.editorSplitRatio}
                 editorSplitRatioTouched={layoutPreferences.editorSplitRatioTouched}
                 onEditorSplitRatioChange={layoutPreferences.setEditorSplitRatio}
-                onTabChange={setActiveSqlTabId}
-                onTabAdd={addSqlTabEvent}
-                onCommandTabAdd={addCommandTabEvent}
                 onOpenInCommandTab={openInCommandTabEvent}
-                onTabClose={closeSqlTabEvent}
-                onTabRename={renameSqlTabEvent}
-                onTabDuplicate={duplicateSqlTabEvent}
                 onSqlChange={changeSqlEvent}
                 onEditorMount={mountSqlEditorEvent}
                 completionSource={sqlCompletionSourceEvent}
@@ -3782,7 +3796,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               />
             ) : mode === 'table' ? (
               <TableWorkspace
-                documentTabs={documentTabs}
                 connectionId={selected?.id}
                 dbType={selected?.dbType}
                 key={tableDocumentKey}
@@ -3825,7 +3838,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             ) : mode === 'diagram' ? (
               <div className="er-diagram-workspace">
                 <header className="er-diagram-workspace-header">
-                  {documentTabs}
                   <Text strong className="er-diagram-workspace-title">ER 图 · {activeSqlSchema || selected?.name}</Text>
                   <Button size="small" onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
                 </header>
@@ -3839,7 +3851,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               const active = mode === 'object' && document.key === objectDocumentKey && selected?.id === document.connectionId;
               return <ObjectDocumentPanel
                 key={document.key}
-                documentTabs={active ? documentTabs : null}
                 document={document}
                 connection={connection}
                 active={active}
@@ -3955,6 +3966,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     onDuplicate={duplicateConnection}
                     onDelete={deleteConnection}
                     onToggleFavorite={toggleFavoriteConnectionEvent}
+                    onRefresh={() => void refreshConnections()}
                   />
                 </Suspense>
               </div>
@@ -4154,7 +4166,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           : connectionEditor.mode === 'create' && connectionEditor.origin === 'duplicate'
             ? '复制为新连接'
             : '新建数据库连接'}
-        width={640}
+        width={MODAL_WIDTH.form}
         open={connectionEditor.mode !== 'closed'}
         footer={null}
         mask={{ closable: !connectionFormDirty && !connectionActionLoading }}

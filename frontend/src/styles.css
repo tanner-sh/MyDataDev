@@ -370,10 +370,6 @@ body {
   gap: 3px;
 }
 
-.sql-tabs .ant-tabs-nav {
-  margin: 0;
-}
-
 .status-alert {
   min-height: 34px;
   padding: 5px 12px;
@@ -1100,20 +1096,6 @@ body.is-resizing-column * {
 .empty-state-fill {
   height: 100%;
   min-height: 0;
-}
-
-.editable-row-action {
-  color: var(--text-secondary);
-}
-
-.editable-row-action:hover:not(:disabled),
-.editable-row-action:focus-visible:not(:disabled) {
-  color: var(--danger);
-}
-
-.editable-row-action.is-undo,
-.editable-row-action.is-undo:hover:not(:disabled) {
-  color: var(--primary);
 }
 
 .sql-preview-card {
@@ -2301,8 +2283,7 @@ body.is-resizing-column * {
 .app-header-brand,
 .app-header-actions,
 .connection-switcher,
-.connection-option,
-.explorer-connection-title {
+.connection-option {
   min-width: 0;
   display: flex;
   align-items: center;
@@ -2467,45 +2448,6 @@ body.is-resizing-column * {
   font-size: var(--text-xs);
 }
 
-.explorer-connection-summary {
-  grid-row: 2;
-  min-width: 0;
-  min-height: 36px;
-  margin: 8px 10px 7px;
-  padding: 6px 9px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-sm);
-}
-
-.explorer-connection-summary > .ant-typography {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.explorer-connection-summary .ant-tag {
-  flex: 0 0 auto;
-  margin-inline-end: 0;
-}
-
-.explorer-connection-title {
-  gap: 7px;
-}
-
-.explorer-connection-title > .ant-typography {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.explorer-connection-title .ant-tag {
-  flex: 0 0 auto;
-  margin-inline-end: 0;
-}
-
 .connection-dot {
   width: 8px;
   height: 8px;
@@ -2538,7 +2480,7 @@ body.is-resizing-column * {
 
 .explorer-filters {
   grid-row: 3;
-  padding: 0 10px 9px;
+  padding: 8px 10px 9px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 6px;
@@ -3352,12 +3294,11 @@ body.is-resizing-column * {
   background: var(--surface);
 }
 
-/* 四行对应四个子元素：工具栏、标签条、上下分栏、状态栏。曾经有过一个 .is-readonly 变体
-   多给只读连接排一行（那时工具栏下面有一条只读提示 Alert）；提示挪进工具栏副标题后，行数
-   比子元素多了一行，于是只读连接上分栏拿到 36px、状态栏拿到 1fr —— 编辑器塌成一行。
-   改这里时先数一遍 SqlWorkspace 里的子元素个数。 */
+/* 三行对应三个子元素：工具栏、上下分栏、状态栏（查询标签已并进 App 顶部的统一标签条）。
+   曾经有过一个 .is-readonly 变体多给只读连接排一行；行数比子元素多一行时，分栏拿到固定高度、
+   状态栏拿到 1fr —— 编辑器塌成一行。改这里时先数一遍 SqlWorkspace 里的子元素个数。 */
 .sql-workspace {
-  grid-template-rows: 44px 36px minmax(0, 1fr) 28px;
+  grid-template-rows: 44px minmax(0, 1fr) 28px;
 }
 
 .table-workspace {
@@ -3506,20 +3447,6 @@ body.is-resizing-column * {
 
 .object-toolbar-actions .ant-btn {
   min-height: 32px;
-}
-
-.sql-tabs {
-  height: 36px;
-  padding: 1px 8px 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-subtle);
-}
-
-.sql-tabs .ant-tabs-tab {
-  min-width: 112px;
-  min-height: 32px;
-  padding-block: 4px !important;
-  justify-content: space-between;
 }
 
 .sql-split {
@@ -5433,14 +5360,24 @@ body.is-resizing-column * {
   「备份此表」后面的按钮全看不见了），副标题最先让，标签条其次 —— 标签条缩了还有左右
   箭头和滚轮能够到，副标题只是一句说明。flex-shrink 的权重就是这个先后顺序。
 */
+/* 工作区最上方的标签条：SQL 查询标签、表数据、对象结构平级排在一条上，所有工作区共用。 */
+.document-tab-bar {
+  flex: 0 0 auto;
+  height: 36px;
+  padding: 3px 8px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-subtle);
+}
+
 .document-tab-strip {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 0 1 auto;
-  min-width: 120px;
-  height: 32px;
+  min-width: 0;
+  height: 100%;
 }
+
+.document-tab-action { flex: 0 0 auto; align-self: center; }
 
 .resource-document-tabs {
   flex: 1 1 auto;
@@ -5472,7 +5409,7 @@ body.is-resizing-column * {
   align-items: center;
   flex-shrink: 0;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: var(--surface-subtle);
+  background: var(--surface);
   border: 1px solid var(--border-subtle);
   border-bottom-color: transparent;
 }
@@ -5494,18 +5431,8 @@ body.is-resizing-column * {
   cursor: pointer;
 }
 
-.document-tab.is-sql {
-  flex-shrink: 0;
-  padding-inline: 10px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  background: var(--surface-subtle);
-  border: 1px solid var(--border-subtle);
-  border-bottom-color: transparent;
-}
-
 .document-tab:disabled { cursor: not-allowed; opacity: 0.6; }
-.document-tab-item:hover,
-.document-tab.is-sql:hover:not(.is-active) { background: var(--surface-hover); }
+.document-tab-item:hover:not(.is-active) { background: var(--surface-hover); }
 .document-tab:hover:not(:disabled) { color: var(--text); }
 .document-tab:focus-visible,
 .document-tab-close:focus-visible,
@@ -5515,8 +5442,7 @@ body.is-resizing-column * {
   激活态：实底 + 主色文字 + 底部 2px 主色条。一排标签里只有一个是「当前」，
   只换一个浅底色在浅色主题下几乎看不出来（用户反馈的就是这个）。
 */
-.document-tab-item.is-active,
-.document-tab.is-sql.is-active {
+.document-tab-item.is-active {
   background: var(--primary-soft);
   border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
   border-bottom-color: transparent;
@@ -5528,6 +5454,7 @@ body.is-resizing-column * {
 .document-tab-icon { flex-shrink: 0; font-size: var(--text-sm); }
 .document-tab.is-table .document-tab-icon { color: var(--success); }
 .document-tab.is-object .document-tab-icon { color: var(--warning); }
+.document-tab.is-sql .document-tab-icon { color: var(--primary); }
 .document-tab.is-active .document-tab-icon { color: var(--primary); }
 
 .document-tab-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -5714,7 +5641,6 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .execution-menu-actions .ant-btn { justify-content: flex-start; }
 .execution-menu .ant-divider.execution-menu-divider { margin: var(--space-2) 0; font-size: var(--text-xs); }
 .sql-execution-notice { margin-inline-end: 0; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sql-tab-kind-icon { margin-right: var(--space-1); color: var(--text-secondary); }
 
 /* 弹层按内容撑开（见 App.tsx 的 popupMatchSelectWidth），但不能比视口还宽：超长的表名照样省略号。 */
 .ant-select-dropdown {

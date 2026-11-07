@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Progress, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { ApiOutlined, BookOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { api } from '../api';
@@ -418,7 +419,7 @@ export function AiSettingsPanel() {
 
       <Modal
         open={Boolean(glossaryPolicy)}
-        width={920}
+        width={MODAL_WIDTH.wide}
         title={`${glossaryPolicy?.connectionName || ''} · 业务词典`}
         okText="保存"
         cancelText="取消"

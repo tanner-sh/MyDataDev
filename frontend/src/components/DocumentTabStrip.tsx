@@ -1,27 +1,42 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { CloseOutlined, CodeOutlined, LeftOutlined, ProfileOutlined, RightOutlined, TableOutlined } from '@ant-design/icons';
+import { Button, Dropdown, Tooltip, type MenuProps } from 'antd';
+import { CloseOutlined, CodeOutlined, ConsoleSqlOutlined, DownOutlined, LeftOutlined, PlusOutlined, ProfileOutlined, RightOutlined, TableOutlined } from '@ant-design/icons';
 import { documentTabLabels, tabScrollState, tabScrollTarget, wheelToHorizontal, type DocumentTabSource, type TabScrollState } from '../documentTabs';
 
 export type DocumentTabItem = DocumentTabSource & { dirty: boolean };
 
+/** SQL 查询标签（含命令窗口）。 */
+export type SqlDocumentTabItem = { id: string; title: string; dirty: boolean; command: boolean };
+
 type DocumentTabStripProps = {
-  /** 当前激活的标签：'sql' 表示 SQL 工作台，其余是文档键。 */
+  /** 当前激活的标签：'sql' 表示 SQL 工作台（具体是哪个查询标签看 activeSqlTabId），其余是文档键。 */
   activeKey: string;
+  sqlTabs: SqlDocumentTabItem[];
+  activeSqlTabId: string;
   documents: DocumentTabItem[];
   disabled?: boolean;
-  onSelectSql: () => void;
+  /** 新建查询标签按钮的提示（带快捷键）。 */
+  addSqlTabHint: string;
+  sqlTabMenu: MenuProps;
+  onSelectSql: (tabId: string) => void;
+  onAddSql: () => void;
+  onCloseSql: (tabId: string) => void;
+  onRenameSql: (tabId: string) => void;
   onSelect: (key: string) => void;
   onClose: (key: string) => void;
 };
 
 /**
- * 工作区标签条。
+ * 工作区标签条：SQL 查询标签与打开的表、对象排在同一条上。
+ *
+ * <p>以前这里只有一个「SQL 工作台」，查询标签在它下面另起一层 —— 两层标签各管各的，用户得先
+ * 想清楚「我要的东西在哪一层」。现在一条标签条，查询、命令窗口、表数据、对象结构都是平级的标签。</p>
  *
  * <p>放不下时左右两端出现箭头 —— 以前只能靠触控板横向滑动，用鼠标的人够不着溢出的标签。
  * 竖向滚轮也换算成横向滚动；切换标签时把激活的那个滚进可视区。激活态用实底色 + 底部主色条
  * 区分，而不是只靠按钮主色：一排标签里只有一个是「当前」，这件事必须一眼看出来。</p>
  */
-export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, documents, disabled = false, onSelectSql, onSelect, onClose }: DocumentTabStripProps) {
+export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlTabs, activeSqlTabId, documents, disabled = false, addSqlTabHint, sqlTabMenu, onSelectSql, onAddSql, onCloseSql, onRenameSql, onSelect, onClose }: DocumentTabStripProps) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [scroll, setScroll] = useState<TabScrollState>({ overflowing: false, canScrollLeft: false, canScrollRight: false });
   const labels = useMemo(() => documentTabLabels(documents), [documents]);
@@ -69,7 +84,7 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, docu
     const active = node?.querySelector<HTMLElement>('[data-tab-active="true"]');
     active?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
     measure();
-  }, [activeKey, documents.length, scroll.overflowing, measure]);
+  }, [activeKey, activeSqlTabId, documents.length, sqlTabs.length, scroll.overflowing, measure]);
 
   const scrollBy = (direction: 'left' | 'right') => {
     const node = scrollerRef.current;
@@ -89,10 +104,44 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, docu
       )}
       <div ref={scrollerRef} className="resource-document-tabs" onScroll={measure}>
         <nav className="document-tab-list" role="tablist" aria-label="工作区标签">
-          <button type="button" role="tab" aria-selected={sqlActive} data-tab-active={sqlActive ? 'true' : undefined} className={`document-tab is-sql${sqlActive ? ' is-active' : ''}`} onClick={onSelectSql}>
-            <CodeOutlined className="document-tab-icon" />
-            <span className="document-tab-name">SQL 工作台</span>
-          </button>
+          {sqlTabs.map((tab) => {
+            const active = sqlActive && tab.id === activeSqlTabId;
+            const closable = sqlTabs.length > 1;
+            return (
+              <span key={tab.id} className={`document-tab-item is-sql-item${active ? ' is-active' : ''}`} data-tab-active={active ? 'true' : undefined}>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`document-tab is-sql${active ? ' is-active' : ''}`}
+                  data-sql-current={tab.id === activeSqlTabId ? 'true' : undefined}
+                  title={`${tab.title}${tab.command ? '（命令窗口）' : ''}，双击重命名`}
+                  onClick={() => onSelectSql(tab.id)}
+                  onDoubleClick={(event) => { event.preventDefault(); onRenameSql(tab.id); }}
+                  onAuxClick={(event) => {
+                    if (event.button !== 1 || !closable) return;
+                    event.preventDefault();
+                    onCloseSql(tab.id);
+                  }}
+                >
+                  {tab.command ? <CodeOutlined className="document-tab-icon" aria-label="命令窗口" /> : <ConsoleSqlOutlined className="document-tab-icon" />}
+                  <span className="document-tab-name">{tab.title}</span>
+                  {tab.dirty && <span className="document-tab-dirty" aria-label="包含会话草稿">●</span>}
+                </button>
+                {closable && (
+                  <button
+                    type="button"
+                    className="document-tab-close"
+                    aria-label={`关闭 ${tab.title} 查询标签`}
+                    title="关闭（中键单击标签也可关闭）"
+                    onClick={() => onCloseSql(tab.id)}
+                  >
+                    <CloseOutlined />
+                  </button>
+                )}
+              </span>
+            );
+          })}
           {labels.map((label, index) => {
             const document = documents[index];
             const active = activeKey === document.key;
@@ -139,6 +188,13 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, docu
           <RightOutlined />
         </button>
       )}
+      {/* 新建与标签操作放在滚动区外面：标签多到溢出时它们也得够得着。 */}
+      <Tooltip title={addSqlTabHint}>
+        <Button type="text" size="small" className="document-tab-action" icon={<PlusOutlined />} aria-label="新建 SQL 标签页" onClick={onAddSql} />
+      </Tooltip>
+      <Dropdown trigger={['click']} menu={sqlTabMenu}>
+        <Button type="text" size="small" className="document-tab-action" icon={<DownOutlined />} aria-label="标签操作" title="新建命令窗口、找回关闭的 SQL、重命名与复制当前查询标签" />
+      </Dropdown>
     </div>
   );
 });

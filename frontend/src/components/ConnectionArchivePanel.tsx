@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { Alert, Input, Modal, Radio, Select, Space, Typography, Upload, message } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
@@ -122,7 +123,7 @@ export function ConnectionArchivePanel({
         onClose();
       }}
       destroyOnHidden
-      width={560}
+      width={MODAL_WIDTH.form}
     >
       {messageContext}
       <Space orientation="vertical" size={12} style={{ width: '100%' }}>

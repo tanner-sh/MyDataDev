@@ -1,7 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { DRAWER_WIDTH } from '../constants';
 import { Badge, Button, Drawer, Dropdown, Layout, Popconfirm, Select, Space, Tooltip, Typography, Upload } from 'antd';
-import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
 import {
   CalculatorOutlined,
@@ -48,7 +47,6 @@ const EXPORT_MENU_ITEMS = [
 ];
 
 export const TableWorkspace = memo(function TableWorkspace({
-  documentTabs,
   connectionId,
   dbType,
   initialScrollTop, onViewScroll, onUndo, onRedo, canUndo, canRedo,
@@ -85,7 +83,6 @@ export const TableWorkspace = memo(function TableWorkspace({
   onTableQueryChange
 }: {
   /** 工作区标签条，渲染在工具栏最左边，兼作这个工作区的标题。 */
-  documentTabs?: ReactNode;
   connectionId?: number;
   /** 右键「复制为 INSERT」按库生成标识符引用与字面量。 */
   dbType?: string;
@@ -186,8 +183,6 @@ export const TableWorkspace = memo(function TableWorkspace({
   return (
     <div ref={workspaceRef} className="workspace table-workspace">
       <Header className="workspace-toolbar">
-        {/* 表名由标签条给出（那里还带着「· 数据」和未提交标记），标题里不再写第二遍。 */}
-        {documentTabs}
         <div className="toolbar-title">
           <Text type="secondary">
             {readonlyConnection

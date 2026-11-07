@@ -29,7 +29,7 @@ import {
 } from '@ant-design/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
-import { API } from '../constants';
+import { API, MODAL_WIDTH } from '../constants';
 import type { McpAccessLevel, McpAgent, McpConfig, McpCredential, McpLimits } from '../types';
 import {
   agentGrantWarnings,
@@ -516,7 +516,7 @@ export function McpSettingsPanel() {
       <Modal
         title="请立即保存 Agent API Key"
         open={Boolean(credential)}
-        width={920}
+        width={MODAL_WIDTH.wide}
         className="mcp-credential-modal"
         closable={false}
         mask={{ closable: false }}
