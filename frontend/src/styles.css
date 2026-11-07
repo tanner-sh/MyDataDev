@@ -879,6 +879,25 @@ body {
   padding-right: 0 !important;
 }
 
+/*
+  勾选列：表头与表体都按整格居中。
+
+  行多时表格切到虚拟滚动，表体单元格是 display:block 的 div，不会像 th 那样 vertical-align 居中，
+  勾选框于是贴着上内边距；左右内边距又与表头不同（表头右内边距被上面那条清成 0），两边的勾选框
+  就错开一两像素 —— 一列方框上下左右都对不齐，一眼就看得出来。内边距清零、虚拟行里改用 flex 居中。
+*/
+.editable-grid .ant-table-selection-column {
+  padding: 0 !important;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.editable-grid .ant-table-tbody-virtual .ant-table-selection-column {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .resizable-column-title {
   min-width: 0;
   display: flex;

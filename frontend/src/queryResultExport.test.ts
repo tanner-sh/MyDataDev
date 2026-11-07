@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
+import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName, parseResultExportKey, readResultCopyFormat, resultExportGroups, resultExportMenuItems, serializeCopiedRows, serializeQueryResult, writeResultCopyFormat } from './queryResultExport';
 
 const columns = [
   { key: 'c1', label: 'id', typeName: 'INTEGER' },
@@ -172,5 +172,23 @@ describe('resultExportGroups', () => {
     expect(parseResultExportKey('loaded:markdown')).toEqual({ scope: 'loaded', format: 'markdown' });
     expect(parseResultExportKey('full:pdf')).toBeUndefined();
     expect(parseResultExportKey('other:csv')).toBeUndefined();
+  });
+});
+
+describe('resultExportMenuItems', () => {
+  it('只有一组时平铺成组，一眼看全', () => {
+    const items = resultExportMenuItems(resultExportGroups({ loadedRows: 240, selectedRows: 0, fullAvailable: false, narrowed: false }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ type: 'group', label: '当前批次 240 行' });
+    expect(items[0].children).toHaveLength(6);
+  });
+
+  it('两组时各收成子菜单，否则十四行的菜单会被视口切掉', () => {
+    const items = resultExportMenuItems(resultExportGroups({ loadedRows: 240, selectedRows: 0, fullAvailable: true, narrowed: true }));
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => !('type' in item))).toBe(true);
+    // 组标题原样当子菜单名：「不含筛选与排序」的提示不能因为收起来就丢掉。
+    expect(items[1].label).toBe('重新执行原 SQL 导出（不含筛选与排序）');
+    expect(items[1].children.map((child) => child.key)).toContain('full:xlsx');
   });
 });

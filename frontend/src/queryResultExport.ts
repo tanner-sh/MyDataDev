@@ -351,6 +351,26 @@ export function resultExportGroups({ loadedRows, selectedRows, fullAvailable, na
   return groups;
 }
 
+export type ResultExportMenuItem =
+  | { type: 'group'; key: string; label: string; children: Array<{ key: string; label: string }> }
+  | { key: string; label: string; children: Array<{ key: string; label: string }> };
+
+/**
+ * 导出分组排成下拉菜单的形状。
+ *
+ * 只有一组时平铺（组标题 + 六个格式，一眼看全）；两组时每组收成一个子菜单。两组平铺是
+ * 两个组标题加十二个格式、十四行约 480px，结果区在窗口下半部，向下放不下、向上翻又会被
+ * 视口顶边切掉 —— 第一组的标题和前几个格式就这样看不见了，而那正是最常用的一组。
+ * 组标题仍然原样当子菜单的名字：「不含筛选与排序」这句提示不能因为收起来就丢掉。
+ */
+export function resultExportMenuItems(groups: ResultExportGroup[]): ResultExportMenuItem[] {
+  const children = (group: ResultExportGroup) => group.formats.map((item) => ({ key: item.key, label: item.label }));
+  if (groups.length <= 1) {
+    return groups.map((group) => ({ type: 'group' as const, key: group.scope, label: group.label, children: children(group) }));
+  }
+  return groups.map((group) => ({ key: group.scope, label: group.label, children: children(group) }));
+}
+
 export function parseResultExportKey(key: string): { scope: ResultExportScope; format: ExportFormat } | undefined {
   const [scope, format] = key.split(':');
   if (scope !== 'loaded' && scope !== 'full') return undefined;
