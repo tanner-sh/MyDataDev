@@ -306,6 +306,22 @@ class SqlFileScriptExecutionTest {
         assertThat(service.get(undecided.id()).statementDelimiter()).isEqualTo("独占行 !");
     }
 
+    @Test void commandWindowAutocommitReallyCommitsWhenTheDialectStreamsWithoutAutocommit() throws Exception {
+        // PostgreSQL 方言为流式游标关掉 autocommit。命令窗口「逐条自动提交」以前就这样悬在一个从不提交的事务里：
+        // 日志报「成功 2 条」，连接一关两行都没了（真实 PostgreSQL 上出错之后还会每条都报 transaction is aborted）。
+        var pgSource = new DriverManagerDataSource("jdbc:h2:mem:pg-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1;MODE=PostgreSQL", "sa", "");
+        var pg = new JdbcTemplate(pgSource);
+        pg.execute("CREATE TABLE t(id INT PRIMARY KEY)");
+        when(connections.require(2)).thenReturn(new DbConnection(2L, "pg", "postgresql", "jdbc:postgresql://h2-stand-in/x", "sa", "", "dev", false, Instant.now(), Instant.now()));
+        when(connections.open(2)).thenAnswer(i -> pgSource.getConnection());
+
+        var job = service.submitCommand(2, "INSERT INTO t VALUES(1);\nINSERT INTO missing VALUES(2);\nINSERT INTO t VALUES(3);", "tester",
+                SqlScriptDelimiter.AUTO, "CONTINUE", "AUTOCOMMIT", null, null);
+
+        assertThat(service.get(job.id()).successCount()).isEqualTo(2);
+        assertThat(pg.queryForList("SELECT id FROM t ORDER BY id", Integer.class)).containsExactly(1, 3);
+    }
+
     private List<String> commandLog(long id) {
         return service.commandView(id, 0, 1000).entries().stream().map(entry -> entry.kind() + ":" + entry.text()).toList();
     }
