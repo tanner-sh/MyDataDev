@@ -252,7 +252,7 @@ public class SqlTransactionService {
 
     private SqlResult readOne(Statement jdbc, long startedNanos, int maxRows, DatabaseDialect dialect, OpenTransaction transaction, DbConnection dbConnection, String sql) throws Exception {
         try (ResultSet rs = jdbc.getResultSet()) {
-            return SqlService.withColumnSources(sqlService.readResult(rs, startedNanos, maxRows, dialect), rs, transaction.connection(),
+            return SqlResultReader.withColumnSources(SqlResultReader.readResult(rs, startedNanos, maxRows, dialect), rs, transaction.connection(),
                     dbConnection, transaction.connectionId(), transaction.schemaName(), sql, dialect);
         }
     }

@@ -2,11 +2,9 @@ package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
-import com.example.dbadmin.core.CellSerializer;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
-import com.example.dbadmin.dto.ApiDtos.ResultEditInfo;
 import com.example.dbadmin.dto.ApiDtos.ResultSourceTable;
 import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.dto.ApiDtos.SqlPageInfo;
@@ -21,14 +19,10 @@ import com.example.dbadmin.service.SqlScriptSplitter.StatementSegment;
 import org.springframework.stereotype.Service;
 import org.springframework.http.HttpStatus;
 
-import java.sql.Blob;
-import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
-import java.sql.Types;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -37,27 +31,31 @@ import java.util.Set;
 @Service
 public class SqlService {
     private static final int DEFAULT_MAX_ROWS = 500;
+
     private static final int MAX_SCRIPT_RESULT_ROWS = 10_000;
-    private static final int MAX_RESULT_CELLS = 200_000;
-    private static final long MAX_RESULT_TEXT_CHARS = 20_000_000;
-    private static final int MAX_CELL_TEXT_CHARS = 100_000;
-    /** 驱动没报表名、SQL 文本也认不出唯一来源表时的说明。 */
-    private static final String SOURCE_TABLE_UNKNOWN =
-            "无法确定这批结果来自哪张表（驱动没有报告，这条 SQL 也不是对单张表的直接查询），因此无法就地编辑；"
-                    + "在资源树里打开目标表可以直接改数据。";
-    /** CLOB 先读回多少字符用于判断截断。查询结果一屏放不下太长的文本，取一个比单元格上限小得多的窗口。 */
-    private static final int MAX_CLOB_WINDOW_CHARS = 10_000;
+
     private final ConnectionService connections;
+
     private final AppProperties properties;
+
     private final AuditRepository audit;
+
     private final DialectRegistry dialectRegistry;
+
     private final SqlHistoryRepository history;
+
     private final MetadataService metadata;
+
     private final SqlScriptSplitter scriptSplitter;
+
     private final SqlStatementClassifier classifier;
+
     private final ExecutionGuard executionGuard;
+
     private final SqlExecutionRegistry executions;
-    private final DataEditService dataEdit;
+
+    private final ResultEditability editability;
+
     private final SqlExecutionMetrics metrics;
 
     public SqlService(
@@ -84,7 +82,7 @@ public class SqlService {
         this.classifier = classifier;
         this.executionGuard = executionGuard;
         this.executions = executions;
-        this.dataEdit = dataEdit;
+        this.editability = new ResultEditability(dialectRegistry, dataEdit);
         this.metrics = metrics;
     }
 
@@ -184,7 +182,7 @@ public class SqlService {
                     return result;
                 }
                 try (ResultSet rs = statement.getResultSet()) {
-                    SqlResult result = parsed != null ? readResult(rs, started, maxRows, dialect) : withColumnSources(readResult(rs, started, maxRows, dialect), rs, connection,
+                    SqlResult result = parsed != null ? SqlResultReader.readResult(rs, started, maxRows, dialect) : SqlResultReader.withColumnSources(SqlResultReader.readResult(rs, started, maxRows, dialect), rs, connection,
                             dbConnection, connectionId, schemaName, executionSql, dialect);
                     history.insert(connectionId, sql, "EXECUTE", "SUCCESS", result.elapsedMs(), null, actor);
                     metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
@@ -274,7 +272,7 @@ public class SqlService {
                 throw new IllegalArgumentException("MCP 查询没有返回结果集，已拒绝该语句");
             }
             try (ResultSet rs = statement.getResultSet()) {
-                SqlResult result = readResult(
+                SqlResult result = SqlResultReader.readResult(
                         rs,
                         started,
                         maxRows,
@@ -284,7 +282,7 @@ public class SqlService {
                         dialect
                 );
                 audit.onConnection(actor, "MCP_SQL_QUERY", connectionId, offset > 0 ? "read-only query; offset=" + offset : "read-only query");
-                result = withoutHelperColumn(withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect), helperColumn);
+                result = SqlResultReader.withoutHelperColumn(SqlResultReader.withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect), helperColumn);
                 history.insert(connectionId, sql, "MCP_QUERY", "SUCCESS", result.elapsedMs(), null, actor);
                 return result;
             }
@@ -425,18 +423,18 @@ public class SqlService {
                         SqlResult result;
                         if (hasResult) {
                             try (ResultSet rs = jdbc.getResultSet()) {
-                                result = readResult(
+                                result = SqlResultReader.readResult(
                                         rs,
                                         statementStarted,
                                         statementLimit,
-                                        Math.max(0, MAX_RESULT_CELLS - returnedCells),
-                                        Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars),
+                                        Math.max(0, SqlResultReader.MAX_RESULT_CELLS - returnedCells),
+                                        Math.max(0, SqlResultReader.MAX_RESULT_TEXT_CHARS - returnedTextChars),
                                         dialect
                                 );
-                                result = withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, statement.sql(), dialect);
+                                result = SqlResultReader.withColumnSources(result, rs, connection, dbConnection, connectionId, schemaName, statement.sql(), dialect);
                                 returnedRows += result.rows().size();
                                 returnedCells += result.rows().size() * result.columns().size();
-                                returnedTextChars += textChars(result);
+                                returnedTextChars += SqlResultReader.textChars(result);
                             }
                         } else {
                             result = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
@@ -451,11 +449,11 @@ public class SqlService {
                                 SqlResult nextResult;
                                 if (more) {
                                     try (ResultSet rs = jdbc.getResultSet()) {
-                                        nextResult = readResult(rs, statementStarted, Math.min(maxRows, Math.max(0, MAX_SCRIPT_RESULT_ROWS - returnedRows)),
-                                                Math.max(0, MAX_RESULT_CELLS - returnedCells), Math.max(0, MAX_RESULT_TEXT_CHARS - returnedTextChars), dialect);
+                                        nextResult = SqlResultReader.readResult(rs, statementStarted, Math.min(maxRows, Math.max(0, MAX_SCRIPT_RESULT_ROWS - returnedRows)),
+                                                Math.max(0, SqlResultReader.MAX_RESULT_CELLS - returnedCells), Math.max(0, SqlResultReader.MAX_RESULT_TEXT_CHARS - returnedTextChars), dialect);
                                         returnedRows += nextResult.rows().size();
                                         returnedCells += nextResult.rows().size() * nextResult.columns().size();
-                                        returnedTextChars += textChars(nextResult);
+                                        returnedTextChars += SqlResultReader.textChars(nextResult);
                                     }
                                 } else nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
                                 results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, nextResult));
@@ -608,7 +606,7 @@ public class SqlService {
             throw new IllegalArgumentException("查询偏移量必须在 0 到 " + maxOffset + " 之间。");
         }
         int rawPageSize = requestedPageSize == null ? DEFAULT_MAX_ROWS : Math.max(requestedPageSize, 1);
-        int pageSize = Math.min(normalizeMaxRows(rawPageSize), MAX_RESULT_CELLS);
+        int pageSize = Math.min(normalizeMaxRows(rawPageSize), SqlResultReader.MAX_RESULT_CELLS);
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
@@ -765,24 +763,6 @@ public class SqlService {
         return FORMATTER.format(sql);
     }
 
-    /** 手动事务复用同一套结果读取与限额，见 SqlTransactionService。 */
-    SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, DatabaseDialect dialect) throws Exception {
-        return readResult(rs, startedNanos, maxRows, MAX_RESULT_CELLS, MAX_RESULT_TEXT_CHARS, dialect);
-    }
-
-    static SqlResult withColumnSources(SqlResult result, ResultSet rs, Connection connection, DbConnection dbConnection,
-                                       long connectionId, String schemaName, String sql, DatabaseDialect dialect) {
-        try {
-            String namespace = schemaName == null || schemaName.isBlank() ? dialect.currentSchema(connection) : schemaName;
-            var columns = ResultColumnSourceResolver.resolve(result.columns(), rs.getMetaData(), sql,
-                    dbConnection.dbType(), connectionId, namespace, dialect);
-            return new SqlResult(columns, result.rows(), result.affectedRows(), result.elapsedMs(), result.resultSet(),
-                    result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit(), result.truncationReason());
-        } catch (Exception ignored) {
-            return result;
-        }
-    }
-
     private SqlResult readPageResult(
             ResultSet rs,
             long startedNanos,
@@ -810,9 +790,9 @@ public class SqlService {
         for (int index = 1; index <= columnCount; index++) {
             columns.add(new ResultColumn("c" + index, metadata.getColumnLabel(index), metadata.getColumnTypeName(index)));
         }
-        int effectivePageSize = Math.min(pageSize, MAX_RESULT_CELLS / Math.max(columnCount, 1));
+        int effectivePageSize = Math.min(pageSize, SqlResultReader.MAX_RESULT_CELLS / Math.max(columnCount, 1));
         ResultSourceTable sourceTable = ResultSetSourceResolver.resolve(metadata, dialect);
-        EditableResult editable = parameterized ? null : editableResult(connection, dbConnection, sourceTable, metadata, columnCount, executionSql, schemaName);
+        ResultEditability.EditableResult editable = parameterized ? null : editability.probe(connection, dbConnection, sourceTable, metadata, columnCount, executionSql, schemaName);
         List<List<Object>> rows = new ArrayList<>();
         List<String> rowKeyTokens = new ArrayList<>();
         long textChars = 0;
@@ -820,15 +800,15 @@ public class SqlService {
         while (rows.size() < effectivePageSize && rs.next()) {
             List<Object> row = new ArrayList<>(columnCount);
             for (int index = 1; index <= columnCount; index++) {
-                int remainingText = (int) Math.min(MAX_CELL_TEXT_CHARS, Math.max(0, MAX_RESULT_TEXT_CHARS - textChars));
-                Object value = serializableValue(rs, metadata, index, remainingText);
+                int remainingText = (int) Math.min(SqlResultReader.MAX_CELL_TEXT_CHARS, Math.max(0, SqlResultReader.MAX_RESULT_TEXT_CHARS - textChars));
+                Object value = SqlResultReader.serializableValue(rs, metadata, index, remainingText);
                 row.add(value);
                 if (value instanceof CharSequence text) textChars += text.length();
             }
             rows.add(row);
             // editable 非空但 locator 为空表示「不可编辑且有原因」，这时不发令牌。
             if (editable != null && editable.locator() != null) rowKeyTokens.add(editable.locator().encode(rs));
-            if (textChars >= MAX_RESULT_TEXT_CHARS) {
+            if (textChars >= SqlResultReader.MAX_RESULT_TEXT_CHARS) {
                 payloadLimitReached = true;
                 break;
             }
@@ -836,7 +816,7 @@ public class SqlService {
         boolean hasMore = payloadLimitReached || rs.next();
         SqlPageInfo page = new SqlPageInfo(connectionId, offset, requestedPageSize, effectivePageSize, hasMore,
                 schemaName, sortColumn, sortDirection, filters);
-        return withColumnSources(new SqlResult(
+        return SqlResultReader.withColumnSources(new SqlResult(
                 columns,
                 rows,
                 -1,
@@ -846,197 +826,8 @@ public class SqlService {
                 payloadLimitReached,
                 page,
                 sourceTable,
-                parameterized ? null : editInfo(editable, rowKeyTokens)
+                parameterized ? null : editability.editInfo(editable, rowKeyTokens)
         ), rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect);
-    }
-
-    /**
-     * 判断这段结果能不能就地编辑，并在可以时准备好行定位令牌生成器。
-     *
-     * <p>任何一步失败都只是「不可编辑」，绝不能让一次成功的查询因为编辑能力探测而报错 ——
-     * 权限不足读不到主键元数据是很常见的情况。</p>
-     */
-    private EditableResult editableResult(
-            Connection connection,
-            DbConnection dbConnection,
-            ResultSourceTable sourceTable,
-            ResultSetMetaData metadata,
-            int visibleColumnCount,
-            String executionSql,
-            String schemaName
-    ) {
-        boolean fromSqlText = false;
-        ResultSourceTable resolved = sourceTable != null && !sourceTable.nameParts().isEmpty() ? sourceTable : null;
-        if (resolved == null) {
-            // 驱动一列都不报表名（Oracle 的 ojdbc 就是这样）时，退回按 SQL 文本认来源表。
-            // 各列报的表名互相对不上则是真的多表结果，那种情况不该兜底。
-            if (ResultSetSourceResolver.classifyUnknownSource(metadata, visibleColumnCount)
-                    != ResultSetSourceResolver.UnknownSource.NO_TABLE_NAMES) {
-                return new EditableResult(null, "查询结果来自多张表，无法就地编辑");
-            }
-            resolved = SelectSourceTable.parse(executionSql, dbConnection.dbType(), schemaName, dialectRegistry.dialectFor(dbConnection));
-            if (resolved == null) return new EditableResult(null, SOURCE_TABLE_UNKNOWN);
-            fromSqlText = true;
-        }
-        // 别名会让「界面上的这一列」与「表里的哪个字段」对不上，而 JDBC 元数据分辨不出别名，
-        // 详见 SelectProjection。分辨不了就不给编辑，否则可能定位到另一行、写错另一个字段。
-        if (!SelectProjection.isDirectColumnProjection(executionSql)) {
-            return new EditableResult(null, "查询结果使用了别名或表达式，无法对应到表字段");
-        }
-        List<String> parts = resolved.nameParts();
-        String table = parts.get(parts.size() - 1);
-        String schema = parts.size() > 1 ? parts.get(parts.size() - 2) : null;
-        if (fromSqlText) {
-            // 表名是从 SQL 文本认出来的，驱动没法印证。落编辑令牌之前先要求结果里的每一列都是
-            // 这张表真实存在的字段：认错表时这一步几乎必然不过，而它同时也证明了这张表读得到。
-            String mismatch = columnsMissingFromTableReason(connection, dbConnection, schema, table, metadata, visibleColumnCount);
-            if (mismatch != null) return new EditableResult(null, mismatch);
-        } else {
-            // ResultSetSourceResolver 会跳过没有报告表名的列（表达式、别名、部分驱动），这对推断
-            // 导出目标表是合适的宽松度，但用来决定「能不能改这张表」就太松了：一次 JOIN 里只要有
-            // 一侧的列没报表名，就会被当成单表来源。编辑路径要求每一个可见列都明确属于同一张表。
-            String mismatch = columnsOutsideTableReason(metadata, visibleColumnCount, table);
-            if (mismatch != null) return new EditableResult(null, mismatch);
-        }
-        try {
-            DataEditService.ResultRowLocator locator = dataEdit.resultRowLocator(
-                    connection, dbConnection, schema, table, metadata, visibleColumnCount
-            );
-            if (locator == null || !locator.editable()) {
-                return new EditableResult(null, locator == null ? "无法确认行定位字段" : locator.reason());
-            }
-            return new EditableResult(locator, null);
-        } catch (Exception error) {
-            return new EditableResult(null, "无法确认行定位字段：" + abbreviate(error.getMessage()));
-        }
-    }
-
-    /**
-     * 表名是从 SQL 文本认出来的，这里再要求结果里的每一列都是这张表真实存在的字段。
-     *
-     * <p>{@code editableColumns} 走的是 {@code SELECT * FROM 表 WHERE 1 = 0}，所以它同时回答了
-     * 「这张表存不存在、读不读得到」。读不到就当作认不出来源表，绝不放行。</p>
-     */
-    private String columnsMissingFromTableReason(Connection connection, DbConnection dbConnection, String schema,
-                                                 String table, ResultSetMetaData metadata, int visibleColumnCount) {
-        try {
-            Set<String> tableColumns = dataEdit.editableColumns(connection, dbConnection, schema, table);
-            for (int index = 1; index <= visibleColumnCount; index++) {
-                String label = metadata.getColumnLabel(index);
-                if (tableColumns.stream().noneMatch(name -> name.equalsIgnoreCase(label))) {
-                    return "结果列 " + label + " 不是 " + table + " 的字段，无法确认改动写回哪里";
-                }
-            }
-            return null;
-        } catch (Exception error) {
-            return SOURCE_TABLE_UNKNOWN;
-        }
-    }
-
-    /** 说明为什么这些列对不上同一张表；对得上返回 null。 */
-    private String columnsOutsideTableReason(ResultSetMetaData metadata, int visibleColumnCount, String table) {
-        try {
-            boolean someColumnHasNoTable = false;
-            for (int index = 1; index <= visibleColumnCount; index++) {
-                String candidate = metadata.getTableName(index);
-                if (candidate == null || candidate.isBlank()) {
-                    someColumnHasNoTable = true;
-                    continue;
-                }
-                if (!candidate.equalsIgnoreCase(table)) return "查询结果来自多张表，无法定位行";
-            }
-            return someColumnHasNoTable ? "结果里有列没有报告所属的表，无法确认改动写回哪里" : null;
-        } catch (Exception error) {
-            return SOURCE_TABLE_UNKNOWN;
-        }
-    }
-
-    /**
-     * 「不可编辑」的说明由 {@link #editableResult} 一处给全 —— 它才知道卡在了哪一步。
-     */
-    private ResultEditInfo editInfo(EditableResult editable, List<String> rowKeyTokens) {
-        if (editable.locator() == null) {
-            return ResultEditInfo.notEditable(editable.reason() == null ? SOURCE_TABLE_UNKNOWN : editable.reason());
-        }
-        return new ResultEditInfo(
-                true,
-                editable.locator().schemaName(),
-                editable.locator().tableName(),
-                editable.locator().keyColumns(),
-                rowKeyTokens,
-                null
-        );
-    }
-
-    private record EditableResult(DataEditService.ResultRowLocator locator, String reason) {
-    }
-
-    private SqlResult readResult(ResultSet rs, long startedNanos, int maxRows, int cellBudget, long textBudget, DatabaseDialect dialect) throws Exception {
-        return readResult(rs, startedNanos, maxRows, cellBudget, textBudget, MAX_CELL_TEXT_CHARS, dialect);
-    }
-
-    private SqlResult readResult(
-            ResultSet rs,
-            long startedNanos,
-            int maxRows,
-            int cellBudget,
-            long textBudget,
-            int cellTextBudget,
-            DatabaseDialect dialect
-    ) throws Exception {
-        ResultSetMetaData metadata = rs.getMetaData();
-        int columnCount = metadata.getColumnCount();
-        List<ResultColumn> columns = new ArrayList<>();
-        for (int index = 1; index <= columnCount; index++) {
-            columns.add(new ResultColumn("c" + index, metadata.getColumnLabel(index), metadata.getColumnTypeName(index)));
-        }
-        int effectiveMaxRows = textBudget <= 0
-                ? 0
-                : Math.min(Math.max(maxRows, 0), Math.max(cellBudget, 0) / Math.max(columnCount, 1));
-        List<List<Object>> rows = new ArrayList<>();
-        long textChars = 0;
-        boolean payloadLimitReached = false;
-        boolean cellTextTruncated = false;
-        while (rows.size() < effectiveMaxRows && rs.next()) {
-            List<Object> row = new ArrayList<>(columnCount);
-            for (int index = 1; index <= columnCount; index++) {
-                int remainingText = (int) Math.min(cellTextBudget, Math.max(0, textBudget - textChars));
-                CellValue cell = readCellWithTruncation(rs, metadata, index, remainingText);
-                Object value = cell.value();
-                cellTextTruncated |= cell.truncated();
-                row.add(value);
-                if (value instanceof CharSequence text) textChars += text.length();
-            }
-            rows.add(row);
-            if (textChars >= textBudget) {
-                payloadLimitReached = true;
-                break;
-            }
-        }
-        boolean moreRows = rs.next();
-        boolean truncated = cellTextTruncated || payloadLimitReached || moreRows;
-        return new SqlResult(
-                columns,
-                rows,
-                -1,
-                elapsed(startedNanos),
-                true,
-                effectiveMaxRows,
-                truncated,
-                null,
-                ResultSetSourceResolver.resolve(metadata, dialect), null,
-                cellTextTruncated || payloadLimitReached ? "text_limit" : moreRows ? (effectiveMaxRows < maxRows ? "cell_limit" : "row_limit") : "none"
-        );
-    }
-
-    /** Oracle 的 ROWNUM 分页会在最后多出一列行号，它不属于用户的结果。 */
-    private static SqlResult withoutHelperColumn(SqlResult result, String helperColumn) {
-        int last = result.columns().size() - 1;
-        if (helperColumn == null || last < 0 || !helperColumn.equalsIgnoreCase(result.columns().get(last).label())) return result;
-        // 单元格可以是 SQL NULL，所以不能用 List.copyOf。
-        List<List<Object>> rows = result.rows().stream().map(row -> row.size() > last ? (List<Object>) new ArrayList<>(row.subList(0, last)) : row).toList();
-        return new SqlResult(result.columns().subList(0, last), rows, result.affectedRows(), result.elapsedMs(), result.resultSet(),
-                result.maxRows(), result.truncated(), result.page(), result.sourceTable(), result.edit(), result.truncationReason());
     }
 
     int sqlTimeoutSeconds() {
@@ -1078,60 +869,6 @@ public class SqlService {
         return classifier.classify(sql) == SqlStatementClassifier.Kind.DDL || SqlScriptSyntax.opaqueBlock(sql);
     }
 
-    private Object serializableValue(Object value, int maxTextChars) throws Exception {
-        return CellSerializer.serialize(value, maxTextChars, MAX_CLOB_WINDOW_CHARS);
-    }
-
-    private Object serializableValue(ResultSet rs, ResultSetMetaData metadata, int index, int maxTextChars) throws Exception {
-        int jdbcType = metadata.getColumnType(index);
-        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(jdbcType)) {
-            String description = binaryDescription(rs, index);
-            return description == null ? null : CellSerializer.truncate(description, "", maxTextChars);
-        }
-        return serializableValue(rs.getObject(index), maxTextChars);
-    }
-
-    private record CellValue(Object value, boolean truncated) { }
-
-    private CellValue readCellWithTruncation(ResultSet rs, ResultSetMetaData metadata, int index, int limit) throws Exception {
-        int type = metadata.getColumnType(index);
-        if (Set.of(Types.BLOB, Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY).contains(type)) {
-            String text = binaryDescription(rs, index);
-            return new CellValue(text == null ? null : CellSerializer.truncate(text, "", limit), text != null && text.length() > limit);
-        }
-        Object raw = rs.getObject(index);
-        boolean clipped = false;
-        if (raw instanceof Clob clob) clipped = clob.length() > Math.min(MAX_CLOB_WINDOW_CHARS, Math.max(0, limit));
-        else if (raw != null && (!(raw instanceof Number) || raw instanceof Long || raw instanceof java.math.BigInteger || raw instanceof java.math.BigDecimal)) {
-            clipped = !(raw instanceof Boolean) && CellSerializer.text(raw).length() > limit;
-        }
-        return new CellValue(serializableValue(raw, limit), clipped);
-    }
-
-    private String binaryDescription(ResultSet rs, int index) throws Exception {
-        try {
-            Blob blob = rs.getBlob(index);
-            if (blob != null) return "<BINARY " + blob.length() + " bytes>";
-            if (rs.wasNull()) return null;
-        } catch (Exception ignored) {
-            // Some drivers expose VARBINARY only through a binary stream.
-        }
-        try (InputStream input = rs.getBinaryStream(index)) {
-            if (input == null) return null;
-            return CellSerializer.describeBinaryStream(input);
-        }
-    }
-
-    private long textChars(SqlResult result) {
-        long count = 0;
-        for (List<Object> row : result.rows()) {
-            for (Object value : row) {
-                if (value instanceof CharSequence text) count += text.length();
-            }
-        }
-        return count;
-    }
-
     private long elapsed(long startedNanos) {
         return (System.nanoTime() - startedNanos) / 1_000_000;
     }
@@ -1140,9 +877,8 @@ public class SqlService {
         return abbreviate(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
     }
 
-    private String abbreviate(String value) {
+    static String abbreviate(String value) {
         if (value == null) return "";
         return value.length() <= 2_000 ? value : value.substring(0, 2_000);
     }
-
 }
