@@ -800,8 +800,9 @@ try {
     await page.shot('06a-多标签与待提交修改');
     if (AUTH) {
       await page.send('Network.clearBrowserCookies');
-      // 随便打一个接口就能让过期会话现形；顶栏不再有「刷新连接」，用资源管理器的刷新。
-      await page.evaluate(`document.querySelector('button[aria-label="刷新表"]')?.click()`);
+      // 随便打一个接口就能让过期会话现形。顶栏不再有「刷新连接」；资源管理器的「刷新」也不行 ——
+      // 这时表里带着待提交修改，它会先弹「放弃并继续」的确认，请求根本发不出去。统计总行数只读、不碰修改。
+      await page.evaluate(`[...document.querySelectorAll('button')].find(node => node.textContent.includes('统计总行数'))?.click()`);
       await page.sleep(1500);
       check('会话过期显示登录页并遮住工作区', await page.evaluate(`document.body.dataset.sessionLocked === 'true' && Boolean(document.querySelector('.auth-page')) && Boolean(document.querySelector('[hidden] .app-shell'))`));
       await page.shot('06b-会话过期');
