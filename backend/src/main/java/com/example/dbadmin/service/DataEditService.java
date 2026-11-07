@@ -11,8 +11,6 @@ import com.example.dbadmin.dto.ApiDtos.RowChange;
 import com.example.dbadmin.dto.ApiDtos.TableColumn;
 import com.example.dbadmin.dto.ApiDtos.TableDataResponse;
 import com.example.dbadmin.dto.ApiDtos.TableDataRequest;
-import com.example.dbadmin.dto.ApiDtos.TableFilterRule;
-import com.example.dbadmin.dto.ApiDtos.TableSortRule;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.MetadataService.RowIdentity;
@@ -21,27 +19,18 @@ import com.example.dbadmin.service.RowLocatorCodec.RowLocatorState;
 import com.example.dbadmin.service.RowLocatorCodec.RowLocatorValue;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.sql.Blob;
 import java.sql.Clob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
-import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.Statement;
-import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
-import java.time.DateTimeException;
-import java.time.OffsetDateTime;
-import java.time.OffsetTime;
-import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
@@ -51,18 +40,29 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
+import com.example.dbadmin.service.TableQueries.NormalizedSort;
+import com.example.dbadmin.service.TableQueries.Query;
+import com.example.dbadmin.service.TableQueries.TableQueryPlan;
+import com.example.dbadmin.service.TableValues.BoundValue;
+import com.example.dbadmin.service.TableValues.ColumnDescriptor;
 
 @Service
 public class DataEditService {
     private static final Logger log = LoggerFactory.getLogger(DataEditService.class);
+
     private static final int MAX_PAGE_SIZE = 200;
+
     private static final long MAX_OFFSET = 100_000;
+
     private static final int MAX_CHANGES = 1_000;
+
     private static final int MAX_TABLE_RESULT_CELLS = 50_000;
+
     private static final long MAX_TABLE_TEXT_CHARS = 5_000_000;
+
     private static final int MAX_TABLE_CELL_TEXT_CHARS = 100_000;
+
     /**
      * CLOB 先读回多少字符用于判断截断。
      *
@@ -71,15 +71,21 @@ public class DataEditService {
      * 用不同阈值，就会出现标了截断却没截、或截了却没标的行。</p>
      */
     private static final int MAX_CLOB_WINDOW_CHARS = 4_096;
-    private static final int MAX_PREVIEW_PARAMETER_CHARS = 2_000;
-    private static final int MAX_PREVIEW_SQL_CHARS = 10_000;
+
     private final MetadataService metadata;
+
     private final ConnectionService connections;
+
     private final AuditRepository audit;
+
     private final DialectRegistry dialectRegistry;
+
     private final AppProperties properties;
+
     private final TableCursorCodec cursorCodec;
+
     private final RowLocatorCodec rowLocatorCodec;
+
     private final ExecutionGuard executionGuard;
 
     public DataEditService(
@@ -121,7 +127,7 @@ public class DataEditService {
         try (Connection connection = connections.open(connectionId)) {
             RowIdentity identity = metadata.rowIdentity(connection, dbConnection, schemaName, tableName);
             Map<String, ColumnDescriptor> descriptors = loadColumnDescriptors(connection, dialect, schemaName, tableName);
-            TableQueryPlan plan = tableQueryPlan(request, descriptors, dialect);
+            TableQueryPlan plan = TableQueries.plan(request, descriptors, dialect);
             int effectivePageSize = Math.min(
                     safePageSize,
                     Math.max(1, MAX_TABLE_RESULT_CELLS / Math.max(descriptors.size(), 1))
@@ -135,10 +141,10 @@ public class DataEditService {
                 throw new IllegalArgumentException("偏移分页最多浏览到偏移 " + MAX_OFFSET + " 行，请缩小筛选范围；有稳定主键的表也可移除自定义排序后重试。");
             }
 
-            Query query = tableQuery(dialect, schemaName, tableName, identity.columns(), descriptors, mode, state, effectivePageSize, plan);
+            Query query = TableQueries.pageQuery(dialect, schemaName, tableName, identity.columns(), descriptors, mode, state, effectivePageSize, plan);
             try (PreparedStatement statement = connection.prepareStatement(query.sql(), ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
                 dialect.configureReadStatement(connection, statement, Math.min(effectivePageSize + 1, 200), properties.getSql().getTimeoutSeconds());
-                bind(statement, query.parameters());
+                TableValues.bind(statement, query.parameters());
                 try (ResultSet rs = statement.executeQuery()) {
                     ResultSetMetaData md = rs.getMetaData();
                     int visibleColumnCount = visibleColumnCount(md, dialect.paginationHelperColumn());
@@ -327,7 +333,7 @@ public class DataEditService {
                         statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
                         if (type.equals("INSERT")) {
                             for (PreparedOperation operation : batch) {
-                                bind(statement, operation.parameters());
+                                TableValues.bind(statement, operation.parameters());
                                 statement.addBatch();
                             }
                             int[] counts = statement.executeBatch();
@@ -347,7 +353,7 @@ public class DataEditService {
                             // predicates cannot be bypassed by JDBC SUCCESS_NO_INFO batch results.
                             for (int operationIndex = index; operationIndex < end; operationIndex++) {
                                 PreparedOperation operation = operations.get(operationIndex);
-                                bind(statement, operation.parameters());
+                                TableValues.bind(statement, operation.parameters());
                                 int count = statement.executeUpdate();
                                 if (count != 1) {
                                     if (count == 0) throw new com.example.dbadmin.api.ApiProblemException(
@@ -415,7 +421,7 @@ public class DataEditService {
             try (PreparedStatement statement = connection.prepareStatement(sql)) {
                 statement.setQueryTimeout(properties.getSql().getTimeoutSeconds());
                 statement.setMaxRows(2);
-                bind(statement, where.parameters());
+                TableValues.bind(statement, where.parameters());
                 Map<String, Object> values = new LinkedHashMap<>();
                 boolean found;
                 boolean truncated = false;
@@ -464,7 +470,7 @@ public class DataEditService {
         String placeholders = canonical.keySet().stream().map(ignored -> "?").collect(Collectors.joining(", "));
         String sql = "INSERT INTO " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " (" + names + ") VALUES (" + placeholders + ")";
         List<BoundValue> parameters = boundValues(canonical, columns);
-        return new PreparedOperation("INSERT", sql, parameters, preview(sql, parameters, dialect));
+        return new PreparedOperation("INSERT", sql, parameters, TableValues.previewSql(sql, parameters, dialect));
     }
 
     private PreparedOperation updateOperation(DataPreviewRequest request, RowChange change, DatabaseDialect dialect, Map<String, ColumnDescriptor> columns, List<String> keyColumns) {
@@ -477,14 +483,14 @@ public class DataEditService {
         List<BoundValue> parameters = boundValues(values, columns);
         parameters.addAll(where.parameters());
         String sql = "UPDATE " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " SET " + set + " WHERE " + where.sql();
-        return new PreparedOperation("UPDATE", sql, parameters, preview(sql, parameters, dialect));
+        return new PreparedOperation("UPDATE", sql, parameters, TableValues.previewSql(sql, parameters, dialect));
     }
 
     private PreparedOperation deleteOperation(DataPreviewRequest request, RowChange change, DatabaseDialect dialect, Map<String, ColumnDescriptor> columns, List<String> keyColumns) {
         Map<String, BoundValue> key = validatedLocator(request, change.keyToken(), columns, keyColumns);
         WhereClause where = whereClause(key, Map.of(), dialect, columns);
         String sql = "DELETE FROM " + dialect.qualifiedName(request.schemaName(), request.tableName()) + " WHERE " + where.sql();
-        return new PreparedOperation("DELETE", sql, where.parameters(), preview(sql, where.parameters(), dialect));
+        return new PreparedOperation("DELETE", sql, where.parameters(), TableValues.previewSql(sql, where.parameters(), dialect));
     }
 
     private Map<String, BoundValue> validatedLocator(DataPreviewRequest request, String token, Map<String, ColumnDescriptor> columns, List<String> keyColumns) {
@@ -506,13 +512,13 @@ public class DataEditService {
         ));
         Map<String, BoundValue> ordered = new LinkedHashMap<>();
         for (String keyColumn : keyColumns) {
-            ColumnDescriptor descriptor = descriptor(columns, keyColumn);
+            ColumnDescriptor descriptor = TableValues.descriptor(columns, keyColumn);
             RowLocatorValue value = locatorValue(supplied, keyColumn);
             if (value == null || value.jdbcType() != descriptor.jdbcType()) {
                 throw new IllegalArgumentException("行定位字段与服务端识别的主键/唯一索引不一致");
             }
             ordered.put(descriptor.name(), new BoundValue(
-                    decodeDatabaseValue(value.encodedValue(), descriptor), descriptor.jdbcType(),
+                    TableValues.decodeDatabaseValue(value.encodedValue(), descriptor), descriptor.jdbcType(),
                     descriptor.typeName(), descriptor.name()
             ));
         }
@@ -551,7 +557,7 @@ public class DataEditService {
                 predicates.add(dialect.quoteIdentifier(entry.getKey()) + " IS NULL");
             } else {
                 predicates.add(dialect.quoteIdentifier(entry.getKey()) + " = ?");
-                ColumnDescriptor descriptor = descriptor(columns, entry.getKey());
+                ColumnDescriptor descriptor = TableValues.descriptor(columns, entry.getKey());
                 parameters.add(new BoundValue(entry.getValue(), descriptor.jdbcType(), descriptor.typeName(), entry.getKey()));
             }
         }
@@ -560,7 +566,7 @@ public class DataEditService {
     private List<BoundValue> boundValues(Map<String, Object> values, Map<String, ColumnDescriptor> columns) {
         return values.entrySet().stream()
                 .map(entry -> {
-                    ColumnDescriptor column = descriptor(columns, entry.getKey());
+                    ColumnDescriptor column = TableValues.descriptor(columns, entry.getKey());
                     return new BoundValue(entry.getValue(), column.jdbcType(), column.typeName(), column.name());
                 })
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -570,7 +576,7 @@ public class DataEditService {
         if (values == null || values.isEmpty()) return allowEmpty ? Map.of() : new LinkedHashMap<>();
         Map<String, Object> canonical = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : values.entrySet()) {
-            ColumnDescriptor column = descriptor(columns, entry.getKey());
+            ColumnDescriptor column = TableValues.descriptor(columns, entry.getKey());
             if (!editableJdbcType(column.jdbcType())) {
                 throw new IllegalArgumentException("字段类型不支持在表格中直接编辑：" + column.name() + " (" + column.typeName() + ")");
             }
@@ -595,156 +601,6 @@ public class DataEditService {
         }
     }
 
-    private TableQueryPlan tableQueryPlan(TableDataRequest request, Map<String, ColumnDescriptor> descriptors, DatabaseDialect dialect) {
-        List<TableFilterRule> filters = request.filters() == null ? List.of() : request.filters();
-        List<TableSortRule> sorts = request.sorts() == null ? List.of() : request.sorts();
-        if (filters.size() > 20) throw new IllegalArgumentException("筛选条件最多 20 条");
-        if (sorts.size() > 10) throw new IllegalArgumentException("排序条件最多 10 条");
-        String logic = request.filterLogic() == null || request.filterLogic().isBlank()
-                ? "AND" : request.filterLogic().trim().toUpperCase(Locale.ROOT);
-        if (!Set.of("AND", "OR").contains(logic)) throw new IllegalArgumentException("筛选关系只支持 AND 或 OR");
-
-        List<String> predicates = new ArrayList<>();
-        List<BoundValue> parameters = new ArrayList<>();
-        StringBuilder fingerprint = new StringBuilder("logic=").append(logic).append(';');
-        for (TableFilterRule rule : filters) {
-            ColumnDescriptor column = descriptor(descriptors, rule.column());
-            String operator = rule.operator().trim().toUpperCase(Locale.ROOT);
-            String quoted = dialect.quoteIdentifier(column.name());
-            appendFingerprint(fingerprint, column.name(), operator, rule.value(), rule.secondValue());
-            switch (operator) {
-                case "EQ", "NE", "GT", "GTE", "LT", "LTE" -> {
-                    String value = requiredFilterValue(rule.value(), column.name(), operator);
-                    String sqlOperator = switch (operator) {
-                        case "EQ" -> "=";
-                        case "NE" -> "<>";
-                        case "GT" -> ">";
-                        case "GTE" -> ">=";
-                        case "LT" -> "<";
-                        default -> "<=";
-                    };
-                    predicates.add(quoted + " " + sqlOperator + " ?");
-                    parameters.add(new BoundValue(value, column.jdbcType(), column.typeName(), column.name()));
-                }
-                case "BETWEEN" -> {
-                    String first = requiredFilterValue(rule.value(), column.name(), operator);
-                    String second = requiredFilterValue(rule.secondValue(), column.name(), operator);
-                    predicates.add(quoted + " BETWEEN ? AND ?");
-                    parameters.add(new BoundValue(first, column.jdbcType(), column.typeName(), column.name()));
-                    parameters.add(new BoundValue(second, column.jdbcType(), column.typeName(), column.name()));
-                }
-                case "CONTAINS", "NOT_CONTAINS", "STARTS_WITH", "ENDS_WITH" -> {
-                    if (!textJdbcType(column.jdbcType())) throw new IllegalArgumentException("字段不支持文本匹配：" + column.name());
-                    String value = escapeLike(requiredFilterValue(rule.value(), column.name(), operator));
-                    String pattern = switch (operator) {
-                        case "STARTS_WITH" -> value + "%";
-                        case "ENDS_WITH" -> "%" + value;
-                        default -> "%" + value + "%";
-                    };
-                    predicates.add(quoted + (operator.equals("NOT_CONTAINS") ? " NOT LIKE ? ESCAPE '!'" : " LIKE ? ESCAPE '!'"));
-                    parameters.add(new BoundValue(pattern, Types.VARCHAR, "VARCHAR", column.name()));
-                }
-                case "IN" -> {
-                    List<String> values = rule.values() == null ? List.of() : rule.values();
-                    if (values.isEmpty()) throw new IllegalArgumentException("IN 筛选至少需要一个值：" + column.name());
-                    if (values.size() > 100) throw new IllegalArgumentException("IN 筛选最多支持 100 个值：" + column.name());
-                    predicates.add(quoted + " IN (" + String.join(", ", java.util.Collections.nCopies(values.size(), "?")) + ")");
-                    for (String value : values) {
-                        appendFingerprint(fingerprint, value);
-                        parameters.add(new BoundValue(value, column.jdbcType(), column.typeName(), column.name()));
-                    }
-                }
-                case "IS_NULL" -> predicates.add(quoted + " IS NULL");
-                case "IS_NOT_NULL" -> predicates.add(quoted + " IS NOT NULL");
-                default -> throw new IllegalArgumentException("不支持的筛选操作：" + operator);
-            }
-        }
-
-        List<NormalizedSort> normalizedSorts = new ArrayList<>();
-        Set<String> sortedColumns = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-        for (TableSortRule rule : sorts) {
-            ColumnDescriptor column = descriptor(descriptors, rule.column());
-            String direction = rule.direction().trim().toUpperCase(Locale.ROOT);
-            if (!Set.of("ASC", "DESC").contains(direction)) throw new IllegalArgumentException("排序方向只支持 ASC 或 DESC");
-            if (!sortedColumns.add(column.name())) throw new IllegalArgumentException("排序字段重复：" + column.name());
-            normalizedSorts.add(new NormalizedSort(column, direction));
-            appendFingerprint(fingerprint, column.name(), direction);
-        }
-        String where = predicates.isEmpty() ? "" : "(" + String.join(" " + logic + " ", predicates) + ")";
-        return new TableQueryPlan(where, parameters, normalizedSorts, sha256(fingerprint.toString()));
-    }
-
-    private String requiredFilterValue(String value, String column, String operator) {
-        if (value == null) throw new IllegalArgumentException("筛选条件缺少值：" + column + " (" + operator + ")");
-        return value;
-    }
-
-    private boolean textJdbcType(int jdbcType) {
-        return Set.of(Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR, Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR, Types.CLOB, Types.NCLOB).contains(jdbcType);
-    }
-
-    private String escapeLike(String value) {
-        return value.replace("!", "!!").replace("%", "!%").replace("_", "!_");
-    }
-
-    private void appendFingerprint(StringBuilder target, String... values) {
-        for (String value : values) {
-            String safe = value == null ? "<null>" : value;
-            target.append(safe.length()).append(':').append(safe).append(';');
-        }
-    }
-
-    private String sha256(String value) {
-        try {
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(
-                    MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))
-            );
-        } catch (Exception e) {
-            throw new IllegalStateException("无法生成查询指纹", e);
-        }
-    }
-
-    private Query tableQuery(DatabaseDialect dialect, String schemaName, String tableName, List<String> keyColumns, Map<String, ColumnDescriptor> descriptors, String mode, CursorState state, int pageSize, TableQueryPlan plan) {
-        StringBuilder base = new StringBuilder("SELECT * FROM ").append(dialect.qualifiedName(schemaName, tableName));
-        List<BoundValue> parameters = new ArrayList<>(plan.parameters());
-        List<String> predicates = new ArrayList<>();
-        if (!plan.whereSql().isBlank()) predicates.add(plan.whereSql());
-        if ("KEYSET".equals(mode) && state != null && !state.keyValues().isEmpty()) {
-            if (state.keyValues().size() != keyColumns.size()) throw new IllegalArgumentException("分页游标字段数量不匹配");
-            List<String> alternatives = new ArrayList<>();
-            for (int index = 0; index < keyColumns.size(); index++) {
-                List<String> parts = new ArrayList<>();
-                for (int prior = 0; prior < index; prior++) {
-                    parts.add(dialect.quoteIdentifier(keyColumns.get(prior)) + " = ?");
-                    ColumnDescriptor column = descriptor(descriptors, keyColumns.get(prior));
-                    parameters.add(new BoundValue(state.keyValues().get(prior), column.jdbcType(), column.typeName(), column.name()));
-                }
-                parts.add(dialect.quoteIdentifier(keyColumns.get(index)) + " > ?");
-                ColumnDescriptor column = descriptor(descriptors, keyColumns.get(index));
-                parameters.add(new BoundValue(state.keyValues().get(index), column.jdbcType(), column.typeName(), column.name()));
-                alternatives.add("(" + String.join(" AND ", parts) + ")");
-            }
-            predicates.add("(" + String.join(" OR ", alternatives) + ")");
-        }
-        if (!predicates.isEmpty()) base.append(" WHERE ").append(String.join(" AND ", predicates));
-        if ("KEYSET".equals(mode)) {
-            base.append(" ORDER BY ").append(keyColumns.stream().map(dialect::quoteIdentifier).collect(Collectors.joining(", ")));
-        } else if (!plan.sorts().isEmpty()) {
-            List<String> orderBy = new ArrayList<>();
-            Set<String> sorted = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
-            for (NormalizedSort sort : plan.sorts()) {
-                orderBy.add(dialect.quoteIdentifier(sort.column().name()) + " " + sort.direction());
-                sorted.add(sort.column().name());
-            }
-            for (String keyColumn : keyColumns) {
-                if (sorted.add(keyColumn)) orderBy.add(dialect.quoteIdentifier(keyColumn) + " ASC");
-            }
-            base.append(" ORDER BY ").append(String.join(", ", orderBy));
-        }
-        int offset = "OFFSET".equals(mode) && state != null ? Math.toIntExact(state.offset()) : 0;
-        return new Query(dialect.pageQuery(base.toString(), pageSize + 1, offset), parameters);
-    }
-
     /**
      * 导出这张表：与浏览用的是同一条查询 —— 同样的筛选、排序、权限与类型绑定，只是去掉分页。
      *
@@ -767,7 +623,7 @@ public class DataEditService {
         try (Connection connection = connections.open(connectionId)) {
             RowIdentity identity = metadata.rowIdentity(connection, dbConnection, schemaName, tableName);
             Map<String, ColumnDescriptor> descriptors = loadColumnDescriptors(connection, dialect, schemaName, tableName);
-            TableQueryPlan plan = tableQueryPlan(request, descriptors, dialect);
+            TableQueryPlan plan = TableQueries.plan(request, descriptors, dialect);
             StringBuilder base = new StringBuilder("SELECT * FROM ").append(dialect.qualifiedName(schemaName, tableName));
             List<BoundValue> parameters = new ArrayList<>(plan.parameters());
             if (!plan.whereSql().isBlank()) base.append(" WHERE ").append(plan.whereSql());
@@ -780,7 +636,7 @@ public class DataEditService {
                 identity.columns().forEach(column -> orderBy.add(dialect.quoteIdentifier(column) + " ASC"));
             }
             if (!orderBy.isEmpty()) base.append(" ORDER BY ").append(String.join(", ", orderBy));
-            return new TableExportQuery(base.toString(), statement -> bind(statement, parameters));
+            return new TableExportQuery(base.toString(), statement -> TableValues.bind(statement, parameters));
         }
     }
 
@@ -805,111 +661,6 @@ public class DataEditService {
         if (state.offset() < 0 || state.offset() > MAX_OFFSET + MAX_PAGE_SIZE) throw new IllegalArgumentException("分页游标偏移量无效");
     }
 
-    private ColumnDescriptor descriptor(Map<String, ColumnDescriptor> descriptors, String column) {
-        ColumnDescriptor exact = descriptors.get(column);
-        if (exact != null) return exact;
-        List<ColumnDescriptor> folded = descriptors.values().stream()
-                .filter(candidate -> candidate.name().equalsIgnoreCase(column))
-                .toList();
-        if (folded.size() == 1) return folded.get(0);
-        if (folded.size() > 1) throw new IllegalArgumentException("字段名大小写不明确，请使用精确名称：" + column);
-        throw new IllegalArgumentException("字段不存在：" + column);
-    }
-
-    /**
-     * 空字符串能不能落进这个类型的列。
-     *
-     * <p>字符列上空串是一个合法的值；到了数字、日期、时间戳列上它什么都不是 —— 而
-     * `Integer.valueOf("")`、`Timestamp.valueOf("")` 抛出来的是一句英文驱动文案，用户看了
-     * 不知道该怎么办。这里提前拦住并把话说清楚：想清空就去设 NULL。</p>
-     */
-    private boolean acceptsEmptyString(int jdbcType) {
-        return switch (jdbcType) {
-            case Types.CHAR, Types.VARCHAR, Types.LONGVARCHAR,
-                 Types.NCHAR, Types.NVARCHAR, Types.LONGNVARCHAR, Types.OTHER -> true;
-            default -> false;
-        };
-    }
-
-    private Object decodeDatabaseValue(String value, ColumnDescriptor column) {
-        if (value == null) return null;
-        String columnLabel = column.name() == null || column.name().isBlank()
-                ? "该字段" : "字段 " + column.name();
-        if (value.isEmpty() && !acceptsEmptyString(column.jdbcType())) {
-            throw new IllegalArgumentException(columnLabel + "（" + column.typeName()
-                    + "）不接受空字符串。要清空这个值，请在单元格上点右键选择「设为 NULL」。");
-        }
-        return switch (column.jdbcType()) {
-            case Types.TINYINT, Types.SMALLINT, Types.INTEGER -> Integer.valueOf(value);
-            case Types.BIGINT -> new BigDecimal(value);
-            case Types.NUMERIC, Types.DECIMAL -> new BigDecimal(value);
-            case Types.REAL, Types.FLOAT, Types.DOUBLE -> Double.valueOf(value);
-            case Types.BOOLEAN, Types.BIT -> parseBoolean(value);
-            case Types.DATE -> Date.valueOf(value.substring(0, Math.min(value.length(), 10)));
-            case Types.TIME -> Time.valueOf(value.length() >= 8 ? value.substring(0, 8) : value);
-            /*
-              这两支原来直接 parse，抛的是 DateTimeParseException —— 它不是
-              IllegalArgumentException 的子类，于是绕过了 ApiExceptionHandler 那条把非法入参
-              转成 400 的分支，被压成一句「服务器内部错误，请稍后重试」。同一个 switch 里其它
-              分支（Integer.valueOf、Timestamp.valueOf、Base64、UUID.fromString）恰好抛的都是
-              IAE，所以只有带时区的这两个类型坏掉了。
-            */
-            case Types.TIME_WITH_TIMEZONE -> parseOffsetTime(value, columnLabel, column);
-            case Types.TIMESTAMP -> Timestamp.valueOf(value.replace('T', ' '));
-            case Types.TIMESTAMP_WITH_TIMEZONE -> parseOffsetDateTime(value, columnLabel, column);
-            case Types.BINARY, Types.VARBINARY, Types.LONGVARBINARY -> Base64.getDecoder().decode(value.replaceFirst("^base64:", ""));
-            case Types.OTHER -> {
-                String typeName = column.typeName() == null ? "" : column.typeName().toLowerCase(Locale.ROOT);
-                yield Set.of("uuid", "uniqueidentifier").contains(typeName) ? UUID.fromString(value) : value;
-            }
-            default -> value;
-        };
-    }
-
-    /**
-     * 带时区的时间戳。
-     *
-     * <p>用户手上的写法比 ISO-8601 杂：表格里读出来的往往是 Oracle 的
-     * `2025-09-18 14:30:00.0 +08:00`，中间是空格；带区域名的 `…+08:00[Asia/Shanghai]` 也常见。
-     * 挨个试完再放弃，报错里给出一个能照抄的例子。</p>
-     *
-     * <p>刻意不在缺时区时替用户补一个：那等于往库里写进一个错误的时刻，而且从界面上看不出来，
-     * 比直接拒绝糟糕得多。</p>
-     */
-    private OffsetDateTime parseOffsetDateTime(String value, String columnLabel, ColumnDescriptor column) {
-        String normalized = value.trim().replaceFirst("^(\\d{4}-\\d{2}-\\d{2})[ T]", "$1T");
-        try {
-            return OffsetDateTime.parse(normalized);
-        } catch (DateTimeException ignored) {
-            // 继续试下一种写法。
-        }
-        try {
-            return ZonedDateTime.parse(normalized).toOffsetDateTime();
-        } catch (DateTimeException ignored) {
-            // 继续试下一种写法。
-        }
-        try {
-            return OffsetDateTime.parse(normalized.replaceAll("\\s+(?=[+-]\\d{2}(:?\\d{2})?$)", ""));
-        } catch (DateTimeException failed) {
-            throw invalidTemporal(value, columnLabel, column, "2025-09-18 14:30:00+08:00", failed);
-        }
-    }
-
-    private OffsetTime parseOffsetTime(String value, String columnLabel, ColumnDescriptor column) {
-        try {
-            return OffsetTime.parse(value.trim().replaceAll("\\s+(?=[+-]\\d{2}(:?\\d{2})?$)", ""));
-        } catch (DateTimeException failed) {
-            throw invalidTemporal(value, columnLabel, column, "14:30:00+08:00", failed);
-        }
-    }
-
-    /** 抛 IAE 而不是 DateTimeException：前者已经有一条走 400 并原样带出消息的分支。 */
-    private IllegalArgumentException invalidTemporal(
-            String value, String columnLabel, ColumnDescriptor column, String example, Throwable cause) {
-        return new IllegalArgumentException(columnLabel + "（" + column.typeName() + "）的值无法识别：「"
-                + value + "」。请使用带时区偏移的写法，例如 " + example + "。", cause);
-    }
-
     private void rollbackQuietly(Connection connection, Exception primary) {
         try {
             connection.rollback();
@@ -925,55 +676,6 @@ public class DataEditService {
         } catch (Exception failure) {
             log.warn("恢复 autoCommit 失败，连接将由连接池回收", failure);
         }
-    }
-
-    private void bind(PreparedStatement statement, List<BoundValue> values) throws Exception {
-        for (int index = 0; index < values.size(); index++) {
-            BoundValue bound = values.get(index);
-            if (bound.value() == null) statement.setNull(index + 1, bound.jdbcType() == Types.OTHER ? Types.NULL : bound.jdbcType());
-            else {
-                Object value = coerceValue(bound);
-                if (bound.jdbcType() == Types.OTHER) statement.setObject(index + 1, value);
-                else statement.setObject(index + 1, value, bound.jdbcType());
-            }
-        }
-    }
-
-    private Boolean parseBoolean(String value) {
-        return switch (value.trim().toLowerCase(Locale.ROOT)) {
-            case "true", "1" -> true;
-            case "false", "0" -> false;
-            default -> throw new IllegalArgumentException("布尔字段仅支持 true、false、1 或 0：" + value);
-        };
-    }
-
-    private Object coerceValue(BoundValue bound) {
-        Object value = bound.value();
-        if (!(value instanceof String text)) return value;
-        return decodeDatabaseValue(text, new ColumnDescriptor(bound.column(), bound.jdbcType(), bound.typeName(), true));
-    }
-
-    private String preview(String sql, List<BoundValue> values, DatabaseDialect dialect) {
-        StringBuilder result = new StringBuilder();
-        int parameter = 0;
-        for (int index = 0; index < sql.length(); index++) {
-            char ch = sql.charAt(index);
-            if (ch == '?' && parameter < values.size()) {
-                Object previewValue = coerceValue(values.get(parameter++));
-                if (previewValue instanceof CharSequence text && text.length() > MAX_PREVIEW_PARAMETER_CHARS) {
-                    previewValue = "<值预览已截断，共 " + text.length() + " 字符>";
-                }
-                String literal = dialect.literal(previewValue);
-                result.append(literal.length() <= MAX_PREVIEW_PARAMETER_CHARS
-                        ? literal
-                        : dialect.literal("<值预览已截断>"));
-            }
-            else result.append(ch);
-            if (result.length() > MAX_PREVIEW_SQL_CHARS) {
-                return result.substring(0, MAX_PREVIEW_SQL_CHARS) + "… /* 预览已截断 */";
-            }
-        }
-        return result.append(';').toString();
     }
 
     private List<String> encodedKeyValues(ResultSet rs, List<String> keyColumns, Map<String, Integer> indexes) throws Exception {
@@ -1000,7 +702,7 @@ public class DataEditService {
         List<RowLocatorValue> values = new ArrayList<>(keyColumns.size());
         for (String keyColumn : keyColumns) {
             Integer index = columnIndex(indexes, keyColumn);
-            ColumnDescriptor descriptor = descriptor(descriptors, keyColumn);
+            ColumnDescriptor descriptor = TableValues.descriptor(descriptors, keyColumn);
             if (index == null) throw new IllegalStateException("行定位字段不在查询结果中：" + keyColumn);
             Object value = rs.getObject(index);
             if (value == null) throw new IllegalStateException("稳定行定位字段包含 NULL：" + keyColumn);
@@ -1116,26 +818,6 @@ public class DataEditService {
 
     private String normalize(String value) {
         return value == null ? "" : value;
-    }
-
-    private record Query(String sql, List<BoundValue> parameters) {
-    }
-
-    private record TableQueryPlan(String whereSql, List<BoundValue> parameters, List<NormalizedSort> sorts, String fingerprint) {
-        private TableQueryPlan {
-            parameters = List.copyOf(parameters);
-            sorts = List.copyOf(sorts);
-        }
-    }
-
-    private record NormalizedSort(ColumnDescriptor column, String direction) {
-    }
-
-    private record ColumnDescriptor(String name, int jdbcType, String typeName, boolean nullable) {
-    }
-
-    /** column 只用于错误文案：预览阶段报错时得说得出是哪一列，否则用户只知道「某个字段」。 */
-    private record BoundValue(Object value, int jdbcType, String typeName, String column) {
     }
 
     private record PreparedOperation(String type, String sql, List<BoundValue> parameters, String previewSql) {
