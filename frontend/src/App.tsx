@@ -15,7 +15,7 @@ import { cellValidation, rebaseConflictRow } from './tableEditing';
 import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { DocumentTabStrip } from './components/DocumentTabStrip';
-import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Segmented, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { PlusOutlined, SwapOutlined } from '@ant-design/icons';
 import { ApiError, api, apiErrorCode, apiResponse, downloadBlob, downloadFromUrl } from './api';
@@ -57,6 +57,7 @@ import { useBackgroundTasks } from './hooks/useBackgroundTasks';
 import { useSqlHistory } from './hooks/useSqlHistory';
 import {
   managementNavigation,
+  managementNavItemOf,
   isManagementSectionAvailable,
   managementSectionLabel,
   resolveManagementSection,
@@ -1966,13 +1967,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
   }
 
-  async function exportSql(format: ExportFormat, liveSql?: string) {
+  async function exportSql(format: ExportFormat, liveSql?: string, exactSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
       showInfo('请先选择一个数据库连接');
       return;
     }
-    const target = sqlExecutionTarget(liveSql);
+    // 结果区的「重新执行原 SQL 导出」给的是产生那份结果的 SQL，不看编辑器此刻的选中与内容。
+    const target = exactSql?.trim() ? { sql: exactSql, selected: false, baseOffset: 0 } : sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要导出的 SQL', statusKind: 'info' });
       return;
@@ -2027,7 +2029,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       downloadBlob(blob, `query-result-${timestamp()}.${exportFileExtension(format)}`);
       const rowLimit = response.headers.get('x-export-row-limit') || '10000';
       const truncated = response.headers.get('x-export-truncated') === 'true';
-      const nextMessage = `已导出 ${format.toUpperCase()}：${target.selected ? '选中 SQL' : '全部 SQL'}（${rowLimit === 'all' ? '完整查询结果' : `最多 ${rowLimit} 行`}${truncated ? '，本次已截断' : ''}）`;
+      const nextMessage = `已导出 ${format.toUpperCase()}：${exactSql?.trim() ? '该结果的 SQL' : target.selected ? '选中 SQL' : '全部 SQL'}（${rowLimit === 'all' ? '完整查询结果' : `最多 ${rowLimit} 行`}${truncated ? '，本次已截断' : ''}）`;
       updateActiveSqlTab({ message: nextMessage, statusKind: 'success' });
       toastApi.success(nextMessage);
       } catch (e) {
@@ -3127,7 +3129,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
   const refreshConnectionsFromHeader = useStableEvent(() => refreshConnections());
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
-  const openSchemaExportEvent = useStableEvent(() => openManagement('schema-export'));
   const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
     if (kind === 'sqlFiles') {
       setActiveDrawer(null);
@@ -3194,7 +3195,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const explainSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/explain', undefined, liveSql));
   const executeSqlEvent = useStableEvent((liveSql?: string) => execute('/sql/execute', undefined, liveSql));
   const cancelSqlEvent = useStableEvent(() => cancelSqlExecution());
-  const exportSqlEvent = useStableEvent((format: ExportFormat, liveSql?: string) => exportSql(format, liveSql));
+  const exportSqlEvent = useStableEvent((format: ExportFormat, liveSql?: string, exactSql?: string) => exportSql(format, liveSql, exactSql));
   const openSqlHistoryEvent = useStableEvent(() => openSqlHistory());
 
   /**
@@ -3563,7 +3564,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       namespaceLabel={namespaceLabel}
       onRefresh={refreshExplorer}
       onOpenDiagram={openDiagramEvent}
-      onOpenSchemaExport={openSchemaExportEvent}
       onClose={closeMobileExplorer}
       onOpenConnections={openConnectionsFromExplorer}
       onSchemaChange={changeExplorerSchema}
@@ -3604,6 +3604,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   })), [connectionDocuments]);
   // ER 图没有对应的标签，此时没有任何一个标签是激活的。
   const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : '';
+  const activeManagementNavItem = activeDrawer ? managementNavItemOf(activeDrawer, isCurrentUserAdmin(), isAuthenticationEnabled()) : undefined;
   const documentTabs = selected ? (
     <DocumentTabStrip
       activeKey={activeDocumentTabKey}
@@ -3886,18 +3887,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             {managementNavigation(isCurrentUserAdmin(), isAuthenticationEnabled()).map((group) => (
               <div className="management-nav-group" key={group.key} role="group" aria-label={group.label}>
                 <div className="management-nav-group-label">{group.label}</div>
-                {group.sections.map((section) => {
-                  const available = isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions);
+                {group.items.map((item) => {
+                  // 合并入口：任一分区可用就可点，点进去落在第一个可用的分区上。
+                  const target = item.sections.find((section) => isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions));
+                  const active = item.sections.some((section) => section.key === activeDrawer);
                   return (
-                    <Tooltip key={section.key} title={available ? undefined : selected ? '当前连接缺少该功能权限' : '请先选择一个数据库连接'}>
+                    <Tooltip key={item.key} title={target ? undefined : selected ? '当前连接缺少该功能权限' : '请先选择一个数据库连接'}>
                       <button
                         type="button"
-                        className={activeDrawer === section.key ? 'management-nav-item is-active' : 'management-nav-item'}
-                        aria-current={activeDrawer === section.key ? 'page' : undefined}
-                        disabled={!available}
-                        onClick={() => openManagement(section.key)}
+                        className={active ? 'management-nav-item is-active' : 'management-nav-item'}
+                        aria-current={active ? 'page' : undefined}
+                        disabled={!target}
+                        onClick={() => { if (!active && target) openManagement(target.key); }}
                       >
-                        {section.label}
+                        {item.label}
                       </button>
                     </Tooltip>
                   );
@@ -3907,6 +3910,19 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           </nav>
 
           <div className="management-body">
+            {activeManagementNavItem && activeManagementNavItem.sections.length > 1 && (
+              <Segmented
+                className="management-entry-tabs"
+                aria-label={activeManagementNavItem.label}
+                value={activeDrawer ?? undefined}
+                options={activeManagementNavItem.sections.map((section) => ({
+                  value: section.key,
+                  label: section.label,
+                  disabled: !isManagementSectionAvailable(section.key, Boolean(selected), isCurrentUserAdmin(), isAuthenticationEnabled(), selected?.permissions)
+                }))}
+                onChange={(value) => openManagement(value as ManagementSection)}
+              />
+            )}
             {activeDrawer === 'connections' && (
               <div className="management-section">
                 <header className="management-section-header">
@@ -3990,7 +4006,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
             {activeDrawer === 'schema-diff' && (
               <div className="management-section">
-                <header className="management-section-header"><Text strong>结构对比与同步</Text></header>
                 <Suspense fallback={<PanelLoading text="正在加载结构对比…" />}>
                   <SchemaDiffPanel
                     connections={connections}
@@ -4004,7 +4019,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
             {activeDrawer === 'schema-snapshots' && (
               <div className="management-section">
-                <header className="management-section-header"><Text strong>结构快照与漂移</Text></header>
                 <Suspense fallback={<PanelLoading text="正在加载结构快照…" />}>
                   <SchemaSnapshotPanel
                     connections={connections}
@@ -4040,7 +4054,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
             {activeDrawer === 'data-diff' && (
               <div className="management-section">
-                <header className="management-section-header"><Text strong>数据对比与同步</Text></header>
                 <Suspense fallback={<PanelLoading text="正在加载数据对比…" />}>
                   <DataDiffPanel
                     connections={connections}

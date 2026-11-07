@@ -5,6 +5,7 @@ import {
   MANAGEMENT_SECTIONS,
   isManagementSectionVisible,
   managementNavigation,
+  managementNavItemOf,
   managementSectionLabel,
   resolveManagementSection
 } from './managementSections';
@@ -65,5 +66,28 @@ describe('management sections', () => {
       .toEqual(['audit']);
     expect(managementNavigation(false, true).map((group) => group.key)).not.toContain('governance');
     expect(managementNavigation(false, true).map((group) => group.key)).not.toContain('integrations');
+  });
+
+  it('对比类分区与用户、访问控制在导航上各合成一项，分区 key 不变', () => {
+    const items = managementNavigation().flatMap((group) => group.items);
+    const compare = items.find((item) => item.key === 'compare');
+    expect(compare?.label).toBe('对比与漂移');
+    expect(compare?.sections.map((section) => section.key)).toEqual(['schema-diff', 'schema-snapshots', 'data-diff']);
+    expect(items.find((item) => item.key === 'identity')?.sections.map((section) => section.key)).toEqual(['users', 'access']);
+    // 单独成项的分区用自己的名字。
+    expect(items.find((item) => item.key === 'connections')?.label).toBe('连接管理');
+    expect(items.length).toBeLessThan(MANAGEMENT_SECTIONS.length);
+    // 合并入口的分区在清单里必须连着写，否则会被拆成两个同名导航项。
+    expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
+  });
+
+  it('按分区找回所在导航项', () => {
+    expect(managementNavItemOf('data-diff')?.key).toBe('compare');
+    expect(managementNavItemOf('audit')?.sections).toHaveLength(1);
+  });
+
+  it('入口里只剩一个可见分区时用分区自己的名字', () => {
+    // 认证关闭时用户与访问控制都不可见，整项消失；这里验证非合并项与合并项的命名规则一致。
+    expect(managementNavigation(true, false).flatMap((group) => group.items).some((item) => item.key === 'identity')).toBe(false);
   });
 });

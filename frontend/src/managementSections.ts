@@ -24,10 +24,27 @@ export const MANAGEMENT_GROUPS: ReadonlyArray<{ key: ManagementGroup; label: str
   { key: 'governance', label: '安全与治理' }
 ];
 
+/**
+ * 导航入口：几个分区合成一个导航项，进去之后在顶部用标签切换。
+ *
+ * 分区数涨到 16 个之后，导航本身成了要找的东西。结构对比、结构快照、数据对比回答的是同一类
+ * 问题（「两边 / 前后有什么不同」），用户与访问控制是同一件事的两半 —— 它们各占一行只是因为
+ * 先后加进来。合并只发生在导航这一层：分区的 key、权限判断、命令面板里的「打开 xxx」都不变，
+ * 所以 openManagement('data-diff') 这类调用照常落到对应的标签上。
+ */
+export type ManagementEntry = 'compare' | 'identity';
+
+const MANAGEMENT_ENTRY_LABELS: Record<ManagementEntry, string> = {
+  compare: '对比与漂移',
+  identity: '用户与权限'
+};
+
 export type ManagementSectionMeta = {
   key: ManagementSection;
   label: string;
   group: ManagementGroup;
+  /** 归属的合并导航入口；不写就是自己单独一项。同一入口的分区在清单里必须连着写。 */
+  entry?: ManagementEntry;
   /** 需要先选中一条连接才有意义的分区。 */
   requiresConnection?: boolean;
   requiresAdmin?: boolean;
@@ -47,15 +64,15 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   // 定时导出把数据带出系统，与手动导出同档：EXPORT 之外还要 QUERY。
   { key: 'scheduled-exports', label: '定时导出', group: 'operations', requiresPermission: 'EXPORT' },
   { key: 'sessions', label: '活动会话', group: 'operations', requiresConnection: true, requiresPermission: 'VIEW_METADATA' },
-  { key: 'schema-diff', label: '结构对比', group: 'data' },
+  { key: 'schema-diff', label: '结构对比', group: 'data', entry: 'compare' },
   // 快照与漂移只读元数据，与结构对比同档。
-  { key: 'schema-snapshots', label: '结构快照', group: 'data', requiresPermission: 'VIEW_METADATA' },
+  { key: 'schema-snapshots', label: '结构快照', group: 'data', entry: 'compare', requiresPermission: 'VIEW_METADATA' },
+  // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
+  { key: 'data-diff', label: '数据对比', group: 'data', entry: 'compare', requiresPermission: 'QUERY' },
   // 只读定义、只生成文本，与查看单个对象的 DDL 同档；执行仍要走 SQL 工作台那条路。
   { key: 'schema-export', label: '对象导出', group: 'data', requiresPermission: 'VIEW_METADATA' },
   // 表关系的候选来自执行历史（只给名字对），判断影响所有人的 JOIN 补全：与看历史同档，要 QUERY。
   { key: 'table-relations', label: '表关系', group: 'data', requiresPermission: 'QUERY' },
-  // 数据对比要把两侧的业务数据整批读出来，所以要的是 QUERY 而不是 VIEW_METADATA。
-  { key: 'data-diff', label: '数据对比', group: 'data', requiresPermission: 'QUERY' },
   // 检索读的是业务数据本身，所以要 QUERY 而不是 VIEW_METADATA。
   { key: 'data-search', label: '数据检索', group: 'data', requiresPermission: 'QUERY' },
   // 传输把数据搬出源连接，与导出同档。两端的真正授权在服务端逐条连接校验（源端 EXPORT +
@@ -64,8 +81,8 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   { key: 'mcp', label: 'MCP Server', group: 'integrations', requiresAdmin: true },
   { key: 'ai', label: 'AI 助手', group: 'integrations', requiresAdmin: true },
   { key: 'audit', label: '审计日志', group: 'governance', requiresAdmin: true },
-  { key: 'users', label: '用户与权限', group: 'governance', requiresAdmin: true, requiresAuthentication: true },
-  { key: 'access', label: '访问控制', group: 'governance', requiresAdmin: true, requiresAuthentication: true }
+  { key: 'users', label: '用户管理', group: 'governance', entry: 'identity', requiresAdmin: true, requiresAuthentication: true },
+  { key: 'access', label: '访问控制', group: 'governance', entry: 'identity', requiresAdmin: true, requiresAuthentication: true }
 ];
 
 export function managementSectionLabel(section: ManagementSection): string {
@@ -116,15 +133,44 @@ export function resolveManagementSection(
  * 整组都不可见时（桌面模式下的「安全与治理」只剩审计，认证关闭时用户与访问控制都不显示）
  * 不留空标题 —— 一个下面什么都没有的分组名比没有分组更让人困惑。
  */
+export type ManagementNavItem = {
+  /** 合并入口用入口 key，单独一项用分区 key。 */
+  key: string;
+  label: string;
+  /** 这一项下可见的分区；多于一个时抽屉顶部出现切换标签。 */
+  sections: ManagementSectionMeta[];
+};
+
 export function managementNavigation(
   isAdmin = true,
   authenticationEnabled = true
-): Array<{ key: ManagementGroup; label: string; sections: ManagementSectionMeta[] }> {
+): Array<{ key: ManagementGroup; label: string; sections: ManagementSectionMeta[]; items: ManagementNavItem[] }> {
   return MANAGEMENT_GROUPS
-    .map((group) => ({
-      ...group,
-      sections: MANAGEMENT_SECTIONS.filter((section) => section.group === group.key
-        && isManagementSectionVisible(section.key, isAdmin, authenticationEnabled))
-    }))
+    .map((group) => {
+      const sections = MANAGEMENT_SECTIONS.filter((section) => section.group === group.key
+        && isManagementSectionVisible(section.key, isAdmin, authenticationEnabled));
+      return { ...group, sections, items: navItems(sections) };
+    })
     .filter((group) => group.sections.length > 0);
+}
+
+function navItems(sections: ManagementSectionMeta[]): ManagementNavItem[] {
+  const items: ManagementNavItem[] = [];
+  for (const section of sections) {
+    const last = items[items.length - 1];
+    if (section.entry && last?.key === section.entry) {
+      last.sections.push(section);
+    } else {
+      // 入口里只剩一个可见分区时（例如认证关闭），就用分区自己的名字，不挂一个空壳标题。
+      items.push({ key: section.entry ?? section.key, label: section.entry ? MANAGEMENT_ENTRY_LABELS[section.entry] : section.label, sections: [section] });
+    }
+  }
+  return items.map((item) => item.sections.length === 1 ? { ...item, label: item.sections[0].label } : item);
+}
+
+/** 当前分区所在的导航项（含同一入口里其它可见分区），抽屉据此决定要不要画切换标签。 */
+export function managementNavItemOf(section: ManagementSection, isAdmin = true, authenticationEnabled = true): ManagementNavItem | undefined {
+  return managementNavigation(isAdmin, authenticationEnabled)
+    .flatMap((group) => group.items)
+    .find((item) => item.sections.some((candidate) => candidate.key === section));
 }

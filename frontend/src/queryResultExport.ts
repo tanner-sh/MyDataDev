@@ -301,3 +301,59 @@ function validTargetParts(parts?: string[] | null): string[] | undefined {
   if (!parts || parts.length === 0 || parts.length > 3 || parts.some((part) => !part.trim())) return undefined;
   return parts.map((part) => part.trim());
 }
+
+export const EXPORT_FORMAT_OPTIONS: ReadonlyArray<{ format: ExportFormat; label: string }> = [
+  { format: 'csv', label: 'CSV' },
+  { format: 'json', label: 'JSON' },
+  { format: 'sql', label: 'SQL 插入' },
+  { format: 'xml', label: 'XML' },
+  { format: 'markdown', label: 'Markdown 表格' },
+  { format: 'xlsx', label: 'Excel' }
+];
+
+export type ResultExportScope = 'loaded' | 'full';
+
+export type ResultExportGroup = {
+  scope: ResultExportScope;
+  label: string;
+  formats: ReadonlyArray<{ key: string; format: ExportFormat; label: string }>;
+};
+
+/**
+ * 结果区导出菜单的分组。
+ *
+ * SQL 结果原来有两个导出入口：结果区的「导出本批」（前端序列化已加载的行）和工作台「更多」里的
+ * 「重新查询并导出」（服务端重跑），格式列表还不一样。合成一个下拉之后，两组的差别必须写在
+ * 组标题上 —— 一组不发请求、一组会重新执行；而重新执行的是原 SQL，结果区里下推的筛选与排序
+ * 不在里面，这时要明说，否则「界面上 12 行、导出 40 行」又会出现。
+ */
+export function resultExportGroups({ loadedRows, selectedRows, fullAvailable, narrowed }: {
+  loadedRows: number;
+  selectedRows: number;
+  fullAvailable: boolean;
+  /** 结果区当前有筛选或排序（本地或下推的）。 */
+  narrowed: boolean;
+}): ResultExportGroup[] {
+  const formats = (scope: ResultExportScope) => EXPORT_FORMAT_OPTIONS.map((option) => ({ ...option, key: `${scope}:${option.format}` }));
+  const groups: ResultExportGroup[] = [{
+    scope: 'loaded',
+    label: selectedRows > 0 ? `已选 ${selectedRows} 行` : `当前批次 ${loadedRows} 行`,
+    formats: formats('loaded')
+  }];
+  if (fullAvailable) {
+    groups.push({
+      scope: 'full',
+      // 不叫「完整结果」：服务端导出有行数上限（默认一万行，截断时会提示），说「完整」是许诺不了的事。
+      label: narrowed ? '重新执行原 SQL 导出（不含筛选与排序）' : '重新执行原 SQL 导出',
+      formats: formats('full')
+    });
+  }
+  return groups;
+}
+
+export function parseResultExportKey(key: string): { scope: ResultExportScope; format: ExportFormat } | undefined {
+  const [scope, format] = key.split(':');
+  if (scope !== 'loaded' && scope !== 'full') return undefined;
+  const option = EXPORT_FORMAT_OPTIONS.find((item) => item.format === format);
+  return option ? { scope, format: option.format } : undefined;
+}

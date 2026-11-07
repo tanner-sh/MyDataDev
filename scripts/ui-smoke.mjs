@@ -496,7 +496,8 @@ try {
   const labels = JSON.parse(sections || '[]');
   // 断言「关键分区还在」而不是一个固定条数：分区会随功能增减，写死数字会让每加一个功能
   // 都要来改这里，改着改着这条检查就没人当回事了。少一个关键分区才是真的故障。
-  const requiredSections = ['连接管理', '结构对比', '数据对比'];
+  // 结构对比、结构快照、数据对比合进了导航上的「对比与漂移」，在里面用顶部标签切换。
+  const requiredSections = ['连接管理', '对比与漂移'];
   const missingSections = requiredSections.filter((name) => !labels.includes(name));
   check('关键管理分区都在', missingSections.length === 0,
     `缺少 ${missingSections.join('、')}；实际 ${labels.length} 个：${labels.join(' / ')}`);
@@ -523,6 +524,25 @@ try {
     `);
     check(`分区「${label}」有内容`, rendered);
     await page.shot(`02-${label}`);
+
+    // 合并入口：顶部标签逐个点开，每个分区都要真的渲染出来。
+    const entryTabs = JSON.parse(await page.evaluate(`JSON.stringify([...document.querySelectorAll('.management-entry-tabs .ant-segmented-item')]
+      .map((node) => ({ label: (node.textContent || '').trim(), disabled: node.classList.contains('ant-segmented-item-disabled') })))`) || '[]');
+    for (const tab of entryTabs.slice(1)) {
+      if (tab.disabled) {
+        console.log(`  – ${label} / ${tab.label}（不可用，已跳过）`);
+        continue;
+      }
+      await page.evaluate(`[...document.querySelectorAll('.management-entry-tabs .ant-segmented-item')].find((node) => (node.textContent || '').trim() === ${JSON.stringify(tab.label)})?.click()`);
+      await page.sleep(2200);
+      const tabRendered = await page.evaluate(`(() => {
+        const active = document.querySelector('.management-entry-tabs .ant-segmented-item-selected');
+        const body = document.querySelector('.management-body');
+        return (active?.textContent || '').trim() === ${JSON.stringify(tab.label)} && Boolean(body) && body.textContent.trim().length > ${JSON.stringify(tab.label)}.length + 40;
+      })()`);
+      check(`分区「${label} / ${tab.label}」有内容`, tabRendered);
+      await page.shot(`02-${label}-${tab.label}`);
+    }
   }
 
   // 「有内容」挡不住这一类：合并抽屉时把连接表单的 <Modal> 连带删掉过一次，六个分区照样
@@ -885,7 +905,10 @@ try {
     await page.sleep(500);
     await page.evaluate(`(() => { [...document.querySelectorAll('.ant-modal-confirm button')].find(node => node.textContent.replace(/\\s/g, '') === '关闭标签')?.click(); })()`);
     await page.sleep(500);
-    await page.evaluate(`(() => { [...document.querySelectorAll('.sql-tabs button')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
+    // 「找回关闭的 SQL」收进了标签栏右侧的「标签操作」下拉。
+    await page.evaluate(`document.querySelector('.sql-tabs button[aria-label="标签操作"]')?.click()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.includes('找回关闭的 SQL'))?.click(); })()`);
     await page.sleep(800);
     check('可以找回关闭的 SQL 草稿', await page.evaluate(`document.querySelector('.cm-content')?.textContent.includes('draft_survives_reload')`));
 
@@ -952,6 +975,19 @@ try {
     check('列名没有被表头按钮挤成省略号', resultGrid.titleClipped === false, JSON.stringify(resultGrid));
     await page.shot('09-查询结果');
     await auditLayout('查询结果');
+
+    // 命令窗口、本地 SQL 文件、分隔方式与命令窗口选项都收进了执行按钮右侧的下拉。
+    await page.evaluate(`document.querySelector('button[aria-label="更多执行方式与选项"]')?.click()`);
+    await page.sleep(400);
+    const executionMenu = await page.evaluate(`(() => {
+      const popover = [...document.querySelectorAll('.ant-popover:not(.ant-popover-hidden)')].find(node => node.querySelector('.execution-menu'));
+      const text = popover?.textContent || '';
+      return { open: Boolean(popover), command: text.includes('在命令窗口执行'), file: text.includes('执行本地 SQL 文件'), delimiter: text.includes('语句分隔') };
+    })()`);
+    check('执行下拉包含命令窗口、本地文件与分隔方式', executionMenu.open && executionMenu.command && executionMenu.file && executionMenu.delimiter, JSON.stringify(executionMenu));
+    await page.shot('09a-执行方式与选项');
+    await page.evaluate(`document.querySelector('button[aria-label="更多执行方式与选项"]')?.click()`);
+    await page.sleep(300);
 
     // 结果编辑曾因重建整批行记录触发 scrollTo(0)。滚到中间再改一格，保留当前位置。
     const editScroll = await page.evaluate(`(() => {
@@ -1269,10 +1305,13 @@ try {
       };
       const create = URL.createObjectURL;
       URL.createObjectURL = blob => { window.__exportBlob = blob; return create.call(URL, blob); };
-      document.querySelector('button[aria-label^="导出当前批次"]')?.click();
+      document.querySelector('button[aria-label="导出查询结果"]')?.click();
     })()`);
     await page.sleep(300);
-    await page.evaluate(`(() => { [...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item')].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
+    // 导出菜单分两组：当前批次（前端序列化）在前，重新执行原 SQL（服务端）在后。这里测的是前一组。
+    const exportGroups = await page.evaluate(`[...document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group-title')].map(node => node.textContent.trim())`);
+    check('结果导出菜单含当前批次与重新执行两组', exportGroups.length === 2 && exportGroups[0].startsWith('当前批次') && exportGroups[1].startsWith('重新执行原 SQL'), JSON.stringify(exportGroups));
+    await page.evaluate(`(() => { const group = document.querySelector('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(group?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'Excel')?.click(); })()`);
     for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
     const exported = await page.evaluate(`(async () => {
       const blob = window.__exportBlob;
@@ -1282,6 +1321,18 @@ try {
     })()`);
     check('大结果 Excel 导出经过 Worker，文件包含全部 400 行', exported.workers === 1 && exported.stopped === 1 && exported.xlsx, JSON.stringify(exported));
     await page.shot('11-大结果导出');
+
+    // 第二组走服务端：重新执行产生这份结果的 SQL（不是编辑器里此刻的内容）。
+    await page.evaluate(`(() => { window.__exportBlob = null; document.querySelector('button[aria-label="导出查询结果"]')?.click(); })()`);
+    await page.sleep(300);
+    await page.evaluate(`(() => { const groups = document.querySelectorAll('.ant-dropdown:not(.ant-dropdown-hidden) .ant-dropdown-menu-item-group'); [...(groups[1]?.querySelectorAll('.ant-dropdown-menu-item') || [])].find(node => node.textContent.trim() === 'CSV')?.click(); })()`);
+    for (let attempt = 0; attempt < 50 && !await page.evaluate('Boolean(window.__exportBlob)'); attempt++) await page.sleep(200);
+    const reExported = await page.evaluate(`(async () => {
+      const blob = window.__exportBlob;
+      const text = blob ? await blob.text() : '';
+      return { size: blob?.size || 0, header: text.split(/\\r?\\n/)[0], lines: text.trim().split(/\\r?\\n/).length };
+    })()`);
+    check('重新执行原 SQL 导出走服务端并返回全部 400 行', /ID/i.test(reExported.header) && reExported.lines === 401, JSON.stringify(reExported));
 
     const templateResponse = await fetch(APP_URL + '/api/sql-snippets', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },

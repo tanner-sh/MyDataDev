@@ -48,7 +48,7 @@ export async function exportResult(request: ResultExportRequest, { signal, onSta
       else if ('blob' in response) finish(undefined, response.blob);
       else finish(new Error(response.error));
     };
-    worker.onerror = () => finish(new Error('导出处理失败，请重试或使用重新查询并导出'));
+    worker.onerror = () => finish(new Error('导出处理失败，请重试或改用导出菜单里的「重新执行原 SQL 导出」'));
     worker.onmessageerror = () => finish(new Error('无法读取导出文件，请重试'));
     try {
       if (signal?.aborted) cancel();
