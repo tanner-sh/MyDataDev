@@ -5,7 +5,6 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ObjectSearchResponse;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.repo.AuditRepository;
-import com.example.dbadmin.repo.MetadataWriteQueue;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,7 +49,7 @@ class ObjectSearchServiceTest {
         DialectRegistry dialects = new DialectRegistry();
         MetadataCacheService cache = new MetadataCacheService();
         AuditRepository audit = mock(AuditRepository.class);
-        MetadataService metadata = new MetadataService(connections, dialects, audit, cache, new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, dialects, cache);
         SchemaObjectService schemaObjects = new SchemaObjectService(
                 connections,
                 dialects,

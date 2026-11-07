@@ -285,8 +285,7 @@ class DataDiffServiceTest {
                 1L, "source", "h2", sourceUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
         when(connections.require(2L)).thenReturn(new DbConnection(
                 2L, "target", "h2", targetUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService metadata = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         return new DataDiffService(connections, metadata, new DialectRegistry(), audit, properties);
     }
 }

@@ -30,6 +30,7 @@ import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.ObjectSearchService;
 import com.example.dbadmin.service.SchemaDiagramService;
 import com.example.dbadmin.service.SchemaExportService;
+import com.example.dbadmin.service.TableDesignService;
 import com.example.dbadmin.service.SchemaObjectService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
@@ -43,10 +44,13 @@ public class MetadataController {
     private final SchemaDiagramService diagrams;
     private final ConnectionAccessService access;
     private final SchemaExportService schemaExport;
+    private final TableDesignService tableDesign;
 
     public MetadataController(MetadataService service, SchemaObjectService schemaObjects, ObjectSearchService objectSearch,
-                              SchemaDiagramService diagrams, ConnectionAccessService access, SchemaExportService schemaExport) {
+                              SchemaDiagramService diagrams, ConnectionAccessService access, SchemaExportService schemaExport,
+                              TableDesignService tableDesign) {
         this.schemaExport = schemaExport;
+        this.tableDesign = tableDesign;
         this.service = service;
         this.schemaObjects = schemaObjects;
         this.objectSearch = objectSearch;
@@ -169,7 +173,7 @@ public class MetadataController {
     @PostMapping("/{connectionId}/objects/design/preview")
     public TableDesignResponse previewDesign(@PathVariable long connectionId, @Valid @RequestBody TableDesignRequest request) throws Exception {
         ddlAccess(connectionId);
-        return service.previewDesign(connectionId, request);
+        return tableDesign.previewDesign(connectionId, request);
     }
 
     @PostMapping("/{connectionId}/objects/design/execute")
@@ -180,7 +184,7 @@ public class MetadataController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         ddlAccess(connectionId);
-        return service.executeDesign(connectionId, request, actor, productionConfirmation);
+        return tableDesign.executeDesign(connectionId, request, actor, productionConfirmation);
     }
 
     @PostMapping("/{connectionId}/tables/lifecycle/preview")
@@ -189,7 +193,7 @@ public class MetadataController {
             @Valid @RequestBody TableLifecycleRequest request
     ) throws Exception {
         ddlAccess(connectionId);
-        return service.previewTableLifecycle(connectionId, request);
+        return tableDesign.previewTableLifecycle(connectionId, request);
     }
 
     @PostMapping("/{connectionId}/tables/lifecycle/execute")
@@ -200,7 +204,7 @@ public class MetadataController {
             @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
     ) throws Exception {
         ddlAccess(connectionId);
-        return service.executeTableLifecycle(connectionId, request, actor, productionConfirmation);
+        return tableDesign.executeTableLifecycle(connectionId, request, actor, productionConfirmation);
     }
 
     @GetMapping("/{connectionId}/schema-objects")

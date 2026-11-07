@@ -236,8 +236,7 @@ class SchemaDiffServiceTest {
                 1L, "source", sourceDbType, sourceUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
         when(connections.require(2L)).thenReturn(new DbConnection(
                 2L, "target", targetDbType, targetUrl, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService metadata = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         return new SchemaDiffService(connections, metadata, new DialectRegistry(), audit);
     }
 }

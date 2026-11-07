@@ -9,7 +9,6 @@ import com.example.dbadmin.dto.ApiDtos.SqlHistoryResponse;
 import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.SqlHistoryRepository;
 import com.example.dbadmin.service.ConnectionService;
-import com.example.dbadmin.service.ExecutionGuard;
 import com.example.dbadmin.service.MetadataCacheService;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.SqlScriptSplitter;
@@ -102,8 +101,7 @@ public final class AiAgentHarness implements AutoCloseable {
 
         audit = mock(AuditRepository.class);
         MetadataCacheService metadataCache = new MetadataCacheService();
-        MetadataService metadata = new MetadataService(
-                connections, new DialectRegistry(), audit, metadataCache, new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, new DialectRegistry(), metadataCache);
         glossary = mock(AiGlossaryService.class);
         when(glossary.terms(anyLong())).thenReturn(glossaryTerms);
 

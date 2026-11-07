@@ -199,7 +199,7 @@ class DatabaseCompatibilityTest {
                     List.of(new ColumnDesign(f.col("id"), f.flavor.bigint(), null, false, null, null, false),
                             new ColumnDesign(f.col("name"), f.flavor.varchar(), 80, true, null, null, false)),
                     List.of(), List.of(f.col("id")), null, f.schema + "." + table);
-            f.metadata.executeTableLifecycle(1L, create, "ci", null);
+            f.design.executeTableLifecycle(1L, create, "ci", null);
             var original = f.metadata.detail(1L, f.schema, table, true);
             assertThat(original.primaryKeys()).containsExactly(f.col("id"));
             var design = new TableDesignRequest(f.schema, table,
@@ -208,16 +208,16 @@ class DatabaseCompatibilityTest {
                             new ColumnDesign(f.col("note"), f.flavor.varchar(), 100, true, null, null, false)),
                     List.of(new IndexDesign(index, List.of(f.col("name")), false, null, false)),
                     List.of(f.col("id")), original.structureVersion(), f.schema + "." + table);
-            f.metadata.executeDesign(1L, design, "ci");
+            f.design.executeDesign(1L, design, "ci");
             var changed = f.metadata.detail(1L, f.schema, table, true);
             assertThat(changed.columns()).extracting("name").containsExactly(f.col("id"), f.col("name"), f.col("note"));
             assertThat(changed.indexes()).extracting("name").contains(index);
             f.execute("INSERT INTO " + f.q(table) + " VALUES (1, " + f.text("x".repeat(100)) + ", " + f.text("保留数据") + ")");
-            f.metadata.executeTableLifecycle(1L, new TableLifecycleRequest("RENAME", f.schema, table, renamed,
+            f.design.executeTableLifecycle(1L, new TableLifecycleRequest("RENAME", f.schema, table, renamed,
                     null, null, null, changed.structureVersion(), f.schema + "." + table), "ci", null);
             assertThat(f.scalar("SELECT note FROM " + f.q(renamed))).isEqualTo("保留数据");
             var detail = f.metadata.detail(1L, f.schema, renamed, true);
-            f.metadata.executeTableLifecycle(1L, new TableLifecycleRequest("DROP", f.schema, renamed, null,
+            f.design.executeTableLifecycle(1L, new TableLifecycleRequest("DROP", f.schema, renamed, null,
                     null, null, null, detail.structureVersion(), f.schema + "." + renamed), "ci", null);
             assertThatThrownBy(() -> f.metadata.detail(1L, f.schema, renamed, true)).isInstanceOf(IllegalArgumentException.class);
         }
@@ -274,6 +274,7 @@ class DatabaseCompatibilityTest {
         final ObjectMapper mapper = new ObjectMapper();
         final ExecutionGuard guard = new ExecutionGuard();
         final MetadataService metadata;
+        final TableDesignService design;
         final DataEditService edits;
         final List<String> tables = new ArrayList<>();
         String sessionSql;
@@ -298,7 +299,9 @@ class DatabaseCompatibilityTest {
             when(connections.open(anyLong(), nullable(String.class))).thenAnswer(call -> open(url, user, password));
             when(connections.openNativeAccess(1L)).thenAnswer(call -> new RemoteDataSourceRegistry.NativeAccess(url, null));
             dialect = dialects.dialectFor(db);
-            metadata = new MetadataService(connections, dialects, audit, new MetadataCacheService(), guard);
+            MetadataCacheService cache = new MetadataCacheService();
+            metadata = new MetadataService(connections, dialects, cache);
+            design = new TableDesignService(connections, dialects, audit, cache, guard, metadata);
             var crypto = new CryptoService("compatibility-test-only-key");
             edits = new DataEditService(metadata, connections, audit, dialects, properties,
                     new TableCursorCodec(mapper, crypto), new RowLocatorCodec(mapper, crypto), guard);
