@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.dto.ApiDtos.ScheduledQueryRequest;
+import com.example.dbadmin.model.CronSchedules;
 import com.example.dbadmin.model.DbConnection;
 import com.example.dbadmin.model.ScheduledQuery;
 import com.example.dbadmin.repo.AuditRepository;
@@ -10,7 +11,6 @@ import com.example.dbadmin.repo.ScheduledQueryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 
 import java.io.OutputStream;
@@ -26,7 +26,6 @@ import java.nio.file.LinkOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
@@ -328,14 +327,7 @@ public class ScheduledQueryService {
 
     /** 下一次执行时间，给界面用。cron 解析不了时返回 null —— 保存时已经拦过一次了。 */
     public Instant nextRunAt(ScheduledQuery task) {
-        if (!task.enabled() || task.cron() == null || task.cron().isBlank()) return null;
-        try {
-            ZonedDateTime next = CronExpression.parse(task.cron())
-                    .next(ZonedDateTime.ofInstant(Instant.now(), task.scheduleZoneId()));
-            return next == null ? null : next.toInstant();
-        } catch (Exception ignored) {
-            return null;
-        }
+        return task.scheduled() ? CronSchedules.nextRun(task.cron(), task.scheduleZoneId(), Instant.now()) : null;
     }
 
     private ScheduledQuery normalize(long id, ScheduledQueryRequest request) {
@@ -344,20 +336,12 @@ public class ScheduledQueryService {
         // 一晚上加一条谁也没看见的失败记录。
         String sql = exports.requireSingleQuery(require(request.sql(), "SQL 不能为空。"));
         String cron = require(request.cron(), "cron 表达式不能为空。");
-        if (!CronExpression.isValidExpression(cron)) {
-            throw new IllegalArgumentException("cron 表达式无法解析：" + cron);
-        }
+        CronSchedules.requireValidCron(cron);
         String format = request.exportFormat() == null ? "csv" : request.exportFormat().trim().toLowerCase(Locale.ROOT);
         if (!List.of("csv", "json", "sql", "xml", "markdown", "xlsx").contains(format)) {
             throw new IllegalArgumentException("不支持的导出格式：" + request.exportFormat());
         }
-        if (request.scheduleZone() != null && !request.scheduleZone().isBlank()) {
-            try {
-                ZoneId.of(request.scheduleZone().trim());
-            } catch (Exception ignored) {
-                throw new IllegalArgumentException("无法识别的时区：" + request.scheduleZone());
-            }
-        }
+        CronSchedules.normalizeZone(request.scheduleZone());
         DbConnection connection = connections.require(request.connectionId());
         // 生产连接必须在创建时确认一次：定时任务没有交互确认的机会，跳过确认等于给生产库
         // 开了一个无人值守的出口。

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { PanelEmpty } from './PanelState';
 import { Alert, Button, Checkbox, Collapse, Divider, Dropdown, Form, Input, InputNumber, Modal, Pagination, Popconfirm, Select, Space, Spin, Tag, Tabs, Tooltip, Typography, message } from 'antd';
 import {
@@ -53,8 +54,8 @@ import {
   backupScopeLabel,
   backupStatusLabel,
   backupTargetLabel,
-  formatFileSize,
-  formatHistoryTime,
+  formatBytes,
+  formatDateTime,
   normalizeBackupScope
 } from '../utils';
 import { BackupHistoryCenter } from './BackupHistoryCenter';
@@ -656,9 +657,9 @@ function BackupTasksPanel({
             const nextRunAt = backup.nextRunAt || taskSchedulePreview?.nextRuns[0];
             const legacyZoneHint = legacyScheduleZoneHint({ cron: backup.cron, scheduleZone: backup.scheduleZone, zoneId: taskZoneId });
             const recentDetails = [
-              backup.lastRunAt ? `最近执行：${formatHistoryTime(backup.lastRunAt)}` : '',
-              backup.lastFileSize ? `文件大小：${formatFileSize(backup.lastFileSize)}` : '',
-              scheduled && nextRunAt ? `下次执行：${formatHistoryTime(nextRunAt)}` : ''
+              backup.lastRunAt ? `最近执行：${formatDateTime(backup.lastRunAt)}` : '',
+              backup.lastFileSize ? `文件大小：${formatBytes(backup.lastFileSize)}` : '',
+              scheduled && nextRunAt ? `下次执行：${formatDateTime(nextRunAt)}` : ''
             ].filter(Boolean).join(' · ');
             return (
               <article className="backup-task-item" key={backup.id}>
@@ -760,7 +761,7 @@ function BackupTasksPanel({
       <Modal
         title={editingId ? '编辑备份任务' : '新建备份任务'}
         open={editorOpen}
-        width={680}
+        width={MODAL_WIDTH.form}
         forceRender
         confirmLoading={loading}
         onCancel={requestCloseEditor}
@@ -1012,10 +1013,10 @@ function BackupTasksPanel({
                   <div className="backup-history-content">
                     <Space size={6} wrap>
                       <Tag color={history.status === 'SUCCESS' ? 'green' : history.status === 'FAILED' ? 'red' : 'default'}>{backupStatusLabel(history.status)}</Tag>
-                      <Text>{formatHistoryTime(history.finishedAt || history.startedAt || '')}</Text>
+                      <Text>{formatDateTime(history.finishedAt || history.startedAt || '')}</Text>
                     </Space>
                     <Space orientation="vertical" size={2} className="full-width">
-                      {history.fileSize ? <Text type="secondary">文件大小：{formatFileSize(history.fileSize)}</Text> : null}
+                      {history.fileSize ? <Text type="secondary">文件大小：{formatBytes(history.fileSize)}</Text> : null}
                       <Text type="secondary">存储位置：{history.storageProfileName || history.storageType && history.storageType !== 'LOCAL' ? `${history.storageProfileName || `文件服务 #${history.storageProfileId}`} · ${history.storageType}` : '应用服务器本地目录'}</Text>
                       {history.message ? <Text type="secondary" className="backup-history-message">{history.message}</Text> : null}
                     </Space>
@@ -1065,7 +1066,7 @@ function BackupTasksPanel({
                   {verifications[history.id] && (
                     <Text type={verifications[history.id].checksumMatches ? 'success' : 'warning'} className="backup-history-verification">
                       {verifications[history.id].message}
-                      {` · 读取 ${formatFileSize(verifications[history.id].bytesRead)}，耗时 ${Math.max(1, Math.round(verifications[history.id].elapsedMs / 1000))} 秒`}
+                      {` · 读取 ${formatBytes(verifications[history.id].bytesRead)}，耗时 ${Math.max(1, Math.round(verifications[history.id].elapsedMs / 1000))} 秒`}
                     </Text>
                   )}
                 </article>
@@ -1197,7 +1198,7 @@ function SchedulePreview({ cron, preview, loading, error, previewAvailable }: { 
       description={preview ? (
         <Space orientation="vertical" size={2}>
           <Text>执行时区：{preview.zoneId}</Text>
-          {preview.nextRuns.slice(0, 3).map((run, index) => <Text key={`${run}-${index}`}>第 {index + 1} 次：{formatHistoryTime(run)}</Text>)}
+          {preview.nextRuns.slice(0, 3).map((run, index) => <Text key={`${run}-${index}`}>第 {index + 1} 次：{formatDateTime(run)}</Text>)}
         </Space>
       ) : previewAvailable ? '正在按所选时区计算后续执行时间。' : '保存后将按所选时区计算实际执行时间。'}
     />

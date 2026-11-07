@@ -17,6 +17,12 @@ import java.util.Locale;
 import java.util.Optional;
 
 public class OracleDialect extends DefaultDialect {
+    /** DDL 前后隐式提交（见 {@link DatabaseDialect#ddlCommitsImplicitly()}）。 */
+    @Override
+    public boolean ddlCommitsImplicitly() {
+        return true;
+    }
+
     /** Oracle 把未加引号的标识符折成大写存进字典。 */
     @Override
     public String foldUnquotedIdentifier(String identifier) {

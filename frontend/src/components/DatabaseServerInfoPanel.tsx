@@ -1,10 +1,17 @@
-import { Alert, Descriptions, Modal, Spin, Table, Tag } from 'antd';
+import { Alert, Descriptions, Table, Tag, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { PanelLoading } from './PanelState';
 import type { Connection } from '../types';
 
 import type { CapabilityReport, ServerInfo, CapabilityFeature } from '../databaseCapabilities';
-export function DatabaseServerInfoPanel({ connection, onClose }: { connection: Connection | null; onClose: () => void }) {
+/**
+ * 当前连接的服务端信息：版本、驱动与能力识别结果。
+ *
+ * <p>原来是连接卡片「⋯」菜单里的一个弹窗；现在是管理抽屉「运行状态」下的一个分区，
+ * 与活动会话、连接池放在一起 —— 三者回答的都是「这个库现在怎么样」。</p>
+ */
+export function DatabaseServerInfoPanel({ connection }: { connection: Connection | null }) {
   const [info, setInfo] = useState<ServerInfo>();
   const [features, setFeatures] = useState<CapabilityFeature[]>([]);
   const [error, setError] = useState('');
@@ -15,8 +22,9 @@ export function DatabaseServerInfoPanel({ connection, onClose }: { connection: C
       .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : '读取服务端信息失败'); });
     return () => { active = false; };
   }, [connection]);
-  return <Modal open={Boolean(connection)} title={`${connection?.name || ''} · 服务端信息`} footer={null} onCancel={onClose} destroyOnHidden>
-    {error ? <Alert type="error" title={error} /> : !info ? <Spin /> : <>
+  return <div className="management-section">
+    <header className="management-section-header"><Typography.Text strong>{connection?.name} · 服务端信息</Typography.Text></header>
+    {error ? <Alert type="error" title={error} /> : !info ? <PanelLoading text="正在读取服务端信息…" /> : <>
       {info.warnings.map(message => <Alert key={message} type="warning" title={message} showIcon />)}
       <Descriptions column={1} size="small" items={[
         { key: 'product', label: '数据库', children: info.product },
@@ -33,5 +41,5 @@ export function DatabaseServerInfoPanel({ connection, onClose }: { connection: C
         { title: '原因', dataIndex: 'reason' }
       ]} />
     </>}
-  </Modal>;
+  </div>;
 }

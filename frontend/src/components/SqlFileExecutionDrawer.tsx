@@ -5,8 +5,8 @@ import { Alert, Button, Descriptions, Drawer, Input, Progress, Select, Space, Sp
 import { CloudUploadOutlined, PauseCircleOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, uploadBinary } from '../api';
 import type { Connection, SqlFileCandidate, SqlFileExecution, SqlFileExecutionPage } from '../types';
-import { localizeMessage } from '../utils';
-import { formatSqlFileBytes, sqlFileStatusLabel, sqlFileTaskPercent } from '../sqlFileExecution';
+import { formatBytes, localizeMessage, formatDateTime } from '../utils';
+import { sqlFileStatusLabel, sqlFileTaskPercent } from '../sqlFileExecution';
 import { backgroundImportPath } from '../dataImport';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
 import { customDelimiterProblem, DEFAULT_DELIMITER, DELIMITER_MODE_OPTIONS, delimiterRequestFields, type SqlDelimiterSetting } from '../scriptDelimiter';
@@ -245,7 +245,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
           <Descriptions size="small" column={2} items={[
             { key: 'file', label: '文件', children: focused.fileName },
             { key: 'target', label: '目标连接', children: focused.connectionName },
-            { key: 'size', label: '文件大小', children: formatSqlFileBytes(focused.fileSize) },
+            { key: 'size', label: '文件大小', children: formatBytes(focused.fileSize) },
             { key: 'charset', label: '检测编码', children: focused.detectedCharset || '-' },
             { key: 'statements', label: '执行单元', children: focused.statementTotal ?? 0 },
             { key: 'delimiter', label: '分隔方式', children: focused.statementDelimiter || '分号（自动）' },
@@ -289,7 +289,7 @@ export const SqlFileExecutionDrawer = memo(function SqlFileExecutionDrawer({ ope
                 )}
               </div>
               <Space orientation="vertical" size={3} className="full-width">
-                <Text type="secondary">{job.connectionName} · {formatSqlFileBytes(job.fileSize)} · {formatTime(job.createdAt)}</Text>
+                <Text type="secondary">{job.connectionName} · {formatBytes(job.fileSize)} · {formatDateTime(job.createdAt)}</Text>
                 {(ACTIVE.has(job.status) || job.status === 'READY') && <Progress size="small" percent={percent} status={job.status === 'RUNNING' || job.status === 'ANALYZING' ? 'active' : 'normal'} />}
                 {job.statementTotal != null && <Text type="secondary">进度 {job.statementCurrent}/{job.statementTotal} · 执行成功 {job.successCount} · 查询返回 {job.queryRowCount} 行</Text>}
                 {job.transaction?.mode === 'SCRIPT' && <Text type="secondary">脚本事务 · 确认提交 {job.transaction.commitCount} 次 · 回滚 {job.transaction.rollbackCount} 次 · 最近顶层提交单元 {job.transaction.lastCommitIndex ?? '无'}（不含过程内部提交）</Text>}
@@ -314,4 +314,3 @@ function statusColor(status: SqlFileExecution['status']) {
   return 'processing';
 }
 
-function formatTime(value: string) { return new Date(value).toLocaleString('zh-CN', { hour12: false }); }

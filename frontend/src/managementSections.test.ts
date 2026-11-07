@@ -81,6 +81,16 @@ describe('management sections', () => {
     expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
   });
 
+  it('运行状态与导出传输各合成一项，导航从 13 项减到 11 项', () => {
+    const items = managementNavigation().flatMap((group) => group.items);
+    expect(items.find((item) => item.key === 'status')?.sections.map((section) => section.key)).toEqual(['sessions', 'server-info', 'pool']);
+    expect(items.find((item) => item.key === 'export')?.sections.map((section) => section.key)).toEqual(['schema-export', 'scheduled-exports', 'data-transfer']);
+    expect(items).toHaveLength(11);
+    // 连接池是全局的：没选连接时「运行状态」照样能点进去，落在连接池上。
+    const status = items.find((item) => item.key === 'status');
+    expect(status?.sections.find((section) => isManagementSectionAvailable(section.key, false))?.key).toBe('pool');
+  });
+
   it('按分区找回所在导航项', () => {
     expect(managementNavItemOf('data-diff')?.key).toBe('compare');
     expect(managementNavItemOf('audit')?.sections).toHaveLength(1);

@@ -1,6 +1,7 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
+import com.example.dbadmin.core.DatabaseFamily;
 import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.SchemaObjectKind;
 import com.example.dbadmin.core.SchemaObjectOperation;
@@ -289,18 +290,7 @@ public class SchemaObjectCatalog {
     }
 
     public String family(DbConnection connection) {
-        String type = connection.dbType() == null ? "" : connection.dbType().toLowerCase(Locale.ROOT);
-        return switch (type) {
-            case "postgres", "postgresql" -> "postgresql";
-            case "oracle", "dm", "dameng", "oceanbase-oracle" -> "oracle";
-            case "sqlserver", "mssql" -> "sqlserver";
-            case "sqlite" -> "sqlite";
-            case "h2" -> "h2";
-            case "clickhouse" -> "clickhouse";
-            case "mariadb" -> "mariadb";
-            case "mysql", "oceanbase-mysql" -> "mysql";
-            default -> type;
-        };
+        return DatabaseFamily.of(connection.dbType());
     }
 
     private CatalogQuery catalogQuery(DbConnection configured, String schema, SchemaObjectKind kind) {

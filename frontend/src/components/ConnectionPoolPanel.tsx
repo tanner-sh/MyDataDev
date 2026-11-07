@@ -110,7 +110,7 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
                 showInfo={false}
                 style={{ width: 120, margin: 0 }}
               />
-              <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>
+              <Text className="text-xs" type="secondary">
                 {pressure.used} / {pressure.capacity} · {pressure.hint}
               </Text>
             </>
@@ -125,7 +125,7 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
         </Space>
       </Space>
 
-      {error && <Alert type="error" showIcon message={error} style={{ marginTop: 'var(--space-2)' }} />}
+      {error && <Alert type="error" showIcon title={error} style={{ marginTop: 'var(--space-2)' }} />}
 
       {overview && overview.pools.length > 0 && (
         <Table<ConnectionPoolStatus>
@@ -161,7 +161,7 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
               width: 150,
               render: (_, pool) => (
                 <Tooltip title={`活跃 ${pool.active} · 空闲 ${pool.idle} · 上限 ${pool.maxPoolSize}`}>
-                  <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>
+                  <Text className="text-xs" type="secondary">
                     活跃 {pool.active} / 共 {pool.total}（上限 {pool.maxPoolSize}）
                   </Text>
                 </Tooltip>
@@ -172,7 +172,7 @@ export function ConnectionPoolPanel({ open }: { open: boolean }) {
               key: 'idle',
               width: 110,
               render: (_, pool) => (
-                <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>{formatIdleFor(pool.idleMillis)}</Text>
+                <Text className="text-xs" type="secondary">{formatIdleFor(pool.idleMillis)}</Text>
               )
             },
             {

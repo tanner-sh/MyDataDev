@@ -1,8 +1,9 @@
 import { lazy, memo, Suspense, useMemo, useState } from 'react';
 import { PanelEmpty, PanelLoading } from './PanelState';
-import { Alert, Button, Checkbox, Form, Input, Select, Space, Table, Tag, Tooltip, Typography } from 'antd';
+import { Alert, Button, Checkbox, Form, Input, Space, Table, Tag, Tooltip, Typography } from 'antd';
 import { BulbOutlined, CopyOutlined, DiffOutlined, ExportOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { ConnectionField, SchemaField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import {
   buildMigrationScript,
@@ -51,10 +52,6 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
   const [showIdentical, setShowIdentical] = useState(false);
   const [aiRequest, setAiRequest] = useState<AiAskRequest>();
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({ value: connection.id, label: `${connection.name}（${connection.dbType}）` })),
-    [connections]
-  );
   const script = result ? buildMigrationScript(result) : '';
   const visibleTables = useMemo(
     () => (result ? result.tables.filter((table) => showIdentical || table.status !== 'IDENTICAL') : []),
@@ -102,38 +99,14 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
     <section className="schema-diff-panel">
       <Form layout="vertical" size="small" className="compact-form" disabled={loading}>
         <Space size={8} wrap className="schema-diff-endpoints">
-          <Form.Item label="源（作为基准）" required>
-            <Select
-              className="schema-diff-connection"
-              placeholder="选择连接"
-              value={form.sourceConnectionId}
-              options={connectionOptions}
-              onChange={(value) => setForm((current) => ({ ...current, sourceConnectionId: value }))}
-            />
-          </Form.Item>
-          <Form.Item label="源 Schema / 数据库">
-            <Input
-              value={form.sourceSchema}
-              placeholder="留空则用默认库"
-              onChange={(event) => setForm((current) => ({ ...current, sourceSchema: event.target.value }))}
-            />
-          </Form.Item>
-          <Form.Item label="目标（将被对齐）" required>
-            <Select
-              className="schema-diff-connection"
-              placeholder="选择连接"
-              value={form.targetConnectionId}
-              options={connectionOptions}
-              onChange={(value) => setForm((current) => ({ ...current, targetConnectionId: value }))}
-            />
-          </Form.Item>
-          <Form.Item label="目标 Schema / 数据库">
-            <Input
-              value={form.targetSchema}
-              placeholder="留空则用默认库"
-              onChange={(event) => setForm((current) => ({ ...current, targetSchema: event.target.value }))}
-            />
-          </Form.Item>
+          <ConnectionField label="源（作为基准）" required connections={connections} value={form.sourceConnectionId}
+            onChange={(value) => setForm((current) => ({ ...current, sourceConnectionId: value }))} />
+          <SchemaField label="源 Schema / 数据库" connectionId={form.sourceConnectionId} value={form.sourceSchema}
+            onChange={(value) => setForm((current) => ({ ...current, sourceSchema: value }))} />
+          <ConnectionField label="目标（将被对齐）" required connections={connections} value={form.targetConnectionId}
+            onChange={(value) => setForm((current) => ({ ...current, targetConnectionId: value }))} />
+          <SchemaField label="目标 Schema / 数据库" connectionId={form.targetConnectionId} value={form.targetSchema}
+            onChange={(value) => setForm((current) => ({ ...current, targetSchema: value }))} />
         </Space>
         <Form.Item label="只对比这些表" help="逗号或换行分隔，留空表示全部表；表很多时建议先缩小范围。">
           <Input.TextArea
@@ -164,7 +137,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon className="schema-diff-alert" message={error} />}
+      {error && <Alert type="error" showIcon className="schema-diff-alert" title={error} />}
       {loading && <PanelLoading text="正在读取两侧结构…" />}
 
       {result && !loading && (
@@ -173,7 +146,7 @@ export const SchemaDiffPanel = memo(function SchemaDiffPanel({ connections, defa
             type={result.summary.onlyInSource + result.summary.onlyInTarget + result.summary.different === 0 ? 'success' : 'info'}
             showIcon
             className="schema-diff-alert"
-            message={summarizeSchemaDiff(result)}
+            title={summarizeSchemaDiff(result)}
             description={
               <>
                 <Text type="secondary">

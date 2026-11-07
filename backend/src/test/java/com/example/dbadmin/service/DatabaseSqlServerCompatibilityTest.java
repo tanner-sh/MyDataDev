@@ -17,15 +17,15 @@ class DatabaseSqlServerCompatibilityTest {
             assertThat(detail.columns().get(0).identity()).isTrue();
             assertThat(detail.columns().get(1).type()).isEqualTo("decimal(18,2)");
             assertThat(detail.columns().get(3).generated()).isTrue();
-            assertThat(f.metadata.previewDesign(1, design(detail, c -> c)).sql()).isEmpty();
-            f.metadata.executeDesign(1, design(detail, c -> c.name().equals("amount")
+            assertThat(f.design.previewDesign(1, design(detail, c -> c)).sql()).isEmpty();
+            f.design.executeDesign(1, design(detail, c -> c.name().equals("amount")
                     ? new ColumnDesign("amount", "DECIMAL(20,3)", null, false, "2.5", "amount", false, "金额说明", false)
                     : c), "ci");
             f.execute("INSERT INTO " + f.q(table) + " (note) VALUES (N'测试')");
             assertThat(f.scalar("SELECT amount FROM " + f.q(table)).toString()).isEqualTo("2.500");
             detail = f.metadata.detail(1, f.schema, table, true);
             assertThat(detail.columns().get(1).remarks()).isEqualTo("金额说明");
-            f.metadata.executeDesign(1, design(detail, c -> c.name().equals("amount")
+            f.design.executeDesign(1, design(detail, c -> c.name().equals("amount")
                     ? new ColumnDesign("price", c.type(), c.size(), c.nullable(), "3", c.originalName(), false, "", c.identity()) : c), "ci");
             detail = f.metadata.detail(1, f.schema, table, true);
             assertThat(detail.columns().get(1).name()).isEqualTo("price");
@@ -33,7 +33,7 @@ class DatabaseSqlServerCompatibilityTest {
             // 删除没有依赖的默认值字段时，必须先移除自动命名的默认约束。
             f.execute("ALTER TABLE " + f.q(table) + " ADD disposable INT DEFAULT 7");
             detail = f.metadata.detail(1, f.schema, table, true);
-            f.metadata.executeDesign(1, design(detail, c -> c.name().equals("disposable")
+            f.design.executeDesign(1, design(detail, c -> c.name().equals("disposable")
                     ? new ColumnDesign(c.name(), c.type(), c.size(), c.nullable(), c.defaultValue(), c.originalName(), true) : c), "ci");
             assertThat(f.metadata.detail(1, f.schema, table, true).columns()).extracting(ColumnInfo::name).doesNotContain("disposable");
         }
@@ -45,7 +45,7 @@ class DatabaseSqlServerCompatibilityTest {
             String table = f.reserveTable();
             var columns = List.of(new ColumnDesign("id", "INT", null, false, null, null, false, "编号", true),
                     new ColumnDesign("name", "NVARCHAR", 40, true, null, null, false, "名字"));
-            f.metadata.executeTableLifecycle(1, new TableLifecycleRequest("CREATE", f.schema, table, null,
+            f.design.executeTableLifecycle(1, new TableLifecycleRequest("CREATE", f.schema, table, null,
                     columns, List.of(), List.of("id"), null, f.schema + "." + table), "ci", null);
             f.execute("INSERT INTO " + f.q(table) + " (name) VALUES (N'名字')");
             assertThat(f.number("SELECT id FROM " + f.q(table))).isEqualTo(1);
@@ -56,8 +56,8 @@ class DatabaseSqlServerCompatibilityTest {
             var keep = new TableDesignRequest(f.schema, table, base.columns(),
                     List.of(new IndexDesign("ix_filtered", List.of("name"), false, "ix_filtered", false)),
                     detail.primaryKeys(), detail.structureVersion(), f.schema + "." + table);
-            assertThat(f.metadata.previewDesign(1, keep).sql()).isEmpty();
-            assertThatThrownBy(() -> f.metadata.previewDesign(1, base)).hasMessageContaining("高级属性");
+            assertThat(f.design.previewDesign(1, keep).sql()).isEmpty();
+            assertThatThrownBy(() -> f.design.previewDesign(1, base)).hasMessageContaining("高级属性");
         }
     }
 
@@ -89,7 +89,7 @@ class DatabaseSqlServerCompatibilityTest {
             var request = new TableDesignRequest(f.schema, table, columns,
                     List.of(new IndexDesign("ix_code", List.of("code"), true, "ix_note", false)),
                     List.of("code"), detail.structureVersion(), f.schema + "." + table);
-            f.metadata.executeDesign(1, request, "ci");
+            f.design.executeDesign(1, request, "ci");
             var changed = f.metadata.detail(1, f.schema, table, true);
             assertThat(changed.primaryKeys()).containsExactly("code");
             assertThat(changed.indexes()).extracting(IndexInfo::name).contains("ix_code").doesNotContain("ix_note");

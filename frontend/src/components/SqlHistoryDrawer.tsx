@@ -5,7 +5,7 @@ import { CopyOutlined, DownOutlined, PlusOutlined, SwapOutlined } from '@ant-des
 import type { SqlHistory, SqlHistoryStats } from '../types';
 import { api } from '../api';
 import { localizeError } from '../utils';
-import { formatHistoryTime } from '../utils';
+import { formatDateTime } from '../utils';
 import { historyLoadedSummary, historyStatsSummary, SQL_HISTORY_SEARCH_DEBOUNCE_MS } from '../sqlHistoryQuery';
 
 const { Text } = Typography;
@@ -30,7 +30,7 @@ function HistoryStats({ stats, loading, error }: { stats?: SqlHistoryStats; load
             <div className="history-item-heading">
               <Space size={6} wrap>
                 <Tag color="orange">{item.elapsedMs}ms</Tag>
-                <Text type="secondary">{formatHistoryTime(item.createdAt)}{item.actor ? ` · ${item.actor}` : ''}</Text>
+                <Text type="secondary">{formatDateTime(item.createdAt)}{item.actor ? ` · ${item.actor}` : ''}</Text>
               </Space>
             </div>
             <pre className="history-sql">{item.sql}</pre>
@@ -43,7 +43,7 @@ function HistoryStats({ stats, loading, error }: { stats?: SqlHistoryStats; load
             <div className="history-item-heading">
               <Space size={6} wrap>
                 <Tag color="red">{item.hits} 次</Tag>
-                <Text type="secondary">最近 {formatHistoryTime(item.lastSeenAt)}</Text>
+                <Text type="secondary">最近 {formatDateTime(item.lastSeenAt)}</Text>
               </Space>
             </div>
             <pre className="history-sql">{item.text}</pre>
@@ -193,7 +193,7 @@ export const SqlHistoryDrawer = memo(function SqlHistoryDrawer({
                 <Space size={6} wrap>
                   <Tag color={item.type === 'EXPLAIN' ? 'purple' : 'blue'}>{item.type === 'EXPLAIN' ? '执行计划' : '执行'}</Tag>
                   <Tag color={item.status === 'SUCCESS' ? 'green' : 'red'}>{item.status === 'SUCCESS' ? '成功' : '失败'}</Tag>
-                  <Text type="secondary">{formatHistoryTime(item.createdAt)} · {item.elapsedMs}ms</Text>
+                  <Text type="secondary">{formatDateTime(item.createdAt)} · {item.elapsedMs}ms</Text>
                 </Space>
                 <Space size={4}>
                   <Tooltip title="复制 SQL"><Button size="small" type="text" icon={<CopyOutlined />} aria-label="复制 SQL" onClick={() => void navigator.clipboard.writeText(item.sql)} /></Tooltip>

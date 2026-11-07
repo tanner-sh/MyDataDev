@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { Alert, Input, Modal, Radio, Select, Space, Typography, Upload, message } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { api, downloadBlob } from '../api';
@@ -122,10 +123,10 @@ export function ConnectionArchivePanel({
         onClose();
       }}
       destroyOnHidden
-      width={560}
+      width={MODAL_WIDTH.form}
     >
       {messageContext}
-      <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+      <Space className="full-width" orientation="vertical" size={12}>
         <Radio.Group
           value={mode}
           onChange={(event) => {
@@ -139,7 +140,7 @@ export function ConnectionArchivePanel({
         <Alert
           type="warning"
           showIcon
-          message="归档包含数据库密码与 SSH 密钥"
+          title="归档包含数据库密码与 SSH 密钥"
           description="文件由你设置的口令加密，本机的加密密钥不参与——因此换机器也能解开。口令请与文件分开传递；口令丢失后文件无法恢复。"
         />
 
@@ -219,11 +220,11 @@ export function ConnectionArchivePanel({
                 style={{ display: 'block', marginTop: 4 }}
               />
             </div>
-            {result && <Alert type="success" showIcon message={archiveImportSummary(result)} />}
+            {result && <Alert type="success" showIcon title={archiveImportSummary(result)} />}
           </>
         )}
 
-        {error && <Alert type="error" showIcon message={error} closable onClose={() => setError('')} />}
+        {error && <Alert type="error" showIcon title={error} closable onClose={() => setError('')} />}
       </Space>
     </Modal>
   );

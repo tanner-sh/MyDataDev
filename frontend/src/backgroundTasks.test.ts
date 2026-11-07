@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backgroundTaskTarget,
   backgroundTaskCompletionMessage,
   backgroundTaskDestinations,
   backgroundTaskLabel,
@@ -75,5 +76,14 @@ describe('backgroundTaskDestinations', () => {
     expect(backgroundTaskDestinations(EMPTY_BACKGROUND_TASK_SUMMARY)).toEqual([]);
     expect(backgroundTaskDestinations({ backups: 0, restores: 0, sqlFiles: 1, total: 1 }))
       .toEqual([{ key: 'sqlFiles', label: '1 个 SQL 文件任务' }]);
+  });
+});
+
+describe('backgroundTaskTarget', () => {
+  it('sends each kind of running task to where it can be watched', () => {
+    expect(backgroundTaskTarget('sqlFiles')).toEqual({ kind: 'sql-files' });
+    expect(backgroundTaskTarget('exports')).toEqual({ kind: 'management', section: 'scheduled-exports' });
+    expect(backgroundTaskTarget('backups')).toEqual({ kind: 'management', section: 'backups', backupTab: 'history' });
+    expect(backgroundTaskTarget('restores')).toEqual({ kind: 'management', section: 'backups', backupTab: 'restore' });
   });
 });

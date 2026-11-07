@@ -46,7 +46,7 @@ class SqlServicePagingCommentTest {
         DialectRegistry dialects = new DialectRegistry();
         MetadataCacheService cache = new MetadataCacheService();
         AuditRepository audit = mock(AuditRepository.class);
-        MetadataService metadata = new MetadataService(connections, dialects, audit, cache, new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, dialects, cache);
         AppProperties properties = new AppProperties();
         CryptoService crypto = new CryptoService("test-key-test-key-test-key-32byt");
         DataEditService dataEdit = new DataEditService(

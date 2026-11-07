@@ -19,7 +19,7 @@ import type {
   RestoreSourceRef,
   RestoreUpload
 } from '../types';
-import { formatFileSize, formatHistoryTime } from '../utils';
+import { formatBytes, formatDateTime } from '../utils';
 import { nativeToolForRestore, requestedToolPath, restoreFormatForBackupMethod, restoreToolHint } from '../nativeTools';
 import type { NativeToolMode } from '../nativeTools';
 import { useVisiblePolling } from '../hooks/useVisiblePolling';
@@ -218,7 +218,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
             <Form layout="vertical" size="small">
               <Form.Item label="可恢复备份">
                 <Select showSearch optionFilterProp="label" value={source?.kind === 'HISTORY' ? source.id : undefined} onChange={selectHistory}
-                  options={historyRows.map((row) => ({ value: row.id, label: `${formatHistoryTime(row.finishedAt || row.startedAt || '')} · ${row.fileFormat || row.backupMethod || 'SQL'} · ${formatFileSize(row.fileSize || 0)}` }))}
+                  options={historyRows.map((row) => ({ value: row.id, label: `${formatDateTime(row.finishedAt || row.startedAt || '')} · ${row.fileFormat || row.backupMethod || 'SQL'} · ${formatBytes(row.fileSize)}` }))}
                   placeholder="选择成功备份" />
               </Form.Item>
             </Form>
@@ -285,7 +285,7 @@ export function RestoreCenter({ connections, selected, initialHistory, nativeToo
           const percent = total > 0 ? Math.min(100, Math.round(((job.progressCurrent || 0) / total) * 100)) : 0;
           const active = ['QUEUED', 'RUNNING'].includes(job.status);
           return <List.Item actions={active ? [<Button key="cancel" size="small" danger icon={<PauseCircleOutlined />} onClick={() => void cancel(job)}>取消</Button>] : []}>
-            <List.Item.Meta title={<Space><span>{job.sourceName || `恢复任务 ${job.id}`}</span><Tag color={statusColor(job.status)}>{job.status}</Tag></Space>} description={<Space orientation="vertical" size={2} className="full-width"><Text type="secondary">{job.sourceDbType} → {job.targetDbType} · {job.conflictMode} · {formatHistoryTime(job.createdAt)}</Text>{active && <Progress size="small" percent={percent} status="active" />}{job.message && <Text type="secondary">{job.message}</Text>}</Space>} />
+            <List.Item.Meta title={<Space><span>{job.sourceName || `恢复任务 ${job.id}`}</span><Tag color={statusColor(job.status)}>{job.status}</Tag></Space>} description={<Space orientation="vertical" size={2} className="full-width"><Text type="secondary">{job.sourceDbType} → {job.targetDbType} · {job.conflictMode} · {formatDateTime(job.createdAt)}</Text>{active && <Progress size="small" percent={percent} status="active" />}{job.message && <Text type="secondary">{job.message}</Text>}</Space>} />
           </List.Item>;
         }} />}
       </Spin>

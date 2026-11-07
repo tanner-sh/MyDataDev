@@ -1,7 +1,8 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useState } from 'react';
 import { Alert, Button, Form, Input, Radio, Select, Space, Typography } from 'antd';
 import { SwapOutlined } from '@ant-design/icons';
 import { api } from '../api';
+import { ConnectionField, SchemaField, TableField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import { IMPORT_CONFLICT_OPTIONS, type ImportConflictMode } from '../dataImport';
 import {
@@ -45,13 +46,6 @@ export const DataTransferPanel = memo(function DataTransferPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({
-      value: connection.id,
-      label: `${connection.name}（${connection.dbType}${connection.environment === 'prod' ? ' · 生产' : ''}）`
-    })),
-    [connections]
-  );
   const conflictHint = IMPORT_CONFLICT_OPTIONS.find((option) => option.value === form.conflictMode)?.hint;
 
   async function run() {
@@ -85,33 +79,20 @@ export const DataTransferPanel = memo(function DataTransferPanel({
   }
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Alert
         type="info"
         showIcon
-        message="传输会先生成一个待执行的后台任务"
+        title="传输会先生成一个待执行的后台任务"
         description="点击后先读源端并生成写入脚本，你会看到要写多少行；真正写库要到「SQL 文件执行」里再确认一次，那一步照常做生产确认与审计。"
       />
 
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="源连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.sourceConnectionId}
-              options={connectionOptions}
-              placeholder="选择源连接"
-              onChange={(value) => setForm({ ...form, sourceConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="源 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 150 }}
-              value={form.sourceSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, sourceSchema: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="源连接" connections={connections} value={form.sourceConnectionId} placeholder="选择源连接"
+            onChange={(value) => setForm({ ...form, sourceConnectionId: value })} />
+          <SchemaField label="源 Schema" connectionId={form.sourceConnectionId} value={form.sourceSchema}
+            onChange={(value) => setForm({ ...form, sourceSchema: value })} />
           <Form.Item label="取数方式">
             <Radio.Group
               size="small"
@@ -122,14 +103,8 @@ export const DataTransferPanel = memo(function DataTransferPanel({
             />
           </Form.Item>
           {form.sourceMode === 'table' && (
-            <Form.Item label="源表" required>
-              <Input
-                style={{ width: 180 }}
-                value={form.sourceTable}
-                placeholder="orders"
-                onChange={(event) => setForm(withSourceTable(form, event.target.value))}
-              />
-            </Form.Item>
+            <TableField label="源表" required connectionId={form.sourceConnectionId} schemaName={form.sourceSchema}
+              value={form.sourceTable} placeholder="orders" onChange={(value) => setForm(withSourceTable(form, value))} />
           )}
         </Space>
 
@@ -149,31 +124,12 @@ export const DataTransferPanel = memo(function DataTransferPanel({
         )}
 
         <Space size={12} wrap align="start">
-          <Form.Item label="目标连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.targetConnectionId}
-              options={connectionOptions}
-              placeholder="选择目标连接"
-              onChange={(value) => setForm({ ...form, targetConnectionId: value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标 Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 150 }}
-              value={form.targetSchema}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, targetSchema: event.target.value })}
-            />
-          </Form.Item>
-          <Form.Item label="目标表" required tooltip="目标表必须已经存在，且字段名要能对上源端的列名">
-            <Input
-              style={{ width: 180 }}
-              value={form.targetTable}
-              placeholder="orders"
-              onChange={(event) => setForm({ ...form, targetTable: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField label="目标连接" connections={connections} value={form.targetConnectionId} placeholder="选择目标连接"
+            onChange={(value) => setForm({ ...form, targetConnectionId: value })} />
+          <SchemaField label="目标 Schema" connectionId={form.targetConnectionId} value={form.targetSchema}
+            onChange={(value) => setForm({ ...form, targetSchema: value })} />
+          <TableField label="目标表" required tooltip="目标表必须已经存在，且字段名要能对上源端的列名" connectionId={form.targetConnectionId}
+            schemaName={form.targetSchema} value={form.targetTable} placeholder="orders" onChange={(value) => setForm({ ...form, targetTable: value })} />
           <Form.Item label="遇到重复主键" tooltip={conflictHint}>
             <Select<ImportConflictMode>
               style={{ width: 180 }}
@@ -195,23 +151,24 @@ export const DataTransferPanel = memo(function DataTransferPanel({
           >
             生成传输任务
           </Button>
-          <Text type="secondary">{describeTransfer(form, connections)}</Text>
+          {/* 填完之前这句全是「（未填）」，只是噪音；填好了它才是一句有用的复核。 */}
+          {canRunTransfer(form) && <Text type="secondary">{describeTransfer(form, connections)}</Text>}
         </Space>
       </Form>
 
       {isSelfCopy(form) && (
-        <Alert type="warning" showIcon message="源表和目标表是同一张表，这样传输只会让行数翻倍。" />
+        <Alert type="warning" showIcon title="源表和目标表是同一张表，这样传输只会让行数翻倍。" />
       )}
 
-      {error && <Alert type="error" showIcon message="传输任务创建失败" description={error} />}
+      {error && <Alert type="error" showIcon title="传输任务创建失败" description={error} />}
 
       {job && (
         <Alert
           type="success"
           showIcon
-          message={`已生成传输任务：${job.fileName}`}
+          title={`已生成传输任务：${job.fileName}`}
           description={
-            <Space direction="vertical" size={4}>
+            <Space orientation="vertical" size={4}>
               <Text type="secondary">脚本已就绪，还没有写入目标库。到「SQL 文件执行」里核对语句数量后再开始执行。</Text>
               <Button size="small" onClick={() => onOpenTasks(job.connectionId)}>查看并执行</Button>
             </Space>

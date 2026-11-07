@@ -1,7 +1,6 @@
 import { Alert, Button, Card, Dropdown, Input, Modal, Select, Skeleton, Space, Tag, Tooltip, Typography } from 'antd';
-import { DatabaseServerInfoPanel } from './DatabaseServerInfoPanel';
 import { PanelEmpty, PanelLoading } from './PanelState';
-import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { CopyOutlined, DeleteOutlined, EditOutlined, MoreOutlined, ReloadOutlined, StarFilled, StarOutlined, SwapOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { useMemo, useState } from 'react';
 import type { Connection } from '../types';
@@ -10,7 +9,7 @@ import { availableTags, connectionProfileSummary, groupConnections, matchesKeywo
 
 const { Text } = Typography;
 
-export function ConnectionList({ connections, favoriteConnectionIds, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSwitch, onEdit, onTest, onDuplicate, onDelete, onToggleFavorite }: {
+export function ConnectionList({ connections, favoriteConnectionIds, selectedId, connectionsLoading, connectionsError, connectionsReady, testingConnectionId, onSwitch, onEdit, onTest, onDuplicate, onDelete, onToggleFavorite, onRefresh }: {
   connections: Connection[];
   favoriteConnectionIds: number[];
   selectedId?: number;
@@ -24,8 +23,8 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
   onDuplicate: (connection: Connection) => void;
   onDelete: (connection: Connection) => void;
   onToggleFavorite: (connectionId: number) => void;
+  onRefresh?: () => void;
 }) {
-  const [infoConnection, setInfoConnection] = useState<Connection | null>(null);
   const [keyword, setKeyword] = useState('');
   const [environment, setEnvironment] = useState<string>('all');
   const [dbType, setDbType] = useState<string>('all');
@@ -106,6 +105,13 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
             onClick={() => setFavoriteOnly((current) => !current)}
           />
         </Tooltip>
+        {/* 刷新连接列表原本在顶栏，常驻却极少用到，而且和资源管理器的「刷新」只隔一个侧栏，
+            不看提示分不清刷的是哪一个。挪到这份列表旁边，作用对象一目了然。 */}
+        {onRefresh && (
+          <Tooltip title="重新读取连接列表">
+            <Button icon={<ReloadOutlined />} aria-label="刷新连接" loading={connectionsLoading} onClick={onRefresh} />
+          </Tooltip>
+        )}
       </div>
       <Text type="secondary" className="connection-filter-summary">显示 {visibleConnections.length} / {connections.length} 个连接，当前连接与收藏连接优先排列</Text>
       <div className="connection-list">
@@ -175,8 +181,7 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
                     onTest,
                     onEdit,
                     onDuplicate,
-                    () => setPendingDelete(connection),
-                    () => setInfoConnection(connection)
+                    () => setPendingDelete(connection)
                   )}
                 >
                   <Tooltip title="更多连接操作">
@@ -193,7 +198,6 @@ export function ConnectionList({ connections, favoriteConnectionIds, selectedId,
         ))}
         {visibleConnections.length === 0 && <PanelEmpty title="没有匹配的数据库连接" description="换个关键字，或清空环境与类型筛选。" />}
       </div>
-      <DatabaseServerInfoPanel connection={infoConnection} onClose={() => setInfoConnection(null)} />
       <Modal
         open={pendingDelete !== null}
         title={pendingDelete ? `删除连接「${pendingDelete.name}」？` : undefined}
@@ -227,13 +231,11 @@ function connectionMenu(
   onTest: (connection: Connection) => void,
   onEdit: (connection: Connection) => void,
   onDuplicate: (connection: Connection) => void,
-  onRequestDelete: () => void,
-  onInfo: () => void
+  onRequestDelete: () => void
 ): MenuProps {
   const canAdminister = connection.permissions?.includes('CONNECTION_ADMIN') ?? true;
   return {
     items: [
-      { key: 'info', label: '服务端信息', disabled: !(connection.permissions?.includes('QUERY') ?? true) },
       { key: 'test', icon: <ThunderboltOutlined />, label: testing ? '正在测试连接…' : '测试连接', disabled: testing || !canAdminister },
       { key: 'edit', icon: <EditOutlined />, label: '编辑连接', disabled: !canAdminister },
       { key: 'duplicate', icon: <CopyOutlined />, label: '复制连接', disabled: !canAdminister },
@@ -241,7 +243,6 @@ function connectionMenu(
       { key: 'delete', icon: <DeleteOutlined />, label: '删除连接', danger: true, disabled: !canAdminister }
     ],
     onClick: ({ key }) => {
-      if (key === 'info') onInfo();
       if (key === 'test') onTest(connection);
       if (key === 'edit') onEdit(connection);
       if (key === 'duplicate') onDuplicate(connection);

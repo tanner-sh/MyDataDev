@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import {
   Alert,
   Button,
@@ -38,7 +39,7 @@ import {
 import type { BackupScheduleKind, CronWeekday } from '../backupSchedule';
 import { SCHEDULED_EXPORT_FORMATS, nextRunLabel, scheduledExportStatus, validateScheduledExport } from '../scheduledExport';
 import type { ScheduledExportRun, Connection, ScheduledExportRequest, ScheduledExportResponse } from '../types';
-import { formatHistoryTime, localizeError } from '../utils';
+import { formatDateTime, localizeError } from '../utils';
 import { PanelEmpty, PanelLoading } from './PanelState';
 
 const { Text, Paragraph } = Typography;
@@ -227,10 +228,10 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
   return (
     <div className="management-section">
       {holder}
-      <Modal title="导出执行历史 · 最近 50 次" open={historyTask != null} onCancel={() => setHistoryTask(undefined)} footer={null} width={840}>
+      <Modal title="导出执行历史 · 最近 50 次" open={historyTask != null} onCancel={() => setHistoryTask(undefined)} footer={null} width={MODAL_WIDTH.wide}>
         {historyError && <Alert type="error" showIcon title={historyError} />}
         <Table rowKey="id" size="small" dataSource={runs} pagination={{ pageSize: 10 }} columns={[
-          { title: '开始时间', dataIndex: 'startedAt', render: value => formatHistoryTime(value) },
+          { title: '开始时间', dataIndex: 'startedAt', render: value => formatDateTime(value) },
           { title: '状态', dataIndex: 'status', render: value => scheduledExportStatus({ enabled: true, lastStatus: value }).label },
           { title: '说明', dataIndex: 'message', render: value => <span style={{ overflowWrap: 'anywhere' }}>{value}</span> },
           { title: '产物', render: (_, run) => run.downloadable ? <Button size="small" onClick={() => void downloadRun(run)}>下载 · {Math.ceil(run.fileSize / 1024)} KB</Button> : <Text type="secondary">{run.status === 'SUCCESS' ? '已按保留策略清理' : '尚无文件'}</Text> }
@@ -246,7 +247,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
         </Space>
       </header>
 
-      {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 'var(--space-3)' }} />}
+      {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 'var(--space-3)' }} />}
 
       {!tasks.length && !error ? (
         <PanelEmpty
@@ -265,9 +266,9 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
               title: '任务',
               key: 'name',
               render: (_, row) => (
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Text strong>{row.task.name}</Text>
-                  <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>
+                  <Text className="text-xs" type="secondary">
                     {connections.find((item) => item.id === row.task.connectionId)?.name || `连接 #${row.task.connectionId}`}
                     {' · '}
                     {row.task.exportFormat.toUpperCase()}
@@ -279,9 +280,9 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
               title: '执行计划',
               key: 'cron',
               render: (_, row) => (
-                <Space direction="vertical" size={0}>
+                <Space orientation="vertical" size={0}>
                   <Text>{describeBackupSchedule(row.task.cron)}</Text>
-                  <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>
+                  <Text className="text-xs" type="secondary">
                     {row.task.zoneId} · 下次 {nextRunLabel(row.task, row.nextRunAt)}
                   </Text>
                 </Space>
@@ -293,10 +294,10 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
               render: (_, row) => {
                 const status = scheduledExportStatus(row.task);
                 return (
-                  <Space direction="vertical" size={0}>
+                  <Space orientation="vertical" size={0}>
                     <Space size={6}>
                       <Tag color={status.color}>{status.label}</Tag>
-                      {row.task.lastRunAt && <Text type="secondary" style={{ fontSize: 'var(--text-xs)' }}>{formatHistoryTime(row.task.lastRunAt)}</Text>}
+                      {row.task.lastRunAt && <Text className="text-xs" type="secondary">{formatDateTime(row.task.lastRunAt)}</Text>}
                     </Space>
                     {row.task.lastMessage && (
                       <Tooltip title={row.task.lastMessage}>
@@ -360,7 +361,7 @@ export function ScheduledExportPanel({ connections, defaultConnectionId, onOpenI
         confirmLoading={saving}
         okText="保存"
         cancelText="取消"
-        width={640}
+        width={MODAL_WIDTH.form}
         destroyOnHidden
       >
         <Form form={form} layout="vertical" size="small">

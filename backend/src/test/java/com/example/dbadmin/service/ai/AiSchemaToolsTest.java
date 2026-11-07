@@ -3,9 +3,7 @@ package com.example.dbadmin.service.ai;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.model.DbConnection;
-import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.service.ConnectionService;
-import com.example.dbadmin.service.ExecutionGuard;
 import com.example.dbadmin.service.MetadataCacheService;
 import com.example.dbadmin.service.MetadataService;
 import com.example.dbadmin.service.ai.llm.LlmToolCall;
@@ -213,8 +211,7 @@ class AiSchemaToolsTest {
         when(connections.open(anyLong(), nullable(String.class)))
                 .thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
         MetadataCacheService cache = new MetadataCacheService();
-        MetadataService metadata = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), cache, new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, new DialectRegistry(), cache);
         AiGlossaryService glossary = mock(AiGlossaryService.class);
         when(glossary.terms(CONNECTION_ID)).thenReturn(terms);
         AiSqlValidationService validator = new AiSqlValidationService(

@@ -3,7 +3,6 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTargetPage;
 import com.example.dbadmin.model.DbConnection;
-import com.example.dbadmin.repo.AuditRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,13 +34,7 @@ class MetadataBackupTargetTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(anyLong())).thenReturn(model);
-        service = new MetadataService(
-                connections,
-                new DialectRegistry(),
-                mock(AuditRepository.class),
-                new MetadataCacheService(),
-                new ExecutionGuard()
-        );
+        service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
     }
 
     @Test

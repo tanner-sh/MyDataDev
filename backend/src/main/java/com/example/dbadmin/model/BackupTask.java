@@ -1,12 +1,8 @@
 package com.example.dbadmin.model;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import org.springframework.scheduling.support.CronExpression;
 
-import java.time.DateTimeException;
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.Locale;
 
@@ -38,7 +34,7 @@ public record BackupTask(
         Long lastStorageProfileId,
         String lastStorageObjectKey,
         String scheduleZone
-) {
+) implements CronScheduled {
     public BackupTask {
         String normalizedScope = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
         if ("TABLE".equals(normalizedScope)) {
@@ -136,20 +132,6 @@ public record BackupTask(
                 || lastStorageObjectKey != null && !lastStorageObjectKey.isBlank());
     }
 
-    /**
-     * 执行计划所用的时区。任务上没有记录时区（旧数据）才回落到服务端默认时区，
-     * 否则 02:00 这样的计划会被按服务器时区解释，用户看到的却是本地时间。
-     */
-    public ZoneId scheduleZoneId() {
-        if (scheduleZone == null || scheduleZone.isBlank()) {
-            return ZoneId.systemDefault();
-        }
-        try {
-            return ZoneId.of(scheduleZone.trim());
-        } catch (DateTimeException ignored) {
-            return ZoneId.systemDefault();
-        }
-    }
 
     @JsonProperty("zoneId")
     public String zoneId() {
@@ -158,15 +140,6 @@ public record BackupTask(
 
     @JsonProperty("nextRunAt")
     public Instant nextRunAt() {
-        if (!enabled || cron == null || cron.isBlank()) {
-            return null;
-        }
-        try {
-            ZoneId zone = scheduleZoneId();
-            ZonedDateTime next = CronExpression.parse(cron).next(ZonedDateTime.now(zone));
-            return next == null ? null : next.toInstant();
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
+        return scheduled() ? CronSchedules.nextRun(cron, scheduleZoneId(), Instant.now()) : null;
     }
 }

@@ -1,5 +1,5 @@
 import Editor from './SqlEditor';
-import { DRAWER_WIDTH } from '../constants';
+import { DRAWER_WIDTH, MODAL_WIDTH } from '../constants';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import {
   ApiOutlined,
@@ -286,7 +286,7 @@ function SchemaObjectGroup({ capability, state, activeObjectKey, onRetry, onOpen
   onOpen: (object: SchemaObjectSummary) => void;
 }) {
   if (!state || state.loading && state.items.length === 0) return <div className="schema-object-group-status"><Spin size="small" /> 正在加载…</div>;
-  if (state.error) return <Alert type="error" showIcon message={state.error} action={<Button size="small" onClick={onRetry}>重试</Button>} />;
+  if (state.error) return <Alert type="error" showIcon title={state.error} action={<Button size="small" onClick={onRetry}>重试</Button>} />;
   if (state.items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={`暂无${schemaObjectKindLabel(capability.kind)}`} />;
   return (
       <div className="schema-object-list" role="list">
@@ -554,14 +554,14 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     !creation && { key: 'overview', label: '概览', children: detail ? <ObjectOverview detail={detail} /> : <Spin /> },
     { key: 'source', label: '源码', children: (
       <div className="schema-object-source-panel">
-        {!creation && detail && !detail.sourceAvailable && <Alert type="warning" showIcon message="无法读取对象源码" description={detail.sourceUnavailableReason} />}
+        {!creation && detail && !detail.sourceAvailable && <Alert type="warning" showIcon title="无法读取对象源码" description={detail.sourceUnavailableReason} />}
         {compilationErrors.length > 0 && (
           <Alert
             type="error"
             showIcon
             closable
             onClose={() => setCompilationErrors([])}
-            message={compilationErrorSummary(compilationErrors)}
+            title={compilationErrorSummary(compilationErrors)}
             description={
               <div className="schema-object-compilation-errors">
                 {compilationErrors.map((error, index) => (
@@ -618,7 +618,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       <Modal
         title={`${pending ? lifecycleLabel(pending.operation) : '对象操作'}确认`}
         open={Boolean(pending)}
-        width={720}
+        width={MODAL_WIDTH.wide}
         okText="确认执行"
         okButtonProps={{
           danger: pending?.operation === 'DROP' || pending?.operation === 'DISABLE',
@@ -629,7 +629,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         onCancel={() => setPending(undefined)}
       >
         {pending && <>
-          <Alert type="warning" showIcon message="请核对最终 SQL" description="对象定义会作为单条原生语句执行；删除操作不会自动添加 CASCADE。" />
+          <Alert type="warning" showIcon title="请核对最终 SQL" description="对象定义会作为单条原生语句执行；删除操作不会自动添加 CASCADE。" />
           <SqlPreview sql={pending.sql} />
           <TypedConfirmationFields
             target={{ expected: pending.confirmationTarget, value: confirmation, ariaLabel: '输入完整对象名确认', onChange: setConfirmation }}
@@ -641,7 +641,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       <Modal
         title={`调用 ${detail?.object.displayName || ''}`}
         open={invokeOpen}
-        width={640}
+        width={MODAL_WIDTH.form}
         okText={invokeMode === 'background' ? '提交后台执行' : '执行调用'}
         confirmLoading={invoking}
         okButtonProps={{ disabled: production && invokeProductionConfirmation !== connection.name }}
@@ -655,12 +655,12 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         onOk={() => void invokeRoutine()}
         onCancel={() => { if (!invoking) setInvokeOpen(false); }}
       >
-        <Alert type="warning" showIcon message="例程可能包含写入或结构变更" description="调用参数值不会写入审计、SQL 历史或执行日志。" />
+        <Alert type="warning" showIcon title="例程可能包含写入或结构变更" description="调用参数值不会写入审计、SQL 历史或执行日志。" />
         {invokeError && <Alert
           className="routine-invoke-error"
           type={invokeError.kind === 'cancelled' ? 'info' : 'error'}
           showIcon
-          message={invokeError.title}
+          title={invokeError.title}
           description={invokeError.message}
           action={invokeError.suggestBackground && invokeMode === 'foreground'
             ? <Button size="small" onClick={() => { setInvokeMode('background'); setInvokeError(undefined); }}>改用后台执行</Button>
@@ -726,7 +726,7 @@ function ParameterTable({ parameters }: { parameters: SchemaObjectParameter[] })
 }
 
 function DependencyPanel({ detail }: { detail: SchemaObjectDetail }) {
-  if (!detail.dependenciesAvailable) return <Alert type="info" showIcon message="依赖信息不可用" description={detail.dependenciesUnavailableReason} />;
+  if (!detail.dependenciesAvailable) return <Alert type="info" showIcon title="依赖信息不可用" description={detail.dependenciesUnavailableReason} />;
   if (detail.dependencies.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现可靠的对象依赖" />;
   return <div className="schema-object-dependency-list">{detail.dependencies.map((item, index) => <div className="schema-object-dependency-item" key={`${item.schemaName}:${item.name}:${index}`}><Space><Tag>{item.kind}</Tag><Text>{item.schemaName ? `${item.schemaName}.` : ''}{item.name}</Text><Text type="secondary">{item.direction}</Text></Space></div>)}</div>;
 }
@@ -734,7 +734,7 @@ function DependencyPanel({ detail }: { detail: SchemaObjectDetail }) {
 function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
   return (
     <div className="routine-results">
-      <Alert type={response.truncated ? 'warning' : 'success'} showIcon message={`调用成功 · ${response.elapsedMs}ms${response.truncated ? ' · 结果已截断' : ''}`} />
+      <Alert type={response.truncated ? 'warning' : 'success'} showIcon title={`调用成功 · ${response.elapsedMs}ms${response.truncated ? ' · 结果已截断' : ''}`} />
       {(response.returnValue !== undefined || response.outParameters.length > 0) && (
         <Descriptions bordered size="small" column={1}>
           {response.returnValue !== undefined && <Descriptions.Item label="返回值"><Text code>{renderValue(response.returnValue)}</Text></Descriptions.Item>}
@@ -743,7 +743,7 @@ function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
       )}
       {response.results.map((item, index) => item.kind === 'RESULT_SET'
         ? <div className="routine-result-set" key={index}><Title level={5}>结果集 {index + 1}</Title><ResultGrid result={item.result || null} pagingEnabled={false} /></div>
-        : <Alert key={index} type="info" message={`更新计数：${item.updateCount ?? 0}`} />)}
+        : <Alert key={index} type="info" title={`更新计数：${item.updateCount ?? 0}`} />)}
       {response.messages.length > 0 && (
         <div className="routine-messages">
           {/* PostgreSQL 的 RAISE NOTICE、Oracle 的 DBMS_OUTPUT —— 不显示出来，PL/SQL 里最常用的那种排查手段等于没有。 */}

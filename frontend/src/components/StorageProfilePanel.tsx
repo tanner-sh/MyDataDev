@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import {
   Alert,
   Button,
@@ -20,7 +21,7 @@ import {
 import { ApiOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import type { StorageProfile, StorageProfileRequest, StorageTestResponse, StorageType } from '../types';
-import { formatHistoryTime } from '../utils';
+import { formatDateTime } from '../utils';
 
 const { Text } = Typography;
 const SECRET_MASK = '******';
@@ -181,7 +182,7 @@ export function StorageProfilePanel({ profiles, loading, onReload }: StorageProf
               {profile.lastTestStatus && <Tag color={profile.lastTestStatus === 'SUCCESS' ? 'green' : 'red'}>{profile.lastTestStatus === 'SUCCESS' ? '测试通过' : '测试失败'}</Tag>}
             </Space>
             <Text type="secondary">{profile.host}:{profile.port}{storageLocation(profile)}</Text>
-            <Text type="secondary">任务引用 {profile.taskReferences} · 历史引用 {profile.historyReferences}{profile.lastTestedAt ? ` · 最近测试 ${formatHistoryTime(profile.lastTestedAt)}` : ''}</Text>
+            <Text type="secondary">任务引用 {profile.taskReferences} · 历史引用 {profile.historyReferences}{profile.lastTestedAt ? ` · 最近测试 ${formatDateTime(profile.lastTestedAt)}` : ''}</Text>
             {profile.lastTestMessage && <Text type="secondary" className="backup-history-message">{profile.lastTestMessage}</Text>}
           </div>
           <Space size={2} className="backup-task-actions">
@@ -195,7 +196,7 @@ export function StorageProfilePanel({ profiles, loading, onReload }: StorageProf
       </div>}
     </Spin>
 
-    <Modal title={editing ? '编辑文件服务' : '新建文件服务'} open={editorOpen} width={680} forceRender confirmLoading={saving}
+    <Modal title={editing ? '编辑文件服务' : '新建文件服务'} open={editorOpen} width={MODAL_WIDTH.form} forceRender confirmLoading={saving}
       okText="保存" cancelText="取消" onOk={() => form.submit()} onCancel={() => !saving && setEditorOpen(false)}
       footer={(_, { OkBtn, CancelBtn }) => <Space><Button icon={<ApiOutlined />} loading={testingId !== null} disabled={saving} onClick={() => void testDraftOrSaved()}>{editing ? '测试已保存配置' : '测试连接'}</Button><CancelBtn /><OkBtn /></Space>}>
       <Form form={form} layout="vertical" size="small" disabled={saving} onFinish={save} initialValues={emptyProfile()}>

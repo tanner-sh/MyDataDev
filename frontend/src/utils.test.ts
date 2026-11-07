@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChanges, localizeError, localizeMessage, sameCellValue, summarizeRowChanges } from './utils';
+import { buildChanges, formatBytes, formatClockTime, formatDateTime, localizeError, localizeMessage, sameCellValue, summarizeRowChanges } from './utils';
 import type { TableRow } from './types';
 
 describe('error localization', () => {
@@ -87,3 +87,22 @@ describe('summarizeRowChanges', () => {
     expect(summarizeRowChanges([])).toEqual({ inserts: 0, updates: 0, deletes: 0 });
   });
 });
+
+describe('shared formatters', () => {
+  it('formats server timestamps in 24-hour time and tolerates the Java zone suffix', () => {
+    const plain = formatDateTime('2026-03-01T13:05:00+08:00');
+    expect(formatDateTime('2026-03-01T13:05:00+08:00[Asia/Shanghai]')).toBe(plain);
+    expect(plain).not.toMatch(/上午|下午|AM|PM/);
+    expect(formatDateTime(null)).toBe('');
+    expect(formatDateTime('not a date')).toBe('not a date');
+    expect(formatClockTime('2026-03-01T13:05:00+08:00[Asia/Shanghai]')).not.toBe('');
+    expect(formatClockTime(undefined)).toBe('');
+  });
+
+  it('formats byte sizes on one scale', () => {
+    expect(formatBytes(1023)).toBe('1023 B');
+    expect(formatBytes(1536)).toBe('1.5 KB');
+    expect(formatBytes(-1)).toBe('');
+  });
+});
+

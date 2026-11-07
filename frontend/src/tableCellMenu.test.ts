@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tableCellMenuItems, tableRowCopyText } from './tableCellMenu';
+import { tableCellMenuItems, tableRowCopyText, tableRowDeleteAction } from './tableCellMenu';
 import type { TableColumn } from './types';
 
 const columns: TableColumn[] = [
@@ -11,6 +11,23 @@ const columns: TableColumn[] = [
 const actions = (items: ReturnType<typeof tableCellMenuItems>) => items.map((item) => item.type === 'divider' ? '---' : item.action);
 
 describe('table cell menu', () => {
+  it('puts the row delete action last, in its own group, and labels it by row state', () => {
+    const items = tableCellMenuItems({ editable: true, isDefault: false, displayKind: 'value', canInsert: true, rowAction: 'delete' });
+    expect(actions(items).slice(-2)).toEqual(['---', 'toggle-delete']);
+    expect(items[items.length - 1]).toMatchObject({ label: '标记删除此行' });
+    // 已标记删除的行不能再编辑，但撤销删除必须还在。
+    const undo = tableCellMenuItems({ editable: false, isDefault: false, displayKind: 'value', canInsert: true, rowAction: 'undo-delete' });
+    expect(actions(undo)).toEqual(['copy', 'copy-row', 'copy-row-insert', 'copy-column-name', '---', 'toggle-delete']);
+    expect(undo[undo.length - 1]).toMatchObject({ label: '撤销删除此行' });
+  });
+
+  it('derives the row delete action from the row state', () => {
+    expect(tableRowDeleteAction({})).toBe('delete');
+    expect(tableRowDeleteAction({ deleted: true })).toBe('undo-delete');
+    expect(tableRowDeleteAction({ inserted: true })).toBe('remove-inserted');
+    expect(tableRowDeleteAction({ rowDisabled: true })).toBeUndefined();
+  });
+
   it('always offers copying, even on read-only connections', () => {
     expect(actions(tableCellMenuItems({ editable: false, isDefault: false, displayKind: 'value', canInsert: true })))
       .toEqual(['copy', 'copy-row', 'copy-row-insert', 'copy-column-name']);

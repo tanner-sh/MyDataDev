@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SqlFileExecution } from './types';
-import { formatSqlFileBytes, sqlFileStatusLabel, sqlFileTaskPercent } from './sqlFileExecution';
+import { sqlFileStatusLabel, sqlFileTaskPercent } from './sqlFileExecution';
+import { formatBytes } from './utils';
 
 function job(patch: Partial<SqlFileExecution>): SqlFileExecution {
   return {
@@ -21,6 +22,6 @@ describe('SQL file execution presentation', () => {
 
   it('formats statuses and file sizes', () => {
     expect(sqlFileStatusLabel('READY')).toBe('等待确认');
-    expect(formatSqlFileBytes(1024 * 1024)).toBe('1.0 MB');
+    expect(formatBytes(1024 * 1024)).toBe('1.0 MB');
   });
 });

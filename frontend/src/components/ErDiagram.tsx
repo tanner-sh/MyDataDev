@@ -63,9 +63,9 @@ export const ErDiagram = memo(function ErDiagram({
   const model = useMemo(() => (diagram ? buildErModel(diagram) : undefined), [diagram]);
 
   if (loading && !model) return <PanelLoading text="正在读取表结构与外键" />;
-  if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />;
+  if (error) return <Alert type="error" showIcon title={error} action={<Button onClick={() => setRevision(value => value + 1)}>重试</Button>} />;
   if (!model || model.nodes.length === 0) {
-    return <Space direction="vertical"><PanelEmpty title="没有可绘制的表" description="这个 Schema 里没有表，或当前账号看不到它们。" /><Button loading={loading} onClick={() => setRevision(value => value + 1)}>重新读取结构</Button></Space>;
+    return <Space orientation="vertical"><PanelEmpty title="没有可绘制的表" description="这个 Schema 里没有表，或当前账号看不到它们。" /><Button loading={loading} onClick={() => setRevision(value => value + 1)}>重新读取结构</Button></Space>;
   }
 
   const isolated = model.nodes.length - model.connectedTables;

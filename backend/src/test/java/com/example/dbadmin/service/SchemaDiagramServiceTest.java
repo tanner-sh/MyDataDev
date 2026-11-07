@@ -4,7 +4,6 @@ import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.SchemaDiagramDtos.DiagramTable;
 import com.example.dbadmin.dto.SchemaDiagramDtos.SchemaDiagram;
 import com.example.dbadmin.model.DbConnection;
-import com.example.dbadmin.repo.AuditRepository;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -26,7 +25,7 @@ class SchemaDiagramServiceTest {
         var connections = mock(ConnectionService.class);
         when(connections.open(1)).thenAnswer(i -> DriverManager.getConnection(url));
         when(connections.require(1)).thenReturn(new DbConnection(1, "fixture", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        var metadata = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        var metadata = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         var diagrams = new SchemaDiagramService(metadata);
         assertThat(diagrams.build(1, "PUBLIC", 60).tables()).hasSize(1);
         try (var c = DriverManager.getConnection(url)) { c.createStatement().execute("CREATE TABLE AFTER_OPEN(ID INT PRIMARY KEY, PARENT_ID INT REFERENCES ORIGINAL(ID))"); }
@@ -131,9 +130,7 @@ class SchemaDiagramServiceTest {
         when(connections.require(1L)).thenReturn(new DbConnection(
                 1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
-        MetadataService metadata = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard()
-        );
+        MetadataService metadata = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         return new SchemaDiagramService(metadata).build(1L, "PUBLIC", limit);
     }
 

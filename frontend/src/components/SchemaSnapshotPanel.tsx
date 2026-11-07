@@ -1,8 +1,9 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Collapse, Form, Input, InputNumber, List, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import { CameraOutlined, HistoryOutlined, SaveOutlined } from '@ant-design/icons';
 import { PanelEmpty } from './PanelState';
 import { api } from '../api';
+import { ConnectionField, SchemaField } from './ConnectionScopeFields';
 import { localizeError } from '../utils';
 import {
   canCaptureSnapshot,
@@ -61,13 +62,6 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const connectionOptions = useMemo(
-    () => connections.map((connection) => ({
-      value: connection.id,
-      label: `${connection.name}（${connection.dbType}${connection.environment === 'prod' ? ' · 生产' : ''}）`
-    })),
-    [connections]
-  );
 
   const load = useCallback(async () => {
     if (!form.connectionId) return;
@@ -164,33 +158,19 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
   ];
 
   return (
-    <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+    <Space className="full-width" orientation="vertical" size="middle">
       <Alert
         type="info"
         showIcon
-        message="快照是一份记录，不是一份可以回放的期望状态"
+        title="快照是一份记录，不是一份可以回放的期望状态"
         description="这里只告诉你结构什么时候变的、变了什么，不生成「改回去」的脚本 —— 一个字段可能是上周有人有意加的，照着旧快照删掉它才是真正的事故。要迁移脚本请用「结构对比」，拿一个真正的基准环境作源端。"
       />
 
       <Form layout="vertical" size="small" className="schema-diff-endpoints">
         <Space size={12} wrap align="start">
-          <Form.Item label="连接">
-            <Select
-              style={{ width: 240 }}
-              value={form.connectionId}
-              options={connectionOptions}
-              placeholder="选择连接"
-              onChange={(value) => { setForm({ ...form, connectionId: value }); setDrift(undefined); setCapture(undefined); }}
-            />
-          </Form.Item>
-          <Form.Item label="Schema" tooltip="留空则用连接当前所在的 Schema/数据库">
-            <Input
-              style={{ width: 160 }}
-              value={form.schemaName}
-              placeholder="默认"
-              onChange={(event) => setForm({ ...form, schemaName: event.target.value })}
-            />
-          </Form.Item>
+          <ConnectionField connections={connections} value={form.connectionId}
+            onChange={(value) => { setForm({ ...form, connectionId: value }); setDrift(undefined); setCapture(undefined); }} />
+          <SchemaField connectionId={form.connectionId} value={form.schemaName} onChange={(value) => setForm({ ...form, schemaName: value })} />
           <Form.Item label="备注" tooltip="给这份快照起个名字，例如「v2.3 上线前」">
             <Input
               style={{ width: 200 }}
@@ -214,15 +194,15 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
         </Space>
       </Form>
 
-      {error && <Alert type="error" showIcon message="操作失败" description={error} />}
+      {error && <Alert type="error" showIcon title="操作失败" description={error} />}
 
       {capture && (
         <Alert
           type={capture.changed ? 'success' : 'info'}
           showIcon
-          message={captureResultMessage(capture)}
+          title={captureResultMessage(capture)}
           description={capture.warnings.length > 0 && (
-            <Space direction="vertical" size={2}>
+            <Space orientation="vertical" size={2}>
               {capture.warnings.map((warning) => <Text key={warning} type="warning">{warning}</Text>)}
             </Space>
           )}
@@ -333,9 +313,9 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
           <Alert
             type={drift.tables.length === 0 ? 'success' : 'warning'}
             showIcon
-            message={driftSummary(drift)}
+            title={driftSummary(drift)}
             description={
-              <Space direction="vertical" size={2}>
+              <Space orientation="vertical" size={2}>
                 <Text type="secondary">对比到：{drift.targetLabel}</Text>
                 <Text type="secondary">{driftAuditNotice(drift)}</Text>
                 {drift.warnings.map((warning) => <Text key={warning} type="warning">{warning}</Text>)}
@@ -379,7 +359,7 @@ export const SchemaSnapshotPanel = memo(function SchemaSnapshotPanel({ connectio
                   render: (_: unknown, row) => row.items.length === 0
                     ? <Text type="secondary">整张表</Text>
                     : (
-                      <Space direction="vertical" size={2}>
+                      <Space orientation="vertical" size={2}>
                         {row.items.map((item) => (
                           <Tooltip key={`${item.category}:${item.name}`} title={`${item.source ?? '—'} → ${item.target ?? '—'}`}>
                             <Text>

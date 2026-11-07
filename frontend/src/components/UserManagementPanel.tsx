@@ -4,6 +4,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { authenticatedUsername } from '../auth';
 import type { WebUser, WebUserForm } from '../users';
+import { formatDateTime } from '../utils';
 
 const { Text } = Typography;
 
@@ -89,7 +90,7 @@ export function UserManagementPanel() {
         </div>
         <Button type="primary" size="small" icon={<PlusOutlined />} onClick={openCreate}>新建用户</Button>
       </header>
-      {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} />}
+      {error && <Alert type="error" showIcon title={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} />}
       <Table<WebUser>
         rowKey="id"
         size="small"
@@ -100,12 +101,12 @@ export function UserManagementPanel() {
         columns={[
           {
             title: '用户', dataIndex: 'username', width: 190,
-            render: (_, user) => <Space direction="vertical" size={0}><Text strong>{user.displayName}</Text><Text type="secondary">{user.username}{user.username === currentUsername ? ' · 当前账号' : ''}</Text></Space>
+            render: (_, user) => <Space orientation="vertical" size={0}><Text strong>{user.displayName}</Text><Text type="secondary">{user.username}{user.username === currentUsername ? ' · 当前账号' : ''}</Text></Space>
           },
           { title: '来源', dataIndex: 'provider', width: 90, render: (provider: string) => <Tag>{provider}</Tag> },
           { title: '角色', dataIndex: 'role', width: 110, render: (role: WebUser['role']) => <Tag color={role === 'ADMIN' ? 'blue' : 'default'}>{role === 'ADMIN' ? '管理员' : '操作员'}</Tag> },
           { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
-          { title: '最近登录', dataIndex: 'lastLoginAt', width: 180, render: (value?: string) => value ? new Date(value).toLocaleString() : '从未登录' },
+          { title: '最近登录', dataIndex: 'lastLoginAt', width: 180, render: (value?: string) => formatDateTime(value) || '从未登录' },
           {
             title: '操作', key: 'actions', width: 150, fixed: 'right',
             render: (_, user) => <Space>
@@ -128,7 +129,7 @@ export function UserManagementPanel() {
         destroyOnHidden
       >
         {editing !== 'new' && editing?.provider !== 'LOCAL' && (
-          <Alert type="info" showIcon message="SSO 账号资料和角色由身份平台声明同步；这里可以停用账号。" />
+          <Alert type="info" showIcon title="SSO 账号资料和角色由身份平台声明同步；这里可以停用账号。" />
         )}
         <Form form={form} layout="vertical" requiredMark={false}>
           <Form.Item name="username" label="用户名" rules={editing !== 'new' && editing?.provider !== 'LOCAL' ? [] : [{ required: true }, { pattern: /^[A-Za-z0-9._-]+$/, message: '仅支持字母、数字、点、下划线和连字符' }]}>

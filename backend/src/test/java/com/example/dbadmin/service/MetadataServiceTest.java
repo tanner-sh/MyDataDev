@@ -55,7 +55,7 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(1L)).thenAnswer(ignored -> recordingConnection(url, approximateFlags));
         when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
 
         service.detail(1, "PUBLIC", "INDEXED", true);
 
@@ -95,7 +95,7 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
 
         assertThat(service.objectColumns(1, "PUBLIC", "ORG_ORGS", false).primaryKeys()).containsExactly("PK_ORG");
         assertThat(service.objectColumns(1, "PUBLIC", "ORDER_LINE", false).primaryKeys()).containsExactly("ORDER_ID", "LINE_NO");
@@ -113,7 +113,7 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(1L)).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         var first = service.objectColumns(1, "PUBLIC", "ANNOTATED", false);
         assertThat(first.remarks()).isEqualTo("交易账户");
         assertThat(first.columns().get(0).remarks()).isEqualTo("账户编码");
@@ -142,7 +142,7 @@ class MetadataServiceTest {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(1L)).thenAnswer(ignored -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(1L)).thenReturn(new DbConnection(1L, "oracle", "oracle", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
-        MetadataService service = new MetadataService(connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard());
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
         var columns = service.objectColumns(1, "PUBLIC", "SIM_STOCKTRADE", false);
         assertThat(columns.remarks()).isEqualTo("股票交易");
         assertThat(columns.columns()).extracting("remarks").containsExactly("交易编码", "自定义字段十五");
@@ -280,9 +280,7 @@ class MetadataServiceTest {
         when(connections.require(1L)).thenReturn(new DbConnection(
                 1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
-        MetadataService service = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard()
-        );
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
 
         MetadataResponse response = service.inspect(1L, null, null, 0, 200, false);
 
@@ -304,9 +302,7 @@ class MetadataServiceTest {
         when(connections.require(1L)).thenReturn(new DbConnection(
                 1L, "oracle", "oracle", url, "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
-        MetadataService service = new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class), new MetadataCacheService(), new ExecutionGuard()
-        );
+        MetadataService service = new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
 
         MetadataResponse first = service.inspect(1L, "PUBLIC", null, 0, 2, false);
         MetadataResponse search = service.inspect(1L, "PUBLIC", "gamma_", 0, 10, false);
@@ -578,9 +574,11 @@ class MetadataServiceTest {
             connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY, name VARCHAR(40) NOT NULL)");
         }
 
-        MetadataService service = service(url);
+        Services services = services(url, "dev", false, mock(AuditRepository.class));
+        MetadataService service = services.metadata();
+        TableDesignService design = services.design();
         String structureVersion = service.detail(1L, null, "USERS", true).structureVersion();
-        var response = service.previewDesign(1L, new TableDesignRequest(
+        var response = design.previewDesign(1L, new TableDesignRequest(
                 null,
                 "USERS",
                 List.of(
@@ -605,7 +603,9 @@ class MetadataServiceTest {
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
         }
-        MetadataService service = service(url);
+        Services services = services(url, "dev", false, mock(AuditRepository.class));
+        MetadataService service = services.metadata();
+        TableDesignService design = services.design();
         ObjectDetail original = service.detail(1L, null, "USERS", true);
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("ALTER TABLE users ADD COLUMN external_value VARCHAR(40)");
@@ -621,7 +621,7 @@ class MetadataServiceTest {
                 null
         );
 
-        assertThatThrownBy(() -> service.previewDesign(1L, request))
+        assertThatThrownBy(() -> design.previewDesign(1L, request))
                 .isInstanceOfSatisfying(ApiProblemException.class,
                         problem -> assertThat(problem.code()).isEqualTo("STALE_TABLE_DESIGN"));
         assertThat(service.detail(1L, null, "USERS", true).columns())
@@ -635,7 +635,9 @@ class MetadataServiceTest {
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(name VARCHAR(40))");
         }
-        MetadataService service = service(url);
+        Services services = services(url, "dev", false, mock(AuditRepository.class));
+        MetadataService service = services.metadata();
+        TableDesignService design = services.design();
         ObjectDetail original = service.detail(1L, null, "USERS");
         assertThat(original.columns()).extracting("name").contains("NAME");
 
@@ -652,7 +654,7 @@ class MetadataServiceTest {
                 "USERS"
         );
 
-        assertThatThrownBy(() -> service.executeDesign(1L, request, "admin"))
+        assertThatThrownBy(() -> design.executeDesign(1L, request, "admin"))
                 .isInstanceOfSatisfying(ApiProblemException.class, problem -> {
                     assertThat(problem.code()).isEqualTo("DDL_PARTIALLY_APPLIED");
                     assertThat(problem.details().get("executedStatements")).asList().isNotEmpty();
@@ -666,7 +668,9 @@ class MetadataServiceTest {
     void createsRenamesAndDropsTableThroughLifecycleApi() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
         AuditRepository audit = mock(AuditRepository.class);
-        MetadataService service = service(url, "dev", false, audit);
+        Services services = services(url, "dev", false, audit);
+        MetadataService service = services.metadata();
+        TableDesignService design = services.design();
         TableLifecycleRequest create = new TableLifecycleRequest(
                 "CREATE",
                 "PUBLIC",
@@ -682,9 +686,9 @@ class MetadataServiceTest {
                 "PUBLIC.APP_USER"
         );
 
-        assertThat(service.previewTableLifecycle(1L, create).sql())
+        assertThat(design.previewTableLifecycle(1L, create).sql())
                 .first().asString().contains("CREATE TABLE", "APP_USER", "PRIMARY KEY");
-        service.executeTableLifecycle(1L, create, "admin", null);
+        design.executeTableLifecycle(1L, create, "admin", null);
         ObjectDetail created = service.detail(1L, "PUBLIC", "APP_USER", true);
         assertThat(created.columns()).extracting("name").containsExactly("ID", "NAME");
         assertThat(created.indexes()).extracting("name").contains("IDX_APP_USER_NAME");
@@ -694,8 +698,8 @@ class MetadataServiceTest {
                 "RENAME", "PUBLIC", "APP_USER", "APP_MEMBER", null, null, null,
                 created.structureVersion(), "PUBLIC.APP_USER"
         );
-        assertThat(service.previewTableLifecycle(1L, rename).sql()).singleElement().asString().contains("RENAME TO");
-        service.executeTableLifecycle(1L, rename, "admin", null);
+        assertThat(design.previewTableLifecycle(1L, rename).sql()).singleElement().asString().contains("RENAME TO");
+        design.executeTableLifecycle(1L, rename, "admin", null);
         ObjectDetail renamed = service.detail(1L, "PUBLIC", "APP_MEMBER", true);
         assertThat(renamed.columns()).extracting("name").contains("ID", "NAME");
         assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_USER", true))
@@ -707,8 +711,8 @@ class MetadataServiceTest {
                 "DROP", "PUBLIC", "APP_MEMBER", null, null, null, null,
                 renamed.structureVersion(), "PUBLIC.APP_MEMBER"
         );
-        assertThat(service.previewTableLifecycle(1L, drop).sql()).containsExactly("DROP TABLE \"PUBLIC\".\"APP_MEMBER\"");
-        service.executeTableLifecycle(1L, drop, "admin", null);
+        assertThat(design.previewTableLifecycle(1L, drop).sql()).containsExactly("DROP TABLE \"PUBLIC\".\"APP_MEMBER\"");
+        design.executeTableLifecycle(1L, drop, "admin", null);
         assertThatThrownBy(() -> service.detail(1L, "PUBLIC", "APP_MEMBER", true))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("未找到");
@@ -721,13 +725,15 @@ class MetadataServiceTest {
         try (Connection connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE users(id BIGINT PRIMARY KEY)");
         }
-        MetadataService service = service(url);
+        Services services = services(url, "dev", false, mock(AuditRepository.class));
+        MetadataService service = services.metadata();
+        TableDesignService design = services.design();
         TableLifecycleRequest duplicate = new TableLifecycleRequest(
                 "CREATE", "PUBLIC", "USERS", null,
                 List.of(new ColumnDesign("ID", "BIGINT", null, false, null, null, false)),
                 List.of(), List.of("ID"), null, "PUBLIC.USERS"
         );
-        assertThatThrownBy(() -> service.previewTableLifecycle(1L, duplicate))
+        assertThatThrownBy(() -> design.previewTableLifecycle(1L, duplicate))
                 .isInstanceOfSatisfying(ApiProblemException.class,
                         problem -> assertThat(problem.code()).isEqualTo("TABLE_ALREADY_EXISTS"));
 
@@ -736,7 +742,7 @@ class MetadataServiceTest {
                 "DROP", "PUBLIC", "USERS", null, null, null, null,
                 original.structureVersion(), "USERS"
         );
-        assertThatThrownBy(() -> service.executeTableLifecycle(1L, wrongConfirmation, "admin", null))
+        assertThatThrownBy(() -> design.executeTableLifecycle(1L, wrongConfirmation, "admin", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("确认文本不匹配");
 
@@ -747,7 +753,7 @@ class MetadataServiceTest {
                 "DROP", "PUBLIC", "USERS", null, null, null, null,
                 original.structureVersion(), "PUBLIC.USERS"
         );
-        assertThatThrownBy(() -> service.previewTableLifecycle(1L, stale))
+        assertThatThrownBy(() -> design.previewTableLifecycle(1L, stale))
                 .isInstanceOfSatisfying(ApiProblemException.class,
                         problem -> assertThat(problem.code()).isEqualTo("STALE_TABLE_OBJECT"));
     }
@@ -802,10 +808,7 @@ class MetadataServiceTest {
         when(connections.require(anyLong())).thenReturn(new DbConnection(
                 1L, "h2", "h2", "jdbc:h2:mem:row-count", "sa", "", "dev", false, Instant.now(), Instant.now()
         ));
-        return new MetadataService(
-                connections, new DialectRegistry(), mock(AuditRepository.class),
-                new MetadataCacheService(), new ExecutionGuard()
-        );
+        return new MetadataService(connections, new DialectRegistry(), new MetadataCacheService());
     }
 
     private MetadataService service(String url) throws Exception {
@@ -813,16 +816,21 @@ class MetadataServiceTest {
     }
 
     private MetadataService service(String url, String environment, boolean readonly, AuditRepository audit) throws Exception {
+        return services(url, environment, readonly, audit).metadata();
+    }
+
+    /** 读结构与改结构共用同一份缓存：改完之后不带 refresh 读到的必须是新结构。 */
+    private Services services(String url, String environment, boolean readonly, AuditRepository audit) throws Exception {
         ConnectionService connections = mock(ConnectionService.class);
         when(connections.open(anyLong())).thenAnswer(_invocation -> DriverManager.getConnection(url, "sa", ""));
         when(connections.require(anyLong())).thenReturn(new DbConnection(1L, "h2", "h2", url, "sa", "", environment, readonly, Instant.now(), Instant.now()));
-        return new MetadataService(
-                connections,
-                new DialectRegistry(),
-                audit,
-                new MetadataCacheService(),
-                new ExecutionGuard()
-        );
+        MetadataCacheService cache = new MetadataCacheService();
+        DialectRegistry dialects = new DialectRegistry();
+        MetadataService metadata = new MetadataService(connections, dialects, cache);
+        return new Services(metadata, new TableDesignService(connections, dialects, audit, cache, new ExecutionGuard(), metadata));
+    }
+
+    private record Services(MetadataService metadata, TableDesignService design) {
     }
 
     @Test

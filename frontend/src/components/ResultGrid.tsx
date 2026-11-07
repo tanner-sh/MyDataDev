@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { MODAL_WIDTH } from '../constants';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import { ColumnMetadataTooltip } from './ColumnMetadataTooltip';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
@@ -965,7 +966,7 @@ export const ResultGrid = memo(function ResultGrid({ result, fill = false, activ
         <Modal
         open={Boolean(commitDialog)}
         title={commitDialog?.phase === 'failed' ? commitDialog.failure.title : '提交前确认'}
-        width={720}
+        width={MODAL_WIDTH.wide}
         onCancel={() => setCommitDialog(null)}
         footer={commitDialog?.phase === 'failed' ? [
           <Button

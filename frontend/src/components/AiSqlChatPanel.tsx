@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Collapse, Drawer, Input, Space, Spin, Tag, Typography } from 'antd';
 import { CheckCircleOutlined, CheckOutlined, CopyOutlined, ImportOutlined, PlusOutlined, SendOutlined, StopOutlined } from '@ant-design/icons';
-import { API } from '../constants';
+import { API, DRAWER_WIDTH } from '../constants';
 import { api, apiErrorCode } from '../api';
 import { authHeaders } from '../auth';
 import { consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
@@ -298,7 +298,7 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
     <Drawer
       open={open}
       title="AI SQL 助手"
-      width={640}
+      size={DRAWER_WIDTH.browse}
       onClose={() => { stopCurrent(false); onClose(); }}
       extra={(
         <Space size={4}>
@@ -348,10 +348,10 @@ export function AiSqlChatPanel({ open, connectionId, schemaName, currentSql, fai
         {question && !busy && (
           <ClarifyPrompt question={question} onPick={(label) => void send({ question: label })} />
         )}
-        {error && <Alert type="error" showIcon message="AI 调用失败" description={error} />}
+        {error && <Alert type="error" showIcon title="AI 调用失败" description={error} />}
       </div>
       <div className="ai-chat-composer">
-        {check?.warning && <Alert type="warning" showIcon message={check.warning} />}
+        {check?.warning && <Alert type="warning" showIcon title={check.warning} />}
         {sqlReady && sql && (
           <Space wrap>
             <Button size="small" type="primary" icon={<ImportOutlined />}
@@ -449,7 +449,7 @@ function Grounding({ report }: { report: AiGroundingReport }) {
         key: 'grounding',
         label: <Space size={6}><CheckCircleOutlined />结构依据 · {report.references.length} 项</Space>,
         children: (
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Space className="full-width" orientation="vertical" size={6}>
             <Text type={report.validated ? 'success' : 'secondary'}>{report.validationMessage}</Text>
             {report.references.map((reference) => (
               <div key={`${reference.kind}-${reference.label}`} className="ai-chat-grounding-item">

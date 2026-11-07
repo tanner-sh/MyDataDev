@@ -6,7 +6,6 @@ import {
   MenuUnfoldOutlined,
   MoonOutlined,
   LogoutOutlined,
-  ReloadOutlined,
   SettingOutlined,
   StarFilled,
   SunOutlined,
@@ -32,7 +31,6 @@ type AppHeaderProps = {
   themeMode: 'light' | 'dark';
   onToggleExplorer: () => void;
   onSelectConnection: (connection: Connection) => void;
-  onRefreshConnections: () => void;
   /** 打开管理抽屉（默认落在连接管理）。 */
   onOpenManagement: () => void;
   /** 根据运行中的任务类型打开对应页面。 */
@@ -50,7 +48,6 @@ export const AppHeader = memo(function AppHeader({
   themeMode,
   onToggleExplorer,
   onSelectConnection,
-  onRefreshConnections,
   onOpenManagement,
   onOpenBackgroundTasks,
   onToggleTheme
@@ -154,16 +151,6 @@ export const AppHeader = memo(function AppHeader({
             </Dropdown>
           </Tooltip>
         )}
-        <Tooltip title="刷新连接">
-          <Button
-            type="text"
-            className="header-icon-button"
-            icon={<ReloadOutlined />}
-            loading={connectionsLoading}
-            aria-label="刷新连接"
-            onClick={onRefreshConnections}
-          />
-        </Tooltip>
         {/*
           管理类入口只留一个。之前这里有 6 个按钮，窄屏下会收成 6 个纯图标，其中「结构对比」
           与「审计」的字形几乎一样；把它们收进带左侧导航的管理抽屉之后，这个问题从根上没了。

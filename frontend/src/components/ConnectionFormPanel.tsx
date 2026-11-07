@@ -160,7 +160,7 @@ export function ConnectionFormPanel({ form, editing, loading, onChange, onDbType
                         type="warning"
                         showIcon
                         className="form-hint-text"
-                        message="不校验主机密钥意味着无法识别中间人，仅建议在可信内网临时使用。"
+                        title="不校验主机密钥意味着无法识别中间人，仅建议在可信内网临时使用。"
                       />
                     )}
                     {editing && <Text type="secondary" className="form-hint-text">****** 表示沿用已保存的口令或私钥；清空后保存会删除它。</Text>}

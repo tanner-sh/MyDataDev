@@ -11,6 +11,8 @@
  * 处理日期这类只写在样式里的信息。</p>
  */
 
+import { formatBytes } from './utils';
+
 export const INLINE_IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 
 export type ImportFileInfo = { name: string; size: number };
@@ -44,11 +46,6 @@ export function importFileExtension(name: string): string {
   return dot < 0 ? '' : name.slice(dot + 1).toLowerCase();
 }
 
-export function formatImportSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${bytes} B`;
-}
 
 /**
  * 决定一份文件走哪条导入路径。
@@ -68,7 +65,7 @@ export function importRoute(file: ImportFileInfo, pendingChanges: number, maxCha
   }
   if (extension === 'csv') {
     if (tooLarge) {
-      return { kind: 'background', format: 'csv', reason: `文件 ${formatImportSize(file.size)}，超过浏览器内解析的 ${formatImportSize(INLINE_IMPORT_MAX_BYTES)} 上限` };
+      return { kind: 'background', format: 'csv', reason: `文件 ${formatBytes(file.size)}，超过浏览器内解析的 ${formatBytes(INLINE_IMPORT_MAX_BYTES)} 上限` };
     }
     if (pendingChanges >= maxChanges) {
       return { kind: 'background', format: 'csv', reason: `当前已有 ${pendingChanges} 项待提交变更，无法再放入导入行` };
@@ -79,8 +76,8 @@ export function importRoute(file: ImportFileInfo, pendingChanges: number, maxCha
     return {
       kind: 'unsupported',
       message: extension === 'sql'
-        ? `SQL 文件 ${formatImportSize(file.size)} 过大，请改用「SQL 文件执行」入口，它支持后台执行与取消。`
-        : `JSON 文件 ${formatImportSize(file.size)} 过大，请转存为 CSV 后重试，CSV 支持后台导入。`
+        ? `SQL 文件 ${formatBytes(file.size)} 过大，请改用「SQL 文件执行」入口，它支持后台执行与取消。`
+        : `JSON 文件 ${formatBytes(file.size)} 过大，请转存为 CSV 后重试，CSV 支持后台导入。`
     };
   }
   return { kind: 'inline' };

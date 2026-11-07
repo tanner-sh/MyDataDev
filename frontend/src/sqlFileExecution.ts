@@ -11,9 +11,3 @@ export function sqlFileStatusLabel(status: SqlFileExecution['status']) {
   return ({ ANALYZING: '解析中', READY: '等待确认', QUEUED: '排队中', RUNNING: '执行中', SUCCESS: '成功', FAILED: '失败', CANCELLED: '已取消', EXPIRED: '已过期' } as const)[status];
 }
 
-export function formatSqlFileBytes(value: number) {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1024 * 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  return `${(value / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}

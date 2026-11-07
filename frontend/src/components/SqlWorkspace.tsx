@@ -1,8 +1,7 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Button, Divider, Dropdown, Empty, Input, Layout, Modal, Popover, Segmented, Select, Space, Tabs, Tag, Tooltip, Typography } from 'antd';
-import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CodeOutlined, CopyOutlined, DownOutlined, EditOutlined, ExportOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UndoOutlined, UpOutlined, QuestionCircleOutlined
+import { BookOutlined, BranchesOutlined, BulbOutlined, CheckOutlined, CloseCircleFilled, CodeOutlined, CopyOutlined, DownOutlined, ExportOutlined, FileTextOutlined, FormatPainterOutlined, FullscreenExitOutlined, FullscreenOutlined, FundProjectionScreenOutlined, HistoryOutlined, InfoCircleOutlined, MoreOutlined, PlayCircleOutlined, ProfileOutlined, SaveOutlined, StopOutlined, UpOutlined, QuestionCircleOutlined
 } from '@ant-design/icons';
-import type { ReactNode } from 'react';
 import type { MenuProps } from 'antd';
 import type { AiExecutionFailure, AiExecutionOutcome, AiExecutionPlan, Connection, ExportFormat, SqlCommandView, SqlPageNavigation, SqlStatementResult, SqlTab, WorkspaceStatus } from '../types';
 import { resultShape, resultShapeText } from '../aiResultShape';
@@ -19,7 +18,6 @@ import type { ResultEditCommit } from '../resultEditing';
 import { transactionBadge, transactionTooltip, type SqlTransactionState } from '../sqlTransaction';
 import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
-import { SHORTCUT_HINTS } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 import type { AiAskRequest } from './AiAssistantPanel';
 import { ScriptExecutionLog } from './ScriptExecutionLog';
@@ -42,11 +40,8 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSaveState, onRestoreClosedTab, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onTabChange, onTabAdd, onCommandTabAdd, onOpenInCommandTab, onTabClose, onTabRename, onTabDuplicate, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
-  /** 工作区标签条，由 App 统一渲染后交给各工作区放进工具栏最左边。 */
-  documentTabs?: ReactNode;
+export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onOpenInCommandTab, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
   draftSaveState?: string;
-  onRestoreClosedTab?: () => void;
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
   /** 这条连接是否开了样本档：只有开了才允许把查询结果发给模型解读。 */
@@ -72,15 +67,9 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   editorSplitRatio: number;
   editorSplitRatioTouched: boolean;
   onEditorSplitRatioChange: (value: number) => void;
-  onTabChange: (tabId: string) => void;
-  onTabAdd: () => void;
   /** 新开一个独立的命令窗口标签。 */
-  onCommandTabAdd: () => void;
   /** 把当前查询窗口里的脚本搬到一个新的命令窗口（当前标签不动）。 */
   onOpenInCommandTab: (sql: string) => void;
-  onTabClose: (tabId: string, liveSql?: string) => void;
-  onTabRename: (tabId: string) => void;
-  onTabDuplicate: (tabId: string, liveSql?: string) => void;
   onSqlChange: (connectionId: number | null, tabId: string, sql: string) => void;
   onEditorMount: SqlEditorOnMount;
   completionSource: SqlEditorProps['completionSource'];
@@ -429,28 +418,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
     }
   };
 
-  const tabMenu: MenuProps = {
-    items: [
-      { key: 'new-command', icon: <CodeOutlined />, label: '新建命令窗口', disabled: !selected },
-      ...(onRestoreClosedTab ? [{ key: 'restore-closed', icon: <UndoOutlined />, label: '找回关闭的 SQL' }] : []),
-      { type: 'divider' as const },
-      { key: 'rename-tab', icon: <EditOutlined />, label: '重命名当前标签' },
-      { key: 'duplicate-tab', icon: <CopyOutlined />, label: '复制当前标签' }
-    ],
-    onClick: ({ key }) => {
-      if (key === 'new-command') {
-        commitDraft();
-        onCommandTabAdd();
-      } else if (key === 'restore-closed') {
-        onRestoreClosedTab?.();
-      } else if (key === 'rename-tab') {
-        onTabRename(activeTabId);
-      } else if (key === 'duplicate-tab') {
-        commitDraft();
-        onTabDuplicate(activeTabId, draftRef.current);
-      }
-    }
-  };
 
   const delimiterMode = activeTab.delimiter?.mode ?? 'AUTO';
   const delimiterOption = DELIMITER_MODE_OPTIONS.find((option) => option.value === delimiterMode);
@@ -572,8 +539,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
   return (
     <div className="workspace sql-workspace">
       <Header className="workspace-toolbar">
-        {/* 「SQL 工作台」这个名字由标签条给出，标题里不再写第二遍。 */}
-        {documentTabs}
         <Tooltip title={selected?.jdbcUrl} placement="bottomLeft">
           <div className="toolbar-title sql-workspace-title">
             <Text type="secondary" className="ellipsis-text">
@@ -622,8 +587,10 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
                 </Tag>
               </Tooltip>
             )}
-            {/* 命令窗口在后台的独立连接上执行，这个窗口的手动事务与它无关，不显示。 */}
-            {!commandTab && <Tooltip title={transactionTooltip(transactionState)}>
+            {/* 命令窗口在后台的独立连接上执行，这个窗口的手动事务与它无关，不显示。
+                只读连接或没有写权限时也不显示：一个永远点不了的按钮只是占地方。已经开着的事务照常显示，
+                否则提交 / 回滚就没了入口。 */}
+            {!commandTab && (transactionState.transaction || (canWrite && !selected?.readonly)) && <Tooltip title={transactionTooltip(transactionState)}>
               {transactionState.transaction ? (
                 <Space.Compact>
                   <Button className="sql-toolbar-button" size="small" disabled>
@@ -652,7 +619,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
                   className="sql-toolbar-button"
                   size="small"
                   icon={<BranchesOutlined />}
-                  disabled={!canWrite || selected?.readonly || loading || scriptTransactionMode === 'SCRIPT'}
+                  disabled={loading || scriptTransactionMode === 'SCRIPT'}
                   loading={transactionState.pending}
                   onClick={onBeginTransaction}
                 >
@@ -708,40 +675,6 @@ export const SqlWorkspace = memo(function SqlWorkspace({ documentTabs, draftSave
           />
         </div>
       </Header>
-      <Tabs
-        className="sql-tabs"
-        type="editable-card"
-        activeKey={activeTabId}
-        onChange={(tabId) => { commitDraft(); onTabChange(tabId); }}
-        onEdit={(targetKey, action) => {
-          if (action === 'add') {
-            commitDraft();
-            onTabAdd();
-          } else {
-            const tabId = String(targetKey);
-            if (tabId === activeTabId) commitDraft();
-            onTabClose(tabId, tabId === activeTabId ? draftRef.current : undefined);
-          }
-        }}
-        tabBarExtraContent={
-          <Dropdown trigger={['click']} menu={tabMenu}>
-            <Button size="small" type="text" icon={<DownOutlined />} aria-label="标签操作" title="新建命令窗口、找回关闭的 SQL、重命名与复制标签" />
-          </Dropdown>
-        }
-        hideAdd={false}
-        addIcon={<Tooltip title={`新建 SQL 标签页（${SHORTCUT_HINTS.newSqlTab}），${SHORTCUT_HINTS.selectSqlTab} 切换标签页`}><span aria-hidden="true">+</span></Tooltip>}
-        items={tabs.map((tab) => ({
-          key: tab.id,
-          label: (
-            <span onDoubleClick={(event) => { event.preventDefault(); event.stopPropagation(); onTabRename(tab.id); }}>
-              {tab.dirty && <span aria-label="包含会话草稿">● </span>}
-              {isCommandTab(tab) && <CodeOutlined className="sql-tab-kind-icon" aria-label="命令窗口" />}
-              {tab.title}
-            </span>
-          ),
-          closable: tabs.length > 1
-        }))}
-      />
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         {resultPaneMode !== 'maximized' && <div className={`editor${resultPaneMode === 'collapsed' ? ' editor-with-collapsed-results' : ''}`} style={resultPaneMode === 'normal' ? { flexBasis: `${splitLimits.value * 100}%` } : undefined}>
           <SqlEditorSurface

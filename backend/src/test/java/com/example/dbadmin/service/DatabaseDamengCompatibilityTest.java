@@ -61,7 +61,7 @@ class DatabaseDamengCompatibilityTest {
                     new ColumnDesign("ID", "INT", null, false, null, "ID", false),
                     new ColumnDesign("NOTE", "VARCHAR", 80, true, null, "NOTE", false, "中文说明")),
                     List.of(), List.of("ID"), detail.structureVersion(), f.schema + "." + table);
-            f.metadata.executeDesign(1, request, "ci");
+            f.design.executeDesign(1, request, "ci");
             f.execute("INSERT INTO " + f.q(table) + " (ID) VALUES (1)");
             assertThat(f.scalar("SELECT NOTE FROM " + f.q(table))).isNull();
             var changed = f.metadata.detail(1, f.schema, table, true);
@@ -71,8 +71,8 @@ class DatabaseDamengCompatibilityTest {
                     .map(c -> new ColumnDesign(c.name(), c.type(), c.size(), c.nullable(), c.defaultValue(), c.name(), false,
                             c.name().equals("NOTE") ? "新说明" : null)).toList(), List.of(), changed.primaryKeys(),
                     changed.structureVersion(), f.schema + "." + table);
-            assertThat(f.metadata.previewDesign(1, commentOnly).sql()).hasSize(1).allMatch(sql -> sql.startsWith("COMMENT ON"));
-            f.metadata.executeDesign(1, commentOnly, "ci");
+            assertThat(f.design.previewDesign(1, commentOnly).sql()).hasSize(1).allMatch(sql -> sql.startsWith("COMMENT ON"));
+            f.design.executeDesign(1, commentOnly, "ci");
             assertThat(f.metadata.detail(1, f.schema, table, true).columns().get(1).remarks()).isEqualTo("新说明");
         }
     }

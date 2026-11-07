@@ -5,7 +5,7 @@ import { DownloadOutlined, LeftOutlined, ReloadOutlined, RightOutlined } from '@
 import { api, downloadBlob } from '../api';
 import { API } from '../constants';
 import type { AuditAlertStatus, AuditChainStatus, AuditEvent, AuditEventPage, AuditFacets, Connection } from '../types';
-import { formatHistoryTime, localizeError } from '../utils';
+import { formatDateTime, localizeError } from '../utils';
 import {
   auditActionColor,
   auditActionLabel,
@@ -235,7 +235,7 @@ export const AuditLogPanel = memo(function AuditLogPanel({ open, connections }: 
                   <Tag color={auditActionColor(event.action)}>{auditActionLabel(event.action)}</Tag>
                   <Text strong className="audit-item-actor">{event.actor}</Text>
                   <Text type="secondary" className="audit-item-target" title={targetLabel}>{targetLabel}</Text>
-                  <Text type="secondary" className="audit-item-time">{formatHistoryTime(event.createdAt)}</Text>
+                  <Text type="secondary" className="audit-item-time">{formatDateTime(event.createdAt)}</Text>
                   <Button
                     size="small"
                     type="link"

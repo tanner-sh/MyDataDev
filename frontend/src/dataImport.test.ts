@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { formatBytes } from './utils';
 import {
   backgroundImportPath,
   IMPORT_CONFLICT_OPTIONS,
-  formatImportSize,
   importFileExtension,
   importRoute,
   INLINE_IMPORT_MAX_BYTES,
@@ -72,11 +72,14 @@ describe('importFileExtension', () => {
   });
 });
 
-describe('formatImportSize', () => {
+describe('formatBytes', () => {
   it('按量级选单位', () => {
-    expect(formatImportSize(512)).toBe('512 B');
-    expect(formatImportSize(2048)).toBe('2 KB');
-    expect(formatImportSize(3 * 1024 * 1024)).toBe('3.0 MB');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(2048)).toBe('2.0 KB');
+    expect(formatBytes(3 * 1024 * 1024)).toBe('3.0 MB');
+    expect(formatBytes(1.5 * 1024 * 1024 * 1024)).toBe('1.50 GB');
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(undefined)).toBe('');
   });
 });
 

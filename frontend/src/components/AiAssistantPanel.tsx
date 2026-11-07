@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Button, Drawer, Space, Typography } from 'antd';
 import { CheckOutlined, CopyOutlined, ImportOutlined, StopOutlined } from '@ant-design/icons';
-import { API } from '../constants';
+import { API, DRAWER_WIDTH } from '../constants';
 import { authHeaders } from '../auth';
 import { applyStreamEvent, consumeSseBuffer, firstSqlBlock, hasUnclosedSqlFence } from '../aiSuggestion';
 import { checkSqlSuggestion } from '../sqlSuggestion';
@@ -97,7 +97,7 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
     <Drawer
       open={Boolean(request)}
       title={request?.title || 'AI 助手'}
-      width={520}
+      size={DRAWER_WIDTH.form}
       onClose={() => { abortRef.current?.abort(); onClose(); }}
       extra={
         <Space size={4}>
@@ -122,13 +122,13 @@ export function AiAssistantPanel({ request, onClose, onInsertSql }: {
         </Space>
       }
     >
-      {state.error && <Alert type="error" showIcon message="AI 调用失败" description={state.error} style={{ marginBottom: 12 }} />}
+      {state.error && <Alert type="error" showIcon title="AI 调用失败" description={state.error} style={{ marginBottom: 12 }} />}
       {!state.text && !state.done && !state.error && <PanelLoading text="模型正在回答…" />}
       {state.text && (
         <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 8 }}>{state.text}</Paragraph>
       )}
       {check?.warning && (
-        <Alert type="warning" showIcon message={check.warning} style={{ marginBottom: 8 }} />
+        <Alert type="warning" showIcon title={check.warning} style={{ marginBottom: 8 }} />
       )}
       {state.done && !state.error && (
         <Text type="secondary">

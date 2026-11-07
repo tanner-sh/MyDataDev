@@ -137,7 +137,7 @@ class SchemaExportServiceTest {
         DialectRegistry dialects = new DialectRegistry();
         MetadataCacheService cache = new MetadataCacheService();
         SchemaObjectCatalog catalog = new SchemaObjectCatalog(new AppProperties());
-        MetadataService metadata = new MetadataService(connections, dialects, audit, cache, new ExecutionGuard());
+        MetadataService metadata = new MetadataService(connections, dialects, cache);
         SchemaObjectService schemaObjects = new SchemaObjectService(connections, dialects, catalog, cache, new ExecutionGuard(),
                 audit, mock(SqlHistoryRepository.class), new AppProperties(), new SqlScriptSplitter());
         return new Fixture(url, new SchemaExportService(connections, dialects, metadata, schemaObjects, catalog, audit), audit);

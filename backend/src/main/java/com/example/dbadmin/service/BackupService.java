@@ -1,7 +1,6 @@
 package com.example.dbadmin.service;
 
 import com.example.dbadmin.config.AppProperties;
-import com.example.dbadmin.core.DatabaseDialect;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskRequest;
 import com.example.dbadmin.dto.ApiDtos.CronPreviewResponse;
@@ -9,6 +8,7 @@ import com.example.dbadmin.dto.ApiDtos.BackupHistoryPage;
 import com.example.dbadmin.dto.ApiDtos.BackupRunResponse;
 import com.example.dbadmin.dto.ApiDtos.BackupTaskPage;
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.model.CronSchedules;
 import com.example.dbadmin.model.BackupHistory;
 import com.example.dbadmin.model.BackupTask;
 import com.example.dbadmin.model.DbConnection;
@@ -27,46 +27,29 @@ import org.springframework.http.HttpStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import jakarta.annotation.PostConstruct;
+import com.example.dbadmin.service.BackupTargets.ResolvedTarget;
+import com.example.dbadmin.service.BackupTargets.TableRef;
 
-import java.io.BufferedWriter;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.Reader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.LinkOption;
-import java.nio.file.attribute.PosixFilePermission;
-import java.nio.file.attribute.PosixFilePermissions;
-import java.net.URI;
-import java.sql.Blob;
-import java.sql.Clob;
-import java.sql.Connection;
-import java.sql.DatabaseMetaData;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.Statement;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
-import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.Instant;
-import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.RejectedExecutionException;
+
+import static com.example.dbadmin.service.BackupTargets.blankToNull;
+import static com.example.dbadmin.service.BackupTargets.requestedTableNames;
+import static com.example.dbadmin.service.BackupTargets.validateRequestTargetShape;
+import static com.example.dbadmin.service.BackupTargets.validateScope;
 
 @Service
 public class BackupService {
@@ -84,6 +67,9 @@ public class BackupService {
     private final StorageProfileRepository storageProfiles;
     private final BackupStorageRegistry storage;
     private final Object[] taskLocks = taskLocks();
+    private final BackupTargets targets;
+    private final NativeBackupRunner nativeRunner;
+    private final SqlBackupWriter sqlWriter;
 
     @Autowired
     public BackupService(BackupTaskRepository repository, BackupHistoryRepository historyRepository, ConnectionService connections, AuditRepository audit, AppProperties properties, DialectRegistry dialectRegistry, BackupExecutionCoordinator coordinator, RestoreJobRepository restoreJobs, NativeToolLocator nativeTools, BackgroundTaskControl taskControl, StorageProfileRepository storageProfiles, BackupStorageRegistry storage) {
@@ -99,6 +85,9 @@ public class BackupService {
         this.taskControl = taskControl;
         this.storageProfiles = storageProfiles;
         this.storage = storage;
+        this.targets = new BackupTargets(connections, dialectRegistry);
+        this.nativeRunner = new NativeBackupRunner(connections, properties, nativeTools, targets);
+        this.sqlWriter = new SqlBackupWriter(connections, dialectRegistry, properties, targets);
     }
 
     @PostConstruct
@@ -167,14 +156,8 @@ public class BackupService {
         if (cron == null) {
             throw new IllegalArgumentException("cron 表达式不能为空。");
         }
-        CronExpression expression;
-        try {
-            expression = CronExpression.parse(cron);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("cron 表达式不合法：" + cron);
-        }
-        String scheduleZone = validateScheduleZone(zoneValue);
-        ZoneId zone = scheduleZone == null ? ZoneId.systemDefault() : ZoneId.of(scheduleZone);
+        CronExpression expression = CronSchedules.requireValidCron(cron);
+        ZoneId zone = CronSchedules.zoneOrDefault(CronSchedules.normalizeZone(zoneValue));
         ZonedDateTime cursor = ZonedDateTime.now(zone);
         List<String> nextRuns = new ArrayList<>(3);
         for (int index = 0; index < 3; index++) {
@@ -820,7 +803,7 @@ public class BackupService {
         validateRequestTargetShape(rawScope, request.schemaName(), requestedTables);
         String cron = blankToNull(request.cron());
         validateCron(cron, request.enabled());
-        String scheduleZone = validateScheduleZone(request.scheduleZone());
+        String scheduleZone = CronSchedules.normalizeZone(request.scheduleZone());
         String backupMethod = validateBackupMethod(request.backupMethod(), connection);
         String toolPath = blankToNull(request.toolPath());
         String extraArgs = validateExtraArgs(backupMethod, request.extraArgs());
@@ -833,12 +816,12 @@ public class BackupService {
             throw new IllegalArgumentException("所选文件服务已停用，请重新选择或启用配置。");
         }
         if (!"SQL".equals(backupMethod)) {
-            nativeTools.validateOverrideName(backupTool(backupMethod), toolPath);
+            nativeTools.validateOverrideName(NativeBackupRunner.backupTool(backupMethod), toolPath);
         }
         String requestedSchema = Set.of("SCHEMA", "TABLES").contains(scope) ? blankToNull(request.schemaName()) : null;
         ResolvedTarget resolved;
         try {
-            resolved = resolveRequestedTarget(connection, scope, requestedSchema, requestedTables);
+            resolved = targets.resolveRequestedTarget(connection, scope, requestedSchema, requestedTables);
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -858,22 +841,6 @@ public class BackupService {
         );
     }
 
-    /**
-     * 执行计划的时区由前端按浏览器所在时区提交。服务端与用户不在同一时区时（例如容器跑在
-     * UTC），沿用服务端默认时区会让 02:00 的计划在用户本地的 10:00 才触发。
-     */
-    private String validateScheduleZone(String value) {
-        String zone = blankToNull(value);
-        if (zone == null) {
-            return null;
-        }
-        try {
-            return ZoneId.of(zone.trim()).getId();
-        } catch (DateTimeException e) {
-            throw new IllegalArgumentException("无法识别的时区：" + zone);
-        }
-    }
-
     private Integer validateRetention(Integer value, String label, int max) {
         if (value == null) return null;
         if (value < 1 || value > max) throw new IllegalArgumentException(label + "必须在 1 到 " + max + " 之间。");
@@ -887,11 +854,7 @@ public class BackupService {
             }
             return;
         }
-        try {
-            CronExpression.parse(cron);
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("cron 表达式不合法：" + cron);
-        }
+        CronSchedules.requireValidCron(cron);
     }
 
     private Path checkedBackupPath(String filePath) {
@@ -918,223 +881,7 @@ public class BackupService {
         // Connections are editable after a task is created. Revalidate the
         // saved method against the current dialect before invoking a tool.
         String method = validateBackupMethod(task.backupMethod(), connection);
-        if (!isNativeMethod(method)) return writeSqlBackup(task, connection);
-        // 原生工具是独立进程，连不上连接池里的隧道，得为这次备份单独开一条；dump 跑完才关。
-        try (RemoteDataSourceRegistry.NativeAccess access = connections.openNativeAccess(connection.id())) {
-            String url = access.jdbcUrl();
-            return switch (method) {
-                case "MYSQLDUMP" -> runMysqlDump(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.MYSQLDUMP, task.toolPath()).path().toString());
-                case "PG_DUMP" -> runPgDump(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.PG_DUMP, task.toolPath()).path().toString());
-                default -> runOracleExp(task, connection, url, resolveTaskTarget(task, connection), nativeTools.resolve(NativeToolLocator.Tool.ORACLE_EXP, task.toolPath()).path().toString());
-            };
-        }
-    }
-
-    private static boolean isNativeMethod(String method) {
-        return "MYSQLDUMP".equals(method) || "PG_DUMP".equals(method) || "ORACLE_EXP".equals(method);
-    }
-
-    private BackupFile runMysqlDump(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
-        MysqlJdbcTarget target = mysqlTarget(jdbcUrl);
-        String database = "DATABASE".equals(resolved.scope()) ? target.database() : resolved.namespace();
-        if (database == null || database.isBlank()) {
-            throw new IllegalArgumentException("mysqldump 备份需要 JDBC URL 中包含数据库名，或选择一个数据库。");
-        }
-        Path file = backupPath(task, "mysqldump", ".sql");
-        List<String> command = new ArrayList<>();
-        command.add(toolPath);
-        command.add("--host=" + target.host());
-        command.add("--port=" + target.port());
-        if (connection.username() != null && !connection.username().isBlank()) {
-            command.add("--user=" + connection.username());
-        }
-        command.add("--result-file=" + file.toAbsolutePath().normalize());
-        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
-        command.add(database);
-        if ("TABLES".equals(resolved.scope())) {
-            command.addAll(resolved.tables().stream().map(TableRef::name).toList());
-        }
-        ProcessBuilder builder = new ProcessBuilder(command);
-        String password = connections.password(connection.id());
-        if (password != null) {
-            builder.environment().put("MYSQL_PWD", password);
-        }
-        runNativeProcess(builder, file, "mysqldump", password);
-        return new BackupFile(file, Files.size(file));
-    }
-
-    /**
-     * pg_dump 备份。
-     *
-     * <p>用 custom 格式（-Fc）而不是纯 SQL：它是 pg_restore 唯一能做选择性恢复的格式，也自带
-     * 压缩。密码通过 PGPASSWORD 环境变量传，不会出现在进程命令行里。</p>
-     */
-    private BackupFile runPgDump(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
-        PostgresJdbcTarget target = postgresTarget(jdbcUrl);
-        // 与 mysqldump 不同：MySQL 的「schema」就是数据库，而 PostgreSQL 的 schema 在库内，
-        // 所以无论备份整库还是单个 schema，连的都是 JDBC URL 里的那个库，范围由 --schema 收窄。
-        String database = target.database();
-        if (database == null || database.isBlank()) {
-            throw new IllegalArgumentException("pg_dump 备份需要 JDBC URL 中包含数据库名。");
-        }
-        Path file = backupPath(task, "pg-dump", ".dump");
-        List<String> command = new ArrayList<>();
-        command.add(toolPath);
-        command.add("--host=" + target.host());
-        command.add("--port=" + target.port());
-        if (connection.username() != null && !connection.username().isBlank()) {
-            command.add("--username=" + connection.username());
-        }
-        command.add("--no-password");
-        command.add("--format=custom");
-        command.add("--file=" + file.toAbsolutePath().normalize());
-        if ("SCHEMA".equals(resolved.scope()) && resolved.namespace() != null) {
-            command.add("--schema=" + resolved.namespace());
-        }
-        if ("TABLES".equals(resolved.scope())) {
-            for (TableRef table : resolved.tables()) {
-                command.add("--table=" + (resolved.namespace() == null ? table.name() : resolved.namespace() + "." + table.name()));
-            }
-        }
-        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
-        command.add(database);
-        ProcessBuilder builder = new ProcessBuilder(command);
-        String password = connections.password(connection.id());
-        if (password != null) {
-            builder.environment().put("PGPASSWORD", password);
-        }
-        runNativeProcess(builder, file, "pg_dump", password);
-        return new BackupFile(file, Files.size(file));
-    }
-
-    private BackupFile runOracleExp(BackupTask task, DbConnection connection, String jdbcUrl, ResolvedTarget resolved, String toolPath) throws Exception {
-        validateOracleNativeTarget(resolved);
-        String username = blankToNull(connection.username());
-        if (username == null) {
-            throw new IllegalArgumentException("Oracle exp 备份需要配置数据库用户名。");
-        }
-        Path file = backupPath(task, "oracle-exp", ".dmp");
-        Path log = file.resolveSibling(file.getFileName() + ".log");
-        String password = connections.password(connection.id());
-        String connectName = task.nativeConnectName() == null || task.nativeConnectName().isBlank()
-                ? oracleConnectName(jdbcUrl)
-                : task.nativeConnectName();
-        String userid = username + "/" + (password == null ? "" : password) + (connectName == null || connectName.isBlank() ? "" : "@" + connectName);
-        validateOracleParameterValue(userid, "Oracle 用户名、密码或连接名");
-        validateOracleParameterValue(file.toAbsolutePath().normalize().toString(), "Oracle 备份文件路径");
-        validateOracleParameterValue(log.toAbsolutePath().normalize().toString(), "Oracle 日志路径");
-        List<String> parameters = new ArrayList<>();
-        parameters.add("userid=" + userid);
-        parameters.add("file=" + file.toAbsolutePath().normalize());
-        parameters.add("log=" + log.toAbsolutePath().normalize());
-        if ("TABLES".equals(resolved.scope())) {
-            List<String> tables = resolved.tables().stream()
-                    .map(table -> resolved.namespace() == null || resolved.namespace().isBlank()
-                            ? table.name()
-                            : resolved.namespace() + "." + table.name())
-                    .toList();
-            parameters.add("tables=(" + String.join(",", tables) + ")");
-        } else if ("SCHEMA".equals(resolved.scope())) {
-            parameters.add("owner=" + resolved.namespace());
-        } else {
-            parameters.add("full=y");
-        }
-        Path parameterFile = writeOracleParameterFile(file, parameters);
-        List<String> command = new ArrayList<>();
-        command.add(toolPath);
-        command.add("parfile=" + parameterFile.toAbsolutePath().normalize());
-        command.addAll(extraArgs(task.backupMethod(), task.extraArgs()));
-        try {
-            runNativeProcess(new ProcessBuilder(command), file, "Oracle exp", password);
-            return new BackupFile(file, Files.size(file));
-        } finally {
-            deleteTemporaryFile(parameterFile);
-            deleteTemporaryFile(log);
-        }
-    }
-
-    private Path writeOracleParameterFile(Path outputFile, List<String> parameters) throws Exception {
-        Files.createDirectories(outputFile.getParent());
-        Set<PosixFilePermission> ownerOnly = Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
-        Path parameterFile = Files.getFileStore(outputFile.getParent()).supportsFileAttributeView("posix")
-                ? Files.createTempFile(outputFile.getParent(), ".oracle-exp-", ".par", PosixFilePermissions.asFileAttribute(ownerOnly))
-                : Files.createTempFile(outputFile.getParent(), ".oracle-exp-", ".par");
-        try {
-            Files.write(parameterFile, parameters, StandardCharsets.UTF_8);
-            return parameterFile;
-        } catch (Exception error) {
-            deleteTemporaryFile(parameterFile);
-            throw error;
-        }
-    }
-
-    private void validateOracleParameterValue(String value, String label) {
-        if (value != null && (value.indexOf('\n') >= 0 || value.indexOf('\r') >= 0 || value.indexOf('\0') >= 0)) {
-            throw new IllegalArgumentException(label + "不能包含换行符或 NUL 字符。");
-        }
-    }
-
-    private void runNativeProcess(ProcessBuilder builder, Path outputFile, String label, String secret) throws Exception {
-        Files.createDirectories(outputFile.getParent());
-        builder.redirectErrorStream(true);
-        Process process = null;
-        ProcessOutputCollector outputCollector = null;
-        boolean success = false;
-        try {
-            process = builder.start();
-            outputCollector = new ProcessOutputCollector(process.getInputStream());
-            outputCollector.start(label);
-            boolean finished = process.waitFor(Math.max(1, properties.getBackup().getTimeoutSeconds()), TimeUnit.SECONDS);
-            if (!finished) {
-                throw new IllegalStateException(label + " 执行超时。");
-            }
-            outputCollector.await(5_000);
-            String output = outputCollector.output();
-            if (process.exitValue() != 0) {
-                throw new IllegalStateException(label + " 执行失败，退出码 " + process.exitValue() + (output.isBlank() ? "" : "：" + scrub(output, secret)));
-            }
-            if (!Files.exists(outputFile) || !Files.isRegularFile(outputFile)) {
-                throw new IllegalStateException(label + " 未生成备份文件。");
-            }
-            success = true;
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            throw interrupted;
-        } finally {
-            terminateProcess(process);
-            if (outputCollector != null) outputCollector.await(5_000);
-            if (!success) deleteTemporaryFile(outputFile);
-        }
-    }
-
-    private void terminateProcess(Process process) {
-        if (process == null) return;
-        process.descendants().forEach(handle -> {
-            if (handle.isAlive()) handle.destroyForcibly();
-        });
-        if (!process.isAlive()) return;
-        process.destroyForcibly();
-        try {
-            if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                log.warn("Native backup process did not exit after forcible termination pid={}", process.pid());
-            }
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    private void deleteTemporaryFile(Path path) {
-        try {
-            Files.deleteIfExists(path);
-        } catch (Exception error) {
-            log.warn("Unable to delete temporary backup file {}", path, error);
-        }
-    }
-
-    private Path backupPath(BackupTask task, String prefix, String extension) throws Exception {
-        Path dir = Path.of(properties.getBackup().getDirectory());
-        Files.createDirectories(dir);
-        return dir.resolve(prefix + "-task-" + task.id() + "-" + Instant.now().toEpochMilli() + extension);
+        return NativeBackupRunner.isNativeMethod(method) ? nativeRunner.run(task, connection, method) : sqlWriter.write(task, connection);
     }
 
     private String validateBackupMethod(String method, DbConnection connection) {
@@ -1186,818 +933,14 @@ public class BackupService {
 
     /** 额外参数按备份方式校验：能拦住什么取决于工具，见 {@link NativeToolArguments}。 */
     private String validateExtraArgs(String backupMethod, String extraArgs) {
-        return NativeToolArguments.normalize(extraArgsTool(backupMethod), extraArgs, "备份");
-    }
-
-    private NativeToolLocator.Tool extraArgsTool(String backupMethod) {
-        return backupMethod == null || "SQL".equals(backupMethod) ? null : backupTool(backupMethod);
-    }
-
-    private NativeToolLocator.Tool backupTool(String backupMethod) {
-        return switch (backupMethod) {
-            case "MYSQLDUMP" -> NativeToolLocator.Tool.MYSQLDUMP;
-            case "PG_DUMP" -> NativeToolLocator.Tool.PG_DUMP;
-            default -> NativeToolLocator.Tool.ORACLE_EXP;
-        };
-    }
-
-    private List<String> extraArgs(String backupMethod, String extraArgs) {
-        return NativeToolArguments.parse(extraArgsTool(backupMethod), extraArgs, "备份");
-    }
-
-    private MysqlJdbcTarget mysqlTarget(String jdbcUrl) {
-        try {
-            String raw = jdbcUrl.replaceFirst("^jdbc:", "");
-            URI uri = URI.create(raw);
-            String database = uri.getPath() == null ? null : uri.getPath().replaceFirst("^/", "");
-            if (database != null && database.contains("/")) {
-                database = database.substring(0, database.indexOf('/'));
-            }
-            return new MysqlJdbcTarget(uri.getHost() == null ? "localhost" : uri.getHost(), uri.getPort() == -1 ? 3306 : uri.getPort(), database == null || database.isBlank() ? null : database);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("无法解析 MySQL JDBC URL：" + jdbcUrl);
-        }
-    }
-
-    /** jdbc:postgresql://host:port/database?params */
-    private PostgresJdbcTarget postgresTarget(String jdbcUrl) {
-        try {
-            URI uri = URI.create(jdbcUrl.replaceFirst("^jdbc:", ""));
-            String database = uri.getPath() == null ? null : uri.getPath().replaceFirst("^/", "");
-            if (database != null && database.contains("/")) database = database.substring(0, database.indexOf('/'));
-            return new PostgresJdbcTarget(
-                    uri.getHost() == null ? "localhost" : uri.getHost(),
-                    uri.getPort() == -1 ? 5432 : uri.getPort(),
-                    database == null || database.isBlank() ? null : database
-            );
-        } catch (Exception e) {
-            throw new IllegalArgumentException("无法解析 PostgreSQL JDBC URL：" + jdbcUrl);
-        }
-    }
-
-    private String oracleConnectName(String jdbcUrl) {
-        String prefix = "jdbc:oracle:thin:@";
-        if (jdbcUrl == null || !jdbcUrl.startsWith(prefix)) {
-            return null;
-        }
-        return jdbcUrl.substring(prefix.length());
-    }
-
-    private String scrub(String message, String secret) {
-        if (secret == null || secret.isBlank()) {
-            return message;
-        }
-        return message.replace(secret, "******");
-    }
-
-    private BackupFile writeSqlBackup(BackupTask task, DbConnection dbConnection) throws Exception {
-        Path dir = Path.of(properties.getBackup().getDirectory());
-        Files.createDirectories(dir);
-        Path file = dir.resolve("backup-task-" + task.id() + "-" + Instant.now().toEpochMilli() + ".sql");
-        try (Connection connection = connections.open(task.connectionId());
-             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true)) {
-            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-            ResolvedTarget resolved = resolveTarget(connection, dialect, task.scope(), task.schemaName(), task.tableNames());
-            if (resolved.tables().isEmpty()) {
-                throw new IllegalArgumentException("没有找到可备份的表。");
-            }
-            try (BufferedWriter writer = Files.newBufferedWriter(file, StandardCharsets.UTF_8)) {
-                writer.write("-- MyDataDev SQL Backup\n");
-                writer.write("-- Task: " + sqlCommentValue(task.name()) + "\n");
-                writer.write("-- Connection: " + sqlCommentValue(dbConnection.name()) + "\n");
-                writer.write("-- Format-Version: 2\n");
-                writer.write("-- Source-Db-Type: " + sqlCommentValue(dbConnection.dbType()) + "\n");
-                writer.write("-- Generated At: " + Instant.now() + "\n\n");
-                for (TableRef table : resolved.tables()) {
-                    ensureBackupNotInterrupted();
-                    writeCreateTable(connection, writer, table, dialect, dbConnection.dbType());
-                }
-                for (TableRef table : resolved.tables()) {
-                    ensureBackupNotInterrupted();
-                    writeTableBackup(connection, writer, table, dialect, dbConnection.dbType());
-                }
-                Set<String> selectedTables = resolved.tables().stream().map(this::tableKey).collect(java.util.stream.Collectors.toSet());
-                for (TableRef table : resolved.tables()) {
-                    ensureBackupNotInterrupted();
-                    writeTableConstraints(connection, writer, table, dialect, selectedTables);
-                }
-            }
-        } catch (Exception e) {
-            Files.deleteIfExists(file);
-            throw e;
-        }
-        return new BackupFile(file, Files.size(file));
-    }
-
-    private List<String> requestedTableNames(List<String> tableNames, String legacyTableName) {
-        List<String> requested = tableNames == null ? new ArrayList<>() : new ArrayList<>(tableNames);
-        String legacy = blankToNull(legacyTableName);
-        if (requested.isEmpty() && legacy != null) {
-            requested.add(legacy);
-        } else if (!requested.isEmpty() && legacy != null) {
-            String first = blankToNull(requested.get(0));
-            if (!legacy.equals(first)) {
-                throw new IllegalArgumentException("tableName 必须与 tableNames 的第一项一致。");
-            }
-        }
-        if (requested.size() > 100) {
-            throw new IllegalArgumentException("一次最多选择 100 张表。");
-        }
-        Set<String> unique = new HashSet<>();
-        List<String> normalized = new ArrayList<>(requested.size());
-        for (String value : requested) {
-            String name = blankToNull(value);
-            if (name == null) {
-                throw new IllegalArgumentException("表名不能为空。");
-            }
-            if (!unique.add(name)) {
-                throw new IllegalArgumentException("不能重复选择表：" + name);
-            }
-            normalized.add(name);
-        }
-        return List.copyOf(normalized);
-    }
-
-    private void validateRequestTargetShape(String rawScope, String schemaName, List<String> tableNames) {
-        String schema = blankToNull(schemaName);
-        switch (rawScope) {
-            case "DATABASE" -> {
-                if (schema != null) {
-                    throw new IllegalArgumentException("全库备份不能指定 Schema/数据库。");
-                }
-                if (!tableNames.isEmpty()) {
-                    throw new IllegalArgumentException("全库备份不能指定表。");
-                }
-            }
-            case "SCHEMA" -> {
-                if (schema == null) {
-                    throw new IllegalArgumentException("请选择 Schema/数据库。");
-                }
-                if (!tableNames.isEmpty()) {
-                    throw new IllegalArgumentException("Schema/数据库备份不能指定表。");
-                }
-            }
-            case "TABLES" -> {
-                if (schema == null) {
-                    throw new IllegalArgumentException("请选择 Schema/数据库。");
-                }
-            }
-            case "TABLE" -> {
-                // Legacy single-table tasks may omit the namespace; resolve it from the connection.
-            }
-            default -> {
-                // validateScope reports unsupported values.
-            }
-        }
-    }
-
-    private ResolvedTarget resolveRequestedTarget(DbConnection dbConnection, String scope, String schemaName, List<String> tableNames) throws Exception {
-        if ("DATABASE".equals(scope)) {
-            return new ResolvedTarget(scope, null, List.of());
-        }
-        try (Connection connection = connections.open(dbConnection.id())) {
-            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
-            if ("SCHEMA".equals(scope)) {
-                String requestedNamespace = blankToNull(schemaName);
-                if (requestedNamespace == null) requestedNamespace = blankToNull(dialect.currentSchema(connection));
-                if (requestedNamespace == null) {
-                    throw new IllegalArgumentException("无法确定当前 Schema/数据库，请重新选择备份目标。");
-                }
-                return new ResolvedTarget(scope, resolveNamespace(connection, dialect, requestedNamespace), List.of());
-            }
-            return resolveTarget(connection, dialect, scope, schemaName, tableNames);
-        }
-    }
-
-    private ResolvedTarget resolveTaskTarget(BackupTask task, DbConnection dbConnection) throws Exception {
-        String scope = normalizeScope(task.scope());
-        if ("DATABASE".equals(scope)) {
-            return new ResolvedTarget(scope, null, List.of());
-        }
-        try (Connection connection = connections.open(dbConnection.id())) {
-            return resolveTarget(connection, dialectRegistry.dialectFor(dbConnection), task.scope(), task.schemaName(), task.tableNames());
-        }
-    }
-
-    private ResolvedTarget resolveTarget(Connection connection, DatabaseDialect dialect, String rawScope, String schemaName, List<String> rawTableNames) throws Exception {
-        List<String> tableNames = requestedTableNames(rawTableNames, null);
-        String scope = validateScope(rawScope, tableNames);
-        if ("DATABASE".equals(scope)) {
-            if (dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG) {
-                String currentNamespace = blankToNull(dialect.currentSchema(connection));
-                if (currentNamespace != null) currentNamespace = resolveNamespace(connection, dialect, currentNamespace);
-                return new ResolvedTarget(scope, currentNamespace, physicalTables(connection, dialect, currentNamespace));
-            }
-            List<TableRef> allTables = new ArrayList<>();
-            for (String namespace : availableNamespaces(connection, dialect)) {
-                allTables.addAll(physicalTables(connection, dialect, namespace));
-            }
-            return new ResolvedTarget(scope, null, List.copyOf(allTables));
-        }
-        String requestedNamespace = blankToNull(schemaName);
-        if (requestedNamespace == null) {
-            requestedNamespace = blankToNull(dialect.currentSchema(connection));
-        }
-        if (requestedNamespace == null) {
-            throw new IllegalArgumentException("无法确定当前 Schema/数据库，请重新选择备份目标。");
-        }
-        String namespace = resolveNamespace(connection, dialect, requestedNamespace);
-        List<TableRef> availableTables = physicalTables(connection, dialect, namespace);
-        if ("SCHEMA".equals(scope)) {
-            return new ResolvedTarget(scope, namespace, availableTables);
-        }
-        Map<String, TableRef> exactTables = new LinkedHashMap<>();
-        Map<String, List<TableRef>> foldedTables = new LinkedHashMap<>();
-        for (TableRef table : availableTables) {
-            exactTables.putIfAbsent(table.name(), table);
-            foldedTables.computeIfAbsent(table.name().toLowerCase(Locale.ROOT), ignored -> new ArrayList<>()).add(table);
-        }
-        List<TableRef> selected = new ArrayList<>(tableNames.size());
-        List<String> missing = new ArrayList<>();
-        List<String> ambiguous = new ArrayList<>();
-        Set<String> selectedActualNames = new HashSet<>();
-        for (String tableName : tableNames) {
-            TableRef table = exactTables.get(tableName);
-            if (table == null) {
-                List<TableRef> folded = foldedTables.getOrDefault(tableName.toLowerCase(Locale.ROOT), List.of());
-                if (folded.size() == 1) {
-                    table = folded.get(0);
-                } else if (folded.size() > 1) {
-                    ambiguous.add(tableName);
-                    continue;
-                }
-            }
-            if (table == null) {
-                missing.add(tableName);
-            } else if (!selectedActualNames.add(table.name())) {
-                throw new IllegalArgumentException("多个目标解析到了同一张表：" + table.name());
-            } else {
-                selected.add(table);
-            }
-        }
-        if (!ambiguous.isEmpty()) {
-            throw new IllegalArgumentException("以下表名大小写不明确，请使用数据库返回的精确名称：" + String.join(", ", ambiguous));
-        }
-        if (!missing.isEmpty()) {
-            throw new IllegalArgumentException("以下表不存在或不是物理表：" + String.join(", ", missing));
-        }
-        return new ResolvedTarget(scope, namespace, List.copyOf(selected));
-    }
-
-    private String resolveNamespace(Connection connection, DatabaseDialect dialect, String requestedNamespace) throws Exception {
-        List<String> available = availableNamespaces(connection, dialect);
-        if (available.contains(requestedNamespace)) {
-            return requestedNamespace;
-        }
-        List<String> folded = available.stream().filter(namespace -> namespace.equalsIgnoreCase(requestedNamespace)).toList();
-        if (folded.size() == 1) {
-            return folded.get(0);
-        }
-        if (folded.size() > 1) {
-            throw new IllegalArgumentException("Schema/数据库名称大小写不明确，请使用精确名称：" + requestedNamespace);
-        }
-        throw new IllegalArgumentException("未找到 Schema/数据库：" + requestedNamespace);
-    }
-
-    private List<String> availableNamespaces(Connection connection, DatabaseDialect dialect) throws Exception {
-        Set<String> namespaces = new java.util.LinkedHashSet<>();
-        String current = blankToNull(dialect.currentSchema(connection));
-        if (current != null && !isSystemSchema(current)) {
-            namespaces.add(current);
-        }
-        DatabaseMetaData meta = connection.getMetaData();
-        try (ResultSet rs = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG
-                ? meta.getCatalogs()
-                : meta.getSchemas()) {
-            String column = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? "TABLE_CAT" : "TABLE_SCHEM";
-            while (rs.next()) {
-                String namespace = blankToNull(rs.getString(column));
-                if (namespace != null && !isSystemSchema(namespace)) {
-                    namespaces.add(namespace);
-                }
-            }
-        }
-        return namespaces.stream()
-                .sorted(String.CASE_INSENSITIVE_ORDER.thenComparing(Comparator.naturalOrder()))
-                .toList();
-    }
-
-    private List<TableRef> physicalTables(Connection connection, DatabaseDialect dialect, String namespace) throws Exception {
-        DatabaseMetaData meta = connection.getMetaData();
-        DatabaseDialect.MetadataScope metadataScope = dialect.metadataScope(connection, namespace);
-        String schemaPattern = metadataScope.schemaPattern() == null ? null : metadataExactPattern(meta, metadataScope.schemaPattern());
-        List<TableRef> tables = new ArrayList<>();
-        try (ResultSet rs = meta.getTables(metadataScope.catalog(), schemaPattern, "%", new String[]{"TABLE", "BASE TABLE"})) {
-            while (rs.next()) {
-                String foundNamespace = blankToNull(dialect.resultNamespace(rs));
-                if (namespace != null && foundNamespace != null && !namespace.equals(foundNamespace)) {
-                    continue;
-                }
-                String effectiveNamespace = foundNamespace == null ? namespace : foundNamespace;
-                String name = blankToNull(rs.getString("TABLE_NAME"));
-                String type = blankToNull(rs.getString("TABLE_TYPE"));
-                if (name != null && ("TABLE".equalsIgnoreCase(type) || "BASE TABLE".equalsIgnoreCase(type)) && !isSystemSchema(effectiveNamespace)) {
-                    tables.add(new TableRef(effectiveNamespace, name));
-                }
-            }
-        }
-        tables.sort(Comparator
-                .comparing((TableRef table) -> table.schema() == null ? "" : table.schema(), String.CASE_INSENSITIVE_ORDER)
-                .thenComparing(table -> table.schema() == null ? "" : table.schema())
-                .thenComparing(TableRef::name, String.CASE_INSENSITIVE_ORDER)
-                .thenComparing(TableRef::name));
-        return List.copyOf(tables);
-    }
-
-    private String metadataExactPattern(DatabaseMetaData meta, String value) throws Exception {
-        String escape = meta.getSearchStringEscape();
-        if (escape == null || escape.isEmpty()) return value;
-        return value.replace(escape, escape + escape)
-                .replace("%", escape + "%")
-                .replace("_", escape + "_");
-    }
-
-    private void validateOracleNativeTarget(ResolvedTarget target) {
-        if ("DATABASE".equals(target.scope())) {
-            return;
-        }
-        validateOracleNativeIdentifier(target.namespace(), "Schema");
-        if ("TABLES".equals(target.scope())) {
-            for (TableRef table : target.tables()) {
-                validateOracleNativeIdentifier(table.name(), "表");
-            }
-        }
-    }
-
-    private void validateOracleNativeIdentifier(String value, String label) {
-        if (value == null || !value.matches("[A-Za-z][A-Za-z0-9_$#]*") || !value.equals(value.toUpperCase(Locale.ROOT))) {
-            throw new IllegalArgumentException("Oracle exp 暂不支持需要引号或区分大小写的" + label + "标识符：" + value);
-        }
-    }
-
-    private void writeCreateTable(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
-        // 标识符引用走方言，不用 JDBC 元数据的 getIdentifierQuoteString()。
-        // SQL Server 的元数据返回的是双引号，而它的方言用的是方括号 —— 备份文件里写成
-        // "dbo"."t" 之后，恢复时 SqlRestoreTranslator 的 SQL Server 解析器把它当字符串而不是
-        // 标识符，第一条语句就报 multi-statement be found，整份备份恢复不回去。
-        // CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
-        String qualified = dialect.qualifiedName(table.schema(), table.name());
-        DatabaseMetaData meta = connection.getMetaData();
-        DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
-        String schema = scope.schemaPattern();
-        String schemaPattern = schema == null ? null : metadataExactPattern(meta, schema);
-        List<String> definitions = new ArrayList<>();
-        try (ResultSet columns = meta.getColumns(scope.catalog(), schemaPattern, table.name(), "%")) {
-            while (columns.next()) {
-                String name = columns.getString("COLUMN_NAME");
-                String type = columns.getString("TYPE_NAME");
-                int size = columns.getInt("COLUMN_SIZE");
-                int scale = columns.getInt("DECIMAL_DIGITS");
-                boolean nullable = columns.getInt("NULLABLE") != DatabaseMetaData.columnNoNulls;
-                String defaultValue = columns.getString("COLUMN_DEF");
-                boolean autoIncrement = "YES".equalsIgnoreCase(safeMetadataString(columns, "IS_AUTOINCREMENT"));
-                StringBuilder definition = new StringBuilder(dialect.quoteIdentifier(name)).append(' ').append(columnType(type, size, scale));
-                if (defaultValue != null && !defaultValue.isBlank() && !autoIncrement) definition.append(" DEFAULT ").append(defaultValue.trim());
-                if (!nullable) definition.append(" NOT NULL");
-                if (autoIncrement) definition.append(identityClause(dbType));
-                definitions.add(definition.toString());
-            }
-        }
-        List<String> primaryKeys = new ArrayList<>();
-        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schema, table.name())) {
-            java.util.TreeMap<Short, String> ordered = new java.util.TreeMap<>();
-            while (keys.next()) ordered.put(keys.getShort("KEY_SEQ"), keys.getString("COLUMN_NAME"));
-            primaryKeys.addAll(ordered.values());
-        }
-        if (!primaryKeys.isEmpty()) definitions.add("PRIMARY KEY (" + primaryKeys.stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")");
-        writer.write("-- Table structure: " + sqlCommentValue(qualified) + "\n");
-        writer.write("CREATE TABLE " + qualified + " (\n  " + String.join(",\n  ", definitions) + "\n)" + dialect.scriptStatementSeparator() + "\n\n");
-    }
-
-    private void writeTableConstraints(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, Set<String> selectedTables) throws Exception {
-        // 标识符引用走方言，不用 JDBC 元数据的 getIdentifierQuoteString()。
-        // SQL Server 的元数据返回的是双引号，而它的方言用的是方括号 —— 备份文件里写成
-        // "dbo"."t" 之后，恢复时 SqlRestoreTranslator 的 SQL Server 解析器把它当字符串而不是
-        // 标识符，第一条语句就报 multi-statement be found，整份备份恢复不回去。
-        // CLAUDE.md 那条「标识符引用收敛到方言接口」说的就是这里。
-        String qualified = dialect.qualifiedName(table.schema(), table.name());
-        DatabaseMetaData meta = connection.getMetaData();
-        DatabaseDialect.MetadataScope scope = dialect.metadataScope(connection, table.schema());
-        String schema = scope.schemaPattern();
-        Set<String> primaryIndexNames = new HashSet<>();
-        try (ResultSet keys = meta.getPrimaryKeys(scope.catalog(), schema, table.name())) {
-            while (keys.next()) {
-                String name = keys.getString("PK_NAME");
-                if (name != null) primaryIndexNames.add(name);
-            }
-        }
-        Map<String, IndexBackup> indexes = new LinkedHashMap<>();
-        // approximate=true：这里只取索引名与列，精确统计用不上，而 approximate=false 会让
-        // Oracle 驱动先跑一遍 DBMS_STATS.GATHER_TABLE_STATS —— 备份是定时跑在生产库上的，
-        // 顺手收一次全表统计不是它该做的事，缺 ANALYZE 权限时还会让整次备份失败。
-        try (ResultSet rows = meta.getIndexInfo(scope.catalog(), schema, table.name(), false, true)) {
-            while (rows.next()) {
-                String name = rows.getString("INDEX_NAME");
-                String column = rows.getString("COLUMN_NAME");
-                if (name == null || column == null || primaryIndexNames.contains(name)) continue;
-                IndexBackup index = indexes.get(name);
-                if (index == null) {
-                    index = new IndexBackup(!rows.getBoolean("NON_UNIQUE"), new java.util.TreeMap<>());
-                    indexes.put(name, index);
-                }
-                index.columns().put(rows.getShort("ORDINAL_POSITION"), column);
-            }
-        }
-        for (Map.Entry<String, IndexBackup> entry : indexes.entrySet()) {
-            var backupName = dialect.backupIndexName(connection, table.schema(), table.name(), entry.getKey());
-            if (backupName.isEmpty()) continue;
-            writer.write("CREATE " + (entry.getValue().unique() ? "UNIQUE " : "") + "INDEX " + dialect.quoteIdentifier(backupName.get()) + " ON " + qualified + " ("
-                    + entry.getValue().columns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");
-        }
-        Map<String, ForeignKeyBackup> foreignKeys = new LinkedHashMap<>();
-        try (ResultSet rows = meta.getImportedKeys(scope.catalog(), schema, table.name())) {
-            while (rows.next()) {
-                String name = rows.getString("FK_NAME");
-                String pkSchema = rows.getString("PKTABLE_SCHEM");
-                String pkCatalog = rows.getString("PKTABLE_CAT");
-                String referencedNamespace = dialect.namespaceKind() == DatabaseDialect.NamespaceKind.CATALOG ? pkCatalog : pkSchema;
-                String referencedTable = rows.getString("PKTABLE_NAME");
-                if (!selectedTables.contains(tableKey(new TableRef(referencedNamespace, referencedTable)))) continue;
-                ForeignKeyBackup key = foreignKeys.computeIfAbsent(name == null ? "fk_" + table.name() + "_" + foreignKeys.size() : name,
-                        ignored -> new ForeignKeyBackup(referencedNamespace, referencedTable, new java.util.TreeMap<>(), new java.util.TreeMap<>()));
-                short sequence = rows.getShort("KEY_SEQ");
-                key.localColumns().put(sequence, rows.getString("FKCOLUMN_NAME"));
-                key.referencedColumns().put(sequence, rows.getString("PKCOLUMN_NAME"));
-            }
-        }
-        for (Map.Entry<String, ForeignKeyBackup> entry : foreignKeys.entrySet()) {
-            ForeignKeyBackup key = entry.getValue();
-            writer.write("ALTER TABLE " + qualified + " ADD CONSTRAINT " + dialect.quoteIdentifier(dialect.backupConstraintName(table.schema(), table.name(), entry.getKey())) + " FOREIGN KEY ("
-                    + key.localColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ") REFERENCES "
-                    + dialect.qualifiedName(key.referencedNamespace(), key.referencedTable()) + " ("
-                    + key.referencedColumns().values().stream().map(name -> dialect.quoteIdentifier(name)).collect(java.util.stream.Collectors.joining(", ")) + ")" + dialect.scriptStatementSeparator() + "\n");
-        }
-        if (!indexes.isEmpty() || !foreignKeys.isEmpty()) writer.write("\n");
-    }
-
-    private void writeTableBackup(Connection connection, BufferedWriter writer, TableRef table, DatabaseDialect dialect, String dbType) throws Exception {
-        String tableName = dialect.qualifiedName(table.schema(), table.name());
-        writer.write("-- Table: " + sqlCommentValue(tableName) + "\n");
-        try (Statement statement = connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)) {
-            dialect.configureStreamingStatement(connection, statement, 500, properties.getBackup().getTimeoutSeconds());
-            try (ResultSet rs = statement.executeQuery("SELECT * FROM " + tableName)) {
-            ResultSetMetaData md = rs.getMetaData();
-            List<String> columns = new ArrayList<>();
-            for (int i = 1; i <= md.getColumnCount(); i++) {
-                columns.add(md.getColumnLabel(i));
-            }
-            String columnSql = columns.stream().map(column -> dialect.quoteIdentifier(column)).reduce((a, b) -> a + ", " + b).orElse("");
-            int batchSize = dialect.supportsMultiRowValues()
-                    ? Math.min(Math.max(1, properties.getBackup().getSqlInsertBatchSize()), 1_000)
-                    : 1;
-            long rows = 0;
-            int batchRows = 0;
-            while (rs.next()) {
-                ensureBackupNotInterrupted();
-                if (batchRows == 0) writer.write("INSERT INTO " + tableName + " (" + columnSql + ") VALUES\n");
-                else writer.write(",\n");
-                writer.write("  (");
-                for (int i = 1; i <= md.getColumnCount(); i++) {
-                    if (i > 1) writer.write(", ");
-                    writeLiteral(writer, rs.getObject(i), tableName, columns.get(i - 1), dbType, dialect);
-                }
-                writer.write(")");
-                rows++;
-                batchRows++;
-                if (batchRows >= batchSize) {
-                    writer.write(dialect.scriptStatementSeparator() + "\n");
-                    batchRows = 0;
-                }
-            }
-            if (batchRows > 0) writer.write(dialect.scriptStatementSeparator() + "\n");
-            writer.write("-- Rows: " + rows + "\n\n");
-            }
-        }
-    }
-
-    private void writeLiteral(BufferedWriter writer, Object value, String tableName, String columnName, String dbType, DatabaseDialect dialect) throws Exception {
-        if (value == null) {
-            writer.write("NULL");
-            return;
-        }
-        if (value instanceof Clob clob) {
-            writer.write('\'');
-            try (Reader reader = clob.getCharacterStream()) {
-                char[] buffer = new char[8_192];
-                int read;
-                while ((read = reader.read(buffer)) != -1) {
-                    for (int index = 0; index < read; index++) {
-                        char ch = buffer[index];
-                        if (ch == '\'') writer.write("''");
-                        else writer.write(ch);
-                    }
-                }
-            }
-            writer.write('\'');
-            return;
-        }
-        if (value instanceof Blob blob) {
-            try (InputStream input = blob.getBinaryStream()) {
-                writeBinary(writer, input, dbType);
-            }
-            return;
-        }
-        if (value instanceof byte[] bytes) {
-            try (InputStream input = new ByteArrayInputStream(bytes)) {
-                writeBinary(writer, input, dbType);
-            }
-            return;
-        }
-        if (value instanceof Number) {
-            writer.write(value.toString());
-            return;
-        }
-        if (value instanceof Boolean bool) {
-            writer.write(booleanLiteral(bool, dbType));
-            return;
-        }
-        // 时间值交给方言写：带引号的 ISO 串不是所有库都认。Oracle 按会话的 NLS_DATE_FORMAT
-        // 解析（默认 DD-MON-RR），'2026-09-09 12:34:56' 直接 ORA-01843 —— 也就是说备份文件
-        // 里的时间列在 Oracle 上恢复不回去。方言负责套上 TO_TIMESTAMP 之类的显式转换。
-        if (value instanceof java.sql.Date date) {
-            writer.write(dialect.scriptTemporalLiteral(date.toString()));
-            return;
-        }
-        if (value instanceof java.sql.Time time) {
-            writer.write(dialect.scriptTemporalLiteral(time.toString()));
-            return;
-        }
-        if (value instanceof java.sql.Timestamp timestamp) {
-            writer.write(dialect.scriptTemporalLiteral(timestamp.toLocalDateTime().toString().replace('T', ' ')));
-            return;
-        }
-        if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof ZonedDateTime || value instanceof Instant) {
-            writer.write(dialect.scriptTemporalLiteral(value.toString()));
-            return;
-        }
-        if (value instanceof CharSequence text) {
-            // 备份会在另一个会话恢复；使用方言的脚本字面量，不能假设 MySQL 的 sql_mode 相同。
-            writer.write(dialect.scriptLiteral(text));
-            return;
-        }
-        writer.write(dialect.scriptLiteral(value.toString()));
-    }
-
-    private void writeBinary(BufferedWriter writer, InputStream input, String dbType) throws Exception {
-        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        if (normalized.equals("postgresql")) writer.write("decode('");
-        else if (normalized.equals("sqlserver")) writer.write("0x");
-        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("hextoraw('");
-        else writer.write("X'");
-        byte[] bytes = new byte[8_192];
-        char[] hex = new char[bytes.length * 2];
-        char[] digits = "0123456789abcdef".toCharArray();
-        int read;
-        while ((read = input.read(bytes)) >= 0) {
-            ensureBackupNotInterrupted();
-            for (int index = 0; index < read; index++) {
-                int value = bytes[index] & 0xff;
-                hex[index * 2] = digits[value >>> 4];
-                hex[index * 2 + 1] = digits[value & 0x0f];
-            }
-            writer.write(hex, 0, read * 2);
-        }
-        if (normalized.equals("postgresql")) writer.write("', 'hex')");
-        else if (Set.of("oracle", "dm", "oceanbase-oracle").contains(normalized)) writer.write("')");
-        else if (!normalized.equals("sqlserver")) writer.write("'");
+        return NativeToolArguments.normalize(NativeBackupRunner.extraArgsTool(backupMethod), extraArgs, "备份");
     }
 
     private String backupOperationKey(long taskId) {
         return "backup:" + taskId;
     }
 
-    private void ensureBackupNotInterrupted() throws InterruptedException {
-        if (Thread.currentThread().isInterrupted()) throw new InterruptedException("备份已取消。");
-    }
-
-    private String safeMetadataString(ResultSet rows, String column) {
-        try { return rows.getString(column); } catch (Exception ignored) { return null; }
-    }
-
-    private String columnType(String raw, int size, int scale) {
-        String type = raw == null || raw.isBlank() ? "VARCHAR" : raw;
-        String upper = type.toUpperCase(Locale.ROOT);
-        if (type.contains("(")) return type;
-        if ((upper.contains("CHAR") || upper.contains("BINARY")) && size > 0 && size < 1_000_000) return type + "(" + size + ")";
-        if ((upper.contains("DECIMAL") || upper.contains("NUMERIC") || upper.equals("NUMBER")) && size > 0) return type + "(" + size + "," + Math.max(0, scale) + ")";
-        return type;
-    }
-
-    private String identityClause(String dbType) {
-        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        if (Set.of("mysql", "mariadb", "oceanbase-mysql").contains(normalized)) return " AUTO_INCREMENT";
-        if (normalized.equals("sqlserver")) return " IDENTITY(1,1)";
-        if (!normalized.equals("sqlite")) return " GENERATED BY DEFAULT AS IDENTITY";
-        return "";
-    }
-
-    private String tableKey(TableRef table) {
-        return (table.schema() == null ? "" : table.schema().toLowerCase(Locale.ROOT)) + "\u0000" + table.name().toLowerCase(Locale.ROOT);
-    }
-
-    private String validateScope(String scope, List<String> tableNames) {
-        String normalized = normalizeScope(scope);
-        if (!Set.of("DATABASE", "SCHEMA", "TABLES").contains(normalized)) {
-            throw new IllegalArgumentException("不支持的备份范围：" + scope);
-        }
-        if ("TABLES".equals(normalized) && tableNames.isEmpty()) {
-            throw new IllegalArgumentException("表备份至少需要选择一张表。");
-        }
-        return normalized;
-    }
-
-    private String normalizeScope(String scope) {
-        String normalized = scope == null ? "" : scope.toUpperCase(Locale.ROOT);
-        return "TABLE".equals(normalized) ? "TABLES" : normalized;
-    }
-
-    private String blankToNull(String value) {
-        return value == null || value.isBlank() ? null : value.trim();
-    }
-
-    private boolean isSystemSchema(String schema) {
-        if (schema == null) {
-            return false;
-        }
-        String s = schema.toUpperCase(Locale.ROOT);
-        return s.equals("INFORMATION_SCHEMA")
-                || s.equals("SYS")
-                || s.equals("SYSTEM")
-                || s.equals("PG_CATALOG")
-                || s.equals("SQLJ")
-                || s.startsWith("SYS_")
-                || s.equals("MYSQL")
-                || s.startsWith("PG_TOAST")
-                || s.startsWith("PG_TEMP_");
-    }
-
-    private String literal(Object value, String tableName, String columnName) throws Exception {
-        if (value == null) {
-            return "NULL";
-        }
-        if (value instanceof Clob clob) {
-            return quoteLiteral(readClob(clob));
-        }
-        if (value instanceof Blob blob) {
-            throw unsupportedBinary(tableName, columnName, "BLOB " + blob.length() + " bytes");
-        }
-        if (value instanceof byte[] bytes) {
-            throw unsupportedBinary(tableName, columnName, "BINARY " + bytes.length + " bytes");
-        }
-        if (value instanceof Number) {
-            return value.toString();
-        }
-        if (value instanceof Boolean bool) {
-            return bool ? "TRUE" : "FALSE";
-        }
-        if (value instanceof java.sql.Date date) {
-            return quoteLiteral(date.toString());
-        }
-        if (value instanceof java.sql.Time time) {
-            return quoteLiteral(time.toString());
-        }
-        if (value instanceof java.sql.Timestamp timestamp) {
-            return quoteLiteral(timestamp.toLocalDateTime().toString().replace('T', ' '));
-        }
-        if (value instanceof LocalDate || value instanceof LocalTime || value instanceof LocalDateTime || value instanceof OffsetDateTime || value instanceof ZonedDateTime || value instanceof Instant) {
-            return quoteLiteral(value.toString());
-        }
-        return quoteLiteral(value.toString());
-    }
-
-    private String readClob(Clob clob) throws Exception {
-        StringBuilder builder = new StringBuilder();
-        try (Reader reader = clob.getCharacterStream()) {
-            char[] buffer = new char[8192];
-            int read;
-            while ((read = reader.read(buffer)) != -1) {
-                builder.append(buffer, 0, read);
-            }
-        }
-        return builder.toString();
-    }
-
-    private IllegalArgumentException unsupportedBinary(String tableName, String columnName, String detail) {
-        return new IllegalArgumentException("SQL 备份暂不支持二进制字段：" + tableName + "." + quoteForMessage(columnName) + " (" + detail + ")");
-    }
-
-    private String quoteForMessage(String identifier) {
-        return "\"" + identifier.replace("\"", "\"\"") + "\"";
-    }
-
-    private String quoteLiteral(String value) {
-        if (value.length() <= 1024) {
-            return "'" + value.replace("'", "''") + "'";
-        }
-        StringBuilder result = new StringBuilder(value.length() + value.length() / 100 + 2);
-        result.append('\'');
-        for (int i = 0; i < value.length(); i++) {
-            char ch = value.charAt(i);
-            if (ch == '\'') result.append("''");
-            else result.append(ch);
-        }
-        result.append('\'');
-        return result.toString();
-    }
-
-    private String booleanLiteral(boolean value, String dbType) {
-        String normalized = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
-        return normalized.equals("postgresql") ? (value ? "TRUE" : "FALSE") : (value ? "1" : "0");
-    }
-
-    private void writeQuotedLiteral(BufferedWriter writer, CharSequence value) throws Exception {
-        writer.write('\'');
-        for (int i = 0; i < value.length(); i++) {
-            char ch = value.charAt(i);
-            if (ch == '\'') writer.write("''");
-            else writer.write(ch);
-        }
-        writer.write('\'');
-    }
-
-    private String sqlCommentValue(String value) {
-        return value == null ? "" : value.replace('\r', ' ').replace('\n', ' ').replace('\0', ' ');
-    }
-
-    private static final class ProcessOutputCollector {
-        private static final int MAX_CAPTURE_BYTES = 4_000;
-        private final InputStream input;
-        private final ByteArrayOutputStream captured = new ByteArrayOutputStream(MAX_CAPTURE_BYTES);
-        private Thread thread;
-
-        private ProcessOutputCollector(InputStream input) {
-            this.input = input;
-        }
-
-        private void start(String label) {
-            thread = new Thread(this::drain, "dbadmin-native-output-" + label.replaceAll("[^A-Za-z0-9_-]", "-"));
-            thread.setDaemon(true);
-            thread.start();
-        }
-
-        private void drain() {
-            try (input) {
-                byte[] buffer = new byte[8_192];
-                int read;
-                while ((read = input.read(buffer)) != -1) {
-                    synchronized (captured) {
-                        int retained = Math.min(read, MAX_CAPTURE_BYTES - captured.size());
-                        if (retained > 0) captured.write(buffer, 0, retained);
-                    }
-                }
-            } catch (IOException ignored) {
-                // Process termination can close the pipe while the collector
-                // is blocked. The retained prefix remains useful for errors.
-            }
-        }
-
-        private void await(long timeoutMillis) {
-            Thread running = thread;
-            if (running == null) return;
-            try {
-                running.join(timeoutMillis);
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
-
-        private String output() {
-            synchronized (captured) {
-                return captured.toString(StandardCharsets.UTF_8);
-            }
-        }
-    }
-
-    private record TableRef(String schema, String name) {
-    }
-
-    private record ResolvedTarget(String scope, String namespace, List<TableRef> tables) {
-    }
-
-    private record BackupFile(Path path, long size) {
-    }
-
-    private record IndexBackup(boolean unique, java.util.TreeMap<Short, String> columns) {
-    }
-
-    private record ForeignKeyBackup(String referencedNamespace, String referencedTable,
-                                    java.util.TreeMap<Short, String> localColumns,
-                                    java.util.TreeMap<Short, String> referencedColumns) {
-    }
-
-    private record MysqlJdbcTarget(String host, int port, String database) {
-    }
-
-    private record PostgresJdbcTarget(String host, int port, String database) {
+    /** 一次备份产出的文件；三种写法（SQL / 原生工具）共用。 */
+    record BackupFile(Path path, long size) {
     }
 }

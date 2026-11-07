@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { DRAWER_WIDTH } from '../constants';
 import { Button, Divider, Drawer, Empty, Input, Select, Space, Typography } from 'antd';
 import { DeleteOutlined, FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import type { TableColumn } from '../types';
@@ -44,9 +45,9 @@ export function TableQueryBuilder({ columns, value, disabled, onApply }: {
       <Button size="small" icon={<FilterOutlined />} disabled={disabled || columns.length === 0} onClick={() => setOpen(true)}>
         筛选 / 排序{tableQueryRuleCount(value) ? ` (${tableQueryRuleCount(value)})` : ''}
       </Button>
-      <Drawer title="服务端筛选与排序" width={600} open={open} onClose={() => setOpen(false)}
+      <Drawer title="服务端筛选与排序" size={DRAWER_WIDTH.browse} open={open} onClose={() => setOpen(false)}
         extra={<Space><Button onClick={() => setDraft(EMPTY_TABLE_QUERY)}>清空</Button><Button type="primary" onClick={apply}>应用</Button></Space>}>
-        <Space direction="vertical" size={12} className="table-query-section">
+        <Space orientation="vertical" size={12} className="table-query-section">
           <Space>
             <Text strong>筛选条件</Text>
             <Select size="small" value={draft.filterLogic} options={[{ value: 'AND', label: '同时满足' }, { value: 'OR', label: '满足任一' }]}
@@ -77,7 +78,7 @@ export function TableQueryBuilder({ columns, value, disabled, onApply }: {
             onClick={() => setDraft({ ...draft, filters: [...draft.filters, { column: columns[0]?.name || '', operator: 'EQ', value: '' }] })}>添加筛选条件</Button>
         </Space>
         <Divider />
-        <Space direction="vertical" size={12} className="table-query-section">
+        <Space orientation="vertical" size={12} className="table-query-section">
           <Text strong>排序优先级</Text>
           {draft.sorts.length === 0 && <Text type="secondary">未指定时按稳定主键正序分页。</Text>}
           {draft.sorts.map((rule, index) => (
