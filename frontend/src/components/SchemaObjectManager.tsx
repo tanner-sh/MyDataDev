@@ -42,7 +42,8 @@ import {
   schemaObjectCapabilities,
   schemaObjectConfirmationTarget,
   schemaObjectDisplayStatus,
-  schemaObjectKindLabel
+  schemaObjectKindLabel,
+  schemaObjectOperationLabels
 } from '../schemaObjectModel';
 import type { ExplorerObjectCount } from '../schemaObjectModel';
 import type {
@@ -327,6 +328,10 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   // 编译错误要一直摆在眼前直到用户改完重提：它说的是「这个对象现在是坏的」。
   const [compilationErrors, setCompilationErrors] = useState<CompilationError[]>([]);
   const [invoking, setInvoking] = useState(false);
+  // 资源管理器里双击一个对象（表就是双击打开的，手会照着来）：第一下打开抽屉，第二下正好落在刚出现的遮罩上
+  // 又把它关了，看起来就是「双击没反应」。打开后这一小段时间里的关闭请求不算数 —— 没有人会在这么短的时间里真想关它。
+  const openedAtRef = useRef(0);
+  useEffect(() => { if (state) openedAtRef.current = Date.now(); }, [state]);
   const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
   const [invokeMode, setInvokeMode] = useState<RoutineInvokeMode>('foreground');
   const [invokeError, setInvokeError] = useState<RoutineInvokeFailure>();
@@ -516,6 +521,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   }
 
   function closeWorkspace() {
+    if (Date.now() - openedAtRef.current < 400) return;
     if (invokeExecutionRef.current) {
       // 关掉之后就看不到这次调用的结果了：与其让它在库里无人看管地跑完，不如先取消。
       modalApi.confirm({
@@ -589,7 +595,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
         </Suspense>
       </div>
     ) },
-    backgroundJobId === undefined && invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} /> }
+    backgroundJobId === undefined && invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} hasReturnValue={detail?.object.kind === 'FUNCTION'} /> }
   ].filter(Boolean) as { key: string; label: string; children: ReactNode }[];
 
   return (
@@ -708,7 +714,7 @@ function ObjectOverview({ detail }: { detail: SchemaObjectDetail }) {
       <Descriptions.Item label="类型">{schemaObjectKindLabel(detail.object.kind)}</Descriptions.Item>
       <Descriptions.Item label="子类型">{detail.object.subtype || '—'}</Descriptions.Item>
       <Descriptions.Item label="状态">{schemaObjectDisplayStatus(detail.object.status) || '—'}</Descriptions.Item>
-      <Descriptions.Item label="可用操作"><Space wrap>{detail.operations.map((operation) => <Tag key={operation}>{operation}</Tag>)}</Space></Descriptions.Item>
+      <Descriptions.Item label="可用操作"><Space wrap>{schemaObjectOperationLabels(detail.operations).map((operation) => <Tag key={operation}>{operation}</Tag>)}</Space></Descriptions.Item>
       <Descriptions.Item label="版本"><Text copyable code>{detail.structureVersion}</Text></Descriptions.Item>
     </Descriptions>
   );
@@ -731,13 +737,15 @@ function DependencyPanel({ detail }: { detail: SchemaObjectDetail }) {
   return <div className="schema-object-dependency-list">{detail.dependencies.map((item, index) => <div className="schema-object-dependency-item" key={`${item.schemaName}:${item.name}:${index}`}><Space><Tag>{item.kind}</Tag><Text>{item.schemaName ? `${item.schemaName}.` : ''}{item.name}</Text><Text type="secondary">{item.direction}</Text></Space></div>)}</div>;
 }
 
-function RoutineResults({ response }: { response: RoutineInvokeResponse }) {
+/** 存储过程没有返回值，后端固定回 null —— 只有函数才显示「返回值」那一行，否则过程的结果里总多一行 NULL。 */
+function RoutineResults({ response, hasReturnValue }: { response: RoutineInvokeResponse; hasReturnValue: boolean }) {
+  const showReturn = hasReturnValue && response.returnValue !== undefined;
   return (
     <div className="routine-results">
       <Alert type={response.truncated ? 'warning' : 'success'} showIcon title={`调用成功 · ${response.elapsedMs}ms${response.truncated ? ' · 结果已截断' : ''}`} />
-      {(response.returnValue !== undefined || response.outParameters.length > 0) && (
+      {(showReturn || response.outParameters.length > 0) && (
         <Descriptions bordered size="small" column={1}>
-          {response.returnValue !== undefined && <Descriptions.Item label="返回值"><Text code>{renderValue(response.returnValue)}</Text></Descriptions.Item>}
+          {showReturn && <Descriptions.Item label="返回值"><Text code>{renderValue(response.returnValue)}</Text></Descriptions.Item>}
           {response.outParameters.map((parameter, index) => <Descriptions.Item key={`${parameter.name}:${index}`} label={`${parameter.name || `OUT ${index + 1}`} · ${parameter.typeName || ''}`}><Text code>{renderValue(parameter.value)}</Text></Descriptions.Item>)}
         </Descriptions>
       )}

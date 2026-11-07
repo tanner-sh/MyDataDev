@@ -8,6 +8,9 @@ import com.example.dbadmin.repo.AuditRepository;
 import com.example.dbadmin.repo.BackupHistoryRepository;
 import com.example.dbadmin.repo.BackupTaskRepository;
 import com.example.dbadmin.repo.ConnectionAccessRepository;
+import com.example.dbadmin.repo.ConnectionRepository;
+import com.example.dbadmin.model.DbConnection;
+import com.example.dbadmin.service.SqlScriptDelimiter;
 import com.example.dbadmin.repo.RestoreJobRepository;
 import com.example.dbadmin.repo.RestoreUploadRepository;
 import com.example.dbadmin.repo.SqlFileExecutionRepository;
@@ -39,6 +42,7 @@ class ConnectionAccessGuardTest {
     private SqlFileExecutionRepository sqlFiles;
     private SqlTransactionRegistry transactions;
     private RestoreUploadRepository restoreUploads;
+    private ConnectionRepository connections;
     private ConnectionAccessService service;
 
     @BeforeEach
@@ -47,10 +51,11 @@ class ConnectionAccessGuardTest {
         sqlFiles = mock(SqlFileExecutionRepository.class);
         transactions = new SqlTransactionRegistry();
         restoreUploads = mock(RestoreUploadRepository.class);
+        connections = mock(ConnectionRepository.class);
         service = new ConnectionAccessService(
                 repository, mock(AuditRepository.class), new SqlStatementClassifier(), new SqlScriptSplitter(),
                 mock(BackupTaskRepository.class), mock(BackupHistoryRepository.class), mock(RestoreJobRepository.class),
-                restoreUploads, sqlFiles, transactions, new SqlExecutionRegistry()
+                restoreUploads, sqlFiles, transactions, new SqlExecutionRegistry(), connections
         );
     }
 
@@ -102,6 +107,24 @@ class ConnectionAccessGuardTest {
 
         when(repository.hasAnyAccess(3L, 8L)).thenReturn(true);
         assertThatCode(() -> service.requireSqlFileExecution(5L)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void sqlPermissionCheckSplitsWithTheConnectionsRealDatabaseType() {
+        // 以前闸门一律按 "generic" 切，Oracle 连接上的 SQL*Plus 指令在这一步就被当成「不支持的客户端指令」拒掉，
+        // 命令窗口的 PROMPT / WHENEVER SQLERROR CONTINUE 从接口进来根本走不到执行那一步。
+        when(connections.findById(3L)).thenReturn(Optional.of(new DbConnection(
+                3L, "ora", "oracle", "jdbc:oracle:thin:@h:1521/x", "u", "", "dev", false, Instant.now(), Instant.now())));
+        when(repository.hasAccess(anyLong(), anyLong(), org.mockito.ArgumentMatchers.eq(ConnectionPermission.QUERY))).thenReturn(true);
+        authenticate(8L, "bob", "OPERATOR");
+        String script = "PROMPT step 1\nWHENEVER SQLERROR CONTINUE\nSET SERVEROUTPUT ON\nSELECT 1 FROM dual;\n";
+
+        assertThatCode(() -> service.requireSql(3L, script, SqlScriptDelimiter.AUTO)).doesNotThrowAnyException();
+        // 指令被跳过不等于放过语句：后面的写操作照样按种类要权限。
+        assertThatThrownBy(() -> service.requireSql(3L, script + "DELETE FROM t WHERE id = 1;\n", SqlScriptDelimiter.AUTO))
+                .isInstanceOf(ApiProblemException.class)
+                .extracting(error -> ((ApiProblemException) error).code())
+                .isEqualTo("CONNECTION_ACCESS_DENIED");
     }
 
     @Test

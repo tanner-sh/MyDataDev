@@ -78,7 +78,7 @@ public class SqlController {
         SqlScriptDelimiter delimiter = SqlScriptDelimiter.of(request.delimiterMode(), request.delimiter());
         access.requireAnyAccess(request.connectionId());
         sqlService.requireDelimiterDecision(request.connectionId(), request.sql(), delimiter, request.delimiterChecked());
-        access.requireSql(request.connectionId(), request.sql(), delimiter);
+        access.requireStatements(request.connectionId(), sqlService.gateUnits(request.connectionId(), request.sql(), delimiter));
         if ("SCRIPT".equals(request.transactionMode())) access.require(request.connectionId(), ConnectionPermission.DATA_WRITE);
         if ("SCRIPT".equals(request.transactionMode()) && transactions.active(request.connectionId()) != null) {
             throw new IllegalArgumentException("请先结束该连接的手动事务，再执行脚本事务。");

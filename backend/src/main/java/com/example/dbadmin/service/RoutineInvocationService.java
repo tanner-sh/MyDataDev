@@ -367,7 +367,7 @@ public class RoutineInvocationService {
             for (SchemaObjectParameter parameter : callParameters) {
                 positions.put(parameter, jdbcIndex);
                 if (parameter.mode().equals("OUT") || parameter.mode().equals("INOUT")) {
-                    statement.registerOutParameter(jdbcIndex, safeJdbcType(parameter));
+                    statement.registerOutParameter(jdbcIndex, isCursor(parameter) ? Types.REF_CURSOR : safeJdbcType(parameter));
                 }
                 if (parameter.mode().equals("IN") || parameter.mode().equals("INOUT")) {
                     bind(statement, jdbcIndex, parameter, inputs.get(parameter.position()));
@@ -382,7 +382,14 @@ public class RoutineInvocationService {
             List<RoutineOutParameter> out = new ArrayList<>();
             for (Map.Entry<SchemaObjectParameter, Integer> entry : positions.entrySet()) {
                 SchemaObjectParameter parameter = entry.getKey();
-                if (parameter.mode().equals("OUT") || parameter.mode().equals("INOUT")) {
+                if (isCursor(parameter) && !parameter.mode().equals("IN")) {
+                    // OUT 游标（Oracle 的 SYS_REFCURSOR）就是过程交出来的结果集：读成一张结果表，与过程直接返回的结果集
+                    // 显示在同一处；参数那一栏只写一句说明 —— 游标对象本身没有可显示的值。
+                    try (ResultSet cursor = statement.getObject(entry.getValue(), ResultSet.class)) {
+                        if (cursor != null) results.add(new RoutineResultItem("RESULT_SET", SqlResultReader.readResult(cursor, started, MAX_RESULT_ROWS, dialect), null));
+                    }
+                    out.add(new RoutineOutParameter(parameter.name(), parameter.typeName(), "（游标，已作为结果集返回）"));
+                } else if (parameter.mode().equals("OUT") || parameter.mode().equals("INOUT")) {
                     out.add(new RoutineOutParameter(parameter.name(), parameter.typeName(), serializable(statement.getObject(entry.getValue()), MAX_CELL_TEXT)));
                 }
             }
@@ -468,6 +475,17 @@ public class RoutineInvocationService {
             return kind == SchemaObjectKind.PROCEDURE ? "CALL " + qualified + "(" + placeholders + ")" : "SELECT * FROM " + qualified + "(" + placeholders + ")";
         }
         return "{" + (kind == SchemaObjectKind.FUNCTION ? "? = " : "") + "call " + qualified + "(" + placeholders + ")}";
+    }
+
+    /**
+     * 游标参数。Oracle 的目录把 SYS_REFCURSOR 报成类型名 REF CURSOR、JDBC 类型 OTHER(1111)，按 1111 注册 OUT
+     * 参数驱动直接报 ORA-17004「列类型无效」—— 用 OUT 游标交出结果集是 PL/SQL 里最常见的写法，所以按类型名认。
+     */
+    static boolean isCursor(SchemaObjectParameter parameter) {
+        if (parameter == null) return false;
+        if (parameter.jdbcType() != null && (parameter.jdbcType() == Types.REF_CURSOR || parameter.jdbcType() == -10)) return true;
+        String type = parameter.typeName() == null ? "" : parameter.typeName().trim().toUpperCase(Locale.ROOT);
+        return type.equals("REF CURSOR") || type.equals("SYS_REFCURSOR");
     }
 
     private int safeJdbcType(SchemaObjectParameter parameter) {

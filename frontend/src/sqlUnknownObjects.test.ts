@@ -62,6 +62,19 @@ describe('findUnknownObjects', () => {
   it('UPDATE 与 INSERT INTO 的目标同样检查', () => {
     expect(marks('UPDATE ghost SET a = 1')).toEqual(['ghost']);
     expect(marks('INSERT INTO ghost (a) VALUES (1)')).toEqual(['ghost']);
+    expect(marks('MERGE INTO ghost g USING orders o ON (g.id = o.id) WHEN MATCHED THEN UPDATE SET g.a = 1')).toEqual(['ghost']);
+  });
+
+  it('INTO 后面是变量或新表时不划线（PL/SQL SELECT/FETCH/RETURNING INTO、SQL Server SELECT INTO）', () => {
+    expect(marks('SELECT COUNT(*) INTO v FROM orders WHERE id = 1')).toEqual([]);
+    expect(marks('BEGIN\n  SELECT COUNT(*) INTO v_total FROM orders;\nEND;')).toEqual([]);
+    expect(marks('FETCH c INTO v_row')).toEqual([]);
+    expect(marks('SELECT * INTO new_backup FROM orders')).toEqual([]);
+    expect(marks('SELECT * FROM orders WHERE id = 1 FOR UPDATE NOWAIT')).toEqual([]);
+    expect(marks('SELECT 1 FROM dual')).toEqual([]);
+    expect(marks('SELECT LEVEL FROM DUAL CONNECT BY LEVEL <= 3')).toEqual([]);
+    // 同一条里真正的未知表照样提示。
+    expect(marks('SELECT COUNT(*) INTO v FROM ghost')).toEqual(['ghost']);
   });
 
   it('给出的是对象名那一段的位置', () => {

@@ -812,8 +812,10 @@ public final class ApiDtos {
                                     boolean unscopedMutationConfirmed) {
     }
 
+    /** delimiterChecked：用户已在工作台对「识别到的分隔符」表过态，后台任务不再自己识别、改用别的切法。 */
     public record SqlEditorScriptRequest(@NotNull Long connectionId, @NotBlank @Size(max = 2_000_000) String sql,
-                                         @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter) {
+                                         @Size(max = 20) String delimiterMode, @Size(max = 16) String delimiter,
+                                         boolean delimiterChecked) {
     }
 
     public record SqlFileExecutionPage(List<SqlFileExecutionResponse> items, int page, int pageSize, boolean hasMore) {

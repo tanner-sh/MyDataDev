@@ -1,5 +1,7 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.core.DatabaseFamily;
+
 import java.io.Reader;
 import java.io.PushbackReader;
 import java.util.LinkedHashSet;
@@ -122,19 +124,36 @@ final class SqlScriptParser {
         private int compoundDepth;
         private boolean pendingEnd;
         private Boolean compoundStatement;
+        /**
+         * statement 里最后一个代码字符（字符串里的算，注释里的不算）的位置，由主词法顺带记下 —— q'[…]'、
+         * 反斜杠转义、$$ 正文这些写法只有这里认得全，另写一个小扫描器去找末尾分号一定会在其中某种上判错。
+         */
+        private int lastCode = -1;
+        private int iterationStart;
+        private boolean iterationComment;
+        /**
+         * 包体的初始化段（{@code … END b; BEGIN init; END pkg;}）和包共用最后那个 END：包这一层直接出现的
+         * BEGIN 不另开一层。要和子程序的 BEGIN 分开 —— 那个也出现在包这一层，但前面一定有
+         * PROCEDURE/FUNCTION … IS|AS 的头，pendingBodies 数的就是「写了头、还没见到 BEGIN」的子程序。
+         */
+        private Boolean packageBody;
+        private boolean subprogramHeader;
+        private int pendingBodies;
 
         Parser(String dbType, int maxStatementChars, SqlScriptDelimiter delimiterMode, UnitConsumer consumer) {
-            String type = dbType == null ? "" : dbType.toLowerCase(Locale.ROOT);
+            String type = dbType == null ? "" : dbType.trim().toLowerCase(Locale.ROOT);
+            String family = DatabaseFamily.of(type);
             this.customDelimiter = delimiterMode.mode() == SqlScriptDelimiter.Mode.CUSTOM ? delimiterMode.token() : null;
             this.blankLineDelimiter = delimiterMode.mode() == SqlScriptDelimiter.Mode.BLANK_LINE;
             // 只对明确的 Oracle 系连接认 SQL*Plus 指令；"generic" 也走 Oracle 词法，但 MySQL 的 SHOW ERRORS
             // 这类真 SQL 不能被当成客户端指令吞掉。
-            this.sqlPlus = Set.of("oracle", "dm", "dameng", "oceanbase-oracle").contains(type);
-            this.mysql = type.equals("mysql") || type.equals("mariadb") || type.equals("oceanbase-mysql");
-            this.backslashEscapes = mysql || type.equals("clickhouse");
-            this.sqlServer = type.equals("sqlserver") || type.equals("sql-server") || type.equals("mssql");
-            this.oracle = type.equals("generic") || type.equals("oracle") || type.equals("dm") || type.equals("dameng") || type.equals("oceanbase-oracle");
-            this.compoundStart = mysql ? MYSQL_COMPOUND_START : type.equals("sqlite") ? SQLITE_COMPOUND_START : null;
+            // 类型串到家族只认 DatabaseFamily 那一份映射。
+            this.sqlPlus = family.equals("oracle");
+            this.mysql = DatabaseFamily.isMySqlCompatible(type);
+            this.backslashEscapes = mysql || family.equals("clickhouse");
+            this.sqlServer = family.equals("sqlserver");
+            this.oracle = sqlPlus || type.equals("generic");
+            this.compoundStart = mysql ? MYSQL_COMPOUND_START : family.equals("sqlite") ? SQLITE_COMPOUND_START : null;
             this.maxStatementChars = Math.max(1, maxStatementChars);
             this.consumer = consumer;
         }
@@ -173,6 +192,7 @@ final class SqlScriptParser {
                     }
                     delimiter = next;
                     statement.setLength(0);
+                    lastCode = -1;
                     advance(line);
                     return;
                 }
@@ -211,8 +231,10 @@ final class SqlScriptParser {
                 }
             }
             boolean lineComment = false;
-            for (int cursor = 0; cursor < line.length(); cursor++) {
+            for (int cursor = 0; cursor < line.length(); cursor++, markCode()) {
                 cursorOffset = cursor;
+                iterationStart = statement.length();
+                iterationComment = lineComment || blockComment;
                 char current = line.charAt(cursor);
                 char next = cursor + 1 < line.length() ? line.charAt(cursor + 1) : '\0';
                 append(current);
@@ -284,11 +306,13 @@ final class SqlScriptParser {
                 }
                 if (current == '-' && next == '-') {
                     if (oracle) codeTail.append(' ');
+                    iterationComment = true;
                     append(next);
                     cursor++;
                     lineComment = true;
                 } else if (current == '/' && next == '*') {
                     if (oracle) codeTail.append(' ');
+                    iterationComment = true;
                     append(next);
                     cursor++;
                     blockComment = true;
@@ -352,46 +376,21 @@ final class SqlScriptParser {
         private void emitWithoutTrailingSemicolon() throws Exception {
             String raw = statement.toString();
             boolean plsqlBlock = oracle && isOracleBlockStart(SqlScriptSyntax.leadingSql(raw));
-            if (!plsqlBlock) {
-                int last = lastCodeCharacter(raw);
-                if (last >= 0 && raw.charAt(last) == ';') statement.deleteCharAt(last);
+            if (!plsqlBlock && lastCode >= 0 && lastCode < raw.length() && raw.charAt(lastCode) == ';') {
+                statement.deleteCharAt(lastCode);
             }
             emit();
         }
 
-        /** 最后一个不在注释里的字符的位置；字符串里的字符算代码。 */
-        private int lastCodeCharacter(String sql) {
-            int last = -1;
-            boolean quoted = false;
-            boolean doubled = false;
-            boolean comment = false;
-            for (int i = 0; i < sql.length(); i++) {
-                char c = sql.charAt(i);
-                char n = i + 1 < sql.length() ? sql.charAt(i + 1) : '\0';
-                if (comment) {
-                    if (c == '*' && n == '/') { comment = false; i++; }
-                    continue;
+        /** 每处理完一个字符：这一轮追加进 statement 的不是注释、也不全是空白，就推进 lastCode。 */
+        private void markCode() {
+            if (iterationComment) return;
+            for (int i = statement.length() - 1; i >= iterationStart && i >= 0; i--) {
+                if (!Character.isWhitespace(statement.charAt(i))) {
+                    lastCode = i;
+                    return;
                 }
-                if (quoted) {
-                    if (c == '\'') quoted = false;
-                    last = i;
-                    continue;
-                }
-                if (doubled) {
-                    if (c == '"') doubled = false;
-                    last = i;
-                    continue;
-                }
-                if (c == '-' && n == '-') {
-                    while (i < sql.length() && sql.charAt(i) != '\n') i++;
-                    continue;
-                }
-                if (c == '/' && n == '*') { comment = true; i++; continue; }
-                if (c == '\'') quoted = true;
-                else if (c == '"') doubled = true;
-                if (!Character.isWhitespace(c)) last = i;
             }
-            return last;
         }
 
         /** 块之后、下一条语句之前的注释（「-- 第 2 条」这类）跟着下一条走，不粘在过程源码的末尾。 */
@@ -481,8 +480,9 @@ final class SqlScriptParser {
                 return true;
             }
             if (SQLPLUS_SET.matcher(upper).matches()) {
+                // 有指令监听器的只有命令窗口，它总是把 DBMS_OUTPUT 读出来写进日志 —— 那里说「不显示」就是错的。
                 notice(upper.matches("SET\\s+SERVEROUT(?:PUT)?\\b.*")
-                        ? "已忽略 " + command + "：SQL 工作台暂不显示 DBMS_OUTPUT"
+                        ? "已忽略 " + command + (directives != null ? "：命令窗口总会显示 DBMS_OUTPUT，无需开启" : "：SQL 工作台暂不显示 DBMS_OUTPUT")
                         : "已忽略 SQL*Plus 设置：" + command);
                 return true;
             }
@@ -519,6 +519,7 @@ final class SqlScriptParser {
             long start = sourceOffset + leading;
             statement.setLength(0);
             codeTail.setLength(0);
+            lastCode = -1;
             consumer.accept(new Unit(++index, sql, start, start + line.strip().length(), lineNumber, lineNumber));
         }
 
@@ -578,6 +579,10 @@ final class SqlScriptParser {
             int trailing = raw.stripTrailing().length();
             statement.setLength(0);
             codeTail.setLength(0);
+            lastCode = -1;
+            packageBody = null;
+            subprogramHeader = false;
+            pendingBodies = 0;
             statementStarted = false;
             oracleBlock = false;
             blockDetected = false;
@@ -611,6 +616,8 @@ final class SqlScriptParser {
                 return;
             }
             flushCompoundWord();
+            // PROCEDURE a; 是前向声明，没有正文。
+            if (current == ';') subprogramHeader = false;
             boolean commentStart = (current == '-' && next == '-') || (current == '/' && next == '*');
             if (pendingEnd && !Character.isWhitespace(current) && !commentStart) {
                 pendingEnd = false;
@@ -629,9 +636,21 @@ final class SqlScriptParser {
                     compoundDepth = Math.max(0, compoundDepth - 1);
                     plsqlDepth--;
                 }
+            } else if (value.equals("BEGIN") && oracle && isPackageBody()) {
+                // 包这一层的深度：基础的那 1 层要到首个分号才加上（见 plsqlBaseDepth），之前是 0。
+                int packageLevel = blockDetected && oracleBlock ? 1 : 0;
+                if (pendingBodies > 0) pendingBodies--;
+                else if (plsqlDepth == packageLevel) return; // 初始化段
+                compoundDepth++;
+                plsqlDepth++;
             } else if (value.equals("BEGIN") || value.equals("CASE")) {
                 compoundDepth++;
                 plsqlDepth++;
+            } else if ((value.equals("PROCEDURE") || value.equals("FUNCTION")) && oracle && isPackageBody()) {
+                subprogramHeader = true;
+            } else if ((value.equals("IS") || value.equals("AS")) && subprogramHeader) {
+                subprogramHeader = false;
+                pendingBodies++;
             } else if (value.equals("END")) {
                 pendingEnd = true;
             }
@@ -646,6 +665,13 @@ final class SqlScriptParser {
                 compoundStatement = compoundStart.matcher(normalized).matches();
             }
             return compoundStatement;
+        }
+
+        private boolean isPackageBody() {
+            if (packageBody == null) {
+                packageBody = normalizedPrefix().trim().matches("CREATE( OR REPLACE)?( (?:NON)?EDITIONABLE)? PACKAGE BODY\\b.*");
+            }
+            return packageBody;
         }
 
         private boolean isOracleBlockStart(String value) {

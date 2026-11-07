@@ -27,4 +27,20 @@ class SqlExecutionRegistryTest {
         assertThat(registry.cancelRequested(id, statement)).isFalse();
         assertThat(registry.cancelRequested(null, statement)).isFalse();
     }
+
+    @Test
+    void reportsTheUsersCancelAsCancelledNotAsATimeout() throws Exception {
+        // 驱动报取消与超时常是同一个错误（ORA-01013 / 57014）；只有登记处知道是用户让它停的。
+        var registry = new SqlExecutionRegistry();
+        Statement statement = mock(Statement.class);
+        String id = registry.register(UUID.randomUUID().toString(), 1L, statement);
+        var driverError = new java.sql.SQLTimeoutException("ORA-01013: user requested cancel of current operation");
+
+        assertThat(registry.translateCancel(id, statement, driverError)).isSameAs(driverError);
+        registry.cancel(id);
+        assertThat(registry.translateCancel(id, statement, driverError))
+                .isInstanceOf(com.example.dbadmin.api.ApiProblemException.class)
+                .extracting(error -> ((com.example.dbadmin.api.ApiProblemException) error).code())
+                .isEqualTo("SQL_CANCELLED");
+    }
 }

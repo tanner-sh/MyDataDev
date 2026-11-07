@@ -45,6 +45,17 @@ public class SqlExecutionRegistry {
         return current != null && current.statement() == statement && current.cancelled().get();
     }
 
+    /**
+     * 用户点了取消时把驱动的错误换成 SQL_CANCELLED。不换的话，PostgreSQL 57014 / Oracle ORA-01013 会被当成
+     * 超时（SQL_TIMEOUT）报出去，界面上进的是「操作问题」，还提示用户去调大超时 —— 而这是他自己让它停的。
+     * 必须在 {@link #unregister} 之前调用。
+     */
+    public Exception translateCancel(String executionId, Statement statement, Exception error) {
+        if (!cancelRequested(executionId, statement)) return error;
+        return new com.example.dbadmin.api.ApiProblemException(org.springframework.http.HttpStatus.CONFLICT, "SQL_CANCELLED",
+                "执行已取消，数据库已中止这条语句；已经提交的部分不会回滚。");
+    }
+
     public void unregister(String executionId, Statement statement) {
         if (executionId != null) running.computeIfPresent(executionId, (ignored, current) -> current.statement() == statement ? null : current);
     }

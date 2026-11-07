@@ -69,6 +69,20 @@ class RoutineResultReadingTest {
         }
     }
 
+    @Test
+    void oracleRefCursorParametersAreRecognisedByTypeName() {
+        // Oracle 目录给 SYS_REFCURSOR 的是 REF CURSOR + OTHER(1111)；按 1111 注册 OUT 参数会报 ORA-17004。
+        assertThat(RoutineInvocationService.isCursor(parameter("REF CURSOR", java.sql.Types.OTHER))).isTrue();
+        assertThat(RoutineInvocationService.isCursor(parameter("SYS_REFCURSOR", null))).isTrue();
+        assertThat(RoutineInvocationService.isCursor(parameter("refcursor", java.sql.Types.REF_CURSOR))).isTrue();
+        assertThat(RoutineInvocationService.isCursor(parameter("NUMBER", java.sql.Types.NUMERIC))).isFalse();
+        assertThat(RoutineInvocationService.isCursor(parameter("jsonb", java.sql.Types.OTHER))).isFalse();
+    }
+
+    private static com.example.dbadmin.dto.ApiDtos.SchemaObjectParameter parameter(String type, Integer jdbcType) {
+        return new com.example.dbadmin.dto.ApiDtos.SchemaObjectParameter(1, "p", "OUT", type, jdbcType, true);
+    }
+
     private static Connection open() throws Exception {
         return DriverManager.getConnection("jdbc:h2:mem:" + UUID.randomUUID(), "sa", "");
     }

@@ -22,6 +22,27 @@ export function schemaObjectKindLabel(kind: SchemaObjectKind) {
   } as const)[kind];
 }
 
+/** 对象能做的操作。概览里原来直接列 LIST / DETAIL / INVOKE 这些能力码，用户看不懂；认不出的码原样显示。 */
+const OPERATION_LABELS: Record<string, string> = {
+  LIST: '列出',
+  DETAIL: '查看详情',
+  SOURCE: '查看源码',
+  CREATE: '新建',
+  REPLACE: '修改',
+  DROP: '删除',
+  INVOKE: '调用',
+  REFRESH: '刷新数据',
+  ENABLE: '启用',
+  DISABLE: '停用',
+  DEPENDENCIES: '查看依赖'
+};
+
+/** 概览里给人看的操作清单：LIST / DETAIL 是每个对象都有的，列出来只是噪音。 */
+export function schemaObjectOperationLabels(operations: readonly string[]): string[] {
+  return operations.filter((operation) => operation !== 'LIST' && operation !== 'DETAIL')
+    .map((operation) => OPERATION_LABELS[operation] || operation);
+}
+
 export function schemaObjectCapabilities(capabilities?: DatabaseCapabilities): SchemaObjectCapability[] {
   const available = capabilities?.schemaObjects || [];
   return SCHEMA_OBJECT_ORDER.flatMap((kind) => {

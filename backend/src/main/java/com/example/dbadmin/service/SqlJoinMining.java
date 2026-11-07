@@ -60,10 +60,11 @@ public final class SqlJoinMining {
         if (sql == null || sql.isBlank()) return List.of();
         List<Token> tokens = tokenize(sql.length() > MAX_SQL_CHARS ? sql.substring(0, MAX_SQL_CHARS) : sql);
         Map<String, String> aliases = tableAliases(tokens);
+        boolean[] assignment = assignmentRegions(tokens);
         Set<String> seen = new LinkedHashSet<>();
         List<JoinPair> pairs = new ArrayList<>();
         for (int index = 0; index < tokens.size(); index++) {
-            if (!tokens.get(index).is("=")) continue;
+            if (!tokens.get(index).is("=") || assignment[index]) continue;
             QualifiedColumn left = columnEndingAt(tokens, index - 1);
             QualifiedColumn right = columnStartingAt(tokens, index + 1);
             if (left == null || right == null) continue;
@@ -78,6 +79,36 @@ public final class SqlJoinMining {
             if (seen.add(pair.key())) pairs.add(pair);
         }
         return pairs;
+    }
+
+    /** SET 子句在这些词处结束（与 SET 同一层括号）：UPDATE … SET … FROM / WHERE、MERGE … UPDATE SET … WHEN。 */
+    private static final Set<String> SET_BOUNDARY = Set.of("from", "where", "returning", "output", "when", "delete", "insert");
+
+    /**
+     * 标出 SET 子句里的等号：{@code UPDATE t SET t.name = s.name FROM t JOIN s ON t.id = s.id} 里，
+     * t.name = s.name 是把值抄过去，不是关联键 —— 两侧都是限定列，长得和关联条件一模一样，不先排除的话
+     * 它会被当成一条「常用关联」排到补全最前面。SET 里套的子查询也一并跳过：宁可漏认。
+     */
+    private static boolean[] assignmentRegions(List<Token> tokens) {
+        boolean[] mask = new boolean[tokens.size()];
+        int depth = 0;
+        int setDepth = -1;
+        for (int index = 0; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.is("(")) depth++;
+            else if (token.is(")")) {
+                depth--;
+                if (setDepth >= 0 && depth < setDepth) setDepth = -1;
+            } else if (token.is(";")) {
+                setDepth = -1;
+            } else if (token.identifier()) {
+                String word = token.lower();
+                if (word.equals("set")) setDepth = depth;
+                else if (setDepth == depth && SET_BOUNDARY.contains(word)) setDepth = -1;
+            }
+            mask[index] = setDepth >= 0;
+        }
+        return mask;
     }
 
     private record Token(String text, boolean identifier) {

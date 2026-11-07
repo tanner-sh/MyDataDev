@@ -116,6 +116,9 @@ class SchemaDiagramServiceTest {
                 """, null);
 
         assertThat(diagram.tables()).extracting(DiagramTable::name).containsExactly("ORDERS");
+        // 视图不是表：不能因为它把总数算成 2，再报出「共 2 张表，只画了前 1 张」。
+        assertThat(diagram.totalTables()).isEqualTo(1);
+        assertThat(diagram.truncated()).isFalse();
     }
 
     private SchemaDiagram diagram(String ddl, Integer limit) throws Exception {

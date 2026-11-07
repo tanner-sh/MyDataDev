@@ -40,6 +40,6 @@ final class CompilationErrorLog {
     String summary() {
         if (byObject.isEmpty()) return "";
         List<String> labels = byObject.values().stream().map(Entry::label).toList();
-        return "其中 " + labels.size() + " 个对象编译失败（INVALID）：" + String.join("、", labels) + "；明细见 compilationErrors。";
+        return "其中 " + labels.size() + " 个对象编译失败（INVALID）：" + String.join("、", labels) + "；出错的行号与原因见执行日志或任务详情。";
     }
 }

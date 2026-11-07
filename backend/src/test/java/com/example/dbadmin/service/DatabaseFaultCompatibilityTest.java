@@ -1,5 +1,6 @@
 package com.example.dbadmin.service;
 
+import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.repo.SqlHistoryRepository;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Timeout;
@@ -37,7 +38,11 @@ class DatabaseFaultCompatibilityTest {
             Future<Throwable> running = fault.startQuery();
             fault.awaitServerSession();
             assertThat(fault.sql.cancel(fault.executionId)).isTrue();
-            assertThat(running.get(10, TimeUnit.SECONDS)).isInstanceOf(SQLException.class);
+            // 用户主动取消要翻译成 SQL_CANCELLED，而不是把驱动的 57014 / 中断原文当成普通 SQL 错误报出去。
+            assertThat(running.get(10, TimeUnit.SECONDS))
+                    .isInstanceOf(ApiProblemException.class)
+                    .extracting(error -> ((ApiProblemException) error).code())
+                    .isEqualTo("SQL_CANCELLED");
             fault.assertRecovered();
             assertThat(fault.sql.cancel(fault.executionId)).isFalse();
         }

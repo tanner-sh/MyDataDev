@@ -52,7 +52,11 @@ export function findUnknownObjects(sql: string, known: KnownSchemaObjects): Unkn
     const part = reference.parts[reference.parts.length - 1];
     if (!part) continue;
     if (cteNames.has(reference.normalizedName) || cteNames.has(fold(part.value))) continue;
+    if (reference.sourceKeyword === 'INTO' && !isInsertTarget(tokens, reference.start)) continue;
+    if (reference.sourceKeyword === 'UPDATE' && !isUpdateTarget(tokens, reference.start)) continue;
     if (isTemporary(part.value)) continue;
+    // Oracle 的 DUAL（MySQL 也认 FROM DUAL）是内置伪表，从来不在用户 Schema 的对象清单里。
+    if (!reference.schemaName && fold(part.value) === 'dual') continue;
     // 限定到别的 Schema 时手上没有它的清单，无从判断。
     if (reference.schemaName && fold(reference.schemaName) !== schema) continue;
     if (isFunctionCall(tokens, part.end)) continue;
@@ -60,6 +64,30 @@ export function findUnknownObjects(sql: string, known: KnownSchemaObjects): Unkn
     marks.push({ start: part.start, end: part.end, name: part.value });
   }
   return marks;
+}
+
+/**
+ * INTO 后面只有在 INSERT INTO / MERGE INTO 里才是一张已有的表。PL/SQL 的 SELECT … INTO v、FETCH c INTO v、
+ * RETURNING … INTO v 后面是变量，SQL Server 的 SELECT … INTO t 是要新建的表 —— 都不该划线。
+ */
+function isInsertTarget(tokens: SqlToken[], referenceStart: number): boolean {
+  const previous = tokenBeforeKeyword(tokens, referenceStart, 'INTO');
+  return previous === 'INSERT' || previous === 'MERGE';
+}
+
+/** MERGE 里的 WHEN MATCHED THEN UPDATE SET …、SELECT … FOR UPDATE NOWAIT：UPDATE 后面跟的不是表。 */
+function isUpdateTarget(tokens: SqlToken[], referenceStart: number): boolean {
+  const previous = tokenBeforeKeyword(tokens, referenceStart, 'UPDATE');
+  return previous !== 'THEN' && previous !== 'FOR';
+}
+
+/** 引用之前最近的那个 keyword 前面一个记号（大写）；keyword 在开头时是空串。 */
+function tokenBeforeKeyword(tokens: SqlToken[], referenceStart: number, keyword: string): string {
+  let keywordIndex = -1;
+  for (let index = 0; index < tokens.length && tokens[index].end <= referenceStart; index += 1) {
+    if (tokens[index].text.toUpperCase() === keyword) keywordIndex = index;
+  }
+  return keywordIndex > 0 ? tokens[keywordIndex - 1].text.toUpperCase() : '';
 }
 
 /** 紧跟一个左括号说明这是表值函数，不是表。 */

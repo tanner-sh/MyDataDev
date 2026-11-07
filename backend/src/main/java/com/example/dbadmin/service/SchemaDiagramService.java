@@ -52,7 +52,11 @@ public class SchemaDiagramService {
         // 多取一页判断有没有被截断：只按 limit 取的话，恰好等于上限时分不出「正好这么多」和「还有更多」。
         MetadataResponse inspection = metadata.inspect(connectionId, schemaName, null, 0, Math.min(limit + 1, 500), false);
         List<DbObject> tables = inspection.objects().stream().filter(object -> isTable(object.type())).toList();
-        boolean truncated = tables.size() > limit || inspection.totalObjects() > tables.size();
+        // 对象总数里含视图等非表对象：拿它和表数比，只要 Schema 里有一个视图就会报「只画了前 N 张」。
+        // 本页已经取全时表数就是准数；还有下一页时减掉本页见到的非表对象，作为表数的估计。
+        int nonTablesSeen = inspection.objects().size() - tables.size();
+        int totalTables = inspection.hasMore() ? Math.max(tables.size(), inspection.totalObjects() - nonTablesSeen) : tables.size();
+        boolean truncated = tables.size() > limit || inspection.hasMore();
         List<DbObject> selected = tables.size() > limit ? tables.subList(0, limit) : tables;
 
         String resolvedSchema = inspection.selectedSchema();
@@ -101,7 +105,7 @@ public class SchemaDiagramService {
             return new DiagramTable(table.schemaName(), table.name(), List.copyOf(keyColumns), columns.size());
         }).toList();
 
-        return new SchemaDiagram(resolvedSchema, diagramTables, relations, inspection.totalObjects(), truncated);
+        return new SchemaDiagram(resolvedSchema, diagramTables, relations, totalTables, truncated);
     }
 
     private static boolean isTable(String type) {

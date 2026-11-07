@@ -57,7 +57,35 @@ public class SqlStatementClassifier {
         }
         Kind kind = kind(operation.word());
         if (kind == Kind.QUERY && hasQuerySideEffect(tokens, operation)) return Kind.MUTATION;
+        if (kind == Kind.QUERY) {
+            Kind trailing = trailingStatementKind(sql);
+            if (trailing != null) return trailing;
+        }
         return kind;
+    }
+
+    /** 不写分号时，查询后面顶层出现这些词就是第二条语句的开头（T-SQL 批次里很常见）。 */
+    private static final Set<String> TRAILING_WRITE_STARTS = Set.of("INSERT", "UPDATE", "DELETE", "MERGE", "EXEC", "EXECUTE", "CALL");
+    private static final Set<String> TRAILING_DDL_STARTS = Set.of("CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "REVOKE");
+
+    /**
+     * T-SQL 不要求语句分隔符：{@code SELECT 1 换行 UPDATE t SET …} 是一个批次、两条语句。只看开头的话整批被判成
+     * 查询 —— 只读连接的写闸门、只有查询权限的用户、无 WHERE 写操作的确认都按「查询」放行。所以查询里顶层
+     * （括号外）再出现写操作或 DDL 的起始词时，按其中最危险的那一类算。FOR UPDATE 在前面已经算成写了。
+     */
+    private Kind trailingStatementKind(String sql) {
+        Kind found = null;
+        List<Token> tokens = tokens(sql);
+        for (int index = 0; index < tokens.size(); index++) {
+            Token token = tokens.get(index);
+            if (token.depth() != 0) continue;
+            // 紧跟括号的是函数调用（MySQL 的 TRUNCATE(x, 2)），不是语句开头 —— EXEC('…') 动态 SQL 除外。
+            boolean call = index + 1 < tokens.size() && tokens.get(index + 1).depth() > token.depth();
+            if (call && !Set.of("EXEC", "EXECUTE").contains(token.word())) continue;
+            if (TRAILING_DDL_STARTS.contains(token.word())) return Kind.DDL;
+            if (TRAILING_WRITE_STARTS.contains(token.word())) found = Kind.MUTATION;
+        }
+        return found;
     }
 
     public boolean isQuery(String sql) {

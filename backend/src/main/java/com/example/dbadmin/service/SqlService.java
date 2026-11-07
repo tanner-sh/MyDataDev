@@ -3,6 +3,7 @@ package com.example.dbadmin.service;
 import com.example.dbadmin.config.AppProperties;
 import com.example.dbadmin.api.ApiProblemException;
 import com.example.dbadmin.core.DatabaseDialect;
+import com.example.dbadmin.core.DatabaseFamily;
 import com.example.dbadmin.core.DialectRegistry;
 import com.example.dbadmin.dto.ApiDtos.ResultColumn;
 import com.example.dbadmin.dto.ApiDtos.ResultSourceTable;
@@ -188,6 +189,8 @@ public class SqlService {
                     metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
                     return result;
                 }
+            } catch (Exception error) {
+                throw executions.translateCancel(registeredId, statement, error);
             } finally {
                 executions.unregister(registeredId, statement);
             }
@@ -320,15 +323,11 @@ public class SqlService {
     }
 
     /**
-     * 命令窗口提交前的无 WHERE 写操作检查：与工作台同一套判定、同一个 409，确认了也同样记审计。
-     * 脚本里的 SQL*Plus 指令（含 WHENEVER SQLERROR CONTINUE）在这里只是被跳过。
+     * 脚本入口的闸门切分：按连接的真实库类型切一次，同一份结果交给权限检查与无 WHERE 写操作确认。
+     * 脚本里的 SQL*Plus 指令（含 WHENEVER SQLERROR CONTINUE）在这里只是被跳过，允不允许由执行那一步判定。
      */
-    public void requireUnscopedMutationConfirmation(long connectionId, String actor, String sql, SqlScriptDelimiter delimiter, boolean confirmed) throws Exception {
-        String dbType = connections.require(connectionId).dbType();
-        List<StatementSegment> segments = new ArrayList<>();
-        SqlScriptParser.read(new java.io.StringReader(sql), dbType, Math.max(1, sql.length()), delimiter, unit ->
-                segments.add(new StatementSegment(unit.sql(), Math.toIntExact(unit.startOffset()), Math.toIntExact(unit.endOffset()))), ignored -> { });
-        requireUnscopedMutationConfirmation(connectionId, actor, scriptSplitter.classificationUnits(segments, dbType, delimiter), confirmed);
+    public List<StatementSegment> gateUnits(long connectionId, String sql, SqlScriptDelimiter delimiter) {
+        return scriptSplitter.gateUnits(sql, connections.require(connectionId).dbType(), delimiter);
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, Integer requestedPageSize, String actor, String executionId, String productionConfirmation, String schemaName, boolean unscopedMutationConfirmed, String transactionMode, String endOfFileAction,
@@ -440,8 +439,12 @@ public class SqlService {
                             result = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
                         }
                         results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, result));
-                        // SQL Server GO preserves a batch; consume all its results instead of losing later SELECTs.
-                        if (java.util.Set.of("sqlserver", "sql-server", "mssql").contains(dbConnection.dbType().toLowerCase(java.util.Locale.ROOT))) {
+                        // 一条语句可能交回多个结果：SQL Server 的 GO 批次、MySQL 的 CALL（过程里每个 SELECT 一个结果集）、
+                        // Oracle 12c 起的隐式结果集（DBMS_SQL.RETURN_RESULT）。原来只有 SQL Server 读后续结果，
+                        // 别的库上 CALL 一个返回两个结果集的过程只看得到第一个，第二个悄无声息地丢了。
+                        // SQL Server 之外，后续的更新计数只会是 MySQL 在 CALL 末尾附带的那个状态计数，读掉但不列出来。
+                        boolean batchCounts = DatabaseFamily.of(dbConnection.dbType()).equals("sqlserver");
+                        {
                             while (true) {
                                 boolean more = jdbc.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
                                 if (!more && jdbc.getUpdateCount() == -1) break;
@@ -455,14 +458,17 @@ public class SqlService {
                                         returnedCells += nextResult.rows().size() * nextResult.columns().size();
                                         returnedTextChars += SqlResultReader.textChars(nextResult);
                                     }
-                                } else nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
+                                } else if (batchCounts) {
+                                    nextResult = emptyResult(jdbc.getUpdateCount(), elapsed(statementStarted), maxRows);
+                                } else continue;
                                 results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "SUCCESS", null, nextResult));
                             }
                         }
                     } catch (Exception e) {
                         if (tx != null) tx.fail(e);
                         long elapsedMs = elapsed(statementStarted);
-                        errorMessage = (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + (tx == null ? "" : "；" + tx.summary());
+                        errorMessage = (executions.cancelRequested(registeredId, jdbc) ? "执行已取消，数据库已中止这条语句。"
+                                : e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()) + (tx == null ? "" : "；" + tx.summary());
                         results.add(new SqlStatementResult(results.size() + 1, statement.sql(), statement.startOffset(), statement.endOffset(), "FAILED", abbreviate(errorMessage), emptyResult(-1, elapsedMs, maxRows)));
                         status = "FAILED";
                         break;
@@ -512,9 +518,13 @@ public class SqlService {
             boolean confirmed
     ) {
         List<Map<String, Object>> unsafeStatements = new ArrayList<>();
+        // T-SQL 不写分号时，一个批次里藏在 SELECT 后面的 UPDATE/DELETE 只看开头是认不出来的，与 MCP 那条路同一个判定。
+        boolean sqlServer = DatabaseFamily.of(connections.require(connectionId).dbType()).equals("sqlserver");
         for (int index = 0; index < statements.size(); index++) {
             StatementSegment statement = statements.get(index);
-            if (!classifier.requiresUnscopedMutationConfirmation(statement.sql())) continue;
+            boolean unsafe = sqlServer ? classifier.requiresSqlServerBatchConfirmation(statement.sql())
+                    : classifier.requiresUnscopedMutationConfirmation(statement.sql());
+            if (!unsafe) continue;
             unsafeStatements.add(Map.of(
                     "index", index + 1,
                     "sql", abbreviate(statement.sql())
@@ -649,6 +659,8 @@ public class SqlService {
                     metrics.success(SqlExecutionMetrics.KIND_PAGE, started);
                     return result;
                 }
+            } catch (Exception error) {
+                throw executions.translateCancel(registeredId, statement, error);
             } finally {
                 executions.unregister(registeredId, statement);
             }

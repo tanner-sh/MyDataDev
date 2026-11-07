@@ -290,6 +290,9 @@ final class SqlFileJobExecutor {
 
     private static final int COMMAND_MAX_COUNTED_ROWS = 100_000;
 
+    /** 逐条自动提交且驱动不能流式读取时（PostgreSQL 的游标要求关掉 autocommit），结果集整批进内存，所以少数一些。 */
+    private static final int COMMAND_MAX_COUNTED_ROWS_BUFFERED = 10_000;
+
     private static final int COMMAND_LOG_LIMIT = 20_000;
 
     private static final int COMMAND_ERROR_LIMIT = 5_000;
@@ -310,6 +313,7 @@ final class SqlFileJobExecutor {
         var settings = files.commands.find(id).orElseThrow();
         CommandUnitRunner runner = files.commandRunners.get(id);
         boolean[] continueOnError = {"CONTINUE".equals(settings.onError())};
+        int[] maxCounted = {COMMAND_MAX_COUNTED_ROWS};
         boolean scriptTx = "SCRIPT".equals(job.transaction().mode());
         boolean commitAtEnd = "COMMIT".equals(job.transaction().endOfFileAction());
         CommandLog out = new CommandLog(id);
@@ -345,6 +349,16 @@ final class SqlFileJobExecutor {
                 try (Statement statement = connection.createStatement()) {
                     files.runningStatements.put(id, statement);
                     dialect.configureStreamingStatement(connection, statement, 500, properties.getSqlFile().getStatementTimeoutSeconds());
+                    if (!scriptTx && !connection.getAutoCommit()) {
+                        // 方言为了流式读取关掉了 autocommit（PostgreSQL）。「逐条自动提交」必须是真的 autocommit：
+                        // 否则每条写入都悬在一个从不提交的事务里，连接归还连接池时被整批回滚，日志却报「成功」；
+                        // 出错之后的每一条也都会报 current transaction is aborted，「遇错继续」形同虚设。
+                        // 也不能改成逐条手动提交 —— VACUUM、CREATE INDEX CONCURRENTLY 只能在事务块之外执行。
+                        // 代价是结果集不再流式读取，用 maxRows 给它封顶。
+                        connection.setAutoCommit(true);
+                        statement.setMaxRows(COMMAND_MAX_COUNTED_ROWS_BUFFERED + 1);
+                        maxCounted[0] = COMMAND_MAX_COUNTED_ROWS_BUFFERED;
+                    }
                     compiled[0] = new CompilationCollector(id, dialect);
                     RoutineOutput.enable(connection, dialect);
                     SqlFileStatementReader.readUnits(files.checkedPath(job), Charset.forName(job.detectedCharset()), job.targetDbType(), SqlFileExecutionService.delimiterOf(job),
@@ -379,7 +393,7 @@ final class SqlFileJobExecutor {
                                 while (true) {
                                     if (result) {
                                         try (ResultSet rows = statement.getResultSet()) {
-                                            var rendered = SqlCommandOutput.render(rows, COMMAND_PREVIEW_ROWS, COMMAND_MAX_COUNTED_ROWS, () -> files.ensureNotCancelled(id));
+                                            var rendered = SqlCommandOutput.render(rows, COMMAND_PREVIEW_ROWS, maxCounted[0], () -> files.ensureNotCancelled(id));
                                             queryRows[0] += rendered.rows();
                                             outcome.add(rendered.text());
                                         }

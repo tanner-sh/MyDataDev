@@ -11,6 +11,24 @@ class SqlStatementClassifierTest {
     private final SqlStatementClassifier classifier = new SqlStatementClassifier();
 
     @Test
+    void aWriteHiddenAfterAQueryInASemicolonlessBatchIsNotAQuery() {
+        // T-SQL 批次不写分号：以前整批按开头判成 QUERY，只读连接与只有查询权限的用户都能借它执行写操作。
+        assertThat(classifier.classify("SELECT 1 AS a\nUPDATE orders SET status = 'X' WHERE id = 1")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("SELECT 1\nDELETE FROM orders")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("SELECT 1\nEXEC sp_who")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("SELECT 1\nEXEC('UPDATE orders SET status = 1')")).isEqualTo(SqlStatementClassifier.Kind.MUTATION);
+        assertThat(classifier.classify("SELECT TRUNCATE(price, 2) FROM orders")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("SELECT 1\nDROP TABLE orders")).isEqualTo(SqlStatementClassifier.Kind.DDL);
+        assertThat(classifier.classify("SELECT 1\nUPDATE t SET a = 1\nTRUNCATE TABLE t")).isEqualTo(SqlStatementClassifier.Kind.DDL);
+        // 真正的查询不能被误伤。
+        assertThat(classifier.classify("SELECT * FROM orders USE INDEX (idx_orders_customer) WHERE id = 1")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("SELECT \"update\", [delete] FROM t")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("SELECT a FROM t WHERE id IN (SELECT id FROM u)")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("SELECT REPLACE(name, 'a', 'b') FROM t")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+        assertThat(classifier.classify("SELECT 'UPDATE t SET a = 1' AS text")).isEqualTo(SqlStatementClassifier.Kind.QUERY);
+    }
+
+    @Test
     void manualTransactionsStillAllowQueriesAndDmlWithQuotedControlWords() {
         for (String sql : java.util.List.of("SELECT 'COMMIT', 'CREATE TABLE x'",
                 "SELECT * FROM accounts FOR UPDATE", "INSERT INTO accounts VALUES (1, 5)",

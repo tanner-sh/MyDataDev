@@ -180,11 +180,20 @@ public class SqlFileExecutionService {
      * 等用户在任务面板里点开始；生产确认、无 WHERE 写确认、并发闸门都在开始那一步。
      */
     public SqlFileExecutionResponse submitEditorScript(long connectionId, String sql, String actor, SqlScriptDelimiter delimiter) throws Exception {
+        return submitEditorScript(connectionId, sql, actor, delimiter, false);
+    }
+
+    /**
+     * @param delimiterChecked 用户已经在工作台对识别出的分隔符表过态（选了「保持自动」也算）。这时不能再自己
+     *                         识别一次 —— 否则后台执行的是另一种切法切出来的语句，不是用户刚同意的那些。
+     */
+    public SqlFileExecutionResponse submitEditorScript(long connectionId, String sql, String actor, SqlScriptDelimiter delimiter,
+                                                       boolean delimiterChecked) throws Exception {
         if (sql == null || sql.isBlank()) throw new IllegalArgumentException("请输入要执行的 SQL");
         byte[] bytes = sql.getBytes(StandardCharsets.UTF_8);
         return uploadScript(connectionId, "workbench-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + ".sql",
                 bytes.length, writer -> { writer.write(sql); return "source=workbench"; }, actor, "SQL_FILE_UPLOAD", "editor script",
-                false, delimiter == null ? SqlScriptDelimiter.AUTO : delimiter, true);
+                false, delimiter == null ? SqlScriptDelimiter.AUTO : delimiter, !delimiterChecked);
     }
 
     /**

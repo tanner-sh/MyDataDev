@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  batchValueModes,
   canBatchEditColumn,
   duplicateRowsAsInserts,
   liveSelection,
@@ -27,6 +28,15 @@ const rows: TableRow[] = [
 ];
 
 describe('table batch edit', () => {
+  it('only offers NULL for nullable columns and empty string for text columns', () => {
+    expect(batchValueModes(columns[0])).toEqual({ value: undefined, null: 'ID 不允许为空', empty: 'ID 不是字符类型' });
+    expect(batchValueModes(columns[1])).toEqual({ value: undefined, null: undefined, empty: undefined });
+    expect(batchValueModes(columns[2]).empty).toBeUndefined();
+    expect(batchValueModes({ name: 'CODE', typeName: 'nvarchar', jdbcType: -9, nullable: false }))
+      .toEqual({ value: undefined, null: 'CODE 不允许为空', empty: undefined });
+    expect(batchValueModes(undefined).null).toBeUndefined();
+  });
+
   it('drops selections that are no longer on screen', () => {
     expect(liveSelection(rows, ['a', 'gone', 'new'])).toEqual(['a', 'new']);
     expect(summarizeSelection(rows, ['a', 'b', 'new'])).toEqual({ total: 3, deleted: 1, inserted: 1 });
