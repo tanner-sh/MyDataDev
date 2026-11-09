@@ -143,7 +143,7 @@ SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuer
 
 **宽屏（≥1200px）时各工作区的操作按钮停靠在顶栏正中间**，SQL 标签的 Schema 停在连接选择器旁边（`components/HeaderDock.tsx`：App 经 `HeaderSlotsContext` 交出两个位置，工作区用 `<HeaderDock slot active>` 渲染进去）。SQL、表、对象结构、视图 / 存储过程、ER 图全部停靠，不要只停其中一个 —— 只停 SQL 时按钮会随页签在顶栏和工作区之间跳。隐藏着的文档页签必须传 `active={false}`，否则同一位置会叠出几组按钮；窄屏两个位置都是 null，工作区照旧渲染自己那一行工具栏，两条路径都要能用。表工具栏停靠后按顶栏那一格的宽度决定收不收进「更多」（`tableToolbarCollapsed(…, docked)`），「可编辑 / 行定位字段」挪到状态栏右侧。
 
-**每个查询标签各自记着自己的 Schema**（`SqlTab.executionSchema`，工具栏上的选择器改它），和 DBeaver 一样完全独立：资源管理器只管浏览，换 Schema 不碰任何查询标签；新开的标签落在资源管理器当前的 Schema 上。SQL 执行与补全用标签的（`activeSqlSchema`），ER 图、结构快照、对象导出、数据检索、对象搜索这些从资源管理器出发的功能用资源管理器的（`explorerSchema`），两者别混用。手动事务按连接开、开启时就绑定了 Schema，事务里的语句一律在那个 Schema 执行 —— 所以事务开着时选择器锁定，标签 Schema 与事务不一致的执行直接拒绝（`transactionSchemaConflict`），否则界面写着 PUBLIC、删的却是 S2 的表。命令窗口按连接默认 Schema 执行，不显示选择器。
+**每个查询标签各自记着自己的 Schema**（`SqlTab.executionSchema`，工具栏上的选择器改它），和 DBeaver 一样完全独立：资源管理器只管浏览，换 Schema 不碰任何查询标签；新开的标签沿用当前标签的 Schema；还没有 Schema 的标签（默认标签、升级前的会话）在元数据加载后钉在资源管理器当时的 Schema 上（`pinTabSchemas`），否则它们会一起跟着资源管理器变。SQL 执行与补全用标签的（`activeSqlSchema`），ER 图、结构快照、对象导出、数据检索、对象搜索这些从资源管理器出发的功能用资源管理器的（`explorerSchema`），两者别混用。手动事务按连接开、开启时就绑定了 Schema，事务里的语句一律在那个 Schema 执行 —— 所以事务开着时选择器锁定，标签 Schema 与事务不一致的执行直接拒绝（`transactionSchemaConflict`），否则界面写着 PUBLIC、删的却是 S2 的表。命令窗口按连接默认 Schema 执行，不显示选择器。
 
 编辑器里的「未知表名」波浪线（`src/sqlUnknownObjects.ts` + `SqlEditor` 的装饰层）用的就是补全那份对象清单，不打接口、不需要模型。**它只在清单确实完整时才提示** —— 资源树是分页的、还可能带着搜索关键字，拿一份筛过或只有第一页的清单去判断「不存在」会把正确的表名也划上线，那比没有提示更糟。CTE、表值函数、临时表、限定到别的 Schema 的引用一律跳过，比对折大小写。改这块时的默认方向永远是「宁可不提示」。
 

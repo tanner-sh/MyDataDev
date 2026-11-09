@@ -26,8 +26,9 @@ type UseSqlTabsOptions = {
   /** 新开或切到某个查询标签后切回 SQL 工作台。 */
   onShowSql: () => void;
   /**
-   * 新标签落在哪个 Schema：资源管理器当前选着的那个。之后这个标签自己记着，资源管理器
-   * 再怎么切也不影响它（和 DBeaver 一样，每个编辑器各自绑定一个 Schema）。
+   * 新标签落在哪个 Schema：沿用当前这个查询标签的。在 S2 的标签里点「+」多半是接着写同一个库的脚本，
+   * 新标签也该在 S2；之后它自己记着，和其它标签、和资源管理器都互不影响（和 DBeaver 一样，每个编辑器
+   * 各自绑定一个 Schema）。调用方显式给了 Schema 的（例如结构对比生成的迁移脚本）以调用方为准。
    */
   inheritedExecutionSchema?: () => string | undefined;
 };

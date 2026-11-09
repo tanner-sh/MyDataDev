@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeSqlTabIn, duplicateSqlTabOf, normalizeSqlTabTitle, patchSqlTab, withLiveSql } from './sqlTabs';
+import { closeSqlTabIn, duplicateSqlTabOf, normalizeSqlTabTitle, patchSqlTab, pinTabSchemas, withLiveSql } from './sqlTabs';
 import type { SqlTab } from './types';
 
 const tab = (id: string, extra: Partial<SqlTab> = {}): SqlTab => ({ id, title: id, sql: `select '${id}'`, dirty: false, results: [], message: '', ...extra });
@@ -38,5 +38,20 @@ describe('sql tabs', () => {
   it('rejects blank titles', () => {
     expect(normalizeSqlTabTitle('   ')).toBeNull();
     expect(normalizeSqlTabTitle('  报表 ')).toBe('报表');
+  });
+
+  it('pins tabs without a schema so the explorer no longer moves them', () => {
+    const tabs = [tab('a'), tab('b', { executionSchema: 'S2', dirty: true }), tab('c')];
+    const pinned = pinTabSchemas(tabs, 'PUBLIC');
+    expect(pinned.map((item) => item.executionSchema)).toEqual(['PUBLIC', 'S2', 'PUBLIC']);
+    expect(pinned.map((item) => item.dirty)).toEqual([false, true, false]);
+    expect(pinned[1]).toBe(tabs[1]);
+  });
+
+  it('returns the same array when there is nothing to pin', () => {
+    const tabs = [tab('a', { executionSchema: 'S2' })];
+    expect(pinTabSchemas(tabs, 'PUBLIC')).toBe(tabs);
+    const unpinned = [tab('a')];
+    expect(pinTabSchemas(unpinned, undefined)).toBe(unpinned);
   });
 });

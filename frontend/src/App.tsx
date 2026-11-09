@@ -48,6 +48,7 @@ import type {
 } from './sqlEditorTypes';
 import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
+import { pinTabSchemas } from './sqlTabs';
 import { readFavoriteConnectionIds, readRecentCommandIds, writeFavoriteConnectionIds, writeRecentCommandIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import {
@@ -233,8 +234,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const editorRef = useRef<SqlEditorHandle | null>(null);
-  /** 资源管理器当前的 Schema：新开的查询标签落在这里（见 useSqlTabs 的 inheritedExecutionSchema）。 */
-  const explorerSchemaRef = useRef<string | undefined>(undefined);
+  /** 当前查询标签的 Schema：新开的标签沿用它（见 useSqlTabs 的 inheritedExecutionSchema）。 */
+  const currentTabSchemaRef = useRef<string | undefined>(undefined);
   /** 顶栏正中间留给 SQL 工作台常用按钮的位置（见 AppHeader 的 toolbarSlotRef）。 */
   const [headerToolbarSlot, setHeaderToolbarSlot] = useState<HTMLDivElement | null>(null);
   const [headerContextSlot, setHeaderContextSlot] = useState<HTMLDivElement | null>(null);
@@ -252,7 +253,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     notifyInfo: (text) => showInfo(text),
     notifyError: (text) => showError(text),
     onShowSql: () => setMode('sql'),
-    inheritedExecutionSchema: () => explorerSchemaRef.current
+    inheritedExecutionSchema: () => currentTabSchemaRef.current
   });
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [activeObjectTarget, setActiveObjectTarget] = useState<DbObject | null>(null);
@@ -369,10 +370,17 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
    * 出发的浏览类功能，跟它走；查询标签的 Schema（activeSqlSchema）只给 SQL 执行和补全用。
    */
   const explorerSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
-  explorerSchemaRef.current = explorerSchema;
   const activeSqlSchema = resolveSqlExecutionSchema(sqlTabs.find(tab => tab.id === activeSqlTabId)?.executionSchema ?? metadataQuery.schema, metadata);
   const activeSqlSchemaRef = useRef(activeSqlSchema);
   activeSqlSchemaRef.current = activeSqlSchema;
+  currentTabSchemaRef.current = activeSqlSchema;
+  // 还没有自己 Schema 的标签（默认标签、升级前的会话、元数据加载前新开的）一律钉在资源管理器当前的 Schema 上，
+  // 否则它们会一起跟着资源管理器变，「每个标签独立 Schema」就只对手动选过的标签成立（规则见 pinTabSchemas）。
+  // 切换连接时 metadata 先清空再加载，explorerSchema 为 undefined 的那一段不会把上一条连接的 Schema 钉到新标签上。
+  useEffect(() => {
+    if (!explorerSchema) return;
+    setSqlTabs((tabs) => pinTabSchemas(tabs, explorerSchema));
+  }, [explorerSchema, sqlTabs, setSqlTabs]);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -2929,7 +2937,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     clearMetadataSearchTimer();
     setMetadataQuery((current) => ({ ...current, schema }));
     // 资源管理器只管浏览，不碰任何查询标签：每个标签的 Schema 只由它自己工具栏上的选择器决定（和 DBeaver 一样）。
-    // 新开的标签落在资源管理器当前的 Schema 上（见 useSqlTabs 的 inheritedExecutionSchema）。
+    // 新开的标签沿用当前标签的 Schema（见 useSqlTabs 的 inheritedExecutionSchema）。
     void loadMetadata(selected, {
       schema,
       keyword: kind === 'TABLE' ? metadataQuery.keyword : '',
