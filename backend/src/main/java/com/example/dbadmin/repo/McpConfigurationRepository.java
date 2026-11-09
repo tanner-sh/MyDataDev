@@ -40,7 +40,8 @@ public class McpConfigurationRepository {
                 rs.getInt("table_page_size"),
                 rs.getInt("max_table_page_size"),
                 rs.getInt("session_ttl_minutes"), rs.getInt("max_scripts_per_connection"),
-                rs.getInt("execute_timeout_seconds")
+                rs.getInt("execute_timeout_seconds"),
+                rs.getInt("export_max_kilobytes")
         ));
         return rows.stream().findFirst();
     }
@@ -51,14 +52,15 @@ public class McpConfigurationRepository {
                     id, enabled, default_query_rows, max_query_rows, max_result_cells,
                     max_result_text_chars, max_cell_text_chars, max_sql_chars, query_timeout_seconds,
                     metadata_page_size, max_metadata_page_size, table_page_size,
-                    max_table_page_size, session_ttl_minutes, max_scripts_per_connection, execute_timeout_seconds
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    max_table_page_size, session_ttl_minutes, max_scripts_per_connection, execute_timeout_seconds,
+                    export_max_kilobytes
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 settings.enabled(), settings.defaultQueryRows(), settings.maxQueryRows(), settings.maxResultCells(),
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(), settings.queryTimeoutSeconds(),
                 settings.metadataPageSize(), settings.maxMetadataPageSize(), settings.tablePageSize(),
                 settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection(),
-                settings.executeTimeoutSeconds());
+                settings.executeTimeoutSeconds(), settings.exportMaxKilobytes());
     }
 
     public void updateSettings(Settings settings) {
@@ -68,7 +70,7 @@ public class McpConfigurationRepository {
                     max_result_text_chars = ?, max_cell_text_chars = ?, max_sql_chars = ?,
                     query_timeout_seconds = ?, metadata_page_size = ?, max_metadata_page_size = ?,
                     table_page_size = ?, max_table_page_size = ?, session_ttl_minutes = ?, max_scripts_per_connection = ?,
-                    execute_timeout_seconds = ?,
+                    execute_timeout_seconds = ?, export_max_kilobytes = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
                 """,
@@ -76,7 +78,7 @@ public class McpConfigurationRepository {
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(), settings.queryTimeoutSeconds(),
                 settings.metadataPageSize(), settings.maxMetadataPageSize(), settings.tablePageSize(),
                 settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection(),
-                settings.executeTimeoutSeconds());
+                settings.executeTimeoutSeconds(), settings.exportMaxKilobytes());
     }
 
     public void replaceOrigins(Set<String> origins) {

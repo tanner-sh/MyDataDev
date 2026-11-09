@@ -31,10 +31,12 @@ import static org.mockito.Mockito.when;
 class ExportServiceTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private ExportService exportService;
+    private String databaseUrl;
 
     @BeforeEach
     void setUp() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1";
+        databaseUrl = url;
         try (var connection = DriverManager.getConnection(url, "sa", "")) {
             connection.createStatement().execute("CREATE TABLE export_values(id INT PRIMARY KEY, name VARCHAR(40), note VARCHAR(80), active BOOLEAN, empty VARCHAR(10))");
             connection.createStatement().execute("INSERT INTO export_values VALUES (1, 'Alice', 'a, \"quoted\" value', TRUE, NULL)");
@@ -310,5 +312,27 @@ class ExportServiceTest {
 
         // 只有表头，没有数据行。
         assertThat(output.toString(java.nio.charset.StandardCharsets.UTF_8).trim().lines().count()).isEqualTo(1);
+    }
+
+    @Test
+    void agentExportHonoursItsOwnRowAndByteLimits() throws Exception {
+        try (var connection = DriverManager.getConnection(databaseUrl, "sa", "")) {
+            connection.createStatement().execute("INSERT INTO export_values VALUES (2, 'Bob', 'b', FALSE, NULL)");
+        }
+        ExportService.PreparedExport limited = exportService.prepareForAgent(1L, "select id from export_values order by id", "csv",
+                "mcp:agent", null, null, 1, 1024 * 1024, 10);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        limited.writeTo(output);
+        assertThat(limited.truncated()).isTrue();
+        assertThat(output.toString(java.nio.charset.StandardCharsets.UTF_8)).contains("\"1\"").doesNotContain("\"2\"");
+
+        // 字节上限远小于下载那条路的 256 MB：超了直接报错，不给半个文件。
+        assertThatThrownBy(() -> exportService.prepareForAgent(1L, "select * from export_values", "csv",
+                "mcp:agent", null, null, 10, 16, 10))
+                .isInstanceOf(java.io.IOException.class)
+                .hasMessageStartingWith("导出文件超过");
+        assertThatThrownBy(() -> exportService.prepareForAgent(1L, "delete from export_values", "csv",
+                "mcp:agent", null, null, 10, 1024, 10))
+                .hasMessageContaining("单条查询");
     }
 }
