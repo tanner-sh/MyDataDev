@@ -35,8 +35,18 @@ public final class McpAdminDtos {
             int maxTablePageSize,
             int sessionTtlMinutes,
             Integer maxScriptsPerConnection,
-            Integer executeTimeoutSeconds
+            Integer executeTimeoutSeconds,
+            /** db_export_query 的文件上限（KB）；旧客户端与旧备份不带它时沿用已存的值。 */
+            Integer exportMaxKilobytes
     ) {
+        /** 加导出上限之前的形状（旧的连接配置备份、测试）。 */
+        public McpLimits(int defaultQueryRows, int maxQueryRows, int maxResultCells, long maxResultTextChars, int maxCellTextChars,
+                         int maxSqlChars, int queryTimeoutSeconds, int metadataPageSize, int maxMetadataPageSize, int tablePageSize,
+                         int maxTablePageSize, int sessionTtlMinutes, Integer maxScriptsPerConnection, Integer executeTimeoutSeconds) {
+            this(defaultQueryRows, maxQueryRows, maxResultCells, maxResultTextChars, maxCellTextChars, maxSqlChars, queryTimeoutSeconds,
+                    metadataPageSize, maxMetadataPageSize, tablePageSize, maxTablePageSize, sessionTtlMinutes, maxScriptsPerConnection,
+                    executeTimeoutSeconds, null);
+        }
     }
 
     public record McpConfigUpdateRequest(

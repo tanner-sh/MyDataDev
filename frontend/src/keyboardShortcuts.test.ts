@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAppShortcut, type ShortcutKeyEvent } from './keyboardShortcuts';
+import { resolveAppShortcut, shortcutKeycap, type ShortcutKeyEvent } from './keyboardShortcuts';
 
 function press(overrides: Partial<ShortcutKeyEvent>): ShortcutKeyEvent {
   return { key: '', code: '', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...overrides };
@@ -70,5 +70,19 @@ describe('全局对象搜索快捷键', () => {
   it('带 Shift 或不带修饰键时不拦截，交回浏览器', () => {
     expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP', metaKey: true, shiftKey: true }))).toBeUndefined();
     expect(resolveAppShortcut(press({ key: 'p', code: 'KeyP' }))).toBeUndefined();
+  });
+});
+
+describe('shortcutKeycap', () => {
+  it('uses symbols on macOS', () => {
+    expect(shortcutKeycap('Ctrl/Cmd+Enter', true)).toBe('⌘↵');
+    expect(shortcutKeycap('Ctrl/Cmd+Shift+F', true)).toBe('⌘⇧F');
+    expect(shortcutKeycap('Alt+N', true)).toBe('⌥N');
+  });
+
+  it('spells out keys elsewhere', () => {
+    expect(shortcutKeycap('Ctrl/Cmd+Enter', false)).toBe('Ctrl+Enter');
+    expect(shortcutKeycap('Ctrl/Cmd+Shift+F', false)).toBe('Ctrl+Shift+F');
+    expect(shortcutKeycap('Ctrl/Cmd+S', false)).toBe('Ctrl+S');
   });
 });

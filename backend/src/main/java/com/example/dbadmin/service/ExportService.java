@@ -217,7 +217,21 @@ public class ExportService {
             String format, String actor, String productionConfirmation, String schemaName,
             List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement) throws Exception {
         return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation, schemaName, targetTableParts,
-                auditDetail, onStatement, EXPORT_MAX_ROWS, false);
+                auditDetail, onStatement, EXPORT_MAX_ROWS, false, EXPORT_MAX_BYTES, properties.getSql().getTimeoutSeconds());
+    }
+
+    /**
+     * MCP Agent 的导出（{@code db_export_query}）：同一条导出路径，只是三个上限由调用方给。
+     *
+     * <p>结果要整份放进一次工具响应里交还给 Agent，所以字节上限远小于下载用的 256 MB；语句超时用
+     * MCP 设置里的「查询超时」，与 {@code db_query} 一致 —— 否则同一条 SQL 查询能跑完、导出却超时，
+     * 报错里给的调整建议也对不上。单条查询的校验、只读作用域、审计与 SQL 历史都和界面导出是同一份。</p>
+     */
+    public PreparedExport prepareForAgent(long connectionId, String sql, String format, String actor, String schemaName,
+            List<String> targetTableParts, int rowLimit, long maxBytes, int timeoutSeconds) throws Exception {
+        if (rowLimit < 1 || rowLimit > EXPORT_MAX_ROWS) throw new IllegalArgumentException("导出行数必须在 1 到 " + EXPORT_MAX_ROWS + " 之间。");
+        return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, null, schemaName, targetTableParts,
+                abbreviate(sql), statement -> {}, rowLimit, false, Math.min(maxBytes, EXPORT_MAX_BYTES), timeoutSeconds);
     }
 
     public PreparedExport prepareParameterized(com.example.dbadmin.dto.ApiDtos.ExportRequest request, String actor,
@@ -228,13 +242,13 @@ public class ExportService {
         String sql = requireSingleQuery(parsed.sql());
         return prepareInternal(request.connectionId(), sql, statement -> SqlParameters.bind(statement, parsed, request.parameters()),
                 request.format(), actor, confirmation, request.schemaName(), request.targetTableParts(), abbreviate(request.sql()), onStatement,
-                request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS, true);
+                request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS, true, EXPORT_MAX_BYTES, properties.getSql().getTimeoutSeconds());
     }
 
     private PreparedExport prepareInternal(long connectionId, String sql, DataEditService.StatementBinder binder,
             String format, String actor, String productionConfirmation, String schemaName,
             List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement, int rowLimit,
-            boolean redactFailure) throws Exception {
+            boolean redactFailure, long maxBytes, int timeoutSeconds) throws Exception {
         String normalizedFormat = normalizeFormat(format);
         List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
@@ -251,8 +265,8 @@ public class ExportService {
                      ? connection.createStatement(ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
                      : connection.prepareStatement(sql, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              OutputStream rawOutput = Files.newOutputStream(file);
-             OutputStream output = new SizeLimitedOutputStream(rawOutput, EXPORT_MAX_BYTES)) {
-            dialect.configureStreamingStatement(connection, statement, 500, properties.getSql().getTimeoutSeconds());
+             OutputStream output = new SizeLimitedOutputStream(rawOutput, maxBytes)) {
+            dialect.configureStreamingStatement(connection, statement, 500, timeoutSeconds);
             statement.setMaxRows(rowLimit == Integer.MAX_VALUE - 1 ? 0 : rowLimit + 1);
             if (binder != null) binder.bind((java.sql.PreparedStatement) statement);
             onStatement.accept(statement);
@@ -670,9 +684,13 @@ public class ExportService {
 
         private void requireCapacity(int additionalBytes) throws IOException {
             if (additionalBytes < 0 || written > maximumBytes - additionalBytes) {
-                throw new IOException("导出文件超过 " + (maximumBytes / 1024 / 1024) + " MB 限制，请缩小查询范围。");
+                throw new IOException("导出文件超过 " + sizeLabel(maximumBytes) + " 限制，请缩小查询范围。");
             }
         }
+    }
+
+    private static String sizeLabel(long bytes) {
+        return bytes >= 1024 * 1024 && bytes % (1024 * 1024) == 0 ? bytes / 1024 / 1024 + " MB" : Math.max(1, bytes / 1024) + " KB";
     }
 
     public static final class PreparedExport {

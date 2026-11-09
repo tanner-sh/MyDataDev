@@ -801,10 +801,11 @@ try {
       if (!button || button.disabled) return false;
       button.click(); return true;
     })()`);
-    const undo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button', '撤销一步');
+    // 宽屏时表工具栏停靠在顶栏正中间（.app-header-toolbar），窄屏才在工作区里。
+    const undo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button, .app-header-toolbar button', '撤销一步');
     await page.sleep(500);
     check('撤销恢复单元格原值', undo && await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('客户1') && !document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户')`));
-    const redo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button', '重做');
+    const redo = await clickText('.table-workspace button, .table-toolbar button, .table-secondary-actions button, .app-header-toolbar button', '重做');
     await page.sleep(500);
     check('重做恢复待提交修改', redo && await page.evaluate(`document.querySelector('.table-grid-pane').textContent.includes('冒烟改过的客户')`));
     await page.evaluate(`(() => {
@@ -915,7 +916,7 @@ try {
   if (palette.open) await page.shot('04-命令面板');
   if (SERVE) {
     await cancelPaletteAndCheck('首次懒加载的表格单元格', firstPaletteFocus);
-    await cancelPaletteAndCheck('表格工具栏', await openPaletteFrom('.table-workspace .workspace-toolbar button:not([disabled])'));
+    await cancelPaletteAndCheck('表格工具栏', await openPaletteFrom('.app-header-toolbar .table-toolbar-actions button:not([disabled]), .table-workspace .workspace-toolbar button:not([disabled])'));
     await page.evaluate(`(() => { document.querySelector('.document-tab.is-sql[data-sql-current="true"]')?.click(); })()`);
     await page.sleep(1800);
     const draft = 'select 1 as draft_survives_reload;';
@@ -1423,7 +1424,9 @@ try {
         };
         return {
           workspace: true,
-          readonlyHint: workspace.textContent.includes('只读连接'),
+          // 宽屏时 SQL 工具栏停靠在顶栏里，工作区自己那一行不在了：只读说明挂在顶栏的「只读」标签上。
+          readonlyHint: workspace.textContent.includes('只读连接')
+            || Boolean(document.querySelector('.app-header .connection-readonly-tag')?.getClientRects().length),
           split: Math.round(split?.height || 0),
           editor: visible('.editor'),
           results: visible('.sql-results-pane'),

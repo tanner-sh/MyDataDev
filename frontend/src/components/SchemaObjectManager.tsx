@@ -1,5 +1,5 @@
 import Editor from './SqlEditor';
-import { DRAWER_WIDTH, MODAL_WIDTH } from '../constants';
+import { MODAL_WIDTH } from '../constants';
 import { PanelEmpty, PanelLoading } from './PanelState';
 import {
   ApiOutlined,
@@ -17,7 +17,6 @@ import {
   Alert,
   Button,
   Descriptions,
-  Drawer,
   Dropdown,
   Empty,
   Input,
@@ -33,7 +32,7 @@ import {
   message as antdMessage
 } from 'antd';
 import type { MenuProps, TableColumnsType } from 'antd';
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { api } from '../api';
 import {
@@ -79,6 +78,8 @@ import {
   type RoutineInvokeMode
 } from '../routineInvoke';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
+import type { ResourceDocument } from '../resourceWorkspaces';
+import { HeaderDock, useHeaderDocked } from './HeaderDock';
 
 const { Text, Title } = Typography;
 // 后台调用的日志就是命令窗口那份；懒加载，免得调用对话框把它拉进对象管理器的首屏。
@@ -97,7 +98,10 @@ type GroupState = {
   error?: string;
 };
 export type SchemaObjectListSummary = ExplorerObjectCount & { error?: string };
-type WorkspaceState = { object?: SchemaObjectSummary; creation?: SchemaObjectTemplate };
+/** 一个对象页签打开的是什么：库里已有的对象，或者「新建」生成的源码模板。 */
+export type SchemaObjectWorkspaceState = { object?: SchemaObjectSummary; creation?: SchemaObjectTemplate };
+/** 页签里改了对象之后，列表要重取对应那一类；token 每次递增，同一类连改两次也能触发。 */
+export type SchemaObjectChangeSignal = { kind: SchemaObjectKind; token: number };
 type PendingLifecycle = { operation: SchemaObjectLifecycleOperation; request: SchemaObjectLifecycleRequest; sql: string[]; confirmationTarget: string };
 
 export function SchemaObjectManager({
@@ -108,9 +112,12 @@ export function SchemaObjectManager({
   createKind,
   refreshToken,
   loadMoreToken,
+  activeObjectKey,
+  changeSignal,
   onCloseCreate,
   onSummaryChange,
-  onOpenViewData
+  onOpenObject,
+  onOpenCreation
 }: {
   connection: Connection;
   schemaName?: string;
@@ -119,21 +126,28 @@ export function SchemaObjectManager({
   createKind?: SchemaObjectKind;
   refreshToken: number;
   loadMoreToken: number;
+  /** 右侧当前激活的对象页签，列表里对应那一项高亮。 */
+  activeObjectKey?: string;
+  changeSignal?: SchemaObjectChangeSignal;
   onCloseCreate: () => void;
   onSummaryChange: (kind: SchemaObjectKind, summary?: SchemaObjectListSummary) => void;
-  onOpenViewData: (object: DbObject) => void;
+  /**
+   * 对象详情以前开在一个抽屉里：抽屉盖住了半个工作台，看着源码就没法对照 SQL 编辑器，
+   * 也开不了第二个。现在交给右侧的文档页签，和表一样可以并排开、来回切。
+   */
+  onOpenObject: (object: SchemaObjectSummary) => void;
+  onOpenCreation: (template: SchemaObjectTemplate) => void;
 }) {
   const capabilities = useMemo(() => schemaObjectCapabilities(connection.capabilities), [connection.capabilities]);
   const [groups, setGroups] = useState<Partial<Record<SchemaObjectKind, GroupState>>>({});
-  const [workspace, setWorkspace] = useState<WorkspaceState>();
   const [createName, setCreateName] = useState('');
   const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [messageApi, messageContextHolder] = antdMessage.useMessage();
   const requestScope = `${connection.id}:${schemaName || ''}:${keyword || ''}`;
-  const workspaceScope = `${connection.id}:${schemaName || ''}`;
   const requestScopeRef = useRef(requestScope);
   const refreshTokenRef = useRef(refreshToken);
   const loadMoreTokenRef = useRef(loadMoreToken);
+  const changeTokenRef = useRef(changeSignal?.token);
   const activeCapability = capabilities.find((capability) => capability.kind === activeKind);
 
   useEffect(() => {
@@ -149,9 +163,16 @@ export function SchemaObjectManager({
   }, [refreshToken]);
 
   useEffect(() => {
-    setWorkspace(undefined);
     setCreateName('');
-  }, [workspaceScope]);
+  }, [connection.id, schemaName]);
+
+  useEffect(() => {
+    if (!changeSignal || changeTokenRef.current === changeSignal.token) return;
+    changeTokenRef.current = changeSignal.token;
+    // 只有加载过的那一类才需要重取；没加载过的，切过去时自然会按最新的取。
+    if (groups[changeSignal.kind]) void loadGroup(changeSignal.kind, 0, false, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changeSignal]);
 
   useEffect(() => {
     if (activeKind && activeCapability && !groups[activeKind]) void loadGroup(activeKind);
@@ -231,7 +252,7 @@ export function SchemaObjectManager({
       const template = await api<SchemaObjectTemplate>(`/metadata/${connection.id}/schema-objects/template?${params.toString()}`);
       onCloseCreate();
       setCreateName('');
-      setWorkspace({ creation: template });
+      onOpenCreation(template);
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : '创建模板生成失败');
     } finally {
@@ -246,9 +267,9 @@ export function SchemaObjectManager({
         <SchemaObjectGroup
           capability={activeCapability}
           state={groups[activeCapability.kind]}
-          activeObjectKey={workspace?.object?.objectKey}
+          activeObjectKey={activeObjectKey}
           onRetry={() => void loadGroup(activeCapability.kind, 0, false, true)}
-          onOpen={(object) => setWorkspace({ object })}
+          onOpen={onOpenObject}
         />
       )}
 
@@ -264,17 +285,6 @@ export function SchemaObjectManager({
         <Text type="secondary">模板会使用当前 {schemaName || '默认命名空间'}，创建前仍可编辑完整源码。</Text>
         <Input autoFocus className="schema-object-create-name" value={createName} placeholder="输入对象名" onChange={(event) => setCreateName(event.target.value)} onPressEnter={() => void generateTemplate()} />
       </Modal>
-
-      <SchemaObjectWorkspace
-        connection={connection}
-        state={workspace}
-        onClose={() => setWorkspace(undefined)}
-        onChanged={(kind, close) => {
-          void loadGroup(kind, 0, false, true);
-          if (close) setWorkspace(undefined);
-        }}
-        onOpenViewData={onOpenViewData}
-      />
     </section>
   );
 }
@@ -306,12 +316,20 @@ function SchemaObjectGroup({ capability, state, activeObjectKey, onRetry, onOpen
   );
 }
 
-function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenViewData }: {
+/**
+ * 视图、存储过程、函数、触发器等对象的工作区，渲染在右侧的文档页签里。
+ * 隐藏的页签保持挂载（源码草稿、调用结果都留着），只是不显示。
+ */
+export const SchemaObjectWorkspace = memo(function SchemaObjectWorkspace({ connection, state, active, onClose, onChanged, onOpenViewData, onDirtyChange }: {
   connection: Connection;
-  state?: WorkspaceState;
+  state: SchemaObjectWorkspaceState;
+  active: boolean;
+  /** 对象被删除、或新建成功后关掉这个页签。 */
   onClose: () => void;
-  onChanged: (kind: SchemaObjectKind, close: boolean) => void;
+  onChanged: (kind: SchemaObjectKind) => void;
   onOpenViewData: (object: DbObject) => void;
+  /** 有未保存的源码或正在执行的调用：关页签前要确认。 */
+  onDirtyChange: (dirty: boolean) => void;
 }) {
   const [detail, setDetail] = useState<SchemaObjectDetail>();
   const [source, setSource] = useState('');
@@ -328,10 +346,6 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   // 编译错误要一直摆在眼前直到用户改完重提：它说的是「这个对象现在是坏的」。
   const [compilationErrors, setCompilationErrors] = useState<CompilationError[]>([]);
   const [invoking, setInvoking] = useState(false);
-  // 资源管理器里双击一个对象（表就是双击打开的，手会照着来）：第一下打开抽屉，第二下正好落在刚出现的遮罩上
-  // 又把它关了，看起来就是「双击没反应」。打开后这一小段时间里的关闭请求不算数 —— 没有人会在这么短的时间里真想关它。
-  const openedAtRef = useRef(0);
-  useEffect(() => { if (state) openedAtRef.current = Date.now(); }, [state]);
   const [invokeProductionConfirmation, setInvokeProductionConfirmation] = useState('');
   const [invokeMode, setInvokeMode] = useState<RoutineInvokeMode>('foreground');
   const [invokeError, setInvokeError] = useState<RoutineInvokeFailure>();
@@ -359,10 +373,15 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [objectKey, state?.creation?.objectName]);
 
-  // 卸载时只停止等待；数据库那边的取消由关闭抽屉的确认负责（见 closeWorkspace）。
-  useEffect(() => () => invokeExecutionRef.current?.controller.abort(), []);
+  // 页签关掉以后就看不到这次调用的结果了：与其让它在库里无人看管地跑完，不如取消。
+  // 关页签之前已经按「有正在执行的调用」确认过（见 onDirtyChange）。
+  useEffect(() => () => {
+    const execution = invokeExecutionRef.current;
+    if (!execution) return;
+    execution.controller.abort();
+    void api(`/sql/executions/${encodeURIComponent(execution.executionId)}/cancel`, { method: 'POST' }).catch(() => undefined);
+  }, []);
 
-  if (!state) return null;
   const creation = state.creation;
   const object = detail?.object || state.object;
   const kind = creation?.kind || object?.kind;
@@ -371,6 +390,9 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
   const canDdl = hasConnectionPermission(connection, 'DDL');
   const canInvoke = hasAnyConnectionPermission(connection, ['QUERY', 'DATA_WRITE', 'DDL']);
   const production = connection.environment === 'prod';
+  const docked = useHeaderDocked();
+  const guarded = dirty || invoking;
+  useEffect(() => { onDirtyChange(guarded); }, [guarded, onDirtyChange]);
 
   async function loadDetail(refresh: boolean) {
     if (!objectKey) return;
@@ -447,8 +469,9 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       setProductionConfirmation('');
       // 编译不过时不关闭编辑器：对象确实建出来了，但它是坏的，用户接下来要做的是改源码重提。
       const close = !failedToCompile && (pending.operation === 'CREATE' || pending.operation === 'DROP');
-      onChanged(kind, close);
-      if (!close) await loadDetail(true);
+      onChanged(kind);
+      if (close) onClose();
+      else await loadDetail(true);
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : '对象操作失败');
     } finally {
@@ -520,34 +543,6 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     }
   }
 
-  function closeWorkspace() {
-    if (Date.now() - openedAtRef.current < 400) return;
-    if (invokeExecutionRef.current) {
-      // 关掉之后就看不到这次调用的结果了：与其让它在库里无人看管地跑完，不如先取消。
-      modalApi.confirm({
-        title: '取消正在执行的调用？',
-        content: '关闭后看不到这次调用的结果，因此会先取消它；过程内部已经提交的部分不会回滚。运行时间长的过程请改用后台执行。',
-        okText: '取消调用并关闭',
-        cancelText: '继续等待',
-        okButtonProps: { danger: true },
-        onOk: () => {
-          void cancelInvoke();
-          closeIfClean();
-        }
-      });
-      return;
-    }
-    closeIfClean();
-  }
-
-  function closeIfClean() {
-    if (!dirty) {
-      onClose();
-      return;
-    }
-    modalApi.confirm({ title: '放弃未保存的源码修改？', content: '关闭后当前修改将丢失。', okText: '放弃修改', cancelText: '继续编辑', okButtonProps: { danger: true }, onOk: onClose });
-  }
-
   const menuItems: NonNullable<MenuProps['items']> = detail ? [
     operations.has('REFRESH') ? { key: 'REFRESH', icon: <ReloadOutlined />, label: '刷新物化视图', disabled: !canDdl } : null,
     operations.has('ENABLE') ? { key: 'ENABLE', icon: <PlayCircleOutlined />, label: '启用触发器', disabled: !canDdl } : null,
@@ -578,7 +573,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
           />
         )}
         <Editor
-          height="52vh"
+          height="62vh"
           value={source}
           themeMode={document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light'}
           readOnly={!canDdl || !creation && (!detail?.sourceAvailable || !operations.has('REPLACE'))}
@@ -598,28 +593,53 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
     backgroundJobId === undefined && invokeResult && { key: 'results', label: '调用结果', children: <RoutineResults response={invokeResult} hasReturnValue={detail?.object.kind === 'FUNCTION'} /> }
   ].filter(Boolean) as { key: string; label: string; children: ReactNode }[];
 
+  const objectTags = (
+    <Space size={8} className="object-title-line">
+      <Tag color="blue">{schemaObjectKindLabel(kind!)}</Tag>
+      {(creation?.schemaName || object?.schemaName) && <Tag>{creation?.schemaName || object?.schemaName}</Tag>}
+      {object?.status && <Tag>{schemaObjectDisplayStatus(object.status)}</Tag>}
+      {connection.readonly && <Tag color="orange">只读连接</Tag>}
+    </Space>
+  );
+  const objectActions = (
+    <Space size={8} className="object-toolbar-actions">
+      {!creation && <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={() => void loadDetail(true)}>刷新</Button>}
+      {!creation && menuItems.length > 0 && !connection.readonly && <Dropdown trigger={['click']} menu={{ items: menuItems, onClick: ({ key }) => void previewLifecycle(key as SchemaObjectLifecycleOperation) }}><Button size="small" icon={<MoreOutlined />} aria-label="更多对象操作">更多</Button></Dropdown>}
+      {!creation && object?.kind === 'VIEW' && <Button size="small" icon={<EyeOutlined />} disabled={!hasConnectionPermission(connection, 'QUERY')} onClick={() => onOpenViewData({ schemaName: object.schemaName, name: object.name, type: 'VIEW', columns: [], indexes: [] })}>查看数据</Button>}
+      {!creation && operations.has('REPLACE') && detail?.sourceAvailable && !connection.readonly && <Button size="small" icon={<CodeOutlined />} disabled={!dirty || !canDdl} loading={executing} onClick={() => void previewLifecycle('REPLACE')}>预览并保存</Button>}
+      {!creation && operations.has('INVOKE') && !connection.readonly && <Button size="small" type="primary" icon={<ThunderboltOutlined />} disabled={!canInvoke} onClick={() => setInvokeOpen(true)}>调用</Button>}
+      {creation && !connection.readonly && <Button size="small" type="primary" icon={<PlayCircleOutlined />} disabled={!canDdl} loading={executing} onClick={() => void previewLifecycle('CREATE')}>预览并创建</Button>}
+    </Space>
+  );
+
   return (
     <>
       {messageContextHolder}
       {modalContextHolder}
-      <Drawer
-        open
-        size={DRAWER_WIDTH.workspace}
-        title={<Space><SchemaObjectIcon kind={kind!} /><span>{creation ? `新建${schemaObjectKindLabel(kind!)}` : object?.displayName}</span>{object?.status && <Tag>{schemaObjectDisplayStatus(object.status)}</Tag>}</Space>}
-        extra={(
-          <Space>
-            {!creation && object?.kind === 'VIEW' && <Button icon={<EyeOutlined />} disabled={!hasConnectionPermission(connection, 'QUERY')} onClick={() => { onClose(); onOpenViewData({ schemaName: object.schemaName, name: object.name, type: 'VIEW', columns: [], indexes: [] }); }}>查看数据</Button>}
-            {!creation && operations.has('INVOKE') && !connection.readonly && <Button type="primary" icon={<ThunderboltOutlined />} disabled={!canInvoke} onClick={() => setInvokeOpen(true)}>调用</Button>}
-            {creation && !connection.readonly && <Button type="primary" icon={<PlayCircleOutlined />} disabled={!canDdl} loading={executing} onClick={() => void previewLifecycle('CREATE')}>预览并创建</Button>}
-            {!creation && operations.has('REPLACE') && detail?.sourceAvailable && !connection.readonly && <Button type="primary" icon={<CodeOutlined />} disabled={!dirty || !canDdl} loading={executing} onClick={() => void previewLifecycle('REPLACE')}>预览并保存</Button>}
-            {!creation && <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadDetail(true)}>刷新</Button>}
-            {!creation && menuItems.length > 0 && !connection.readonly && <Dropdown menu={{ items: menuItems, onClick: ({ key }) => void previewLifecycle(key as SchemaObjectLifecycleOperation) }}><Button icon={<MoreOutlined />} /></Dropdown>}
-          </Space>
+      <div className="resource-document-panel" hidden={!active}>
+      <div className={`workspace schema-object-workspace${docked ? ' is-toolbar-docked' : ''}`}>
+        {docked ? (
+          // 停靠时类型、Schema、状态标签跟着按钮进顶栏；对象全名在页签和「概览」里都有。
+          <HeaderDock slot="toolbar" active={active}>
+            <div className="object-docked-toolbar">
+              {objectTags}
+              {objectActions}
+            </div>
+          </HeaderDock>
+        ) : (
+          <header className="workspace-toolbar">
+            <div className="toolbar-title">
+              {objectTags}
+              <Text type="secondary" ellipsis>{creation ? `新建${schemaObjectKindLabel(kind!)}：${creation.objectName}` : object?.displayName}</Text>
+            </div>
+            {objectActions}
+          </header>
         )}
-        onClose={closeWorkspace}
-      >
-        {loading && !detail && !creation ? <div className="schema-object-workspace-loading"><Spin /> 正在加载对象详情…</div> : <Tabs activeKey={activeTab} items={tabs} onChange={setActiveTab} />}
-      </Drawer>
+        {loading && !detail && !creation
+          ? <PanelLoading text="正在加载对象详情…" />
+          : <Tabs className="object-detail-tabs schema-object-document-tabs" activeKey={activeTab} items={tabs} onChange={setActiveTab} />}
+      </div>
+      </div>
 
       <Modal
         title={`${pending ? lifecycleLabel(pending.operation) : '对象操作'}确认`}
@@ -705,7 +725,7 @@ function SchemaObjectWorkspace({ connection, state, onClose, onChanged, onOpenVi
       </Modal>
     </>
   );
-}
+});
 
 function ObjectOverview({ detail }: { detail: SchemaObjectDetail }) {
   return (
@@ -781,3 +801,27 @@ function renderValue(value: unknown) {
   if (typeof value === 'string') return value;
   try { return JSON.stringify(value); } catch { return String(value); }
 }
+
+/** App 只认文档键；这一层把键绑到回调上，隐藏的页签不随其他工作区的状态变化重渲染。 */
+export const SchemaObjectDocumentPanel = memo(function SchemaObjectDocumentPanel({ document, connection, active, onDirtyChange, onClose, onChanged, onOpenViewData }: {
+  document: ResourceDocument;
+  connection?: Connection;
+  active: boolean;
+  onDirtyChange: (key: string, dirty: boolean) => void;
+  onClose: (key: string) => void;
+  onChanged: (kind: SchemaObjectKind) => void;
+  onOpenViewData: (object: DbObject) => void;
+}) {
+  const dirtyChanged = useCallback((dirty: boolean) => onDirtyChange(document.key, dirty), [document.key, onDirtyChange]);
+  const close = useCallback(() => onClose(document.key), [document.key, onClose]);
+  if (!connection || !document.schemaObject) return null;
+  return <SchemaObjectWorkspace
+    connection={connection}
+    state={document.schemaObject}
+    active={active}
+    onClose={close}
+    onChanged={onChanged}
+    onOpenViewData={onOpenViewData}
+    onDirtyChange={dirtyChanged}
+  />;
+});

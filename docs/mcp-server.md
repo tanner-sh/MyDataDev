@@ -45,7 +45,7 @@ MCP 设置抽屉包含 **服务配置** 和 **接入帮助** 两个页签。接�
 
 | 档位 | 能力 |
 | --- | --- |
-| `READ_ONLY` | 查看结构、浏览表、`db_query`、`db_explain` |
+| `READ_ONLY` | 查看结构、浏览表、`db_query`、`db_explain`、`db_export_query` |
 | `DATA_WRITE` | 只读能力，外加通过 `db_execute` 执行 INSERT / UPDATE / DELETE |
 | `FULL` | 数据读写能力，外加 CREATE / ALTER / DROP 等结构变更 |
 
@@ -208,6 +208,7 @@ Claude Desktop 的远程自定义连接器由 Anthropic 云端发起请求，通
 | `db_browse_table` | 使用不透明 cursor 分页浏览表数据，不返回编辑 token |
 | `db_query` | 执行一条只读查询；因行数或单元格数量截断时返回 `nextOffset`，带 `offset` 取下一页；文本截断需按字符续读 |
 | `db_explain` | 获取一条查询的执行计划 |
+| `db_export_query` | 把一条只读查询的结果导出成文件内容直接返回：`csv`、`json`、`sql`（INSERT 语句，`targetTableName` 指定目标表）、`xml`、`markdown`、`xlsx`。文本格式按 UTF-8 放在 `content` 里，Excel 是 Base64（`encoding=base64`）。最多 10,000 行（`maxRows` 可调小）；文件大小上限默认 1 MB，在 MCP 设置的「导出文件上限（KB）」里调（64–10240），超了报错而不是给半个文件 —— 文件整份进模型上下文，1 MB 的 CSV 已是几十万 token |
 | `db_execute` | 执行一个完整写入单元，要求该连接上有 `DATA_WRITE` 或 `FULL` 档位 |
 | `db_execute_script` | 按指定事务策略后台执行 SQL 文本，返回 taskId |
 | `db_list_script_tasks` | 按连接分页找回当前 agent 的任务，默认只列活动任务；`activeOnly=false` 包含已完成与失败任务 |
@@ -253,7 +254,7 @@ Oracle / OceanBase Oracle 上，`CREATE OR REPLACE` 或 `ALTER … COMPILE` 编�
 - 查询默认 100 行、最多 500 行。
 - 单次结果最多 20,000 个单元格。
 - 单次结果文本总量最多 1,000,000 字符，单个文本值最多 20,000 字符。
-- SQL 最多 200,000 字符；查询超时（`db_query`、`db_explain`）默认 30 秒，写操作超时（`db_execute`）默认 60 秒，两者都可在 MCP 设置里调整，上限 300 秒。后台脚本的单条语句超时由 `app.sql-file.statement-timeout-seconds` 决定（默认 7200 秒）。
+- SQL 最多 200,000 字符；查询超时（`db_query`、`db_explain`、`db_export_query`）默认 30 秒，写操作超时（`db_execute`）默认 60 秒，两者都可在 MCP 设置里调整，上限 300 秒。后台脚本的单条语句超时由 `app.sql-file.statement-timeout-seconds` 决定（默认 7200 秒）。
 - 元数据分页最大 200 项，表数据分页最大 100 行。
 - MCP session 归属记录默认保留 120 分钟并在访问时续期。
 

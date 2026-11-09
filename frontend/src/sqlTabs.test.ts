@@ -27,10 +27,10 @@ describe('sql tabs', () => {
     expect(closeSqlTabIn([tab('a')], 'a', 'a').tabs).toHaveLength(1);
   });
 
-  it('duplicates kind, options and delimiter, but not results', () => {
-    const source = tab('a', { kind: 'command', title: '迁移脚本', results: [{} as never], delimiter: { mode: 'SLASH' } as never });
+  it('duplicates kind, options, delimiter and schema, but not results', () => {
+    const source = tab('a', { kind: 'command', title: '迁移脚本', results: [{} as never], delimiter: { mode: 'SLASH' } as never, executionSchema: 'ETL' });
     const copy = duplicateSqlTabOf(source, 7, 'select 3');
-    expect(copy).toMatchObject({ kind: 'command', title: '迁移脚本 副本', sql: 'select 3', dirty: true, delimiter: { mode: 'SLASH' } });
+    expect(copy).toMatchObject({ kind: 'command', title: '迁移脚本 副本', sql: 'select 3', dirty: true, delimiter: { mode: 'SLASH' }, executionSchema: 'ETL' });
     expect(copy.results).toEqual([]);
     expect(copy.id).not.toBe(source.id);
   });

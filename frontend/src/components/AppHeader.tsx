@@ -36,6 +36,13 @@ type AppHeaderProps = {
   /** 根据运行中的任务类型打开对应页面。 */
   onOpenBackgroundTasks: (kind: BackgroundTaskKind) => void;
   onToggleTheme: () => void;
+  /**
+   * 顶栏正中间留给当前工作区的常用按钮（SQL 工作台的执行、格式化、历史……）。工作区用 portal
+   * 把按钮渲染进来；窄屏放不下时不传，工作区自己留着那一行工具栏。
+   */
+  toolbarSlotRef?: (element: HTMLDivElement | null) => void;
+  /** 紧挨连接选择器的位置，放 SQL 标签的 Schema：连接和 Schema 一起回答「在哪执行」。 */
+  contextSlotRef?: (element: HTMLDivElement | null) => void;
 };
 
 export const AppHeader = memo(function AppHeader({
@@ -50,7 +57,9 @@ export const AppHeader = memo(function AppHeader({
   onSelectConnection,
   onOpenManagement,
   onOpenBackgroundTasks,
-  onToggleTheme
+  onToggleTheme,
+  toolbarSlotRef,
+  contextSlotRef
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
     const favorites = new Set(favoriteConnectionIds);
@@ -86,6 +95,11 @@ export const AppHeader = memo(function AppHeader({
         </div>
       </div>
 
+      {/* 常用按钮在正中间，伸手最近；连接选择器挪到右边并收窄 —— 它一天换不了几次，不该占着最好的位置。 */}
+      <div className="app-header-toolbar" ref={toolbarSlotRef} />
+
+      <div className="app-header-context">
+      <Tooltip title={selected ? `${selected.name} · ${dbTypeLabel(selected.dbType)} · ${selected.jdbcUrl}` : undefined} placement="bottom" mouseEnterDelay={0.6}>
       <div className="connection-switcher">
         <Badge status={selected?.environment === 'prod' ? 'error' : selected ? 'success' : 'default'} />
         <Select
@@ -119,9 +133,13 @@ export const AppHeader = memo(function AppHeader({
             <Tag className="connection-environment-tag" color={selected.environment === 'prod' ? 'red' : 'default'} variant="filled">
               {environmentLabel(selected.environment)}
             </Tag>
-            {selected.readonly && <Tag className="connection-readonly-tag" color="orange" variant="filled">只读</Tag>}
+            {/* SQL 工具栏停靠到顶栏之后，工作区里那句「写入和 DDL 会被拒绝」没地方放了，挂在这个标签上。 */}
+            {selected.readonly && <Tooltip title="只读连接，写入和 DDL 会被拒绝"><Tag className="connection-readonly-tag" color="orange" variant="filled">只读</Tag></Tooltip>}
           </Space>
         )}
+      </div>
+      </Tooltip>
+      <div className="app-header-context-slot" ref={contextSlotRef} />
       </div>
 
       <Space size={4} className="app-header-actions">

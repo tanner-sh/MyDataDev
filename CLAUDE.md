@@ -90,7 +90,7 @@ Vite dev server 把 `/api` 和 `/mcp` 代理到 `http://localhost:8080`。前端
 
 `config/SecurityConfig` 有两条过滤链：`/mcp` 要求 `ROLE_MCP_AGENT`（由 `McpApiKeyAuthenticationFilter` 按 Agent API Key 认证，无状态）；其余请求按运行 profile 的认证模式处理。数据库密码使用系统托管主密钥加密后存 H2；默认文件为 `./secrets/mydatadev-master.key`，桌面正式版则由 Electron 经标准输入一次性交付。丢失或替换密钥会导致已有密文无法解密；旧环境变量安装通过 `crypto-key adopt` 一次性接管。
 
-MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `db_list_connections`、`db_list_namespaces`、`db_search_objects`、`db_describe_object`、`db_get_object_ddl`、`db_list_schema_objects`、`db_get_schema_object`、`db_browse_table`、`db_query`、`db_explain`，以及脚本任务的 `db_script_status` / `db_list_script_tasks`；写工具是 `db_execute`（复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少）和 `db_execute_script` / `db_cancel_script`（复用 SQL 文件任务）。三条约定：
+MCP 侧的授权在 `mcp/McpAccessService`：Agent 只能访问白名单内的连接，访问档位**按连接**授予（只读 / 数据读写 / 完全），生产连接需要额外授权。只读工具有 `db_list_connections`、`db_list_namespaces`、`db_search_objects`、`db_describe_object`、`db_get_object_ddl`、`db_list_schema_objects`、`db_get_schema_object`、`db_browse_table`、`db_query`、`db_explain`、`db_export_query`（走 `ExportService.prepareForAgent`，与界面导出同一套格式化、单条查询校验、只读作用域与审计；文件整份放进响应、进模型上下文，字节上限是 MCP 设置里的 `exportMaxKilobytes`（默认 1 MB，Flyway V30），不返回服务器路径），以及脚本任务的 `db_script_status` / `db_list_script_tasks`；写工具是 `db_execute`（复用 `SqlService.execute` 那条路径，生产确认、未限定范围写确认与审计一个都不少）和 `db_execute_script` / `db_cancel_script`（复用 SQL 文件任务）。三条约定：
 
 - **结构化结果里的 null 必须原样输出**（`McpJsonConfiguration`）。Spring AI 自带的 `mcpServerObjectMapper` 用 `NON_NULL`，而 Jackson 这个开关同样作用于 Map 条目 —— 工具返回值转成 `structuredContent` 后可空字段整键消失，输出 schema 却声明它们必有，严格校验的客户端会拒收整个结果（`db_execute_script` 因此拿不到 taskId）。`McpEndpointIntegrationTest` 经真实 SDK 守着这条。
 - **报错一律 `[CODE] 中文说明`**（`McpToolErrors`）。SDK 只取异常根因的 message，所以翻译后的异常不能挂 cause。超时单独成码（`SQL_TIMEOUT`），并按通道给出建议：查询走「查询超时」，`db_execute` 走 MCP 设置里的「写操作超时」（`executeTimeoutSeconds`，不是全局 `app.sql.timeout-seconds`）。
@@ -140,6 +140,10 @@ SQL 结果是服务端分页的（`SqlService.executePage` + 方言的 `pageQuer
 有状态但与界面无关的子系统抽成 `src/hooks/` 下的自定义 hook（`useBackgroundTasks`、`useSqlHistory`、`useVisiblePolling`、`useLayoutPreferences`、`useProductionConfirmation`、`useSqlTabs`、`useOverlays`），hook 内部依赖的纯逻辑再落到 `src/` 下的同名模块（`backgroundTaskStream.ts`、`sqlHistoryQuery.ts`、`productionConfirmation.ts`）。新增「一组状态 + 一条取数路径」时优先走这条路，而不是继续往 `App.tsx` 里加 `useState`。
 
 `useProductionConfirmation` 是把已有状态搬出去的样板：状态与 resolver 在 hook 里，校验在纯逻辑模块里（有测试），错误文案怎么显示由调用方决定。**`await requestProductionConfirmation(...)` 拿不到值就直接 return** 这条约定是这道闸门好用的原因，搬动时不能改。SQL 标签页（`useSqlTabs`，数组怎么变的规则在 `sqlTabs.ts`）与抽屉、弹层的开合（`useOverlays`）已按同样的方式搬出；**凡是「离开当前标签」的操作都要先用 `withLiveSql` 把编辑器现值写回标签** —— 编辑器的改动 300ms 后才同步，漏了这一步最后几个字会丢。
+
+**宽屏（≥1200px）时各工作区的操作按钮停靠在顶栏正中间**，SQL 标签的 Schema 停在连接选择器旁边（`components/HeaderDock.tsx`：App 经 `HeaderSlotsContext` 交出两个位置，工作区用 `<HeaderDock slot active>` 渲染进去）。SQL、表、对象结构、视图 / 存储过程、ER 图全部停靠，不要只停其中一个 —— 只停 SQL 时按钮会随页签在顶栏和工作区之间跳。隐藏着的文档页签必须传 `active={false}`，否则同一位置会叠出几组按钮；窄屏两个位置都是 null，工作区照旧渲染自己那一行工具栏，两条路径都要能用。表工具栏停靠后按顶栏那一格的宽度决定收不收进「更多」（`tableToolbarCollapsed(…, docked)`），「可编辑 / 行定位字段」挪到状态栏右侧。
+
+**每个查询标签各自记着自己的 Schema**（`SqlTab.executionSchema`，工具栏上的选择器改它），和 DBeaver 一样完全独立：资源管理器只管浏览，换 Schema 不碰任何查询标签；新开的标签落在资源管理器当前的 Schema 上。SQL 执行与补全用标签的（`activeSqlSchema`），ER 图、结构快照、对象导出、数据检索、对象搜索这些从资源管理器出发的功能用资源管理器的（`explorerSchema`），两者别混用。手动事务按连接开、开启时就绑定了 Schema，事务里的语句一律在那个 Schema 执行 —— 所以事务开着时选择器锁定，标签 Schema 与事务不一致的执行直接拒绝（`transactionSchemaConflict`），否则界面写着 PUBLIC、删的却是 S2 的表。命令窗口按连接默认 Schema 执行，不显示选择器。
 
 编辑器里的「未知表名」波浪线（`src/sqlUnknownObjects.ts` + `SqlEditor` 的装饰层）用的就是补全那份对象清单，不打接口、不需要模型。**它只在清单确实完整时才提示** —— 资源树是分页的、还可能带着搜索关键字，拿一份筛过或只有第一页的清单去判断「不存在」会把正确的表名也划上线，那比没有提示更糟。CTE、表值函数、临时表、限定到别的 Schema 的引用一律跳过，比对折大小写。改这块时的默认方向永远是「宁可不提示」。
 

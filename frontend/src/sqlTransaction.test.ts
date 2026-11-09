@@ -10,6 +10,7 @@ import {
   transactionFinishPrompt,
   transactionLeaveWarning,
   transactionTooltip,
+  transactionSchemaConflict,
   type SqlTransaction,
   type SqlTransactionState,
   restoredTransactionNotice
@@ -124,5 +125,23 @@ describe('restoredTransactionNotice', () => {
       expect(transactionGoneNotice({ transaction: { ...open.transaction!, statementCount: 0 }, pending: false }))
         .not.toContain('丢弃');
     });
+  });
+});
+
+describe('transactionSchemaConflict', () => {
+  it('refuses to run a tab whose schema differs from the open transaction', () => {
+    const message = transactionSchemaConflict(active({ schemaName: 'S2' }), 'PUBLIC');
+    expect(message).toContain('S2');
+    expect(message).toContain('PUBLIC');
+  });
+
+  it('allows the matching schema regardless of case', () => {
+    expect(transactionSchemaConflict(active({ schemaName: 'ETL' }), 'etl')).toBeNull();
+  });
+
+  it('does not block when either side is unknown or no transaction is open', () => {
+    expect(transactionSchemaConflict(IDLE_SQL_TRANSACTION, 'PUBLIC')).toBeNull();
+    expect(transactionSchemaConflict(active({ schemaName: null }), 'PUBLIC')).toBeNull();
+    expect(transactionSchemaConflict(active({ schemaName: 'S2' }), undefined)).toBeNull();
   });
 });

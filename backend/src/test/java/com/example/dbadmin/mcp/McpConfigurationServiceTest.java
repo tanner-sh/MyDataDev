@@ -76,6 +76,39 @@ class McpConfigurationServiceTest {
     }
 
     @Test
+    void exportLimitDefaultsToOneMegabyteIsValidatedAndKeptWhenOmitted() {
+        McpConfigurationRepository repository = mock(McpConfigurationRepository.class);
+        Settings persisted = new Settings(false, 100, 500, 20_000, 1_000_000,
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60, 2048);
+        assertThat(new Settings(false, 100, 500, 20_000, 1_000_000, 20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60)
+                .exportMaxKilobytes()).isEqualTo(1024);
+        when(repository.findSettings()).thenReturn(Optional.of(persisted));
+        when(repository.findAgents()).thenReturn(List.of());
+        when(repository.findOrigins()).thenReturn(Set.of());
+        PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
+        when(manager.getTransaction(any(TransactionDefinition.class))).thenReturn(mock(TransactionStatus.class));
+        McpConfigurationService service = new McpConfigurationService(repository, mock(ConnectionService.class),
+                mock(AuditRepository.class), new AppProperties(), manager);
+        service.initialize();
+        for (int invalid : new int[]{63, 10_241}) {
+            var limits = new com.example.dbadmin.dto.McpAdminDtos.McpLimits(100, 500, 20_000, 1_000_000,
+                    20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60, invalid);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.updateConfig(
+                    new com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest(List.of(), limits), "admin"))
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("导出文件上限");
+        }
+        verify(repository, never()).updateSettings(any());
+
+        // 旧客户端（以及旧的连接配置备份）不带这个字段：沿用已存的值，不悄悄退回默认。
+        var omitted = new com.example.dbadmin.dto.McpAdminDtos.McpLimits(100, 500, 20_000, 1_000_000,
+                20_000, 200_000, 30, 50, 200, 50, 100, 120, 1, 60);
+        service.updateConfig(new com.example.dbadmin.dto.McpAdminDtos.McpConfigUpdateRequest(List.of(), omitted), "admin");
+        var saved = org.mockito.ArgumentCaptor.forClass(Settings.class);
+        verify(repository).updateSettings(saved.capture());
+        assertThat(saved.getValue().exportMaxKilobytes()).isEqualTo(2048);
+    }
+
+    @Test
     void keepsPersistedDisabledStatusWhenNewInstallDefaultIsEnabled() {
         McpConfigurationRepository repository = mock(McpConfigurationRepository.class);
         Settings persisted = new Settings(

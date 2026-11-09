@@ -177,6 +177,24 @@ public final class McpDtos {
     ) {
     }
 
+    /**
+     * {@code db_export_query} 的结果：导出文件的全文。文本格式（CSV / JSON / SQL / XML / Markdown）
+     * 按 UTF-8 原样放在 content 里；Excel 是二进制，content 是 Base64。
+     */
+    public record ExportResult(
+            String format,
+            String mimeType,
+            /** utf-8 或 base64。 */
+            String encoding,
+            String content,
+            long sizeBytes,
+            /** 这次导出允许的最大行数。 */
+            int maxRows,
+            /** true 表示结果超过 maxRows，文件里只有前 maxRows 行。 */
+            boolean truncated
+    ) {
+    }
+
     public record QueryResult(
             List<QueryColumnView> columns,
             List<List<Object>> rows,

@@ -24,6 +24,7 @@ const tools = [
   { name: 'db_browse_table', capability: '使用游标分页浏览表数据', level: '只读' },
   { name: 'db_query', capability: '执行一条查询语句，截断时可按 offset 续取', level: '只读' },
   { name: 'db_explain', capability: '查看查询执行计划', level: '只读' },
+  { name: 'db_export_query', capability: '把一条查询的结果导出成 CSV / JSON / SQL / XML / Markdown / Excel 文件内容直接返回', level: '只读' },
   { name: 'db_execute', capability: '执行一条写语句（INSERT/UPDATE/DELETE，FULL 档位还可 DDL）', level: '数据读写' },
   { name: 'db_execute_script', capability: '后台运行长脚本或存储过程，返回任务 ID', level: '数据读写' },
   { name: 'db_list_script_tasks', capability: '中断后找回当前 Agent 的任务，避免重复执行', level: '只读' },

@@ -539,12 +539,13 @@ export function McpSettingsPanel() {
 
 const LIMIT_HINTS: Partial<Record<keyof McpLimits, string>> = {
   maxScriptsPerConnection: '默认 1，保存立即生效；所有 Agent 与 SQL 文件任务共享。计入排队任务，实际同时运行数还受全局工作线程数限制（默认 2）。调低不会中断已有任务。',
-  queryTimeoutSeconds: 'db_query 与 db_explain 的语句超时。',
-  executeTimeoutSeconds: 'db_execute 单条写语句的超时，默认 60。更长的写操作应让 Agent 改用 db_execute_script（后台执行，可查询进度与取消）。'
+  queryTimeoutSeconds: 'db_query、db_explain 与 db_export_query 的语句超时。',
+  executeTimeoutSeconds: 'db_execute 单条写语句的超时，默认 60。更长的写操作应让 Agent 改用 db_execute_script（后台执行，可查询进度与取消）。',
+  exportMaxKilobytes: 'db_export_query 单个文件的上限，默认 1024 KB（1 MB），可调 64–10240。文件会整份进入模型上下文，1 MB 的 CSV 已是几十万 token；超过时报错让 Agent 缩小范围，不会给半个文件。'
 };
 
 function LimitsForm() {
-  const fields: Array<{ name: keyof McpLimits; label: string; max: number }> = [
+  const fields: Array<{ name: keyof McpLimits; label: string; max: number; min?: number }> = [
     { name: 'maxScriptsPerConnection', label: '同连接脚本并发上限', max: 16 },
     { name: 'defaultQueryRows', label: '查询默认行数', max: 5_000 },
     { name: 'maxQueryRows', label: '查询最大行数', max: 5_000 },
@@ -554,6 +555,7 @@ function LimitsForm() {
     { name: 'maxSqlChars', label: 'SQL 长度上限', max: 1_000_000 },
     { name: 'queryTimeoutSeconds', label: '查询超时（秒）', max: 300 },
     { name: 'executeTimeoutSeconds', label: '写操作超时（秒）', max: 300 },
+    { name: 'exportMaxKilobytes', label: '导出文件上限（KB）', min: 64, max: 10_240 },
     { name: 'metadataPageSize', label: '元数据默认分页', max: 1_000 },
     { name: 'maxMetadataPageSize', label: '元数据最大分页', max: 1_000 },
     { name: 'tablePageSize', label: '表数据默认分页', max: 1_000 },
@@ -564,7 +566,7 @@ function LimitsForm() {
     <div className="mcp-limit-grid">
       {fields.map((field) => (
         <Form.Item key={field.name} name={field.name} label={field.label} extra={LIMIT_HINTS[field.name]} rules={[{ required: true }]}>
-          <InputNumber min={1} max={field.max} precision={0} style={{ width: '100%' }} />
+          <InputNumber min={field.min ?? 1} max={field.max} precision={0} style={{ width: '100%' }} />
         </Form.Item>
       ))}
     </div>

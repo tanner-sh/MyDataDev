@@ -33,7 +33,10 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // 管理面板公用的连接 / Schema / 表字段（ConnectionScopeFields，用到项目里已有的 antd AutoComplete）与
 // 独立成分区的服务端信息面板，都在懒加载的管理面板里，实测 832.9 KiB；没有新增依赖，首屏仍是 240.4 KiB，
 // 可输入工作台只多 0.2 KiB。给 4 KiB 余量。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 836 * 1024;
+// 视图 / 存储过程从抽屉改成右侧文档页签、SQL 常用按钮停靠到顶栏（portal）、每个查询标签独立的 Schema
+// 选择器与按钮上的快捷键：全是自身代码与样式，没有新增依赖，实测 836.7 KiB；首屏 240.7 KiB、
+// 可输入工作台 606.2 KiB 仍在各自预算内。给 4 KiB 余量。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 840 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;

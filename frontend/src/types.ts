@@ -625,6 +625,8 @@ export type McpLimits = {
   sessionTtlMinutes: number;
   maxScriptsPerConnection: number;
   executeTimeoutSeconds: number;
+  /** db_export_query 单个文件的上限（KB），默认 1024。 */
+  exportMaxKilobytes: number;
 };
 export type McpAccessLevel = 'READ_ONLY' | 'DATA_WRITE' | 'FULL';
 /** 一条连接授权：连接与它的档位是一体的，分开存会出现「授了连接没档位」的中间态。 */

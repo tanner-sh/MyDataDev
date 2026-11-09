@@ -21,6 +21,7 @@ import {
 } from './TableDefinitionEditor';
 import type { DesignColumnRow, DesignIndexRow } from './TableDefinitionEditor';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
+import { HeaderDock, useHeaderDocked } from './HeaderDock';
 import { TypedConfirmationFields } from './TypedConfirmationFields';
 import { productionConfirmationHeaders } from '../productionConfirmation';
 import { compactColumnType } from '../columnTypeLabel';
@@ -78,6 +79,7 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
 }: ObjectDetailWorkspaceProps) {
   const [activeTabKey, setActiveTabKey] = useState('columns');
   const [designerDirty, setDesignerDirty] = useState(false);
+  const docked = useHeaderDocked();
   const displayObject = detail || target;
   const objectName = displayObject ? fullObjectName(displayObject) : '未选择对象';
   const isView = detail?.type.toUpperCase().includes('VIEW') || false;
@@ -118,8 +120,46 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
     onDesignDirtyChange?.(dirty);
   });
 
+  const objectActions = (
+    <Space size={8} className="object-toolbar-actions">
+      <Dropdown trigger={['click']} menu={secondaryMenu}>
+        <Button
+          className="object-more-actions"
+          size="small"
+          icon={<MoreOutlined />}
+          aria-label="更多对象操作"
+          disabled={!detail}
+        >
+          更多
+        </Button>
+      </Dropdown>
+      <Button
+        size="small"
+        type="primary"
+        icon={<TableOutlined />}
+        disabled={!detail || !isPhysicalTable || !tableBrowseSupported || loading}
+        onClick={() => detail && onOpenTable(detail)}
+      >
+        打开数据
+      </Button>
+    </Space>
+  );
+
   return (
-    <div className="workspace object-workspace">
+    <div className={`workspace object-workspace${docked ? ' is-toolbar-docked' : ''}`}>
+      {docked ? (
+        // 停靠时标签（类型 / Schema / 只读）跟着按钮进顶栏：字段数、索引数下面的摘要里本来就有。
+        <HeaderDock slot="toolbar" active={active}>
+          <div className="object-docked-toolbar">
+            <Space size={8} className="object-title-line">
+              {displayObject && <Tag color="blue">{objectTypeLabel(displayObject.type)}</Tag>}
+              {displayObject?.schemaName && <Tag>{displayObject.schemaName}</Tag>}
+              {readonlyConnection && <Tag color="orange">只读连接</Tag>}
+            </Space>
+            {objectActions}
+          </div>
+        </HeaderDock>
+      ) : (
       <Header className="workspace-toolbar">
         <div className="toolbar-title">
           <Space size={8} className="object-title-line">
@@ -133,29 +173,9 @@ export const ObjectDetailWorkspace = memo(function ObjectDetailWorkspace({
               ? loading ? '正在加载对象定义…' : '对象定义尚未加载'
               : '从资源管理器中选择数据库对象'}</Text>
         </div>
-        <Space size={8} className="object-toolbar-actions">
-          <Dropdown trigger={['click']} menu={secondaryMenu}>
-            <Button
-              className="object-more-actions"
-              size="small"
-              icon={<MoreOutlined />}
-              aria-label="更多对象操作"
-              disabled={!detail}
-            >
-              更多
-            </Button>
-          </Dropdown>
-          <Button
-            size="small"
-            type="primary"
-            icon={<TableOutlined />}
-            disabled={!detail || !isPhysicalTable || !tableBrowseSupported || loading}
-            onClick={() => detail && onOpenTable(detail)}
-          >
-            打开数据
-          </Button>
-        </Space>
+        {objectActions}
       </Header>
+      )}
       {!detail ? (
         target ? (
           <div className="object-detail-placeholder">

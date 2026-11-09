@@ -49,6 +49,8 @@ export function resolveAppShortcut(event: ShortcutKeyEvent): AppShortcut | undef
 }
 
 export const SHORTCUT_HINTS = {
+  executeSql: 'Ctrl/Cmd+Enter',
+  formatSql: 'Ctrl/Cmd+Shift+F',
   toggleExplorer: 'Ctrl/Cmd+B',
   newSqlTab: 'Alt+N',
   selectSqlTab: 'Alt+1~9',
@@ -56,6 +58,28 @@ export const SHORTCUT_HINTS = {
   openObjectSearch: 'Ctrl/Cmd+P',
   openCommandPalette: 'Ctrl/Cmd+K'
 } as const;
+
+/**
+ * 按钮上直接显示的快捷键：提示里写「Ctrl/Cmd+Enter」是为了两边的人都看得懂，但按钮上
+ * 地方小，只写本机那一种 —— macOS 上用 ⌘ ⇧ ⌥ 符号（和系统菜单一致），其余平台写 Ctrl / Shift / Alt。
+ */
+export function shortcutKeycap(hint: string, mac: boolean): string {
+  const keys = hint.split('+').map((key) => {
+    if (key === 'Ctrl/Cmd') return mac ? '⌘' : 'Ctrl';
+    if (key === 'Shift') return mac ? '⇧' : 'Shift';
+    if (key === 'Alt') return mac ? '⌥' : 'Alt';
+    if (key === 'Enter') return mac ? '↵' : 'Enter';
+    return key;
+  });
+  return mac ? keys.join('') : keys.join('+');
+}
+
+/** 当前是不是 macOS（含 iPadOS 外接键盘）。只用来决定快捷键怎么写，不做功能判断。 */
+export function isMacPlatform(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const platform = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent;
+  return /mac|iphone|ipad/i.test(platform);
+}
 
 function shortcutDigit(code: string): number | undefined {
   const match = /^(?:Digit|Numpad)([1-9])$/.exec(code);

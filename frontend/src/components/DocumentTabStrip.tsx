@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dropdown, Tooltip, type MenuProps } from 'antd';
-import { CloseOutlined, CodeOutlined, ConsoleSqlOutlined, DownOutlined, LeftOutlined, PlusOutlined, ProfileOutlined, RightOutlined, TableOutlined } from '@ant-design/icons';
+import { CloseOutlined, CodeOutlined, FunctionOutlined, ConsoleSqlOutlined, DownOutlined, LeftOutlined, PlusOutlined, ProfileOutlined, RightOutlined, TableOutlined } from '@ant-design/icons';
 import { documentTabLabels, tabScrollState, tabScrollTarget, wheelToHorizontal, type DocumentTabSource, type TabScrollState } from '../documentTabs';
 
 export type DocumentTabItem = DocumentTabSource & { dirty: boolean };
@@ -162,7 +162,9 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlT
                     onClose(document.key);
                   }}
                 >
-                  {document.kind === 'table' ? <TableOutlined className="document-tab-icon" /> : <ProfileOutlined className="document-tab-icon" />}
+                  {document.kind === 'table' ? <TableOutlined className="document-tab-icon" />
+                    : document.kind === 'schemaObject' ? <FunctionOutlined className="document-tab-icon" />
+                    : <ProfileOutlined className="document-tab-icon" />}
                   {label.schema && <span className="document-tab-schema">{label.schema}.</span>}
                   <span className="document-tab-name">{label.name}</span>
                   <span className="document-tab-kind">{label.kindLabel}</span>

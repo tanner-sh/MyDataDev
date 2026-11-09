@@ -53,6 +53,9 @@ public class McpConfigurationService {
     private static final int MAX_QUERY_TIMEOUT_SECONDS = 300;
     /** 与全局 app.sql.timeout-seconds 的默认值一致：db_execute 原来就用那个值。 */
     private static final int DEFAULT_EXECUTE_TIMEOUT_SECONDS = 60;
+    /** db_export_query 文件上限的可调范围：再小导不出什么，再大模型上下文装不下，响应本身也太重。 */
+    static final int MIN_EXPORT_KILOBYTES = 64;
+    static final int MAX_EXPORT_KILOBYTES = 10 * 1024;
     private static final int MAX_PAGE_SIZE = 1_000;
     private static final int MAX_SESSION_TTL_MINUTES = 1_440;
 
@@ -144,7 +147,8 @@ public class McpConfigurationService {
                 limits.queryTimeoutSeconds(), limits.metadataPageSize(), limits.maxMetadataPageSize(),
                 limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes(),
                 limits.maxScriptsPerConnection() == null ? old.maxScriptsPerConnection() : limits.maxScriptsPerConnection(),
-                limits.executeTimeoutSeconds() == null ? old.executeTimeoutSeconds() : limits.executeTimeoutSeconds()
+                limits.executeTimeoutSeconds() == null ? old.executeTimeoutSeconds() : limits.executeTimeoutSeconds(),
+                limits.exportMaxKilobytes() == null ? old.exportMaxKilobytes() : limits.exportMaxKilobytes()
         );
         validateSettings(updated);
         Set<String> origins = normalizeOrigins(request.allowedOrigins());
@@ -163,7 +167,7 @@ public class McpConfigurationService {
                 enabled, old.defaultQueryRows(), old.maxQueryRows(), old.maxResultCells(), old.maxResultTextChars(),
                 old.maxCellTextChars(), old.maxSqlChars(), old.queryTimeoutSeconds(), old.metadataPageSize(),
                 old.maxMetadataPageSize(), old.tablePageSize(), old.maxTablePageSize(), old.sessionTtlMinutes(), old.maxScriptsPerConnection(),
-                old.executeTimeoutSeconds()
+                old.executeTimeoutSeconds(), old.exportMaxKilobytes()
         );
         transactions.executeWithoutResult(ignored -> repository.updateSettings(updated));
         reload();
@@ -410,7 +414,8 @@ public class McpConfigurationService {
                 limits.queryTimeoutSeconds(), limits.metadataPageSize(), limits.maxMetadataPageSize(),
                 limits.tablePageSize(), limits.maxTablePageSize(), limits.sessionTtlMinutes(),
                 limits.maxScriptsPerConnection() == null ? fallback.maxScriptsPerConnection() : limits.maxScriptsPerConnection(),
-                limits.executeTimeoutSeconds() == null ? fallback.executeTimeoutSeconds() : limits.executeTimeoutSeconds()
+                limits.executeTimeoutSeconds() == null ? fallback.executeTimeoutSeconds() : limits.executeTimeoutSeconds(),
+                limits.exportMaxKilobytes() == null ? fallback.exportMaxKilobytes() : limits.exportMaxKilobytes()
         );
     }
 
@@ -472,6 +477,7 @@ public class McpConfigurationService {
         between(settings.maxSqlChars(), 1, MAX_SQL_CHARS, "SQL 长度上限");
         between(settings.queryTimeoutSeconds(), 1, MAX_QUERY_TIMEOUT_SECONDS, "查询超时");
         between(settings.executeTimeoutSeconds(), 1, MAX_QUERY_TIMEOUT_SECONDS, "写操作超时");
+        between(settings.exportMaxKilobytes(), MIN_EXPORT_KILOBYTES, MAX_EXPORT_KILOBYTES, "导出文件上限（KB）");
         positive(settings.metadataPageSize(), "元数据默认分页");
         between(settings.maxMetadataPageSize(), 1, MAX_PAGE_SIZE, "元数据最大分页");
         if (settings.metadataPageSize() > settings.maxMetadataPageSize()) throw new IllegalArgumentException("元数据默认分页不能大于最大分页");
@@ -504,7 +510,7 @@ public class McpConfigurationService {
                 settings.maxResultTextChars(), settings.maxCellTextChars(), settings.maxSqlChars(),
                 settings.queryTimeoutSeconds(), settings.metadataPageSize(), settings.maxMetadataPageSize(),
                 settings.tablePageSize(), settings.maxTablePageSize(), settings.sessionTtlMinutes(), settings.maxScriptsPerConnection(),
-                settings.executeTimeoutSeconds()
+                settings.executeTimeoutSeconds(), settings.exportMaxKilobytes()
         );
     }
 

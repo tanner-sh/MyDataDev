@@ -30,6 +30,24 @@ export function isTransactionActive(state: SqlTransactionState): boolean {
   return state.transaction !== null;
 }
 
+/**
+ * 当前查询标签的 Schema 与开着的手动事务不一致时，返回拒绝执行的说明；一致或无从判断时返回 null。
+ *
+ * <p>事务是按连接开的，开启那一刻就绑定了 Schema，之后事务里的语句一律在那个 Schema 下执行，
+ * 不看请求里带的是什么。每个查询标签又各自记着自己的 Schema —— 不拦的话，选择器上写着 PUBLIC 的标签
+ * 执行一条 DELETE，删的是事务所在的 S2 里的表。界面说一套、库里做另一套，在生产库上就是事故。</p>
+ *
+ * <p>任一边不知道 Schema（老事务没记、元数据还没加载）时不拦：无从比较，拦了只会让事务用不了。
+ * 比较不分大小写（Oracle 字典里是大写，用户选的可能是原样）。</p>
+ */
+export function transactionSchemaConflict(state: SqlTransactionState, tabSchema: string | undefined): string | null {
+  const transactionSchema = state.transaction?.schemaName?.trim();
+  const schema = tabSchema?.trim();
+  if (!transactionSchema || !schema) return null;
+  if (transactionSchema.toLocaleLowerCase() === schema.toLocaleLowerCase()) return null;
+  return `手动事务开在 ${transactionSchema} 上，事务里的语句都会在 ${transactionSchema} 执行；当前标签指向 ${schema}。请切到 ${transactionSchema} 的标签执行，或先提交 / 回滚事务。`;
+}
+
 /** 事务里执行走独立端点，其余走原来的脚本执行。 */
 export function transactionExecutePath(state: SqlTransactionState): string | null {
   return state.transaction ? `/sql/transactions/${state.transaction.id}/execute` : null;

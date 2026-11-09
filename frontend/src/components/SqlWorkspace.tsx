@@ -18,6 +18,8 @@ import type { ResultEditCommit } from '../resultEditing';
 import { transactionBadge, transactionTooltip, type SqlTransactionState } from '../sqlTransaction';
 import type { SqlEditorOnMount, SqlEditorProps } from '../sqlEditorTypes';
 import { useStableEvent } from '../hooks/useStableEvent';
+import { HeaderDock, useHeaderDocked } from './HeaderDock';
+import { isMacPlatform, SHORTCUT_HINTS, shortcutKeycap } from '../keyboardShortcuts';
 import { hasAnyConnectionPermission, hasConnectionPermission } from '../accessControl';
 import type { AiAskRequest } from './AiAssistantPanel';
 import { ScriptExecutionLog } from './ScriptExecutionLog';
@@ -26,6 +28,7 @@ import { commandOptionsLabel, effectiveCommandOptions, isCommandTab, supportsScr
 import { needsScriptLog, resolveResultTabKey, SCRIPT_LOG_KEY, tabbedResults } from '../scriptExecutionLog';
 import { customDelimiterProblem, DELIMITER_MODE_OPTIONS, type SqlDelimiterMode, type SqlDelimiterSetting } from '../scriptDelimiter';
 
+const macPlatform = isMacPlatform();
 // 命令窗口只在跑过一次命令之后才出现：懒加载，不进可输入工作台的静态依赖。
 const CommandConsole = lazy(() => import('./CommandConsole').then((module) => ({ default: module.CommandConsole })));
 // AI 抽屉只在真的问了一次之后才需要，懒加载它才不会把这条链拉进 SQL 工作台的首屏预算。
@@ -40,7 +43,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onOpenInCommandTab, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, schemaOptions, onSchemaChange, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onOpenInCommandTab, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
   draftSaveState?: string;
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
@@ -53,6 +56,13 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
   selected: Connection | null;
   activeSchema?: string;
   namespaceKind?: 'SCHEMA' | 'CATALOG';
+  /**
+   * 这个查询标签可选的 Schema（或 MySQL 的数据库）。每个标签各自记着自己的那一个，
+   * 和 DBeaver 一样 —— 以前所有标签都跟着资源管理器走，在一个标签里查 A 库、另一个标签里改 B 库，
+   * 来回切标签就得来回改资源管理器。为空表示这种库没有可切的命名空间，不显示选择器。
+   */
+  schemaOptions?: string[];
+  onSchemaChange?: (schema: string) => void;
   sessionConnectionId: number | null;
   tabs: SqlTab[];
   activeTabId: string;
@@ -536,23 +546,39 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
     </div>
   );
 
-  return (
-    <div className="workspace sql-workspace">
-      <Header className="workspace-toolbar">
-        <Tooltip title={selected?.jdbcUrl} placement="bottomLeft">
-          <div className="toolbar-title sql-workspace-title">
-            <Text type="secondary" className="ellipsis-text">
-              {selected ? `${selected.name} · ${namespaceKind === 'CATALOG' ? '数据库' : 'Schema'} ${activeSchema || '连接默认值'}` : '请先选择数据库连接'}
-              {/* 顶栏和资源管理器已各有一个「只读」标签，这里不再占一整条横幅，只补一句说明。 */}
-              {selected?.readonly ? ' · 只读连接，写入和 DDL 会被拒绝' : ''}
-            </Text>
-          </div>
-        </Tooltip>
-        <div className="sql-toolbar-actions">
+  const namespaceLabel = namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
+  // 宽屏时按钮停靠到顶栏正中间、Schema 停到连接选择器旁边（见 HeaderDock），工作区自己那一行工具栏省掉，
+  // 编辑器多出 44px。窄屏顶栏放不下，两样都留在工作区里。
+  const docked = useHeaderDocked();
+  // 命令窗口在后台的独立连接上按连接默认 Schema 执行，不认这个选择：显示出来就是一个不起作用的开关。
+  const schemaSelect = selected && !commandTab && schemaOptions && schemaOptions.length > 0 && onSchemaChange && (
+            // 说明放在原生 title 上而不是 Tooltip：气泡会盖住刚展开的下拉列表。
+            <span className="sql-schema-select-wrap" title={transactionState.transaction
+              ? `手动事务开着时${namespaceLabel}固定为事务开启时的那个，提交或回滚后才能切换。`
+              : `这个查询标签在哪个${namespaceLabel}下执行。每个标签各自记着，切换标签或在资源管理器里换${namespaceLabel}都不会影响它。`}>
+              <Select
+                className="sql-schema-select"
+                size="small"
+                showSearch
+                aria-label={`当前标签的${namespaceLabel}`}
+                value={activeSchema}
+                placeholder={`${namespaceLabel}：连接默认值`}
+                // 事务绑定在开启时的 Schema 上，中途换了也不会生效，只会让界面和实际执行对不上。
+                disabled={loading || Boolean(transactionState.transaction)}
+                options={schemaOptions.map((schema) => ({ value: schema, label: schema }))}
+                labelRender={({ label }) => <span className="sql-schema-select-label"><span className="sql-schema-select-kind">{namespaceLabel}</span>{label}</span>}
+                onChange={onSchemaChange}
+              />
+            </span>
+          );
+  const toolbarActions = (
+        <div className={`sql-toolbar-actions${docked ? ' is-docked' : ''}`}>
+          {!docked && schemaSelect}
           <Space size={4} className="sql-toolbar-group">
-            <Tooltip title="格式化 SQL（Ctrl/Cmd+Shift+F）">
+            <Tooltip title={`格式化 SQL（${SHORTCUT_HINTS.formatSql}）`}>
               <Button className="sql-toolbar-button" size="small" icon={<FormatPainterOutlined />} aria-label="格式化当前 SQL 语句" disabled={loading} onClick={() => { commitDraft(); onFormat(draftRef.current); }}>
                 <span className="sql-toolbar-label">格式化</span>
+                <kbd className="sql-toolbar-keycap">{shortcutKeycap(SHORTCUT_HINTS.formatSql, macPlatform)}</kbd>
               </Button>
             </Tooltip>
             {aiQueryAvailable && (
@@ -631,15 +657,16 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
           <Space size={4} className="sql-toolbar-group sql-toolbar-execution-group">
             <Space.Compact>
               {commandTab ? (
-                <Tooltip title={`交给后台逐条执行选中内容或整段脚本（Ctrl/Cmd+Enter），结果是一条滚动日志（${commandOptionsLabel(commandOptions)}）。执行期间可以继续编辑。`}>
+                <Tooltip title={`交给后台逐条执行选中内容或整段脚本（${SHORTCUT_HINTS.executeSql}），结果是一条滚动日志（${commandOptionsLabel(commandOptions)}）。执行期间可以继续编辑。`}>
                   <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<CodeOutlined />}
                     aria-label={selected?.environment === 'prod' ? '在生产环境执行命令窗口脚本' : '执行命令窗口脚本'} disabled={!canExecute || loading}
                     onClick={runActive}>
                     <span className="sql-toolbar-label">{selected?.environment === 'prod' ? '生产执行' : '执行'}</span>
+                    <kbd className="sql-toolbar-keycap">{shortcutKeycap(SHORTCUT_HINTS.executeSql, macPlatform)}</kbd>
                   </Button>
                 </Tooltip>
               ) : (
-                <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : '执行当前或选中 SQL（Ctrl/Cmd+Enter）'}>
+                <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : `执行当前或选中 SQL（${SHORTCUT_HINTS.executeSql}）`}>
                   {loading && cancellable ? (
                     <Button className="sql-toolbar-button sql-execute-button" size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel}>
                       <span className="sql-toolbar-label">{cancelling ? '正在取消' : `取消 ${formatElapsed(executionElapsedMs)}`}</span>
@@ -651,6 +678,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
                   ) : (
                     <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<PlayCircleOutlined />} aria-label={selected?.environment === 'prod' ? '在生产环境执行当前或选中 SQL' : '执行当前或选中 SQL'} disabled={!canExecute} onClick={() => { commitDraft(); onExecute(draftRef.current); }}>
                       <span className="sql-toolbar-label">{selected?.environment === 'prod' ? '生产执行' : '执行'}</span>
+                      <kbd className="sql-toolbar-keycap">{shortcutKeycap(SHORTCUT_HINTS.executeSql, macPlatform)}</kbd>
                     </Button>
                   )}
                 </Tooltip>
@@ -674,7 +702,27 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
             }}
           />
         </div>
-      </Header>
+  );
+
+  return (
+    <div className={`workspace sql-workspace${docked ? ' is-toolbar-docked' : ''}`}>
+      {docked ? <>
+        <HeaderDock slot="toolbar">{toolbarActions}</HeaderDock>
+        <HeaderDock slot="context">{schemaSelect}</HeaderDock>
+      </> : (
+        <Header className="workspace-toolbar">
+          <Tooltip title={selected?.jdbcUrl} placement="bottomLeft">
+            <div className="toolbar-title sql-workspace-title">
+              <Text type="secondary" className="ellipsis-text">
+                {selected ? selected.name : '请先选择数据库连接'}
+                {/* 顶栏和资源管理器已各有一个「只读」标签，这里不再占一整条横幅，只补一句说明。 */}
+                {selected?.readonly ? ' · 只读连接，写入和 DDL 会被拒绝' : ''}
+              </Text>
+            </div>
+          </Tooltip>
+          {toolbarActions}
+        </Header>
+      )}
       <div ref={splitRef} className="sql-split" id="sql-split-workspace">
         {resultPaneMode !== 'maximized' && <div className={`editor${resultPaneMode === 'collapsed' ? ' editor-with-collapsed-results' : ''}`} style={resultPaneMode === 'normal' ? { flexBasis: `${splitLimits.value * 100}%` } : undefined}>
           <SqlEditorSurface
