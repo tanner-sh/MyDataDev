@@ -23,7 +23,8 @@ import { EditableTable } from './EditableTable';
 import { SqlPreview } from './SqlPreview';
 import { WorkspaceStatusBar } from './WorkspaceStatusBar';
 import { summarizeRowChanges } from '../utils';
-import { SHORTCUT_HINTS } from '../keyboardShortcuts';
+import { isMacPlatform, SHORTCUT_HINTS, shortcutKeycap } from '../keyboardShortcuts';
+import { HeaderDock, useDockWidth, useHeaderDocked } from './HeaderDock';
 import { canCountTableRows, IDLE_TABLE_ROW_COUNT, tablePageSummary, type TableRowCountState } from '../tableRowCount';
 import type { RelationTarget } from '../relationNavigation';
 import type { TableQuery } from '../tableQuery';
@@ -35,6 +36,7 @@ import { tableToolbarCollapsed } from '../tableToolbarLayout';
 const { Header } = Layout;
 const { Text } = Typography;
 const TABLE_PAGE_SIZE_OPTIONS = [50, 100, 200];
+const macPlatform = isMacPlatform();
 
 /** 导出格式在工具栏下拉和「更多」子菜单里是同一份，写两遍迟早会分叉。 */
 const EXPORT_MENU_ITEMS = [
@@ -139,24 +141,37 @@ export const TableWorkspace = memo(function TableWorkspace({
   // it here meant diffing the whole table twice on each keystroke.
   const changeSummary = useMemo(() => summarizeRowChanges(pendingChanges), [pendingChanges]);
   const { elementRef: workspaceRef, width: workspaceWidth } = useElementWidth();
-  const toolbarCollapsed = tableToolbarCollapsed(workspaceWidth, pendingCount > 0);
+  // 宽屏时按钮停靠在顶栏正中间（见 HeaderDock），约束它们的是那一格的宽度。
+  const docked = useHeaderDocked();
+  const dockWidth = useDockWidth();
+  const toolbarCollapsed = docked
+    ? tableToolbarCollapsed(dockWidth, pendingCount > 0, true)
+    : tableToolbarCollapsed(workspaceWidth, pendingCount > 0);
+  const editabilityText = `${readonlyConnection
+    ? '当前连接为只读连接'
+    : !editingSupported
+      ? '当前数据库方言未开放表数据编辑'
+      : tableData?.editable
+        ? `可编辑，行定位字段：${tableData.keyColumns.join(', ')}`
+        : '当前表没有主键或全非空唯一索引，只允许新增数据'}${tableData?.navigationMode === 'OFFSET'
+    ? tableQuery.sorts.length > 0 ? ' · 自定义排序使用偏移分页' : ' · 当前使用偏移分页，深页浏览受限'
+    : ''}`;
+  // 宽的时候工具栏放得下，「备份此表」直接作为一颗按钮摆出来：「更多」里只剩它一项时，
+  // 点开一个只有一项的菜单纯属多一步。只有工具栏收窄时才出现「更多」，浏览类操作连同备份整组收进去。
   const secondaryMenu: MenuProps = {
-    items: [
-      // 备份此表是低频操作（对象树右键、对象详情里也有），只放在「更多」里，不常驻工具栏。
-      ...(onBackupTable ? [{ key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading }] : []),
-      // 工具栏收窄时，浏览类操作整组收进来；导出在工具栏上自己是一个下拉，进来时成为子菜单 ——
-      // 少了它，工具栏一收窄，导出就整个没有入口了。
-      ...(!toolbarCollapsed ? [] : [...(onBackupTable ? [{ type: 'divider' as const }] : []), {
+    items: !toolbarCollapsed ? [] : [
+      {
         key: 'export',
         icon: <DownloadOutlined />,
         label: '导出',
         disabled: !tableData || loading || !onExport,
+        // 导出在工具栏上自己是一个下拉，进来时成为子菜单 —— 少了它，工具栏一收窄，导出就整个没有入口了。
         children: EXPORT_MENU_ITEMS.map((item) => ({ ...item, key: `export:${item.key}` }))
       },
       { key: 'reload', icon: <ReloadOutlined />, label: '刷新数据', disabled: !activeTable || loading },
       { key: 'add', icon: <PlusOutlined />, label: '新增行', disabled: !tableData || loading || editingDisabled },
-      { key: 'import', icon: <UploadOutlined />, label: '导入数据', disabled: !tableData || loading || editingDisabled }
-      ])
+      { key: 'import', icon: <UploadOutlined />, label: '导入数据', disabled: !tableData || loading || editingDisabled },
+      ...(onBackupTable ? [{ type: 'divider' as const }, { key: 'backup', icon: <CloudServerOutlined />, label: '备份此表', disabled: !activeTable || loading }] : [])
     ],
     onClick: ({ key }) => {
       if (key.startsWith('export:')) onExport?.(key.slice('export:'.length) as ExportFormat);
@@ -180,23 +195,8 @@ export const TableWorkspace = memo(function TableWorkspace({
     if (previewSql.length === 0 && !loading) setPreviewOpen(false);
   }, [previewSql.length, loading]);
 
-  return (
-    <div ref={workspaceRef} className="workspace table-workspace">
-      <Header className="workspace-toolbar">
-        <div className="toolbar-title">
-          <Text type="secondary">
-            {readonlyConnection
-              ? '当前连接为只读连接'
-              : !editingSupported
-                ? '当前数据库方言未开放表数据编辑'
-              : tableData?.editable
-                ? `可编辑，行定位字段：${tableData.keyColumns.join(', ')}`
-                : '当前表没有主键或全非空唯一索引，只允许新增数据'}
-            {tableData?.navigationMode === 'OFFSET'
-              ? tableQuery.sorts.length > 0 ? ' · 自定义排序使用偏移分页' : ' · 当前使用偏移分页，深页浏览受限'
-              : ''}
-          </Text>
-        </div>
+  const toolbarActions = (
+      <>
         {/*
           data-pending 给样式用：有待提交修改时这一行会多出「撤销全部 / 预览 / 提交」三颗
           按钮，收起浏览类操作的门槛要相应抬高。判断放在容器查询里而不是媒体查询里 ——
@@ -233,6 +233,7 @@ export const TableWorkspace = memo(function TableWorkspace({
                 <Button size="small" icon={<UploadOutlined />} disabled={!tableData || loading || editingDisabled}>导入</Button>
               </Tooltip>
             </Upload>
+            {onBackupTable && <Button size="small" icon={<CloudServerOutlined />} disabled={!activeTable || loading} onClick={onBackupTable}>备份此表</Button>}
           </Space>}
           {(secondaryMenu.items?.length ?? 0) > 0 && <Dropdown menu={secondaryMenu} trigger={['click']}>
             <Button className="table-more-actions" size="small" icon={<MoreOutlined />} aria-label="更多表格操作">更多</Button>
@@ -266,7 +267,10 @@ export const TableWorkspace = memo(function TableWorkspace({
                 预览 {pendingCount}
               </Button>
               <Tooltip title={`提交待处理的表数据变更（${SHORTCUT_HINTS.commitTableChanges}）`}>
-                <Button size="small" type="primary" icon={<SaveOutlined />} disabled={loading || editingDisabled} loading={loading} onClick={onCommit}>提交 {pendingCount}</Button>
+                <Button size="small" type="primary" icon={<SaveOutlined />} disabled={loading || editingDisabled} loading={loading} onClick={onCommit}>
+                  提交 {pendingCount}
+                  {docked && <kbd className="sql-toolbar-keycap">{shortcutKeycap(SHORTCUT_HINTS.commitTableChanges, macPlatform)}</kbd>}
+                </Button>
               </Tooltip>
             </Space>
           )}
@@ -297,7 +301,19 @@ export const TableWorkspace = memo(function TableWorkspace({
             }}
           />
         </div>
-      </Header>
+      </>
+  );
+
+  return (
+    <div ref={workspaceRef} className={`workspace table-workspace${docked ? ' is-toolbar-docked' : ''}`}>
+      {docked ? <HeaderDock slot="toolbar">{toolbarActions}</HeaderDock> : (
+        <Header className="workspace-toolbar">
+          <div className="toolbar-title">
+            <Text type="secondary">{editabilityText}</Text>
+          </div>
+          {toolbarActions}
+        </Header>
+      )}
       <div className="table-grid-pane">
         <EditableTable metadataSource={metadataSource} dbType={dbType} initialScrollTop={initialScrollTop} onViewScroll={onViewScroll} data={tableData} rows={tableRows} readonly={editingDisabled} loading={loading} foreignKeys={foreignKeys} onEdit={onEdit} onDelete={onDelete} onFollowRelation={onFollowRelation}
           selectedRowIds={onBatchRows ? selection : undefined} onSelectionChange={onBatchRows ? setSelectedRowIds : undefined} />
@@ -382,7 +398,14 @@ export const TableWorkspace = memo(function TableWorkspace({
             <Badge status="warning" text={`待提交 ${pendingCount} 项`} />
             <Text type="secondary">新增 {changeSummary.inserts} · 修改 {changeSummary.updates} · 删除 {changeSummary.deletes}</Text>
           </Space>
-        ) : <Text type="secondary">无待提交变更</Text>}
+        ) : (
+          // 停靠之后工作区没有自己那一行了，「能不能编辑、按什么定位行」挪到状态栏右侧：
+          // 改单元格之前要看的就是它，放在表格正下方比放在顶栏更近。
+          <Space size={8} className="table-status-trailing">
+            {docked && <Text type="secondary" ellipsis className="table-editability" title={editabilityText}>{editabilityText}</Text>}
+            <Text type="secondary">无待提交变更</Text>
+          </Space>
+        )}
       />
       <Drawer
         title="变更语句预览"

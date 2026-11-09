@@ -36,12 +36,15 @@ function measureWorkbenchContrast() {
     samples.push({ name, text: element.textContent.trim(), color: style.color, background: back,
       ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05) });
   };
-  for (const button of document.querySelectorAll('.sql-workspace button.ant-btn-primary:not([disabled])')) {
+  // 宽屏时 SQL 工作台的按钮停靠在顶栏正中间（.app-header-toolbar），两处都要量。
+  for (const button of document.querySelectorAll('.sql-workspace button.ant-btn-primary:not([disabled]), .app-header-toolbar button.ant-btn-primary:not([disabled])')) {
     const label = [...button.children].find(node => node.tagName === 'SPAN'
       && !node.classList.contains('ant-btn-icon') && node.textContent.trim());
     if (label) add('执行按钮', label);
   }
-  add('连接和 Schema', document.querySelector('.sql-workspace-title .ant-typography-secondary'));
+  // 停靠时 Schema 写在连接选择器旁边那个查询标签自己的选择器里，最浅的是前面那个「Schema」字样。
+  add('连接和 Schema', document.querySelector('.sql-workspace-title .ant-typography-secondary')
+    || document.querySelector('.app-header-context-slot .sql-schema-select-kind'));
   for (const text of document.querySelectorAll('.sql-result-empty-state .ant-typography-secondary')) add('无结果操作提示', text);
   for (const span of document.querySelectorAll('.cm-activeLine span')) {
     if (span.textContent.includes('contrast_probe')) add('活动行注释', span);

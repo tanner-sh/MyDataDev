@@ -25,6 +25,11 @@ type UseSqlTabsOptions = {
   notifyError: (text: string) => void;
   /** 新开或切到某个查询标签后切回 SQL 工作台。 */
   onShowSql: () => void;
+  /**
+   * 新标签落在哪个 Schema：资源管理器当前选着的那个。之后这个标签自己记着，资源管理器
+   * 再怎么切也不影响它（和 DBeaver 一样，每个编辑器各自绑定一个 Schema）。
+   */
+  inheritedExecutionSchema?: () => string | undefined;
 };
 
 /**
@@ -36,7 +41,7 @@ type UseSqlTabsOptions = {
  * 编辑器里的改动要 300ms 才同步回标签，所以凡是「离开当前标签」的操作都先用 editorRef 取一次现值
  * —— 这是 withLiveSql 存在的原因。
  */
-export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, modal, notifyInfo, notifyError, onShowSql }: UseSqlTabsOptions) {
+export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, modal, notifyInfo, notifyError, onShowSql, inheritedExecutionSchema }: UseSqlTabsOptions) {
   const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(() => readSqlSession(null, undefined, workspaceOwner)?.tabs || [DEFAULT_TAB]);
   const [activeSqlTabId, setActiveSqlTabId] = useState(() => readSqlSession(null, undefined, workspaceOwner)?.activeTabId || DEFAULT_TAB.id);
   /** 每次换一套会话就加一：SqlWorkspace 以它为 key 重建，编辑器里不残留上一条连接的内容。 */
@@ -100,7 +105,8 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
     }
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
-    const tab = build(nextIndex);
+    const built = build(nextIndex);
+    const tab = built.executionSchema ? built : { ...built, executionSchema: inheritedExecutionSchema?.() };
     const nextTabs = [...withLiveSql(sqlTabsRef.current, activeSqlTabIdRef.current, liveEditorSql()), tab];
     sqlTabsRef.current = nextTabs;
     activeSqlTabIdRef.current = tab.id;

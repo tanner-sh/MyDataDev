@@ -9,9 +9,11 @@
 
 export type DocumentTabSource = {
   key: string;
-  kind: 'table' | 'object';
+  kind: 'table' | 'object' | 'schemaObject';
   schemaName?: string;
   name: string;
+  /** 标签上的类型字样；视图、存储过程这类对象写自己的类型（「存储过程」），不写笼统的「结构」。 */
+  kindLabel?: string;
 };
 
 export type DocumentTabLabel = {
@@ -54,7 +56,7 @@ export function documentTabLabels(documents: DocumentTabSource[], max = DOCUMENT
     schemasByName.set(name, schemas);
   }
   return documents.map((document) => {
-    const kindLabel = document.kind === 'table' ? '数据' : '结构';
+    const kindLabel = document.kindLabel ?? (document.kind === 'table' ? '数据' : '结构');
     const ambiguous = (schemasByName.get(document.name.toLocaleLowerCase())?.size ?? 0) > 1;
     const qualified = document.schemaName ? `${document.schemaName}.${document.name}` : document.name;
     return {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_RESOURCE_DOCUMENTS, rekeyDocument, resourceDocumentKey, updateDocument, type ResourceDocument } from './resourceWorkspaces';
+import { MAX_RESOURCE_DOCUMENTS, rekeyDocument, resourceDocumentKey, schemaObjectDocument, updateDocument, type ResourceDocument } from './resourceWorkspaces';
 describe('resource workspaces', () => {
   it('isolates matching names across schemas, connections and view kinds', () => {
     const keys = [resourceDocumentKey(1, 'table', 'a', 't'), resourceDocumentKey(2, 'table', 'a', 't'), resourceDocumentKey(1, 'table', 'b', 't'), resourceDocumentKey(1, 'object', 'a', 't')];
@@ -21,5 +21,20 @@ describe('resource workspaces', () => {
     const next = rekeyDocument(documents, 'typed', { key: 'canon', dirty: false } as ResourceDocument);
     expect(next.map(item => item.key)).toEqual(['canon']);
     expect(next[0].dirty).toBe(false);
+  });
+  it('keys schema objects by objectKey so overloads and same-named kinds get their own tabs', () => {
+    const proc = schemaObjectDocument(1, { object: { objectKey: 'k1', schemaName: 'S', name: 'P', displayName: 'P', kind: 'PROCEDURE' } });
+    const func = schemaObjectDocument(1, { object: { objectKey: 'k2', schemaName: 'S', name: 'P', displayName: 'P', kind: 'FUNCTION' } });
+    expect(proc?.key).not.toBe(func?.key);
+    expect(proc?.kind).toBe('schemaObject');
+    expect(proc?.object).toMatchObject({ schemaName: 'S', name: 'P', type: 'PROCEDURE' });
+    expect(proc?.key).not.toBe(resourceDocumentKey(1, 'object', 'S', 'P'));
+  });
+  it('gives a creation template a stable key distinct from an existing object', () => {
+    const creation = { kind: 'VIEW' as const, schemaName: 'S', objectName: 'V1', source: 'create view' };
+    const first = schemaObjectDocument(1, { creation });
+    expect(schemaObjectDocument(1, { creation: { ...creation, source: 'changed' } })?.key).toBe(first?.key);
+    expect(first?.key).not.toBe(schemaObjectDocument(1, { object: { objectKey: 'V1', schemaName: 'S', name: 'V1', displayName: 'V1', kind: 'VIEW' } })?.key);
+    expect(schemaObjectDocument(1, {})).toBeNull();
   });
 });

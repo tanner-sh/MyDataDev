@@ -10,10 +10,10 @@ import {
   schemaObjectCapabilities
 } from '../schemaObjectModel';
 import type { ExplorerObjectCount, ExplorerObjectKind } from '../schemaObjectModel';
-import type { Connection, DbObject, Metadata, SchemaObjectKind } from '../types';
+import type { Connection, DbObject, Metadata, SchemaObjectKind, SchemaObjectSummary, SchemaObjectTemplate } from '../types';
 import { ObjectTree } from './ObjectTree';
 import { useStableEvent } from '../hooks/useStableEvent';
-import type { SchemaObjectListSummary } from './SchemaObjectManager';
+import type { SchemaObjectChangeSignal, SchemaObjectListSummary } from './SchemaObjectManager';
 import { hasConnectionPermission } from '../accessControl';
 import {
   objectPreferenceKey,
@@ -59,6 +59,11 @@ export type ResourceExplorerProps = {
   onCreateTable: () => void;
   onRenameTable: (object: DbObject) => void;
   onDropTable: (object: DbObject) => void;
+  /** 视图、存储过程等对象在右侧文档页签里打开；当前激活的那个在列表里高亮。 */
+  activeSchemaObjectKey?: string;
+  schemaObjectChange?: SchemaObjectChangeSignal;
+  onOpenSchemaObject: (object: SchemaObjectSummary) => void;
+  onOpenSchemaObjectCreation: (template: SchemaObjectTemplate) => void;
 };
 
 export const ResourceExplorer = memo(function ResourceExplorer({
@@ -91,7 +96,11 @@ export const ResourceExplorer = memo(function ResourceExplorer({
   requestedView,
   onCreateTable,
   onRenameTable,
-  onDropTable
+  onDropTable,
+  activeSchemaObjectKey,
+  schemaObjectChange,
+  onOpenSchemaObject,
+  onOpenSchemaObjectCreation
 }: ResourceExplorerProps) {
   const [activeKind, setActiveKind] = useState<ExplorerObjectKind>('TABLE');
   const [objectView, setObjectView] = useState<'all' | 'favorites' | 'recent'>('all');
@@ -467,7 +476,10 @@ export const ResourceExplorer = memo(function ResourceExplorer({
               loadMoreToken={schemaObjectLoadMoreToken}
               onCloseCreate={() => setSchemaCreateKind(undefined)}
               onSummaryChange={handleSummaryChange}
-              onOpenViewData={onOpenTable}
+              activeObjectKey={activeSchemaObjectKey}
+              changeSignal={schemaObjectChange}
+              onOpenObject={onOpenSchemaObject}
+              onOpenCreation={onOpenSchemaObjectCreation}
             />
           </Suspense>
         )}

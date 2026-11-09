@@ -47,6 +47,8 @@ export function duplicateSqlTabOf(source: SqlTab, index: number, liveSql?: strin
     ...(source.kind === 'command' ? createCommandTab(index) : createSqlTab(index)),
     ...(source.commandOptions ? { commandOptions: source.commandOptions } : {}),
     ...(source.delimiter ? { delimiter: source.delimiter } : {}),
+    // 副本沿用来源标签的 Schema：复制一条查询通常是想在同一个地方改着跑。
+    ...(source.executionSchema ? { executionSchema: source.executionSchema } : {}),
     title: `${source.title} 副本`.slice(0, 80),
     sql: liveSql ?? source.sql,
     dirty: true

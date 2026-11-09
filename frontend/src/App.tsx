@@ -11,12 +11,14 @@ import { useWorkspaceRetention } from './hooks/useWorkspaceRetention';
 import { useSqlTabs } from './hooks/useSqlTabs';
 import { useOverlays } from './hooks/useOverlays';
 import { finishWorkbenchTimingAfterPaint, markWorkbenchResponse, startWorkbenchTiming } from './workbenchPerformance';
-import { resourceDocumentKey, type ResourceDocument } from './resourceWorkspaces';
+import { resourceDocumentKey, schemaObjectDocument, type ResourceDocument, type SchemaObjectDocumentSource } from './resourceWorkspaces';
+import type { SchemaObjectChangeSignal } from './components/SchemaObjectManager';
 import { useEditableRows } from './hooks/useEditableRows';
 import { cellValidation, rebaseConflictRow } from './tableEditing';
 import { ErrorCenter } from './components/ErrorCenter';
 import { PanelEmpty, PanelLoading } from './components/PanelState';
 import { DocumentTabStrip } from './components/DocumentTabStrip';
+import { HeaderDock, HeaderSlotsContext, type HeaderSlots } from './components/HeaderDock';
 import { Button, ConfigProvider, Drawer, Input, Modal, Radio, Segmented, Space, Tooltip, Typography, message as antdMessage, theme as antdTheme, type MenuProps } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { CodeOutlined, CopyOutlined, EditOutlined, PlusOutlined, SwapOutlined, UndoOutlined } from '@ant-design/icons';
@@ -25,14 +27,14 @@ import { isAuthenticationEnabled, isCurrentUserAdmin } from './auth';
 import { hasConnectionPermission, type ConnectionPermission } from './accessControl';
 import { currentSqlPage } from './sqlResultPaging';
 import { API, DB_TYPE_OPTIONS, DRAWER_WIDTH, MODAL_WIDTH } from './constants';
-import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCommandView, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, TableData, TableRow, WorkspaceStatus } from './types';
+import type { ObjectRelation, ObjectRelations, SqlTransactionScriptResult, ActiveTable, BackupEditorRequest, BackupHistory, BackupHistoryPage, BackupRunResponse, BackupSchedulePreview, BackupTableTargetQuery, BackupTargetPage, BackupTargetQuery, BackupTask, BackupTaskForm, BackupTaskPage, CompletionCatalog, Connection, DbObject, ExportFormat, ImportResult, Metadata, ObjectDetail, ObjectStructure, RefreshConnectionsOptions, SqlCommandView, SqlFileCandidate, SqlFileExecution, RowChange, SqlHistory, SqlPageNavigation, SqlResult, SqlScriptResult, SqlStatementResult, SqlTab, SchemaObjectKind, SchemaObjectSummary, SchemaObjectTemplate, TableData, TableRow, WorkspaceStatus } from './types';
 import { buildChanges, createSqlTab, localizeError, localizeMessage, sleep, timestamp, formatDateTime } from './utils';
 import { AsyncResourceCache } from './asyncResourceCache';
 import { clearColumnMetadataCache, loadObjectColumns } from './columnMetadata';
 import { loadRelationKnowledge } from './tableRelations';
 import { provideSqlCompletions } from './sqlCompletionProvider';
 import { withLoadedObjectStructure } from './objectTreeModel';
-import type { ExplorerObjectKind } from './schemaObjectModel';
+import { schemaObjectKindLabel, type ExplorerObjectKind } from './schemaObjectModel';
 import { findSqlObjectReferenceAtOffset, type SqlTableReference } from './sqlCompletion';
 import { findUnknownObjects } from './sqlUnknownObjects';
 import { readSelectedConnectionId, resolveSelectedConnection, writeSelectedConnectionId } from './selectedConnectionStorage';
@@ -91,6 +93,7 @@ import {
   isTransactionActive,
   isTransactionGone,
   transactionExecutePath,
+  transactionSchemaConflict,
   transactionFinishPrompt,
   transactionGoneNotice,
   transactionStateAfterError,
@@ -158,6 +161,8 @@ const CommandPalette = lazy(() => import('./components/CommandPalette').then((mo
 const SqlSnippetDrawer = lazy(() => import('./components/SqlSnippetDrawer').then((module) => ({ default: module.SqlSnippetDrawer })));
 const loadObjectDetailWorkspace = () => import('./components/ObjectDetailWorkspace').then((module) => ({ default: module.ObjectDocumentPanel }));
 const ObjectDocumentPanel = lazy(loadObjectDetailWorkspace);
+// 和资源管理器里的对象列表是同一个模块（同一个分块），打开第一个视图/存储过程时它早已加载过。
+const SchemaObjectDocumentPanel = lazy(() => import('./components/SchemaObjectManager').then((module) => ({ default: module.SchemaObjectDocumentPanel })));
 const INACTIVE_OBJECT_STATUS: WorkspaceStatus = { kind: 'idle', text: '就绪' };
 const SqlFileExecutionDrawer = lazy(() => import('./components/SqlFileExecutionDrawer').then((module) => ({ default: module.SqlFileExecutionDrawer })));
 const SqlHistoryDrawer = lazy(() => import('./components/SqlHistoryDrawer').then((module) => ({ default: module.SqlHistoryDrawer })));
@@ -221,10 +226,18 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const [backupTaskPage, setBackupTaskPage] = useState(0);
   const [backupTaskHasMore, setBackupTaskHasMore] = useState(false);
   const [connectionEditor, setConnectionEditor] = useState(CLOSED_CONNECTION_EDITOR);
-  const [mode, setMode] = useState<'sql' | 'table' | 'object' | 'diagram'>('sql');
+  const [mode, setMode] = useState<'sql' | 'table' | 'object' | 'schemaObject' | 'diagram'>('sql');
+  /** 激活的视图/存储过程等对象页签（mode === 'schemaObject' 时有效）。 */
+  const [schemaObjectDocumentKey, setSchemaObjectDocumentKey] = useState('');
+  const [schemaObjectChange, setSchemaObjectChange] = useState<SchemaObjectChangeSignal>();
   const [toastApi, toastContextHolder] = antdMessage.useMessage();
   const [modalApi, modalContextHolder] = Modal.useModal();
   const editorRef = useRef<SqlEditorHandle | null>(null);
+  /** 资源管理器当前的 Schema：新开的查询标签落在这里（见 useSqlTabs 的 inheritedExecutionSchema）。 */
+  const explorerSchemaRef = useRef<string | undefined>(undefined);
+  /** 顶栏正中间留给 SQL 工作台常用按钮的位置（见 AppHeader 的 toolbarSlotRef）。 */
+  const [headerToolbarSlot, setHeaderToolbarSlot] = useState<HTMLDivElement | null>(null);
+  const [headerContextSlot, setHeaderContextSlot] = useState<HTMLDivElement | null>(null);
   // SQL 标签页这组状态在 hooks/useSqlTabs（规则在 sqlTabs.ts，有测试）。
   const {
     sqlTabs, setSqlTabs, sqlTabsRef, activeSqlTabId, setActiveSqlTabId, activeSqlTabIdRef, activeSqlTab,
@@ -238,7 +251,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     modal: modalApi,
     notifyInfo: (text) => showInfo(text),
     notifyError: (text) => showError(text),
-    onShowSql: () => setMode('sql')
+    onShowSql: () => setMode('sql'),
+    inheritedExecutionSchema: () => explorerSchemaRef.current
   });
   const [activeTable, setActiveTable] = useState<ActiveTable | null>(null);
   const [activeObjectTarget, setActiveObjectTarget] = useState<DbObject | null>(null);
@@ -269,6 +283,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   });
   const [backupEditorRequest, setBackupEditorRequest] = useState<BackupEditorRequest>();
   const [compactLayout, setCompactLayout] = useState(false);
+  // 窄屏顶栏放不下工作区的按钮：两个位置都给 null，各工作区照旧用自己那一行工具栏（见 HeaderDock）。
+  const headerSlots = useMemo<HeaderSlots>(() => compactLayout
+    ? { toolbar: null, context: null }
+    : { toolbar: headerToolbarSlot, context: headerContextSlot }, [compactLayout, headerContextSlot, headerToolbarSlot]);
   const [tableCreateOpen, setTableCreateOpen] = useState(false);
   const [tableLifecycleAction, setTableLifecycleAction] = useState<TableLifecycleAction>();
   const [structureCacheRevision, setStructureCacheRevision] = useState(0);
@@ -346,7 +364,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     [objects]
   );
   const namespaceLabel = metadata?.namespaceKind === 'CATALOG' ? '数据库' : 'Schema';
+  /**
+   * 资源管理器当前的 Schema。ER 图、结构快照、对象导出、数据检索与 Ctrl/Cmd+P 对象搜索都是从资源管理器
+   * 出发的浏览类功能，跟它走；查询标签的 Schema（activeSqlSchema）只给 SQL 执行和补全用。
+   */
+  const explorerSchema = resolveSqlExecutionSchema(metadataQuery.schema, metadata);
+  explorerSchemaRef.current = explorerSchema;
   const activeSqlSchema = resolveSqlExecutionSchema(sqlTabs.find(tab => tab.id === activeSqlTabId)?.executionSchema ?? metadataQuery.schema, metadata);
+  const activeSqlSchemaRef = useRef(activeSqlSchema);
+  activeSqlSchemaRef.current = activeSqlSchema;
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -1431,6 +1457,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
     sqlBusyRef.current = true;
     try {
+      // 事务绑定在开启时的 Schema 上，标签指向别的 Schema 时执行出去的结果和界面上写的不是一回事。
+      // 放在生产确认之前：让用户输完连接名再告诉他这条执行不了，是白让他确认一次。
+      const schemaConflict = path === '/sql/explain' ? null : transactionSchemaConflict(transactionState, activeSqlSchema);
+      if (schemaConflict) {
+        updateActiveSqlTab({ message: schemaConflict, statusKind: 'error', errorDetail: schemaConflict });
+        toastApi.error(schemaConflict);
+        return;
+      }
       let parameterValues: SqlParameterValues | undefined;
       if (target.sql.includes(':')) {
         const names = await api<string[]>('/sql/parameters', { method: 'POST', body: JSON.stringify({ sql: target.sql, dbType: selected.dbType }) });
@@ -2097,13 +2131,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
   function sqlCompletionResult(request: SqlCompletionRequest): Promise<SqlCompletionResult | null> {
     const connectionId = selectedIdRef.current;
-    const schemaName = metadataRef.current?.selectedSchema || '';
+    // 补全按这个标签自己的 Schema 取清单，不是资源管理器那个：两者可以不一样。
+    const schemaName = activeSqlSchemaRef.current || '';
     const tabId = activeSqlTabIdRef.current;
     return provideSqlCompletions(request, {
       connectionId,
       schemaName,
       isCurrent: () => selectedIdRef.current === connectionId
-        && (metadataRef.current?.selectedSchema || '') === schemaName
+        && (activeSqlSchemaRef.current || '') === schemaName
         && activeSqlTabIdRef.current === tabId,
       loadCatalog: loadCompletionCatalog,
       loadColumns: loadObjectColumns,
@@ -2893,6 +2928,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const changeExplorerSchema = useStableEvent((schema: string, kind: ExplorerObjectKind) => {
     clearMetadataSearchTimer();
     setMetadataQuery((current) => ({ ...current, schema }));
+    // 资源管理器只管浏览，不碰任何查询标签：每个标签的 Schema 只由它自己工具栏上的选择器决定（和 DBeaver 一样）。
+    // 新开的标签落在资源管理器当前的 Schema 上（见 useSqlTabs 的 inheritedExecutionSchema）。
     void loadMetadata(selected, {
       schema,
       keyword: kind === 'TABLE' ? metadataQuery.keyword : '',
@@ -2900,6 +2937,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       applyKeyword: kind === 'TABLE'
     });
   });
+  const changeSqlSchemaEvent = useStableEvent((schema: string) => updateSqlTab(activeSqlTab.id, { executionSchema: schema }));
   const changeExplorerKeyword = useStableEvent((keyword: string, kind: ExplorerObjectKind) => queueMetadataSearch(keyword, kind));
   const searchExplorer = useStableEvent((keyword: string, kind: ExplorerObjectKind) => runMetadataSearch(keyword, kind));
   const loadMoreExplorerObjects = useStableEvent(() => {
@@ -2909,6 +2947,32 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const prefetchExplorerObjectDetail = useStableEvent((object: DbObject) => prefetchObjectDetail(object));
   const openExplorerObjectDetail = useStableEvent((object: DbObject) => openObjectDetail(object));
   const openExplorerTable = useStableEvent((object: DbObject) => openTable(object));
+  const openSchemaObjectDocument = (source: SchemaObjectDocumentSource) => {
+    if (!selected) return;
+    const document = schemaObjectDocument(selected.id, source);
+    if (!document) return;
+    const existing = resources.documents.find(item => item.key === document.key);
+    // 已经开着的对象只是切过去：页签里可能有没保存的源码，不能拿新取的覆盖掉。
+    if (!existing && !resources.ensure(document)) {
+      showInfo('最多打开 20 个表或对象标签，请先关闭不需要的标签。'); return;
+    }
+    setSchemaObjectDocumentKey(document.key);
+    setMobileExplorerOpen(false);
+    setMode('schemaObject');
+  };
+  const openSchemaObjectEvent = useStableEvent((object: SchemaObjectSummary) => openSchemaObjectDocument({ object }));
+  const openSchemaObjectCreationEvent = useStableEvent((creation: SchemaObjectTemplate) => openSchemaObjectDocument({ creation }));
+  const closeSchemaObjectDocumentEvent = useStableEvent((key: string) => {
+    resources.close(key);
+    if (key === schemaObjectDocumentKey && mode === 'schemaObject') setMode('sql');
+  });
+  const schemaObjectChangedEvent = useStableEvent((kind: SchemaObjectKind) => {
+    setSchemaObjectChange(current => ({ kind, token: (current?.token ?? 0) + 1 }));
+  });
+  const activeSchemaObjectKey = useMemo(() => {
+    if (mode !== 'schemaObject') return undefined;
+    return resources.documents.find(item => item.key === schemaObjectDocumentKey)?.schemaObject?.object?.objectKey;
+  }, [mode, resources.documents, schemaObjectDocumentKey]);
   const backupExplorerTable = useStableEvent((object: DbObject) => openBackupTaskEditor({ schemaName: object.schemaName, tableName: object.name }));
   const toggleExplorerFromHeader = useStableEvent(() => compactLayout
     ? setMobileExplorerOpen((current) => !current)
@@ -3206,6 +3270,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const resolveUnknownObjectsEvent = useStableEvent((sql: string) => {
     const current = metadataRef.current;
     if (!current) return [];
+    // 这份清单是资源管理器那个 Schema 的；标签指向别的 Schema 时拿它判断「不存在」会把对的表名也划上线，宁可不提示。
+    const listedSchema = current.selectedSchema || current.currentSchema || '';
+    if ((activeSqlSchemaRef.current || '').toLocaleLowerCase() !== listedSchema.toLocaleLowerCase()) return [];
     return findUnknownObjects(sql, {
       hasMore: current.hasMore,
       loadedKeyword: metadataObjectsKeyword,
@@ -3303,8 +3370,15 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       resources.close(document.key);
       if (document.key === tableDocumentKey) { clearTableWorkspace(); if (mode === 'table') setMode('sql'); }
       if (document.key === objectDocumentKey) { setActiveObjectTarget(null); setActiveObjectDetail(null); updateObjectDesignDirty(false); if (mode === 'object') setMode('sql'); }
+      if (document.key === schemaObjectDocumentKey && mode === 'schemaObject') setMode('sql');
     };
-    if (document.dirty) modalApi.confirm({ title: `关闭 ${document.object.name} 并放弃未提交修改？`, okText: '放弃修改并关闭', cancelText: '继续编辑', okButtonProps: { danger: true }, onOk: close });
+    if (document.dirty && document.kind === 'schemaObject') modalApi.confirm({
+      title: `关闭 ${document.object.name}？`,
+      // 对象页签标脏有两个原因：源码改了没保存，或者调用还没返回。关掉之后都看不到了，调用会被取消。
+      content: '未保存的源码修改会丢失；正在执行的调用会被取消，过程内部已经提交的部分不会回滚。运行时间长的过程请改用后台执行。',
+      okText: '关闭', cancelText: '继续', okButtonProps: { danger: true }, onOk: close
+    });
+    else if (document.dirty) modalApi.confirm({ title: `关闭 ${document.object.name} 并放弃未提交修改？`, okText: '放弃修改并关闭', cancelText: '继续编辑', okButtonProps: { danger: true }, onOk: close });
     else close();
   }
 
@@ -3340,6 +3414,10 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       onCreateTable={openCreateTableEvent}
       onRenameTable={renameTableEvent}
       onDropTable={dropTableEvent}
+      activeSchemaObjectKey={activeSchemaObjectKey}
+      schemaObjectChange={schemaObjectChange}
+      onOpenSchemaObject={openSchemaObjectEvent}
+      onOpenSchemaObjectCreation={openSchemaObjectCreationEvent}
     />
   );
 
@@ -3360,10 +3438,11 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     kind: document.kind,
     schemaName: document.object.schemaName,
     name: document.object.name,
+    kindLabel: document.kind === 'schemaObject' ? schemaObjectKindLabel(document.object.type as SchemaObjectKind) : undefined,
     dirty: document.dirty
   })), [connectionDocuments]);
   // ER 图没有对应的标签，此时没有任何一个标签是激活的。
-  const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : '';
+  const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : mode === 'schemaObject' ? schemaObjectDocumentKey : '';
   const activeManagementNavItem = activeDrawer ? managementNavItemOf(activeDrawer, isCurrentUserAdmin(), isAuthenticationEnabled()) : undefined;
   const sqlDocumentTabs = useMemo(() => sqlTabs.map(tab => ({ id: tab.id, title: tab.title, dirty: tab.dirty, command: isCommandTab(tab) })), [sqlTabs]);
   const sqlTabMenu: MenuProps = {
@@ -3402,6 +3481,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         const document = connectionDocuments.find(item => item.key === key);
         if (!document) return;
         if (document.kind === 'table') void applyOpenTable(document.object);
+        else if (document.kind === 'schemaObject') { setSchemaObjectDocumentKey(document.key); setMode('schemaObject'); }
         else void loadObjectDetail(document.object);
       }}
       onClose={key => {
@@ -3468,6 +3548,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           onOpenManagement={openManagementFromHeader}
           onOpenBackgroundTasks={openBackgroundTasksFromHeader}
           onToggleTheme={toggleThemeFromHeader}
+          toolbarSlotRef={setHeaderToolbarSlot}
+          contextSlotRef={setHeaderContextSlot}
         />
 
         <div className="app-body">
@@ -3488,6 +3570,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             </>
           )}
 
+          <HeaderSlotsContext.Provider value={headerSlots}>
           <main className="app-content">
             {documentTabs && <div className="document-tab-bar">{documentTabs}</div>}
             <Suspense fallback={<PanelLoading text="正在加载工作区…" />}>
@@ -3510,6 +3593,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 selected={selected}
                 activeSchema={activeSqlSchema}
                 namespaceKind={metadata?.namespaceKind}
+                schemaOptions={metadata?.schemas}
+                onSchemaChange={changeSqlSchemaEvent}
                 sessionConnectionId={selected?.id ?? null}
                 tabs={sqlTabs}
                 activeTabId={activeSqlTab.id}
@@ -3602,12 +3687,22 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
               />
             ) : mode === 'diagram' ? (
               <div className="er-diagram-workspace">
-                <header className="er-diagram-workspace-header">
-                  <Text strong className="er-diagram-workspace-title">ER 图 · {activeSqlSchema || selected?.name}</Text>
-                  <Button size="small" onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
-                </header>
+                {/* 和其它页签一样：宽屏时标题与返回按钮停靠进顶栏，窄屏留在这一行。 */}
+                {headerSlots.toolbar ? (
+                  <HeaderDock slot="toolbar">
+                    <div className="er-diagram-docked-toolbar">
+                      <Text strong>ER 图 · {explorerSchema || selected?.name}</Text>
+                      <Button onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
+                    </div>
+                  </HeaderDock>
+                ) : (
+                  <header className="er-diagram-workspace-header">
+                    <Text strong className="er-diagram-workspace-title">ER 图 · {explorerSchema || selected?.name}</Text>
+                    <Button size="small" onClick={returnFromDiagramEvent}>返回 SQL 工作台</Button>
+                  </header>
+                )}
                 {selected
-                  ? <ErDiagram connectionId={selected.id} schemaName={activeSqlSchema} />
+                  ? <ErDiagram connectionId={selected.id} schemaName={explorerSchema} />
                   : <PanelEmpty title="未选择连接" description="选择一个数据库连接后才能绘制 ER 图。" />}
               </div>
             ) : null}
@@ -3630,8 +3725,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 onOpenRelation={openRelationEvent}
               />;
             })}
+            {resources.documents.filter(document => document.kind === 'schemaObject').map(document => (
+              <SchemaObjectDocumentPanel
+                key={document.key}
+                document={document}
+                connection={connections.find(item => item.id === document.connectionId)}
+                active={mode === 'schemaObject' && document.key === schemaObjectDocumentKey && selected?.id === document.connectionId}
+                onDirtyChange={changeObjectDocumentDirty}
+                onClose={closeSchemaObjectDocumentEvent}
+                onChanged={schemaObjectChangedEvent}
+                onOpenViewData={openExplorerTable}
+              />
+            ))}
             </Suspense>
           </main>
+          </HeaderSlotsContext.Provider>
         </div>
       </div>
 
@@ -3797,7 +3905,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <SchemaSnapshotPanel
                     connections={connections}
                     defaultConnectionId={selected?.id}
-                    defaultSchema={activeSqlSchema}
+                    defaultSchema={explorerSchema}
                   />
                 </Suspense>
               </div>
@@ -3819,7 +3927,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <SchemaExportPanel
                     connections={connections}
                     defaultConnectionId={selected?.id}
-                    defaultSchema={activeSqlSchema}
+                    defaultSchema={explorerSchema}
                     onOpenInSqlTab={openSchemaDiffScript}
                   />
                 </Suspense>
@@ -3845,7 +3953,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                   <DataSearchPanel
                     connections={connections}
                     defaultConnectionId={selected?.id}
-                    defaultSchema={activeSqlSchema}
+                    defaultSchema={explorerSchema}
                     onRequestConfirmation={productionConfirmation.requestConfirmation}
                     onOpenInSqlTab={openSchemaDiffScript}
                   />
@@ -4016,7 +4124,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           <ObjectSearchPalette
             open
             connectionId={selected?.id}
-            schemaName={activeSqlSchema}
+            schemaName={explorerSchema}
             onClose={() => setObjectSearchOpen(false)}
             onOpenHit={openObjectSearchHit}
           />

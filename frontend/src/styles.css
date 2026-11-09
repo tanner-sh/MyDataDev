@@ -2303,7 +2303,8 @@ body.is-resizing-column * {
   height: 48px;
   padding: 0 10px 0 8px;
   display: grid;
-  grid-template-columns: minmax(220px, auto) minmax(280px, 620px) minmax(240px, 1fr);
+  /* 品牌 | 正中间的工作区按钮 | 连接选择器 | 管理入口。按钮那一格吃掉剩下的宽度，内容居中。 */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
   border-bottom: 1px solid var(--border);
@@ -2367,8 +2368,170 @@ body.is-resizing-column * {
 }
 
 .connection-select {
-  min-width: 160px;
-  flex: 1 1 220px;
+  width: 200px;
+  min-width: 120px;
+  flex: 0 1 200px;
+}
+
+.app-header-toolbar {
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* 停靠在顶栏里的 SQL 工作台按钮：和顶栏的 32px 按钮同高，不用工作区那一行里的 28px。 */
+.app-header-toolbar .sql-toolbar-actions {
+  min-width: 0;
+  gap: 6px;
+}
+
+.app-header-toolbar .sql-toolbar-button {
+  height: 32px;
+  padding-inline: 10px;
+}
+
+.sql-toolbar-keycap {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  line-height: 16px;
+  opacity: 0.72;
+  background: rgb(127 127 127 / 14%);
+}
+
+.ant-btn-primary .sql-toolbar-keycap {
+  background: rgb(255 255 255 / 20%);
+  opacity: 0.9;
+}
+
+.sql-schema-select-wrap {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 190px;
+}
+
+.sql-schema-select {
+  width: 190px;
+  flex: 0 1 190px;
+  min-width: 120px;
+}
+
+.app-header-toolbar .sql-schema-select .ant-select-selector {
+  height: 32px !important;
+  align-items: center;
+}
+
+.sql-schema-select-label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sql-schema-select-kind {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+/* 连接选择器收窄之后，数据库类型只在很宽的屏幕上常驻；其余时候在选择器的悬停提示里。 */
+@media (max-width: 1699px) {
+  .connection-db-tag {
+    display: none;
+  }
+}
+
+/* 按钮停靠到顶栏之后，工作区少了工具栏那一行：分栏 + 状态栏两行。 */
+.sql-workspace.is-toolbar-docked {
+  grid-template-rows: minmax(0, 1fr) 28px;
+}
+
+/* 其余工作区同理：停靠之后少了工具栏那一行，各自的网格去掉第一行。 */
+.table-workspace.is-toolbar-docked {
+  grid-template-rows: minmax(0, 1fr) auto 28px;
+}
+
+.object-workspace.is-toolbar-docked {
+  grid-template-rows: minmax(0, 1fr) 28px;
+}
+
+.schema-object-workspace.is-toolbar-docked {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* 连接与 Schema 是同一件事（在哪执行），在顶栏右侧挨在一起。 */
+.app-header-context {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-header-context-slot {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.app-header-context-slot:empty {
+  display: none;
+}
+
+/* 停靠进顶栏的表、对象、ER 图按钮：与 SQL 工作台一样用顶栏的 32px，不用工作区那一行的 24px。 */
+.app-header-toolbar .table-toolbar-actions,
+.object-docked-toolbar,
+.er-diagram-docked-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.object-docked-toolbar .object-title-line {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-header-toolbar .ant-btn-sm:not(.ant-btn-icon-only) {
+  height: 32px;
+  padding-inline: 10px;
+}
+
+.app-header-toolbar .ant-btn-sm.ant-btn-icon-only {
+  width: 32px;
+  height: 32px;
+}
+
+/* 表停靠之后，「能不能编辑、按什么定位行」挪到状态栏右侧，太长时截断、悬停看全文。 */
+.table-editability {
+  max-width: min(46vw, 520px);
+}
+
+/* 顶栏放不下全部文字时先收次要按钮的快捷键，再收它们的文字；执行按钮的文字和快捷键一直留着 ——
+   它是唯一天天要按的那一个，1440px 的笔记本上也得看得到。 */
+@media (max-width: 1499px) {
+  .app-header-toolbar .sql-toolbar-button:not(.sql-execute-button) .sql-toolbar-keycap {
+    display: none;
+  }
+}
+
+@media (max-width: 1379px) {
+  .app-header-toolbar .sql-toolbar-button:not(.sql-execute-button) .sql-toolbar-label {
+    display: none;
+  }
+
+  .app-header-toolbar .sql-toolbar-button:not(.sql-execute-button) {
+    width: 32px;
+    padding-inline: 0;
+  }
+
+  .app-header .brand-copy {
+    display: none;
+  }
 }
 
 .connection-select .ant-select-selector {
@@ -4331,6 +4494,25 @@ body.is-resizing-column * {
     grid-template-columns: minmax(190px, auto) minmax(240px, 1fr) auto;
   }
 
+  /* 窄屏顶栏不停靠工作区按钮（App 不传位置，按钮留在工作区里），连接选择器重新撑满中间。 */
+  .app-header-toolbar,
+  .app-header-context-slot {
+    display: none;
+  }
+
+  .app-header-context {
+    flex: 1 1 auto;
+  }
+
+  .app-header-context > .connection-switcher {
+    flex: 1 1 auto;
+  }
+
+  .connection-select {
+    width: auto;
+    flex: 1 1 220px;
+  }
+
   .connection-db-tag {
     display: none;
   }
@@ -5685,3 +5867,8 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .ant-select-dropdown {
   max-width: min(480px, calc(100vw - 32px));
 }
+
+/* 视图、存储过程等对象的页签：工具栏 + 下面撑满的选项卡；选项卡内容自己滚动（依赖列表、参数表都可能很长）。 */
+.schema-object-workspace { grid-template-rows: 54px minmax(0, 1fr); }
+.schema-object-workspace .workspace-toolbar .toolbar-title { min-width: 0; }
+.schema-object-document-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content > .ant-tabs-tabpane { height: 100%; overflow: auto; padding-bottom: var(--space-3); }
