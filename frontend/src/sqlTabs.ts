@@ -55,6 +55,21 @@ export function duplicateSqlTabOf(source: SqlTab, index: number, liveSql?: strin
   };
 }
 
+/**
+ * 把还没有自己 Schema 的标签固定到给定的 Schema 上；没有要改的就原样返回同一个数组（调用方据此跳过 setState）。
+ *
+ * <p>标签没有 executionSchema 时会退回资源管理器当前的 Schema。这样的标签不止一种：默认的「查询 1」、
+ * 升级前保存的会话、连接元数据还没加载完就新开的标签 —— 它们全都跟着资源管理器走，在资源管理器里
+ * 换一次 Schema，这些标签一起变，看起来就是「所有标签指向同一个 Schema」，独立 Schema 名存实亡。
+ * 元数据一加载出来就把它们钉住，之后每个标签只听自己工具栏上那个选择器的。</p>
+ *
+ * <p>不动 dirty：这是补一个缺省值，不是用户改了标签。</p>
+ */
+export function pinTabSchemas(tabs: SqlTab[], schema: string | undefined): SqlTab[] {
+  if (!schema || tabs.every((tab) => tab.executionSchema)) return tabs;
+  return tabs.map((tab) => tab.executionSchema ? tab : { ...tab, executionSchema: schema });
+}
+
 /** 重命名：去掉首尾空白，空名返回 null（由调用方报错），最长 80 个字符。 */
 export function normalizeSqlTabTitle(title: string): string | null {
   const normalized = title.trim().slice(0, 80);
