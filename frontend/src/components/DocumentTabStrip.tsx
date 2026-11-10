@@ -1,12 +1,31 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dropdown, Tooltip, type MenuProps } from 'antd';
 import { CloseOutlined, CodeOutlined, FunctionOutlined, ConsoleSqlOutlined, DownOutlined, LeftOutlined, PlusOutlined, ProfileOutlined, RightOutlined, TableOutlined } from '@ant-design/icons';
-import { documentTabLabels, tabScrollState, tabScrollTarget, wheelToHorizontal, type DocumentTabSource, type TabScrollState } from '../documentTabs';
+import { documentTabLabels, tabScrollState, tabScrollTarget, wheelToHorizontal, type DocumentTabSource, type TabConnectionBadge, type TabScrollState } from '../documentTabs';
 
-export type DocumentTabItem = DocumentTabSource & { dirty: boolean };
+export type DocumentTabItem = DocumentTabSource & { dirty: boolean; connection?: TabConnectionBadge };
 
 /** SQL 查询标签（含命令窗口）。 */
-export type SqlDocumentTabItem = { id: string; title: string; dirty: boolean; command: boolean };
+export type SqlDocumentTabItem = { id: string; title: string; dirty: boolean; command: boolean; connection?: TabConnectionBadge };
+
+/**
+ * 标签上的连接标记。不同连接的标签平铺在一条上，名字说明「这是哪个库」，红色「生产」说明「小心」，
+ * 「不可用」说明这条连接没了 —— 标签留着草稿，但要先换绑才能执行。
+ */
+function TabConnectionMark({ badge }: { badge?: TabConnectionBadge }) {
+  if (!badge) return null;
+  return <>
+    {badge.unavailable && <span className="document-tab-connection is-unavailable" title="这个标签绑定的连接已不可用（被删除或没有权限），请用顶栏的连接选择器换绑">不可用</span>}
+    {!badge.unavailable && badge.name && <span className="document-tab-connection" title={badge.fullName}>{badge.name}</span>}
+    {badge.production && <span className="document-tab-production" title={`生产连接：${badge.fullName ?? ''}`}>生产</span>}
+  </>;
+}
+
+function connectionTitle(badge?: TabConnectionBadge) {
+  if (!badge) return '';
+  if (badge.unavailable) return ' · 连接不可用';
+  return badge.fullName ? ` · ${badge.fullName}${badge.production ? '（生产）' : ''}` : '';
+}
 
 type DocumentTabStripProps = {
   /** 当前激活的标签：'sql' 表示 SQL 工作台（具体是哪个查询标签看 activeSqlTabId），其余是文档键。 */
@@ -115,7 +134,7 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlT
                   aria-selected={active}
                   className={`document-tab is-sql${active ? ' is-active' : ''}`}
                   data-sql-current={tab.id === activeSqlTabId ? 'true' : undefined}
-                  title={`${tab.title}${tab.command ? '（命令窗口）' : ''}，双击重命名`}
+                  title={`${tab.title}${tab.command ? '（命令窗口）' : ''}${connectionTitle(tab.connection)}，双击重命名`}
                   onClick={() => onSelectSql(tab.id)}
                   onDoubleClick={(event) => { event.preventDefault(); onRenameSql(tab.id); }}
                   onAuxClick={(event) => {
@@ -125,6 +144,7 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlT
                   }}
                 >
                   {tab.command ? <CodeOutlined className="document-tab-icon" aria-label="命令窗口" /> : <ConsoleSqlOutlined className="document-tab-icon" />}
+                  <TabConnectionMark badge={tab.connection} />
                   <span className="document-tab-name">{tab.title}</span>
                   {tab.dirty && <span className="document-tab-dirty" aria-label="包含会话草稿">●</span>}
                 </button>
@@ -152,7 +172,7 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlT
                   role="tab"
                   aria-selected={active}
                   className={`document-tab is-${document.kind}${active ? ' is-active' : ''}`}
-                  title={document.dirty ? `${label.title}（有未提交修改）` : label.title}
+                  title={`${label.title}${connectionTitle(document.connection)}${document.dirty ? '（有未提交修改）' : ''}`}
                   disabled={disabled}
                   onClick={() => onSelect(document.key)}
                   // 中键关闭，与浏览器标签一致。
@@ -165,6 +185,7 @@ export const DocumentTabStrip = memo(function DocumentTabStrip({ activeKey, sqlT
                   {document.kind === 'table' ? <TableOutlined className="document-tab-icon" />
                     : document.kind === 'schemaObject' ? <FunctionOutlined className="document-tab-icon" />
                     : <ProfileOutlined className="document-tab-icon" />}
+                  <TabConnectionMark badge={document.connection} />
                   {label.schema && <span className="document-tab-schema">{label.schema}.</span>}
                   <span className="document-tab-name">{label.name}</span>
                   <span className="document-tab-kind">{label.kindLabel}</span>

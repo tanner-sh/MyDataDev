@@ -36,12 +36,14 @@ const MAX_INITIAL_GZIP_BYTES = 450 * 1024;
 // 视图 / 存储过程从抽屉改成右侧文档页签、SQL 常用按钮停靠到顶栏（portal）、每个查询标签独立的 Schema
 // 选择器与按钮上的快捷键：全是自身代码与样式，没有新增依赖，实测 836.7 KiB；首屏 240.7 KiB、
 // 可输入工作台 606.2 KiB 仍在各自预算内。给 4 KiB 余量。
-const MAX_SQL_WORKSPACE_GZIP_BYTES = 840 * 1024;
+// 标签与连接绑定（所有连接的标签平铺一条、切标签时跟着切连接、会话迁移与连接标记）全在 App 与
+// useSqlTabs 里，实测 839.8 KiB / 可输入工作台 609.0 KiB；没有新增依赖，首屏 241.0 KiB。两条各给 4 KiB 余量。
+const MAX_SQL_WORKSPACE_GZIP_BYTES = 844 * 1024;
 // 编辑器从 Monaco 换成 CodeMirror 6 之后是 128 KiB（此前 685 KiB）。
 // 上限贴着实际值留一点余量：这块曾经是全站最大的资源，退回去不该悄无声息。
 const MAX_SQL_EDITOR_GZIP_BYTES = 160 * 1024;
 // 真正进入可输入工作台的静态依赖链，区别于登录页首屏和包含可选面板的完整依赖。
-const MAX_READY_WORKSPACE_GZIP_BYTES = 610 * 1024;
+const MAX_READY_WORKSPACE_GZIP_BYTES = 614 * 1024;
 const distDirectory = resolve(process.cwd(), 'dist');
 const html = readFileSync(resolve(distDirectory, 'index.html'), 'utf8');
 const assetUrls = [...new Set([...html.matchAll(/(?:src|href)="(\/[^"?]+\.(?:js|css))"/g)].map((match) => match[1]))];

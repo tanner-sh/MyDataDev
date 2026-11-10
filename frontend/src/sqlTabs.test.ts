@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeSqlTabIn, duplicateSqlTabOf, normalizeSqlTabTitle, patchSqlTab, pinTabSchemas, withLiveSql } from './sqlTabs';
+import { bindTabConnections, closeSqlTabIn, duplicateSqlTabOf, lastSqlTabOf, normalizeSqlTabTitle, patchSqlTab, pinTabSchemas, rebindSqlTab, withLiveSql } from './sqlTabs';
 import type { SqlTab } from './types';
 
 const tab = (id: string, extra: Partial<SqlTab> = {}): SqlTab => ({ id, title: id, sql: `select '${id}'`, dirty: false, results: [], message: '', ...extra });
@@ -53,5 +53,37 @@ describe('sql tabs', () => {
     expect(pinTabSchemas(tabs, 'PUBLIC')).toBe(tabs);
     const unpinned = [tab('a')];
     expect(pinTabSchemas(unpinned, undefined)).toBe(unpinned);
+  });
+
+  it('lands on a neighbour of the same connection when closing the active tab', () => {
+    const tabs = [tab('a', { connectionId: 1 }), tab('b', { connectionId: 2 }), tab('c', { connectionId: 1 }), tab('d', { connectionId: 2 })];
+    expect(closeSqlTabIn(tabs, 'c', 'c').activeId).toBe('a');
+    expect(closeSqlTabIn(tabs, 'b', 'b').activeId).toBe('d');
+    expect(closeSqlTabIn([tab('a', { connectionId: 1 }), tab('b', { connectionId: 2 })], 'b', 'b').activeId).toBe('a');
+  });
+
+  it('binds only the tabs that have no connection yet', () => {
+    const tabs = [tab('a'), tab('b', { connectionId: 2, dirty: true })];
+    const bound = bindTabConnections(tabs, 1);
+    expect(bound.map((item) => item.connectionId)).toEqual([1, 2]);
+    expect(bound[1]).toBe(tabs[1]);
+    expect(bindTabConnections(bound, 3)).toBe(bound);
+    expect(bindTabConnections(tabs, undefined)).toBe(tabs);
+  });
+
+  it('rebinding keeps the SQL but drops the old connection\'s schema and results', () => {
+    const source = tab('a', { connectionId: 1, executionSchema: 'S2', results: [{} as never], activeResultKey: 'r', message: 'done', statusKind: 'success', dirty: true });
+    const rebound = rebindSqlTab(source, 2);
+    expect(rebound).toMatchObject({ connectionId: 2, sql: source.sql, dirty: true, results: [], message: '' });
+    expect(rebound.executionSchema).toBeUndefined();
+    expect(rebound.activeResultKey).toBeUndefined();
+    expect(rebindSqlTab(source, 1)).toBe(source);
+  });
+
+  it('finds the right-most tab of a connection and pins schemas per connection', () => {
+    const tabs = [tab('a', { connectionId: 1 }), tab('b', { connectionId: 2 }), tab('c', { connectionId: 1 })];
+    expect(lastSqlTabOf(tabs, 1)?.id).toBe('c');
+    expect(lastSqlTabOf(tabs, 9)).toBeUndefined();
+    expect(pinTabSchemas(tabs, 'PUBLIC', 1).map((item) => item.executionSchema)).toEqual(['PUBLIC', undefined, 'PUBLIC']);
   });
 });

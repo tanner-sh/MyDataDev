@@ -489,6 +489,11 @@ export type SqlTab = {
    * 结果区只有滚动日志（见 commandWindow.ts）。
    */
   kind?: 'command';
+  /**
+   * 这个标签绑定的连接。标签不再按连接分组：所有连接的标签平铺在一条上，切到哪个标签就用哪个标签的
+   * 连接与 Schema（App 的 selected 跟着当前标签走）。缺省只出现在升级前的会话里，元数据加载后补上。
+   */
+  connectionId?: number;
   /** Generated migration scripts keep their target namespace. */
   executionSchema?: string;
   parameters?: import('./sqlParameters').SqlParameterDefinition[];

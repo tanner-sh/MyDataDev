@@ -1442,6 +1442,30 @@ try {
     await page.shot('10-只读连接SQL工作台');
     await auditLayout('只读连接工作台');
 
+    // 标签与连接绑定：所有连接的标签在一条上，点另一条连接的标签要把当前连接（顶栏、资源管理器）一起切过去。
+    // 这一步曾经让两个 effect 在同一次提交里来回切连接，React 报更新深度超限、整个工作台白屏 ——
+    // 只在「点另一条连接的标签」时出现，只测同一条连接内的标签切换是发现不了的。
+    const crossConnection = async (connectionName) => {
+      await page.evaluate(`(() => {
+        const tab = [...document.querySelectorAll('.document-tab.is-sql')]
+          .find(node => node.querySelector('.document-tab-connection')?.getAttribute('title') === ${JSON.stringify(connectionName)});
+        tab?.click();
+      })()`);
+      await page.sleep(2200);
+      return page.evaluate(`({
+        crashed: document.body.textContent.includes('工作台暂时无法显示'),
+        connection: document.querySelector('.app-header .connection-select')?.textContent || '',
+        readonly: Boolean(document.querySelector('.app-header .connection-readonly-tag')),
+        active: document.querySelector('.document-tab.is-sql.is-active')?.textContent || ''
+      })`);
+    };
+    const toSeed = await crossConnection(SEED_CONNECTION_NAME);
+    check('点另一条连接的标签时连接一起切过去且不崩溃',
+      !toSeed.crashed && toSeed.connection.includes(SEED_CONNECTION_NAME) && !toSeed.readonly && toSeed.active.includes(SEED_CONNECTION_NAME), JSON.stringify(toSeed));
+    const backToReadonly = await crossConnection(SEED_READONLY_CONNECTION_NAME);
+    check('再点回只读连接的标签时连接切回',
+      !backToReadonly.crashed && backToReadonly.connection.includes(SEED_READONLY_CONNECTION_NAME) && backToReadonly.readonly, JSON.stringify(backToReadonly));
+
     // 主题 × 断点扫描。前面每一屏都是在 1440px 的浅色下量的，而这个界面有暗色开关和四档
     // 断点（styles.css 里的 1199 / 1099 / 860 / 640），也就是说另外七种组合从没被跑过 ——
     // 而「窄屏下头部把按钮挤成两行」「暗色下某块忘了上色」正是这类只能自己用到才发现的问题。

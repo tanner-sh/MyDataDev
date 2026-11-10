@@ -24,7 +24,7 @@
   --code-comment: #6b7280;
   --code-operator: #57606a;
   --code-function: #6639ba;
-  --code-type: #b76508;
+  --code-type: #a35a07; /* 活动行（浅蓝底）上也要过 4.5:1，原来的 #b76508 只有 4.07 */
 
   /*
     尺度令牌。之前只有颜色是令牌化的，间距、圆角、字号各处硬编码，量出来是 18 种间距、
@@ -5872,3 +5872,37 @@ body[data-session-locked="true"] .ant-dropdown { display: none; }
 .schema-object-workspace { grid-template-rows: 54px minmax(0, 1fr); }
 .schema-object-workspace .workspace-toolbar .toolbar-title { min-width: 0; }
 .schema-object-document-tabs > .ant-tabs-body-holder > .ant-tabs-body > .ant-tabs-content > .ant-tabs-tabpane { height: 100%; overflow: auto; padding-bottom: var(--space-3); }
+
+/* 标签上的连接标记：名字是弱化的灰底小字，生产是红底，不可用是警告色。高度与标签文字齐平，不撑高标签。 */
+.document-tab-connection,
+.document-tab-production {
+  flex: 0 0 auto;
+  max-width: 120px;
+  padding: 0 4px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-tab-connection {
+  color: var(--text-secondary);
+  background: rgb(127 127 127 / 12%);
+}
+
+.document-tab-connection.is-unavailable {
+  color: #ad4e00;
+  background: #fff7e6;
+}
+
+.document-tab-production {
+  color: #ffffff;
+  background: #cf1322;
+}
+
+:root[data-theme="dark"] .document-tab-connection.is-unavailable {
+  color: #ffc069;
+  background: rgb(250 173 20 / 16%);
+}

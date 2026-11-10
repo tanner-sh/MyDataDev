@@ -43,6 +43,11 @@ type AppHeaderProps = {
   toolbarSlotRef?: (element: HTMLDivElement | null) => void;
   /** 紧挨连接选择器的位置，放 SQL 标签的 Schema：连接和 Schema 一起回答「在哪执行」。 */
   contextSlotRef?: (element: HTMLDivElement | null) => void;
+  /**
+   * 当前标签绑定的连接已不可用：选择器不显示「当前连接」（那不是这个标签的连接，显示出来会被当成是），
+   * 而是空着提示去选一条 —— 在这里选就是给这个标签换绑。
+   */
+  tabConnectionUnavailable?: boolean;
 };
 
 export const AppHeader = memo(function AppHeader({
@@ -59,7 +64,8 @@ export const AppHeader = memo(function AppHeader({
   onOpenBackgroundTasks,
   onToggleTheme,
   toolbarSlotRef,
-  contextSlotRef
+  contextSlotRef,
+  tabConnectionUnavailable = false
 }: AppHeaderProps) {
   const connectionOptions = useMemo(() => {
     const favorites = new Set(favoriteConnectionIds);
@@ -105,8 +111,8 @@ export const AppHeader = memo(function AppHeader({
         <Select
           variant="borderless"
           className="connection-select"
-          value={selected?.id}
-          placeholder="选择数据库连接"
+          value={tabConnectionUnavailable ? undefined : selected?.id}
+          placeholder={tabConnectionUnavailable ? '为这个标签选择连接' : '选择数据库连接'}
           loading={connectionsLoading}
           optionLabelProp="label"
           options={connectionOptions}

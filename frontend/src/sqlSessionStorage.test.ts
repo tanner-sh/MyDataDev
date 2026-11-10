@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SqlTab } from './types';
-import { MAX_STORED_SQL_TABS, normalizeSqlSession, readSqlSession, sqlSessionStorageKey, writeSqlSession, rememberClosedSqlTab, restoreClosedSqlTab } from './sqlSessionStorage';
+import { MAX_STORED_SQL_TABS, migrateLegacySqlSessions, normalizeSqlSession, readGlobalSqlSession, readSqlSession, sqlSessionStorageKey, writeGlobalSqlSession, writeSqlSession, rememberClosedSqlTab, restoreClosedSqlTab } from './sqlSessionStorage';
 
 function tab(id: string, sql = `select '${id}'`): SqlTab {
   return {
@@ -20,8 +20,14 @@ function memoryStorage(initial: Record<string, string> = {}) {
   return {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => { values.set(key, value); },
+    key: (index: number) => [...values.keys()][index] ?? null,
+    get length() { return values.size; },
     value: (key: string) => values.get(key)
   };
+}
+
+function plain(id: string, sql: string, dirty = false): SqlTab {
+  return { id, title: id, sql, dirty, results: [], message: '' };
 }
 
 describe('SQL session storage', () => {
@@ -118,5 +124,54 @@ describe('sql session delimiter', () => {
     expect(session?.tabs[0].kind).toBeUndefined();
     expect(session?.tabs[0].commandOptions).toBeUndefined();
     expect(session?.tabs[1]).toMatchObject({ kind: 'command', title: '命令窗口 2' });
+  });
+
+  it('keeps each tab bound to its own connection in the global session', () => {
+    const storage = memoryStorage();
+    writeGlobalSqlSession([{ ...tab('a'), connectionId: 1, executionSchema: 'S2' }, { ...tab('b'), connectionId: 2 }], 'b', storage, 'alice');
+    const restored = readGlobalSqlSession(storage, 'alice');
+    expect(restored?.tabs.map((item) => [item.id, item.connectionId, item.executionSchema])).toEqual([['a', 1, 'S2'], ['b', 2, undefined]]);
+    expect(restored?.activeTabId).toBe('b');
+    expect(readGlobalSqlSession(storage, 'bob')).toBeUndefined();
+  });
+
+  it('merges the per-connection sessions of older versions, preferred connection first', () => {
+    const storage = memoryStorage();
+    writeSqlSession(2, [plain('query-1', 'select 2'), plain('query-2', 'select 22', true)], 'query-2', storage, 'alice');
+    writeSqlSession(1, [plain('query-1', 'select 1')], 'query-1', storage, 'alice');
+    writeSqlSession(null, [plain('query-1', 'select 0')], 'query-1', storage, 'alice');
+    writeSqlSession(3, [plain('other-user', 'select 3')], 'other-user', storage, 'bob');
+    rememberClosedSqlTab(2, plain('closed', 'select closed'), 'alice', storage);
+
+    const migrated = migrateLegacySqlSessions(2, 30, storage, 'alice');
+    expect(migrated?.tabs.map((item) => [item.id, item.connectionId, item.sql])).toEqual([
+      ['2:query-1', 2, 'select 2'],
+      ['2:query-2', 2, 'select 22'],
+      ['1:query-1', 1, 'select 1'],
+      ['u:query-1', undefined, 'select 0']
+    ]);
+    expect(migrated?.activeTabId).toBe('2:query-2');
+    // 旧数据保留，迁移出问题还能找回。
+    expect(readSqlSession(2, storage, 'alice')?.tabs).toHaveLength(2);
+  });
+
+  it('moves overflowing drafts to recently closed instead of dropping them', () => {
+    const storage = memoryStorage();
+    writeSqlSession(1, [plain('keep', 'select 1 as val'), plain('mine', 'select mine')], 'keep', storage, 'alice');
+    writeSqlSession(2, [plain('blank', 'select 1 as val'), plain('draft', 'select draft', true)], 'draft', storage, 'alice');
+    const migrated = migrateLegacySqlSessions(1, 3, storage, 'alice');
+    expect(migrated?.tabs.map((item) => item.id)).toEqual(['1:keep', '1:mine', '2:draft']);
+    expect(migrated?.activeTabId).toBe('1:keep');
+    expect(restoreClosedSqlTab(2, 'alice', storage)).toBeUndefined();
+
+    const tight = memoryStorage();
+    writeSqlSession(1, [plain('a', 'select a')], 'a', tight, 'alice');
+    writeSqlSession(2, [plain('b', 'select b')], 'b', tight, 'alice');
+    expect(migrateLegacySqlSessions(1, 1, tight, 'alice')?.tabs.map((item) => item.id)).toEqual(['1:a']);
+    expect(restoreClosedSqlTab(2, 'alice', tight)?.sql).toBe('select b');
+  });
+
+  it('returns nothing to migrate when no older session exists', () => {
+    expect(migrateLegacySqlSessions(1, 30, memoryStorage(), 'alice')).toBeUndefined();
   });
 });

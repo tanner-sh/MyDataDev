@@ -9,8 +9,14 @@ import { createCommandTab, createSqlTab } from './utils';
  * 否则最后几个字会丢。</p>
  */
 
-/** 同时打开的 SQL 标签上限：每个标签都带着结果，开太多会把浏览器内存吃满。 */
-export const MAX_SQL_TABS = 20;
+/** 标签与当前标签：会话存储读出来、迁移出来的都是这个形状。 */
+export type SqlSessionSnapshot = { tabs: SqlTab[]; activeTabId: string };
+
+/**
+ * 同时打开的 SQL 标签上限：每个标签都带着结果，开太多会把浏览器内存吃满。
+ * 所有连接共用一条标签条之后，从每连接 20 个改为全部 30 个。
+ */
+export const MAX_SQL_TABS = 30;
 
 export const SQL_TAB_LIMIT_MESSAGE = `最多同时打开 ${MAX_SQL_TABS} 个 SQL 标签页，请先关闭不需要的标签页。`;
 
@@ -38,7 +44,45 @@ export function closeSqlTabIn(tabs: SqlTab[], targetId: string, activeId: string
   if (targetIndex < 0) return { tabs, activeId };
   const nextTabs = tabs.filter((tab) => tab.id !== targetId);
   if (targetId !== activeId) return { tabs: nextTabs, activeId };
-  return { tabs: nextTabs, activeId: (nextTabs[Math.max(0, targetIndex - 1)] ?? nextTabs[0]).id };
+  // 标签来自多条连接时，先落到同一条连接的邻居上：关一个标签不该顺带把整个工作台切到另一个库。
+  const connectionId = tabs[targetIndex].connectionId;
+  const sameConnection = (tab: SqlTab) => tab.connectionId === connectionId;
+  const left = nextTabs.slice(0, targetIndex).reverse().find(sameConnection);
+  const right = nextTabs.slice(targetIndex).find(sameConnection);
+  const fallback = nextTabs[Math.max(0, targetIndex - 1)] ?? nextTabs[0];
+  return { tabs: nextTabs, activeId: (left ?? right ?? fallback).id };
+}
+
+/**
+ * 给还没有连接的标签补上连接（升级前「未选连接」的会话、迁移前的默认标签）；没有要改的就原样返回。
+ * 不动 dirty：这是补缺省值，不是用户改了标签。
+ */
+export function bindTabConnections(tabs: SqlTab[], connectionId: number | undefined): SqlTab[] {
+  if (connectionId == null || tabs.every((tab) => tab.connectionId != null)) return tabs;
+  return tabs.map((tab) => tab.connectionId != null ? tab : { ...tab, connectionId });
+}
+
+/**
+ * 把一个查询标签换绑到另一条连接（顶栏连接选择器）。SQL 原样保留；Schema 清掉，等新连接的元数据回来
+ * 再钉上它的默认值；上一条连接的结果、提示、分页一并清空 —— 留着会让人以为那是新连接上跑出来的。
+ */
+export function rebindSqlTab(tab: SqlTab, connectionId: number): SqlTab {
+  if (tab.connectionId === connectionId) return tab;
+  return {
+    ...tab,
+    connectionId,
+    executionSchema: undefined,
+    results: [],
+    activeResultKey: undefined,
+    message: '',
+    statusKind: undefined,
+    errorDetail: undefined
+  };
+}
+
+/** 某条连接最近（最靠右）的一个查询标签；没有返回 undefined。 */
+export function lastSqlTabOf(tabs: SqlTab[], connectionId: number): SqlTab | undefined {
+  return [...tabs].reverse().find((tab) => tab.connectionId === connectionId);
 }
 
 /** 复制一个标签：类型、命令窗口选项、分隔方式跟着走，结果不带（副本还没执行过）。 */
@@ -65,9 +109,11 @@ export function duplicateSqlTabOf(source: SqlTab, index: number, liveSql?: strin
  *
  * <p>不动 dirty：这是补一个缺省值，不是用户改了标签。</p>
  */
-export function pinTabSchemas(tabs: SqlTab[], schema: string | undefined): SqlTab[] {
-  if (!schema || tabs.every((tab) => tab.executionSchema)) return tabs;
-  return tabs.map((tab) => tab.executionSchema ? tab : { ...tab, executionSchema: schema });
+export function pinTabSchemas(tabs: SqlTab[], schema: string | undefined, connectionId?: number): SqlTab[] {
+  // 只钉这条连接的标签：别的连接的标签拿这条连接的 Schema 名毫无意义，它们等自己的连接被选中时再钉。
+  const pinnable = (tab: SqlTab) => !tab.executionSchema && (connectionId == null || tab.connectionId === connectionId);
+  if (!schema || !tabs.some(pinnable)) return tabs;
+  return tabs.map((tab) => pinnable(tab) ? { ...tab, executionSchema: schema } : tab);
 }
 
 /** 重命名：去掉首尾空白，空名返回 null（由调用方报错），最长 80 个字符。 */
