@@ -103,3 +103,37 @@ export function wheelToHorizontal(deltaX: number, deltaY: number, deltaMode = 0)
   // deltaMode 1 是按行计（Firefox 的鼠标滚轮），一行折成 40px。
   return deltaMode === 1 ? deltaY * 40 : deltaY;
 }
+
+/** 标签上那一小块连接信息：名字（只在标签来自多条连接时写）、生产标记、连接不可用。 */
+export type TabConnectionBadge = {
+  /** 连接名，可能已从中间截断；只有一条连接时为空，免得每个标签都多一截一模一样的字。 */
+  name?: string;
+  /** 完整连接名，用于悬停提示。 */
+  fullName?: string;
+  production: boolean;
+  /** 连接被删了或没权限了：标签留着，但不能执行，要换绑。 */
+  unavailable: boolean;
+};
+
+type BadgeConnection = { id: number; name: string; environment?: string };
+
+/** 标签条上的标签是不是来自不止一条连接。 */
+export function tabsSpanConnections(connectionIds: Array<number | undefined>): boolean {
+  return new Set(connectionIds.filter((id): id is number => id != null)).size > 1;
+}
+
+/**
+ * 一个标签的连接标记。生产连接无论如何都标出来：不同连接的标签挤在一条上以后，
+ * 「我以为这是测试库的标签」是最容易出事的误会。
+ */
+export function tabConnectionBadge(connectionId: number | undefined, connections: BadgeConnection[], showName: boolean): TabConnectionBadge {
+  if (connectionId == null) return { production: false, unavailable: false };
+  const connection = connections.find((item) => item.id === connectionId);
+  if (!connection) return { production: false, unavailable: true, name: showName ? '连接不可用' : undefined };
+  return {
+    name: showName ? middleEllipsis(connection.name, 14) : undefined,
+    fullName: connection.name,
+    production: connection.environment === 'prod',
+    unavailable: false
+  };
+}

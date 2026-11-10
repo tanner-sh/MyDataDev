@@ -48,7 +48,8 @@ import type {
 } from './sqlEditorTypes';
 import { exportFileExtension, inferSqlTargetParts, parseQualifiedTableName } from './queryResultExport';
 import { resolveSqlExecutionSchema } from './sqlExecutionContext';
-import { pinTabSchemas } from './sqlTabs';
+import { lastSqlTabOf, patchSqlTab, pinTabSchemas, rebindSqlTab, withLiveSql } from './sqlTabs';
+import { tabConnectionBadge, tabsSpanConnections } from './documentTabs';
 import { readFavoriteConnectionIds, readRecentCommandIds, writeFavoriteConnectionIds, writeRecentCommandIds } from './workspacePreferences';
 import { enforceResultBudget } from './resultRetention';
 import {
@@ -175,6 +176,11 @@ const TableWorkspace = lazy(() => import('./components/TableWorkspace').then((mo
 const ErDiagram = lazy(() => import('./components/ErDiagram').then((module) => ({ default: module.ErDiagram })));
 const TableLifecyclePanel = lazy(() => import('./components/TableLifecyclePanel').then((module) => ({ default: module.TableLifecyclePanel })));
 
+/** 当前查询标签绑定的连接被删了或没有权限时的提示。 */
+const TAB_CONNECTION_UNAVAILABLE_MESSAGE = '这个查询标签绑定的连接已不可用（被删除或没有权限）。请用顶栏的连接选择器把它换绑到一条可用的连接后再执行。';
+/** 切换连接之后落在哪个标签上：指定的查询标签、指定的表 / 对象页签，或者这条连接最近的查询标签（没有就新开）。 */
+type TabActivation = { kind: 'sql'; tabId: string } | { kind: 'document'; key: string } | { kind: 'connection' };
+
 export default function App({ workspaceOwner = 'local', workspaceLocked = false }: { workspaceOwner?: string; workspaceLocked?: boolean }) {
   const wasWorkspaceLocked = useRef(workspaceLocked);
   const [baseConnections, setConnections] = useState<Connection[]>([]);
@@ -242,11 +248,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   // SQL 标签页这组状态在 hooks/useSqlTabs（规则在 sqlTabs.ts，有测试）。
   const {
     sqlTabs, setSqlTabs, sqlTabsRef, activeSqlTabId, setActiveSqlTabId, activeSqlTabIdRef, activeSqlTab,
-    sqlSessionRevision, sqlSessionConnectionIdRef, draftSaveState, activateSqlSession, updateSqlTab, updateActiveSqlTab, openSqlTab,
+    draftSaveState, updateSqlTab, updateActiveSqlTab, openSqlTab,
     addSqlTab, addCommandTab, duplicateSqlTab, closeSqlTab, reopenSqlTab, renameSqlTab
   } = useSqlTabs({
     workspaceOwner,
-    connectionId: selected?.id ?? null,
+    currentConnectionId: selected?.id ?? null,
+    legacyPreferredConnectionId: readSelectedConnectionId(),
     editorRef,
     toast: toastApi,
     modal: modalApi,
@@ -326,6 +333,21 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   useEffect(() => { setScriptTransactionMode('AUTO'); setScriptEndAction('ROLLBACK'); }, [selected?.id]);
   const exportAbortRef = useRef<AbortController | null>(null);
   const sqlBusyRef = useRef(false);
+  /** applyConnectionSelection 记下的「切过去之后落在哪个标签」，等 selected 真的换过来再执行。 */
+  const pendingActivationRef = useRef<{ connectionId: number; activation: TabActivation } | null>(null);
+  /**
+   * 每调一次 applyConnectionSelection 就加一。落标签的 effect 同时依赖它和 selected：保存当前连接的设置时
+   * setSelected 可能拿到同一个对象、selected 不变，只靠 selected 的话那一步永远不执行，
+   * pendingActivationRef 一直挂着，「标签跟连接」的同步也就一直被它挡住。
+   */
+  const [connectionSelectionSeq, setConnectionSelectionSeq] = useState(0);
+  /** 当前查询标签与当前连接对不上时，同一对（标签, 连接）只尝试自动切一次，免得被拦时每次渲染都弹提示；对上了就清掉。 */
+  const tabConnectionSyncRef = useRef('');
+  /**
+   * 这一次提交里刚落过标签。两个 effect 在同一次提交里先后执行：落标签那个刚 setActiveSqlTabId，
+   * 同步那个读到的还是旧的当前标签，会以为「标签和连接对不上」又切回去 —— 两边来回切，React 报更新深度超限。
+   */
+  const activatedThisCommitRef = useRef(false);
   const tableDocumentKey = selected && activeTable ? resourceDocumentKey(selected.id, 'table', activeTable.schemaName, activeTable.tableName) : '';
   const objectDocumentKey = selected && activeObjectTarget ? resourceDocumentKey(selected.id, 'object', activeObjectTarget.schemaName, activeObjectTarget.name) : '';
   // 生产确认的一组状态搬进了 hooks/useProductionConfirmation：它是「一组状态 + 一条异步流程」，
@@ -378,9 +400,70 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   // 否则它们会一起跟着资源管理器变，「每个标签独立 Schema」就只对手动选过的标签成立（规则见 pinTabSchemas）。
   // 切换连接时 metadata 先清空再加载，explorerSchema 为 undefined 的那一段不会把上一条连接的 Schema 钉到新标签上。
   useEffect(() => {
-    if (!explorerSchema) return;
-    setSqlTabs((tabs) => pinTabSchemas(tabs, explorerSchema));
-  }, [explorerSchema, sqlTabs, setSqlTabs]);
+    if (!explorerSchema || !selected) return;
+    // 只钉当前连接的标签：别的连接的标签拿这条连接的 Schema 名毫无意义。
+    setSqlTabs((tabs) => pinTabSchemas(tabs, explorerSchema, selected.id));
+  }, [explorerSchema, selected, sqlTabs, setSqlTabs]);
+  // 一个查询标签绑定的连接不是当前连接（又没有被拦）时，执行会落到错的库上：
+  // 执行入口都会先查它（见 requireTabConnection），SqlWorkspace 也据此禁用执行并说明原因。
+  const sqlTabConnectionMismatch = Boolean(selected && activeSqlTab.connectionId != null && activeSqlTab.connectionId !== selected.id);
+  // 对不上通常是标签的连接没了；连接还在却没切过去，只能是切换被拦（事务开着、有操作在执行），提示要说成那一种。
+  const sqlTabBoundConnection = sqlTabConnectionMismatch ? connections.find((item) => item.id === activeSqlTab.connectionId) : undefined;
+  const sqlTabMismatchMessage = sqlTabBoundConnection && selected
+    ? `这个查询标签绑定的是连接「${sqlTabBoundConnection.name}」，当前连接是「${selected.name}」。结束当前事务或等操作完成后，再点一下这个标签切过去。`
+    : TAB_CONNECTION_UNAVAILABLE_MESSAGE;
+
+  // 连接切过来之后落标签（applyConnectionSelection 记下的那一步）。必须等 selected 换好：
+  // 打开表、读对象详情、新开标签都读 selected，在切换的同一个事件里做会读到上一条连接。
+  useEffect(() => {
+    const pending = pendingActivationRef.current;
+    if (!pending || selected?.id !== pending.connectionId) return;
+    pendingActivationRef.current = null;
+    activatedThisCommitRef.current = true;
+    const activate = (tabId: string) => {
+      activeSqlTabIdRef.current = tabId;
+      setActiveSqlTabId(tabId);
+      setMode('sql');
+    };
+    const { activation } = pending;
+    if (activation.kind === 'document') {
+      const document = resources.documents.find((item) => item.key === activation.key);
+      if (document) activateResourceDocument(document);
+      return;
+    }
+    if (activation.kind === 'sql' && sqlTabsRef.current.some((tab) => tab.id === activation.tabId)) {
+      activate(activation.tabId);
+      return;
+    }
+    const current = sqlTabsRef.current.find((tab) => tab.id === activeSqlTabIdRef.current);
+    if (current?.connectionId === pending.connectionId) { setMode('sql'); return; }
+    const last = lastSqlTabOf(sqlTabsRef.current, pending.connectionId);
+    if (last) { activate(last.id); return; }
+    openSqlTab(createSqlTab, pending.connectionId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, connectionSelectionSeq]);
+
+  // 当前查询标签换成了另一条连接的（关掉了这条连接的最后一个标签、找回了别的标签……）：跟过去。
+  // 用户点标签、按快捷键走的是 activateSqlTab，在那里先过拦截；这里只兜其余的情况。
+  useEffect(() => {
+    if (activatedThisCommitRef.current) { activatedThisCommitRef.current = false; return; }
+    if (mode !== 'sql' || !selected || pendingActivationRef.current) return;
+    // 读 ref 而不是这次渲染的 activeSqlTab：同一次提交里前面的 effect 可能刚换过当前标签。
+    const current = sqlTabsRef.current.find((tab) => tab.id === activeSqlTabIdRef.current);
+    const tabConnectionId = current?.connectionId;
+    if (!current || tabConnectionId == null) return;
+    // 对上了就清掉记号：之后同一个标签再和这条连接对不上（例如关掉了别的标签又落回它），还要再跟一次。
+    if (tabConnectionId === selected.id) { tabConnectionSyncRef.current = ''; return; }
+    const marker = `${current.id}:${selected.id}`;
+    if (tabConnectionSyncRef.current === marker) return;
+    tabConnectionSyncRef.current = marker;
+    const connection = connections.find((item) => item.id === tabConnectionId);
+    if (!connection) return; // 连接不可用：留在原连接，执行由 sqlTabConnectionMismatch 拦住
+    const blocker = connectionSwitchBlocker();
+    if (blocker) { showInfo(blocker); return; }
+    applyConnectionSelection(connection, { kind: 'sql', tabId: current.id });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, selected, connectionSelectionSeq, activeSqlTab.id, activeSqlTab.connectionId, connections]);
   const currentBackupTable = useMemo<ActiveTable | null>(() => {
     const fallbackNamespace = metadata?.selectedSchema || metadata?.currentSchema || undefined;
     if (mode === 'table' && activeTable) {
@@ -654,6 +737,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       showInfo('请先选择一个数据库连接');
       return;
     }
+    if (!requireTabConnection()) return;
     const target = sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
@@ -804,9 +888,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
         const rows = loadedRows.map((connection) => ({ ...connection, permissions: permissions[String(connection.id)] || [] }));
         setConnections(rows);
         setSelected((current: Connection | null) => {
+          // 「当前连接」跟着当前标签走：刷新页面后先回到当前标签绑定的那条连接。
+          const activeTabConnectionId = sqlTabsRef.current.find((tab) => tab.id === activeSqlTabIdRef.current)?.connectionId;
           const target = resolveSelectedConnection(rows, [
             options.preferredConnectionId,
             current?.id,
+            activeTabConnectionId,
             readSelectedConnectionId()
           ]);
           writeSelectedConnectionId(target?.id);
@@ -986,7 +1073,6 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           applyConnectionSelection(nextConnection);
         } else {
           invalidateConnectionRequests();
-          activateSqlSession(null, true);
           setSelected(null);
           writeSelectedConnectionId(null);
           setMetadata(null);
@@ -1009,13 +1095,22 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     }
   }
 
-  function applyConnectionSelection(connection: Connection) {
+  /**
+   * 切换「当前连接」。标签不再按连接分组，这里不换标签，只换跟连接走的那些东西（资源管理器、缓存、
+   * 事务状态、后台任务……），然后按 activation 决定落在哪个标签上：
+   * 指定的查询标签、指定的表 / 对象页签，或者（默认）这条连接最近的一个查询标签，没有就新开一个。
+   * 落标签要等 selected 真的换过来之后再做（见 pendingActivationRef 的 effect）—— 打开表、读对象详情都读 selected。
+   */
+  function applyConnectionSelection(connection: Connection, activation: TabActivation = { kind: 'connection' }) {
+    // 编辑器的改动 300ms 后才同步回标签，而 SqlWorkspace 会随连接重建：先把现值写回去，最后几个字才不会丢。
+    flushLiveEditorSql();
+    pendingActivationRef.current = { connectionId: connection.id, activation };
+    setConnectionSelectionSeq((current) => current + 1);
     // Counts belong to one connection; carrying them over would announce the
     // previous connection's jobs as finished on the very first snapshot here.
     resetBackgroundTasks();
     clearMetadataSearchTimer();
     invalidateConnectionRequests();
-    activateSqlSession(connection.id, true);
     setSelected(baseConnections.find(item => item.id === connection.id) ?? connection);
     writeSelectedConnectionId(connection.id);
     setMetadata(null);
@@ -1054,21 +1149,98 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     setObjectDetailLoading(false);
   }
 
+  /**
+   * 离开当前连接之前的两道拦：手动事务开着（服务端空闲 5 分钟会自动回滚，切走后最容易忘了它），
+   * 或者还有操作在执行。返回要提示的话，可以离开时返回 null。
+   */
+  function connectionSwitchBlocker(): string | null {
+    const transactionWarning = transactionLeaveWarning(transactionState);
+    if (transactionWarning) return transactionWarning;
+    if (sqlLoading || tableLoading || objectDetailLoading) {
+      return sqlCancellable
+        ? '请等待当前操作完成后再切换连接，或先点击工具栏的「取消」终止本次执行'
+        : '请等待当前操作完成后再切换连接';
+    }
+    return null;
+  }
+
+  /** 「切到某条连接」（命令面板、连接管理、结构对比……）：落在这条连接最近的查询标签上。 */
   function selectConnection(connection: Connection, onSelected?: () => void) {
     if (selected?.id === connection.id) return;
-    const transactionWarning = transactionLeaveWarning(transactionState);
-    if (transactionWarning) {
-      showInfo(transactionWarning);
-      return;
-    }
-    if (sqlLoading || tableLoading || objectDetailLoading) {
-      showInfo(sqlCancellable
-        ? '请等待当前操作完成后再切换连接，或先点击工具栏的「取消」终止本次执行'
-        : '请等待当前操作完成后再切换连接');
+    const blocker = connectionSwitchBlocker();
+    if (blocker) {
+      showInfo(blocker);
       return;
     }
     applyConnectionSelection(connection);
     onSelected?.();
+  }
+
+  function flushLiveEditorSql() {
+    if (mode !== 'sql') return;
+    const live = editorRef.current?.getValue();
+    const tabId = activeSqlTabIdRef.current;
+    if (live === undefined) return;
+    setSqlTabs((tabs) => withLiveSql(tabs, tabId, live));
+  }
+
+  /**
+   * 切到一个查询标签。标签绑定的是另一条连接时先切连接（同样过事务 / 执行中那两道拦）；
+   * 绑定的连接已经不可用时照样切过去 —— 草稿要看得到，执行由 sqlTabConnectionMismatch 拦着。
+   */
+  function activateSqlTab(tabId: string) {
+    const tab = sqlTabsRef.current.find((item) => item.id === tabId);
+    if (!tab) return;
+    const connection = tab.connectionId == null ? undefined : connections.find((item) => item.id === tab.connectionId);
+    if (!connection || connection.id === selected?.id) {
+      setActiveSqlTabId(tabId);
+      setMode('sql');
+      if (tab.connectionId != null && !connection) showInfo(TAB_CONNECTION_UNAVAILABLE_MESSAGE);
+      return;
+    }
+    const blocker = connectionSwitchBlocker();
+    if (blocker) {
+      showInfo(blocker);
+      return;
+    }
+    applyConnectionSelection(connection, { kind: 'sql', tabId });
+  }
+
+  /** 切到一个表 / 对象页签；页签属于另一条连接时先切连接。 */
+  function activateResourceDocument(document: ResourceDocument) {
+    if (document.connectionId !== selected?.id) {
+      const connection = connections.find((item) => item.id === document.connectionId);
+      if (!connection) { showInfo('这个页签所属的连接已不可用'); return; }
+      const blocker = connectionSwitchBlocker();
+      if (blocker) { showInfo(blocker); return; }
+      applyConnectionSelection(connection, { kind: 'document', key: document.key });
+      return;
+    }
+    if (document.kind === 'table') void applyOpenTable(document.object);
+    else if (document.kind === 'schemaObject') { setSchemaObjectDocumentKey(document.key); setMode('schemaObject'); }
+    else void loadObjectDetail(document.object);
+  }
+
+  /**
+   * 顶栏的连接选择器：它显示的是当前标签的连接，所以在查询标签上换连接 = 把这个标签换绑到新连接
+   * （SQL 留着，Schema 与上一条连接的结果清掉，见 rebindSqlTab）。表 / 对象页签绑定的是一个具体对象，
+   * 换不了连接，按「切到那条连接」处理。
+   */
+  function chooseConnectionFromHeader(connection: Connection) {
+    if (mode !== 'sql') { selectConnection(connection); return; }
+    const tab = activeSqlTab;
+    if (tab.connectionId === connection.id && selected?.id === connection.id) return;
+    if (selected?.id !== connection.id) {
+      const blocker = connectionSwitchBlocker();
+      if (blocker) { showInfo(blocker); return; }
+    }
+    const live = editorRef.current?.getValue();
+    setSqlTabs((tabs) => tabs.map((item) => item.id === tab.id
+      ? rebindSqlTab(live !== undefined && live !== item.sql ? patchSqlTab(item, { sql: live }) : item, connection.id)
+      : item));
+    // 标签原来绑的连接不可用、换绑到的正是当前连接：不用再切。
+    if (selected?.id === connection.id) return;
+    applyConnectionSelection(connection, { kind: 'sql', tabId: tab.id });
   }
 
   function editConnection(connection: Connection) {
@@ -1346,8 +1518,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   }
 
   /** 在新标签页里打开一段 SQL，保留当前标签的草稿。 */
-  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[], executionSchema?: string) {
-    openSqlTab((index) => ({ ...createSqlTab(index), title: title.slice(0, 80), sql, dirty: true, parameters, executionSchema }));
+  function openSqlInNewTab(sql: string, title: string, parameters?: SqlParameterDefinition[], executionSchema?: string, connectionId?: number) {
+    return openSqlTab((index) => ({ ...createSqlTab(index), title: title.slice(0, 80), sql, dirty: true, parameters, executionSchema }), connectionId);
   }
 
   function objectCacheKey(connectionId: number, object: Pick<DbObject, 'schemaName' | 'name'>) {
@@ -1444,12 +1616,25 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
 
   const sqlParameters = useSqlParameters(`${selected?.id}:${activeSqlTab.id}`);
 
+  /**
+   * 当前查询标签绑定的连接必须就是当前连接，否则 SQL 会落到另一个库上。正常切标签时两者总是一致的；
+   * 对不上只会是标签绑定的连接被删了或没权限了 —— 这时拒绝执行，让用户先用顶栏换绑。
+   */
+  function requireTabConnection(): boolean {
+    if (!sqlTabConnectionMismatch) return true;
+    const message = sqlTabMismatchMessage;
+    updateActiveSqlTab({ message, statusKind: 'error', errorDetail: message });
+    toastApi.error(message);
+    return false;
+  }
+
   async function execute(path = '/sql/execute', productionConfirmation?: string, liveSql?: string) {
     if (!selected) {
       updateActiveSqlTab({ message: '请先选择一个数据库连接', statusKind: 'info' });
       showInfo('请先选择一个数据库连接');
       return;
     }
+    if (!requireTabConnection()) return;
     const target = sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
       updateActiveSqlTab({ message: '请输入要执行的 SQL', statusKind: 'info' });
@@ -1836,6 +2021,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       showInfo('请先选择数据库连接');
       return;
     }
+    if (!requireTabConnection()) return;
     const productionConfirmation = await requestProductionConfirmation('开启手动事务');
     if (selected.environment === 'prod' && !productionConfirmation) return;
     setTransactionState((current) => ({ ...current, pending: true }));
@@ -1978,6 +2164,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       showInfo('请先选择一个数据库连接');
       return;
     }
+    if (!requireTabConnection()) return;
     // 结果区的「重新执行原 SQL 导出」给的是产生那份结果的 SQL，不看编辑器此刻的选中与内容。
     const target = exactSql?.trim() ? { sql: exactSql, selected: false, baseOffset: 0 } : sqlExecutionTarget(liveSql);
     if (!target.sql.trim()) {
@@ -2212,7 +2399,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       const target = sqlTabs[shortcut.index];
       if (!target) return;
       event.preventDefault();
-      setActiveSqlTabId(target.id);
+      activateSqlTab(target.id);
       return;
     }
     if (shortcut.kind === 'commit-table-changes') {
@@ -2985,7 +3172,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   const toggleExplorerFromHeader = useStableEvent(() => compactLayout
     ? setMobileExplorerOpen((current) => !current)
     : layoutPreferences.toggleExplorer());
-  const selectConnectionFromHeader = useStableEvent((connection: Connection) => selectConnection(connection));
+  const selectConnectionFromHeader = useStableEvent((connection: Connection) => chooseConnectionFromHeader(connection));
   const openManagementFromHeader = useStableEvent(() => openManagement('connections'));
   const openBackgroundTasksFromHeader = useStableEvent((kind: BackgroundTaskKind) => {
     const target = backgroundTaskTarget(kind);
@@ -3000,10 +3187,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     const connection = target ? connections.find(item => item.id === target.connectionId) : selected;
     if (!connection) { showInfo('目标连接不可用，请重新对比。'); return; }
     if (connection.id !== selected?.id) {
-      selectConnection(connection, () => {
-        setActiveDrawer(null);
-        openSqlInNewTab(sql, title, undefined, target?.schemaName);
-      });
+      const blocker = connectionSwitchBlocker();
+      if (blocker) { showInfo(blocker); return; }
+      setActiveDrawer(null);
+      // 脚本开在目标连接的新标签里，再切到那条连接上。
+      const tabId = openSqlInNewTab(sql, title, undefined, target?.schemaName, connection.id);
+      if (tabId) applyConnectionSelection(connection, { kind: 'sql', tabId });
       return;
     }
     setActiveDrawer(null);
@@ -3033,8 +3222,9 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     });
   });
   const openInCommandTabEvent = useStableEvent((sql: string) => addCommandTab(sql, activeSqlTab.commandOptions));
-  const changeSqlEvent = useStableEvent((connectionId: number | null, tabId: string, sql: string) => {
-    if (sqlSessionConnectionIdRef.current !== connectionId) return;
+  const changeSqlEvent = useStableEvent((_connectionId: number | null, tabId: string, sql: string) => {
+    // 标签已经关掉了（编辑器的改动 300ms 后才到）就不写回。
+    if (!sqlTabsRef.current.some((tab) => tab.id === tabId)) return;
     updateSqlTab(tabId, { sql });
   });
   const mountSqlEditorEvent = useStableEvent<Parameters<SqlEditorOnMount>, ReturnType<SqlEditorOnMount>>((...args) => handleEditorMount(...args));
@@ -3437,9 +3627,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     和操作按钮，一行装下，省掉 42px。三个工作区的工具栏结构相同，标签的位置不会随
     模式跳动。
   */
-  const connectionDocuments = useMemo(
-    () => selected ? resources.documents.filter(document => document.connectionId === selected.id) : [],
-    [resources.documents, selected]
+  // 标签不再按连接分组：所有连接的查询标签和表 / 对象页签都在这一条上。来自不止一条连接时标签上写连接名，
+  // 生产连接一律标红（见 tabConnectionBadge）。
+  const connectionDocuments = resources.documents;
+  const tabsShowConnection = useMemo(
+    () => tabsSpanConnections([...sqlTabs.map(tab => tab.connectionId), ...connectionDocuments.map(document => document.connectionId)]),
+    [connectionDocuments, sqlTabs]
   );
   const documentTabItems = useMemo(() => connectionDocuments.map(document => ({
     key: document.key,
@@ -3447,12 +3640,16 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
     schemaName: document.object.schemaName,
     name: document.object.name,
     kindLabel: document.kind === 'schemaObject' ? schemaObjectKindLabel(document.object.type as SchemaObjectKind) : undefined,
-    dirty: document.dirty
-  })), [connectionDocuments]);
+    dirty: document.dirty,
+    connection: tabConnectionBadge(document.connectionId, connections, tabsShowConnection)
+  })), [connectionDocuments, connections, tabsShowConnection]);
   // ER 图没有对应的标签，此时没有任何一个标签是激活的。
   const activeDocumentTabKey = mode === 'sql' ? 'sql' : mode === 'table' ? tableDocumentKey : mode === 'object' ? objectDocumentKey : mode === 'schemaObject' ? schemaObjectDocumentKey : '';
   const activeManagementNavItem = activeDrawer ? managementNavItemOf(activeDrawer, isCurrentUserAdmin(), isAuthenticationEnabled()) : undefined;
-  const sqlDocumentTabs = useMemo(() => sqlTabs.map(tab => ({ id: tab.id, title: tab.title, dirty: tab.dirty, command: isCommandTab(tab) })), [sqlTabs]);
+  const sqlDocumentTabs = useMemo(() => sqlTabs.map(tab => ({
+    id: tab.id, title: tab.title, dirty: tab.dirty, command: isCommandTab(tab),
+    connection: tabConnectionBadge(tab.connectionId, connections, tabsShowConnection)
+  })), [connections, sqlTabs, tabsShowConnection]);
   const sqlTabMenu: MenuProps = {
     items: [
       { key: 'new-command', icon: <CodeOutlined />, label: '新建命令窗口' },
@@ -3480,17 +3677,14 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
       disabled={tableLoading || objectDetailLoading}
       addSqlTabHint={`新建 SQL 标签页（${SHORTCUT_HINTS.newSqlTab}），${SHORTCUT_HINTS.selectSqlTab} 切换标签页`}
       sqlTabMenu={sqlTabMenu}
-      onSelectSql={tabId => { setActiveSqlTabId(tabId); setMode('sql'); }}
+      onSelectSql={tabId => activateSqlTab(tabId)}
       onAddSql={() => { addSqlTab(); setMode('sql'); }}
       // 关的是编辑器里那个标签时，带上编辑器里的现值：草稿要 300ms 才同步回标签，关闭后还得能「找回」。
       onCloseSql={tabId => closeSqlTab(tabId, mode === 'sql' && tabId === activeSqlTab.id ? editorRef.current?.getValue() : undefined)}
       onRenameSql={renameSqlTab}
       onSelect={key => {
         const document = connectionDocuments.find(item => item.key === key);
-        if (!document) return;
-        if (document.kind === 'table') void applyOpenTable(document.object);
-        else if (document.kind === 'schemaObject') { setSchemaObjectDocumentKey(document.key); setMode('schemaObject'); }
-        else void loadObjectDetail(document.object);
+        if (document) activateResourceDocument(document);
       }}
       onClose={key => {
         const document = connectionDocuments.find(item => item.key === key);
@@ -3557,6 +3751,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           onOpenBackgroundTasks={openBackgroundTasksFromHeader}
           onToggleTheme={toggleThemeFromHeader}
           toolbarSlotRef={setHeaderToolbarSlot}
+          tabConnectionUnavailable={mode === 'sql' && sqlTabConnectionMismatch}
           contextSlotRef={setHeaderContextSlot}
         />
 
@@ -3593,7 +3788,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
             ) : mode === 'sql' ? (
               <SqlWorkspace
                 draftSaveState={draftSaveState}
-                key={`${selected?.id ?? 'unselected'}:${sqlSessionRevision}`}
+                key={selected?.id ?? 'unselected'}
                 aiAvailable={isAiAvailableForConnection(aiStatus, selected?.id)}
                 aiSampleAllowed={isAiSampleAllowedForConnection(aiStatus, selected?.id)}
                 schemaTables={aiDocumentTableNames}
@@ -3601,7 +3796,8 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                 selected={selected}
                 activeSchema={activeSqlSchema}
                 namespaceKind={metadata?.namespaceKind}
-                schemaOptions={metadata?.schemas}
+                schemaOptions={sqlTabConnectionMismatch ? undefined : metadata?.schemas}
+                unavailableReason={sqlTabConnectionMismatch ? sqlTabMismatchMessage : undefined}
                 onSchemaChange={changeSqlSchemaEvent}
                 sessionConnectionId={selected?.id ?? null}
                 tabs={sqlTabs}

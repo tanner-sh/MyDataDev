@@ -43,7 +43,7 @@ const RESIZER_HEIGHT = 5;
 /** 与后端 AiAssistantService.MAX_DOCUMENT_TABLES 一致：再多就该分几次写。 */
 const MAX_DOCUMENT_TABLES = 20;
 
-export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, schemaOptions, onSchemaChange, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onOpenInCommandTab, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
+export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvailable, aiSampleAllowed, schemaTables, onOpenSqlInNewTab, selected, activeSchema, namespaceKind, schemaOptions, onSchemaChange, unavailableReason, sessionConnectionId, tabs, activeTabId, activeTab, status, loading, cancelling, cancellable, historyLoading, pagingResultKey, themeMode, editorSplitRatio, editorSplitRatioTouched, onEditorSplitRatioChange, onOpenInCommandTab, onSqlChange, onEditorMount, completionSource, onResolveUnknownObjects, onDefinitionProbe, onDefinitionActivate, onFormat, onExplain, onExecute, onCancel, onExport, onOpenHistory, onSqlFileSelect, onOpenSqlFileTasks, onOpenSnippets, onSaveSnippet, onResultTabChange, onResultPageChange, onPreviewResultEdits, onCommitResultEdits, transactionState, onBeginTransaction, onFinishTransaction, scriptTransactionMode, scriptEndAction, onScriptTransactionModeChange, onScriptEndActionChange, onDelimiterChange, onExecuteCommand, onCommandOptionsChange, onLocateCommandLines, onCloseCommand, onCommandFinished }: {
   draftSaveState?: string;
   /** AI 功能是否对当前连接可用；关掉或未授权时相关入口整个不出现。 */
   aiAvailable: boolean;
@@ -63,6 +63,8 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
    */
   schemaOptions?: string[];
   onSchemaChange?: (schema: string) => void;
+  /** 这个标签绑定的连接不可用（被删、没权限）时的说明：执行与导出都禁用，提示里写清楚怎么办。 */
+  unavailableReason?: string;
   sessionConnectionId: number | null;
   tabs: SqlTab[];
   activeTabId: string;
@@ -122,7 +124,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
   const canQuery = Boolean(selected && hasConnectionPermission(selected, 'QUERY'));
   const aiQueryAvailable = aiAvailable && canQuery;
   const canWrite = Boolean(selected && hasConnectionPermission(selected, 'DATA_WRITE'));
-  const canExecute = Boolean(selected && hasAnyConnectionPermission(selected, ['QUERY', 'DATA_WRITE', 'DDL']));
+  const canExecute = Boolean(selected && !unavailableReason && hasAnyConnectionPermission(selected, ['QUERY', 'DATA_WRITE', 'DDL']));
   const canExport = canQuery && Boolean(selected && hasConnectionPermission(selected, 'EXPORT'));
   const [draftSql, setDraftSql] = useState(activeTab.sql);
   const [resultPaneMode, setResultPaneMode] = useState<ResultPaneMode>('normal');
@@ -657,7 +659,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
           <Space size={4} className="sql-toolbar-group sql-toolbar-execution-group">
             <Space.Compact>
               {commandTab ? (
-                <Tooltip title={`交给后台逐条执行选中内容或整段脚本（${SHORTCUT_HINTS.executeSql}），结果是一条滚动日志（${commandOptionsLabel(commandOptions)}）。执行期间可以继续编辑。`}>
+                <Tooltip title={unavailableReason || `交给后台逐条执行选中内容或整段脚本（${SHORTCUT_HINTS.executeSql}），结果是一条滚动日志（${commandOptionsLabel(commandOptions)}）。执行期间可以继续编辑。`}>
                   <Button className="sql-toolbar-button sql-execute-button" size="small" type="primary" danger={selected?.environment === 'prod'} icon={<CodeOutlined />}
                     aria-label={selected?.environment === 'prod' ? '在生产环境执行命令窗口脚本' : '执行命令窗口脚本'} disabled={!canExecute || loading}
                     onClick={runActive}>
@@ -666,7 +668,7 @@ export const SqlWorkspace = memo(function SqlWorkspace({ draftSaveState, aiAvail
                   </Button>
                 </Tooltip>
               ) : (
-                <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : `执行当前或选中 SQL（${SHORTCUT_HINTS.executeSql}）`}>
+                <Tooltip title={loading && cancellable ? '请求数据库取消当前 SQL' : unavailableReason || `执行当前或选中 SQL（${SHORTCUT_HINTS.executeSql}）`}>
                   {loading && cancellable ? (
                     <Button className="sql-toolbar-button sql-execute-button" size="small" danger icon={<StopOutlined />} aria-label="取消执行 SQL" loading={cancelling} onClick={onCancel}>
                       <span className="sql-toolbar-label">{cancelling ? '正在取消' : `取消 ${formatElapsed(executionElapsedMs)}`}</span>

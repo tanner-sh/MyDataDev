@@ -5,8 +5,8 @@ import type { HookAPI as ModalHookAPI } from 'antd/es/modal/useModal';
 import { PERSIST_WORK_EVENT } from '../auth';
 import { createUuid } from '../createUuid';
 import { enforceResultBudget } from '../resultRetention';
-import { readSqlSession, rememberClosedSqlTab, restoreClosedSqlTab, writeSqlSession } from '../sqlSessionStorage';
-import { MAX_SQL_TABS, SQL_TAB_LIMIT_MESSAGE, closeSqlTabIn, duplicateSqlTabOf, normalizeSqlTabTitle, patchSqlTab, withLiveSql } from '../sqlTabs';
+import { migrateLegacySqlSessions, readGlobalSqlSession, rememberClosedSqlTab, restoreClosedSqlTab, writeGlobalSqlSession } from '../sqlSessionStorage';
+import { MAX_SQL_TABS, SQL_TAB_LIMIT_MESSAGE, bindTabConnections, closeSqlTabIn, duplicateSqlTabOf, normalizeSqlTabTitle, patchSqlTab, withLiveSql, type SqlSessionSnapshot } from '../sqlTabs';
 import type { SqlEditorHandle } from '../sqlEditorTypes';
 import type { SqlTab } from '../types';
 import { createCommandTab, createSqlTab } from '../utils';
@@ -15,8 +15,13 @@ const DEFAULT_TAB: SqlTab = { id: 'query-1', title: '查询 1', sql: 'select 1 a
 
 type UseSqlTabsOptions = {
   workspaceOwner: string;
-  /** 当前选中的连接：SQL 标签按连接分会话保存，切换连接就换一套标签。 */
-  connectionId: number | null;
+  /**
+   * 当前连接（App 的 selected，跟着当前标签走）。标签不再按连接分组：所有连接的标签在一份会话里，
+   * 每个标签自己带 connectionId。这里只用它给还没有连接的标签补上连接、决定「找回关闭的 SQL」找哪条连接的。
+   */
+  currentConnectionId: number | null;
+  /** 第一次打开新版本、把旧的按连接保存的会话并起来时，排在最前的那条连接（上次所在的）。 */
+  legacyPreferredConnectionId?: number | null;
   editorRef: MutableRefObject<SqlEditorHandle | null>;
   toast: MessageInstance;
   modal: ModalHookAPI;
@@ -34,7 +39,7 @@ type UseSqlTabsOptions = {
 };
 
 /**
- * SQL 标签页：一组状态（标签、当前标签、按连接保存的会话）加上它们的增删改。
+ * SQL 标签页：一组状态（标签、当前标签、全局会话）加上它们的增删改。
  *
  * 从 App.tsx 搬出来的第二组状态（第一组是 useProductionConfirmation）。数组怎么变的规则在
  * sqlTabs.ts（有测试）；这里只管状态、会话持久化和两个确认弹窗。
@@ -42,16 +47,19 @@ type UseSqlTabsOptions = {
  * 编辑器里的改动要 300ms 才同步回标签，所以凡是「离开当前标签」的操作都先用 editorRef 取一次现值
  * —— 这是 withLiveSql 存在的原因。
  */
-export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, modal, notifyInfo, notifyError, onShowSql, inheritedExecutionSchema }: UseSqlTabsOptions) {
-  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(() => readSqlSession(null, undefined, workspaceOwner)?.tabs || [DEFAULT_TAB]);
-  const [activeSqlTabId, setActiveSqlTabId] = useState(() => readSqlSession(null, undefined, workspaceOwner)?.activeTabId || DEFAULT_TAB.id);
-  /** 每次换一套会话就加一：SqlWorkspace 以它为 key 重建，编辑器里不残留上一条连接的内容。 */
-  const [sqlSessionRevision, setSqlSessionRevision] = useState(0);
+export function useSqlTabs({ workspaceOwner, currentConnectionId, legacyPreferredConnectionId, editorRef, toast, modal, notifyInfo, notifyError, onShowSql, inheritedExecutionSchema }: UseSqlTabsOptions) {
+  const [initialSession] = useState<SqlSessionSnapshot>(() => readGlobalSqlSession(undefined, workspaceOwner)
+    ?? migrateLegacySqlSessions(legacyPreferredConnectionId, MAX_SQL_TABS, undefined, workspaceOwner)
+    ?? { tabs: [DEFAULT_TAB], activeTabId: DEFAULT_TAB.id });
+  const [sqlTabs, setSqlTabs] = useState<SqlTab[]>(initialSession.tabs);
+  const [activeSqlTabId, setActiveSqlTabId] = useState(initialSession.activeTabId);
   const [draftSaveState, setDraftSaveState] = useState('草稿保存中…');
   const sqlTabsRef = useRef(sqlTabs);
   const activeSqlTabIdRef = useRef(activeSqlTabId);
-  const sqlSessionConnectionIdRef = useRef<number | null>(null);
-  const sqlTabSeqRef = useRef(1);
+  const currentConnectionIdRef = useRef(currentConnectionId);
+  currentConnectionIdRef.current = currentConnectionId;
+  // 标题里的序号接着已有的标签往下数，不从 1 重来。
+  const sqlTabSeqRef = useRef(Math.max(1, initialSession.tabs.length));
   sqlTabsRef.current = sqlTabs;
   activeSqlTabIdRef.current = activeSqlTabId;
 
@@ -69,37 +77,19 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
     updateSqlTab(activeSqlTabIdRef.current, patch);
   }
 
-  function persistCurrentSqlSession(sessionConnectionId: number | null) {
+  function persistCurrentSqlSession() {
     const tabs = withLiveSql(sqlTabsRef.current, activeSqlTabIdRef.current, liveEditorSql());
-    writeSqlSession(sessionConnectionId, tabs, activeSqlTabIdRef.current, undefined, workspaceOwner);
-  }
-
-  /** 切换连接：先把上一条连接的标签存下，再取出这一条连接的。 */
-  function activateSqlSession(nextConnectionId: number | null, captureLiveEditor: boolean) {
-    const previousConnectionId = sqlSessionConnectionIdRef.current;
-    if (previousConnectionId === nextConnectionId) return;
-    if (captureLiveEditor) {
-      persistCurrentSqlSession(previousConnectionId);
-    } else {
-      writeSqlSession(previousConnectionId, sqlTabsRef.current, activeSqlTabIdRef.current, undefined, workspaceOwner);
-    }
-    const restored = readSqlSession(nextConnectionId, undefined, workspaceOwner);
-    const nextTabs = restored?.tabs || [{ ...DEFAULT_TAB, id: `query-${Date.now()}-1` }];
-    const nextActiveTabId = restored?.activeTabId || nextTabs[0].id;
-    sqlSessionConnectionIdRef.current = nextConnectionId;
-    sqlTabSeqRef.current = Math.max(1, nextTabs.length);
-    sqlTabsRef.current = nextTabs;
-    activeSqlTabIdRef.current = nextActiveTabId;
-    setSqlTabs(nextTabs);
-    setActiveSqlTabId(nextActiveTabId);
-    setSqlSessionRevision((current) => current + 1);
+    writeGlobalSqlSession(tabs, activeSqlTabIdRef.current, undefined, workspaceOwner);
   }
 
   /**
    * 新开一个标签。build 拿到序号造出标签；当前标签的现值先写回去，原来的草稿与结果保持不变。
    * 返回新标签的 id，到上限时返回 null。
+   *
+   * 新标签绑定哪条连接：build 自己给了的为准，其次是 connectionId 参数（从别的连接打开脚本，例如结构对比），
+   * 再次是当前连接（它跟着当前页签走）。Schema 只在新标签和当前标签是同一条连接时才沿用 —— 别的连接没有这个 Schema。
    */
-  function openSqlTab(build: (index: number) => SqlTab): string | null {
+  function openSqlTab(build: (index: number) => SqlTab, connectionId?: number): string | null {
     if (sqlTabsRef.current.length >= MAX_SQL_TABS) {
       toast.warning(SQL_TAB_LIMIT_MESSAGE);
       return null;
@@ -107,7 +97,15 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
     const nextIndex = sqlTabSeqRef.current + 1;
     sqlTabSeqRef.current = nextIndex;
     const built = build(nextIndex);
-    const tab = built.executionSchema ? built : { ...built, executionSchema: inheritedExecutionSchema?.() };
+    const current = sqlTabsRef.current.find((item) => item.id === activeSqlTabIdRef.current);
+    // 当前连接跟着当前页签走：在表页签里点「+」，新标签绑的是那张表所在的连接。
+    const boundConnectionId = built.connectionId ?? connectionId ?? currentConnectionIdRef.current ?? current?.connectionId ?? undefined;
+    const sameConnection = boundConnectionId != null && boundConnectionId === current?.connectionId;
+    const tab: SqlTab = {
+      ...built,
+      ...(boundConnectionId != null ? { connectionId: boundConnectionId } : {}),
+      executionSchema: built.executionSchema ?? (sameConnection ? inheritedExecutionSchema?.() : undefined)
+    };
     const nextTabs = [...withLiveSql(sqlTabsRef.current, activeSqlTabIdRef.current, liveEditorSql()), tab];
     sqlTabsRef.current = nextTabs;
     activeSqlTabIdRef.current = tab.id;
@@ -140,7 +138,7 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
 
   function removeSqlTab(targetId: string) {
     const closing = sqlTabsRef.current.find((tab) => tab.id === targetId);
-    if (closing && !rememberClosedSqlTab(connectionId, closing, workspaceOwner)) {
+    if (closing && !rememberClosedSqlTab(closing.connectionId ?? currentConnectionIdRef.current, closing, workspaceOwner)) {
       notifyError('保存最近关闭的草稿失败，请先下载 SQL 文件。');
       return;
     }
@@ -177,9 +175,11 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
 
   function reopenSqlTab() {
     if (sqlTabsRef.current.length >= MAX_SQL_TABS) { notifyInfo('请先关闭一个 SQL 标签页'); return; }
+    // 找回的是当前连接最近关掉的那个，回来时仍绑在这条连接上。
+    const connectionId = currentConnectionIdRef.current;
     const tab = restoreClosedSqlTab(connectionId, workspaceOwner);
     if (!tab) { notifyInfo('没有可找回的 SQL 草稿'); return; }
-    openSqlTab(() => ({ ...tab, id: createUuid() }));
+    openSqlTab(() => ({ ...tab, id: createUuid(), ...(connectionId != null ? { connectionId } : {}) }));
   }
 
   function renameSqlTab(targetId: string) {
@@ -202,22 +202,24 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
     });
   }
 
+  // 还没有连接的标签（升级前「未选连接」的会话、全新安装的默认标签）绑到当前连接上。
   useEffect(() => {
-    activateSqlSession(connectionId, false);
-  }, [connectionId]);
+    if (currentConnectionId == null) return;
+    setSqlTabs((tabs) => bindTabConnections(tabs, currentConnectionId));
+  }, [currentConnectionId, sqlTabs]);
 
   // 草稿自动保存到本机：停手 300ms 后写一次。
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      const saved = writeSqlSession(connectionId, sqlTabs, activeSqlTabId, undefined, workspaceOwner);
+      const saved = writeGlobalSqlSession(sqlTabs, activeSqlTabId, undefined, workspaceOwner);
       setDraftSaveState(saved ? '草稿已保存到本机' : '草稿保存失败，请下载 SQL 文件留存');
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [activeSqlTabId, connectionId, sqlTabs]);
+  }, [activeSqlTabId, sqlTabs]);
 
   // 离开页面（或会话过期前）把编辑器里还没同步的那一点也存下。
   useEffect(() => {
-    const persist = () => persistCurrentSqlSession(sqlSessionConnectionIdRef.current);
+    const persist = () => persistCurrentSqlSession();
     window.addEventListener('pagehide', persist);
     window.addEventListener(PERSIST_WORK_EVENT, persist);
     return () => { window.removeEventListener('pagehide', persist); window.removeEventListener(PERSIST_WORK_EVENT, persist); };
@@ -226,8 +228,8 @@ export function useSqlTabs({ workspaceOwner, connectionId, editorRef, toast, mod
   return {
     sqlTabs, setSqlTabs, sqlTabsRef,
     activeSqlTabId, setActiveSqlTabId, activeSqlTabIdRef, activeSqlTab,
-    sqlSessionRevision, sqlSessionConnectionIdRef, draftSaveState,
-    activateSqlSession, updateSqlTab, updateActiveSqlTab, openSqlTab,
+    draftSaveState,
+    updateSqlTab, updateActiveSqlTab, openSqlTab,
     addSqlTab, addCommandTab, duplicateSqlTab, closeSqlTab, reopenSqlTab, renameSqlTab
   };
 }

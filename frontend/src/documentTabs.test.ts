@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { documentTabLabels, middleEllipsis, tabScrollState, tabScrollTarget, wheelToHorizontal } from './documentTabs';
+import { documentTabLabels, middleEllipsis, tabScrollState, tabScrollTarget, wheelToHorizontal, tabConnectionBadge, tabsSpanConnections } from './documentTabs';
 
 describe('document tabs', () => {
   it('keeps both ends when a name is too long, so shared prefixes do not hide the difference', () => {
@@ -52,5 +52,23 @@ describe('document tabs', () => {
     expect(wheelToHorizontal(0, 100)).toBe(100);
     expect(wheelToHorizontal(0, 3, 1)).toBe(120);
     expect(wheelToHorizontal(60, 10)).toBe(0);
+  });
+});
+
+describe('tab connection badges', () => {
+  const connections = [{ id: 1, name: 'eastmoney', environment: 'dev' }, { id: 2, name: '生产核心库-交易与清算', environment: 'prod' }];
+
+  it('names the connection only when tabs come from more than one', () => {
+    expect(tabsSpanConnections([1, 1, undefined])).toBe(false);
+    expect(tabsSpanConnections([1, 2])).toBe(true);
+    expect(tabConnectionBadge(1, connections, false)).toEqual({ fullName: 'eastmoney', production: false, unavailable: false, name: undefined });
+    expect(tabConnectionBadge(1, connections, true).name).toBe('eastmoney');
+  });
+
+  it('always marks production and unavailable connections', () => {
+    expect(tabConnectionBadge(2, connections, false).production).toBe(true);
+    expect(tabConnectionBadge(9, connections, false)).toMatchObject({ unavailable: true, production: false });
+    expect(tabConnectionBadge(9, connections, true).name).toBe('连接不可用');
+    expect(tabConnectionBadge(undefined, connections, true)).toEqual({ production: false, unavailable: false });
   });
 });
