@@ -8,6 +8,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -29,11 +31,14 @@ import java.util.List;
 public class AuthController {
     private final WebAuthenticationService authenticationService;
     private final AuditRepository audit;
+    private final boolean redirectLoopbackHost;
     private final HttpSessionSecurityContextRepository contextRepository = new HttpSessionSecurityContextRepository();
 
-    public AuthController(WebAuthenticationService authenticationService, AuditRepository audit) {
+    public AuthController(WebAuthenticationService authenticationService, AuditRepository audit, Environment environment) {
         this.authenticationService = authenticationService;
         this.audit = audit;
+        // 桌面版自身固定使用 127.0.0.1，且 Electron 只允许同源导航，不能跳转。
+        this.redirectLoopbackHost = !environment.acceptsProfiles(Profiles.of("desktop"));
     }
 
     @GetMapping("/status")
@@ -101,7 +106,8 @@ public class AuthController {
                 identity == null ? null : identity.displayName(),
                 identity == null ? null : identity.role(),
                 authenticationService.providerId(), authenticationService.passwordLogin(), authenticationService.loginUrl(),
-                csrfToken == null ? null : csrfToken.getToken(), csrfToken == null ? null : csrfToken.getHeaderName()
+                csrfToken == null ? null : csrfToken.getToken(), csrfToken == null ? null : csrfToken.getHeaderName(),
+                redirectLoopbackHost
         );
     }
 
@@ -125,7 +131,8 @@ public class AuthController {
             boolean passwordLogin,
             String loginUrl,
             String csrfToken,
-            String csrfHeaderName
+            String csrfHeaderName,
+            boolean redirectLoopbackHost
     ) {}
     public record AuthError(boolean ok, String code, String message) {
         AuthError(String code, String message) { this(false, code, message); }

@@ -2,7 +2,11 @@ package com.example.dbadmin.service;
 
 import org.junit.jupiter.api.Test;
 
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class SqlFormatterTest {
     private final SqlFormatter formatter = new SqlFormatter();
@@ -81,6 +85,164 @@ class SqlFormatterTest {
                 .contains("\n    LEFT JOIN roles")
                 .contains("\nWHERE users.name")
                 .contains("'A  B'");
+    }
+
+    @Test
+    void formatsCreateTableColumnsAndConstraintsOnePerLine() {
+        String source = """
+                create table "FBA_DEV_20230210"."SIM_OTCTRADE"("DEF20" VARCHAR2(101),"TAX6" NUMBER(28,8),
+                "TAX3" NUMBER(*,0),CONSTRAINT "PK_SIM_OTCTRADE" PRIMARY KEY("DEF20")) TABLESPACE "DATA";
+                """;
+
+        String formatted = formatter.format(source);
+
+        assertThat(formatted).isEqualTo("""
+                CREATE TABLE "FBA_DEV_20230210"."SIM_OTCTRADE" (
+                    "DEF20" VARCHAR2(101),
+                    "TAX6" NUMBER(28, 8),
+                    "TAX3" NUMBER(*, 0),
+                    CONSTRAINT "PK_SIM_OTCTRADE" PRIMARY KEY ("DEF20")
+                ) TABLESPACE "DATA";""");
+        assertThat(formatter.format(formatted)).isEqualTo(formatted);
+    }
+
+    @Test
+    void keepsShortTypeParametersTogetherEvenAfterALongColumnName() {
+        String column = "very_long_column_".repeat(7);
+
+        String formatted = formatter.format("create table t (" + column + " NUMBER(28,8), other VARCHAR2(10))");
+
+        assertThat(formatted).isEqualTo("CREATE TABLE t (\n    " + column
+                + " NUMBER(28, 8),\n    other VARCHAR2(10)\n)");
+    }
+
+    @Test
+    void keepsLongDefaultExpressionContinuationsNearTheTableIndent() {
+        String column = "long_column_".repeat(5);
+        String firstValue = "'" + "a".repeat(50) + "'";
+        String secondValue = "'" + "b".repeat(50) + "'";
+        String source = "CREATE TABLE t (" + column + " VARCHAR(20) DEFAULT coalesce("
+                + firstValue + "," + secondValue + "), other NUMBER(28,8))";
+
+        String formatted = formatter.format(source);
+
+        assertThat(formatted).contains(firstValue + ",\n        " + secondValue + "),\n    other NUMBER(28, 8)");
+        assertThat(formatter.format(formatted)).isEqualTo(formatted);
+    }
+
+    @Test
+    void keepsCreateTableCommentsAndNestedExpressionsInPlace() {
+        String source = """
+                create table if not exists `db`.`orders` (
+                `id` DECIMAL(28,8) NOT NULL, -- identifier
+                /* explanation, with comma */
+                `status` varchar(20) default 'a,b', /* status note */
+                `amount` DECIMAL(28,8) default coalesce(1,2),
+                CONSTRAINT positive CHECK (`amount` IN (1,2,3)),
+                `note` varchar(20) default q'[a,b]' -- last column
+                ) ENGINE=InnoDB;
+                """;
+
+        String formatted = formatter.format(source);
+
+        assertThat(formatted).isEqualTo("""
+                CREATE TABLE IF NOT EXISTS `db`.`orders` (
+                    `id` DECIMAL(28, 8) NOT NULL, -- identifier
+                    /* explanation, with comma */
+                    `status` varchar(20) DEFAULT 'a,b', /* status note */
+                    `amount` DECIMAL(28, 8) DEFAULT coalesce(1, 2),
+                    CONSTRAINT positive CHECK (`amount` IN (1, 2, 3)),
+                    `note` varchar(20) DEFAULT q'[a,b]' -- last column
+                ) ENGINE = InnoDB;""");
+        assertThat(formatter.format(formatted)).isEqualTo(formatted);
+    }
+
+    @Test
+    void formatsTemporaryTablesWithoutTreatingCreateTableAsSelectAsAColumnList() {
+        String formatted = formatter.format("""
+                create GLOBAL temporary table temp_data (id NUMBER(10), name VARCHAR2(20));
+                create table copied as select coalesce(a,b) from source;
+                """);
+
+        assertThat(formatted).isEqualTo("""
+                CREATE GLOBAL TEMPORARY TABLE temp_data (
+                    id NUMBER(10),
+                    name VARCHAR2(20)
+                );
+
+                CREATE TABLE copied AS
+                SELECT coalesce(a, b)
+                FROM source;""");
+    }
+
+    @Test
+    void preservesIdentifiersThatCanAlsoAppearInTableSyntax() {
+        String formatted = formatter.format("create table global (local VARCHAR(20), key INTEGER)");
+
+        assertThat(formatted).isEqualTo("""
+                CREATE TABLE global (
+                    local VARCHAR(20),
+                    key INTEGER
+                )""");
+    }
+
+    @Test
+    void recognizesCommentedHeadersAndPreservesMultilineContent() {
+        String source = """
+                /* header */ create table /* table name */ [db].[notes] (
+                id INTEGER,
+                /* first line
+                second line */
+                note VARCHAR(40) DEFAULT 'first line
+                second line',
+                amount DECIMAL(28,8)
+                )
+                """;
+
+        String formatted = formatter.format(source);
+
+        assertThat(formatted).isEqualTo("""
+                /* header */ CREATE TABLE /* table name */ [db].[notes] (
+                    id INTEGER,
+                    /* first line
+                second line */
+                    note VARCHAR(40) DEFAULT 'first line
+                second line',
+                    amount DECIMAL(28, 8)
+                )""");
+        assertThat(formatter.format(formatted)).isEqualTo(formatted);
+    }
+
+    @Test
+    void keepsClosingParenthesisAfterALineComment() {
+        assertThat(formatter.format("select coalesce(a -- argument\n) from t"))
+                .isEqualTo("""
+                        SELECT coalesce(a -- argument
+                                       )
+                        FROM t""");
+    }
+
+    @Test
+    void formattedTableDefinitionRetainsExecutableConstraintsAndComments() throws Exception {
+        String source = """
+                CREATE TABLE sample (id DECIMAL(28,8) NOT NULL, -- identifier
+                label VARCHAR(40) DEFAULT 'A,B', /* default */
+                CONSTRAINT sample_pk PRIMARY KEY (id),
+                CONSTRAINT sample_ck CHECK (label IN ('A,B','C')) -- constraint
+                )
+                """;
+
+        try (var connection = DriverManager.getConnection("jdbc:h2:mem:sql_formatter");
+             var statement = connection.createStatement()) {
+            statement.execute(formatter.format(source));
+            statement.executeUpdate("INSERT INTO sample (id) VALUES (1)");
+            try (var rows = statement.executeQuery("SELECT label FROM sample WHERE id = 1")) {
+                assertThat(rows.next()).isTrue();
+                assertThat(rows.getString(1)).isEqualTo("A,B");
+            }
+            assertThatThrownBy(() -> statement.executeUpdate("INSERT INTO sample VALUES (2, 'invalid')"))
+                    .isInstanceOf(SQLException.class);
+        }
     }
 
     @Test

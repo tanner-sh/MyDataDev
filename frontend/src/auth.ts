@@ -15,6 +15,8 @@ export type AuthStatus = {
   loginUrl?: string | null;
   csrfToken?: string | null;
   csrfHeaderName?: string | null;
+  /** 由后端区分 Web 和桌面运行模式；旧版本后端不提供时不跳转。 */
+  redirectLoopbackHost?: boolean;
 };
 
 let authRequestGeneration = 0;

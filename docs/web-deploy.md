@@ -23,6 +23,8 @@ java -jar MyDataDev-<version>-web.jar --spring.profiles.active=web
 
 打开 <http://localhost:8080>。`--spring.profiles.active=web` 不是可选项：它启用 Web 登录、关闭 H2 控制台、启用优雅停机并写出 `./logs/mydatadev.log`，缺少它会退回面向本地开发的默认配置。
 
+通过 `127.0.0.1` 访问本机 Web 页面时，页面会自动切换到同端口的 `localhost` 并显示提示；局域网 IP 和域名不受影响。
+
 JAR 使用**当前工作目录**存放数据，请固定在一个目录里启动：
 
 | 目录 | 内容 |

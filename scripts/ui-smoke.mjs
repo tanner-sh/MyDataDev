@@ -494,6 +494,25 @@ try {
 
   console.log(`打开 ${APP_URL}`);
   await page.send('Page.navigate', { url: APP_URL });
+  if (SERVE) {
+    // 提示只显示几秒：等它出现就检查，不要在机器繁忙时等固定时间错过它。
+    const deadline = Date.now() + 15_000;
+    let redirectNoticeSeen = false;
+    while (!redirectNoticeSeen && Date.now() < deadline) {
+      try {
+        redirectNoticeSeen = await page.evaluate(`
+          location.hostname === 'localhost' && location.port === '${SERVE_PORT}'
+          && !location.search.includes('__mydatadev_from_loopback=1')
+          && document.body.textContent.includes('已自动从 127.0.0.1 切换到 localhost')
+        `);
+      } catch {
+        // 跳转发生时 Chrome 的旧执行上下文会短暂销毁，继续等新页面。
+      }
+      if (!redirectNoticeSeen) await page.sleep(250);
+    }
+    check('127.0.0.1 自动切换到同端口 localhost，并显示提示', redirectNoticeSeen);
+    await page.shot('00-本机地址跳转提示');
+  }
   await page.sleep(5000);
 
   if (AUTH) {
