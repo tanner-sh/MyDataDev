@@ -1,5 +1,6 @@
 package com.example.dbadmin.desktop;
 
+import com.example.dbadmin.auth.AuthController;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,5 +34,6 @@ class DesktopProfileIntegrationTest {
         assertThat(environment.getProperty("server.address")).isEqualTo("127.0.0.1");
         assertThat(environment.getProperty("server.port")).isEqualTo("5173");
         assertThat(environment.getProperty("spring.h2.console.enabled")).isEqualTo("false");
+        assertThat(context.getBean(AuthController.class).status(null, null).redirectLoopbackHost()).isFalse();
     }
 }

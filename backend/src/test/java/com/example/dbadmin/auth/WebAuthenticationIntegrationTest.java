@@ -45,6 +45,7 @@ class WebAuthenticationIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enabled").value(true))
                 .andExpect(jsonPath("$.authenticated").value(false))
+                .andExpect(jsonPath("$.redirectLoopbackHost").value(true))
                 .andReturn();
         JsonNode statusBody = mapper.readTree(statusResult.getResponse().getContentAsString());
         String token = statusBody.path("csrfToken").asText();

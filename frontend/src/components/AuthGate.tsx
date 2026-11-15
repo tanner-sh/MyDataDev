@@ -1,18 +1,29 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, ConfigProvider, Form, Input, Spin, Typography } from 'antd';
+import { Alert, Button, Card, ConfigProvider, Form, Input, message, Spin, Typography } from 'antd';
 import { DatabaseOutlined, LockOutlined, UserOutlined } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 const App = lazy(() => import('../App'));
 import { AUTH_REQUIRED_EVENT, AUTH_LOGOUT_EVENT, PERSIST_WORK_EVENT, workspaceIdentity, loadAuthStatus, login, type AuthStatus } from '../auth';
+import { localhostRedirectTarget, removeLocalhostRedirectMarker } from '../localOriginRedirect';
 
 type LoginFields = { username: string; password: string };
 
 export function AuthGate() {
   const refreshGeneration = useRef(0);
+  const redirectChecked = useRef(false);
   const [status, setStatus] = useState<AuthStatus>();
   const [error, setError] = useState('');
   const [owner, setOwner] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+  const [messageApi, messageContext] = message.useMessage();
+
+  useEffect(() => {
+    const cleanUrl = removeLocalhostRedirectMarker(window.location.href);
+    if (!cleanUrl) return;
+    window.history.replaceState(window.history.state, '', cleanUrl);
+    void messageApi.info('已自动从 127.0.0.1 切换到 localhost。', 6);
+  }, [messageApi]);
 
   useEffect(() => {
     let mounted = true;
@@ -22,6 +33,16 @@ export function AuthGate() {
       void loadAuthStatus()
         .then((next) => { if (mounted && generation === refreshGeneration.current) {
           window.dispatchEvent(new Event(PERSIST_WORK_EVENT));
+          // 只在首次启动时跳转；会话过期后重新认证不能把正在编辑的工作台带走。
+          if (!redirectChecked.current) {
+            redirectChecked.current = true;
+            const target = localhostRedirectTarget(window.location.href, next.redirectLoopbackHost === true);
+            if (target) {
+              setRedirecting(true);
+              window.location.replace(target);
+              return;
+            }
+          }
           if (!next.enabled || next.authenticated) setOwner(workspaceIdentity());
           setStatus(next);
         } })
@@ -58,12 +79,18 @@ export function AuthGate() {
     }
   }
 
-  if (!status && !error) {
-    return <div className="auth-loading"><Spin size="large" tip="正在连接 MyDataDev…" /></div>;
+  if (redirecting || (!status && !error)) {
+    return (
+      <ConfigProvider locale={zhCN}>
+        {messageContext}
+        <div className="auth-loading"><Spin size="large" tip={redirecting ? '正在切换到 localhost…' : '正在连接 MyDataDev…'} /></div>
+      </ConfigProvider>
+    );
   }
   if (!status) {
     return (
       <ConfigProvider locale={zhCN}>
+        {messageContext}
         <main className="auth-page">
           <Card className="auth-card" variant="borderless">
             <Alert type="error" showIcon title="无法连接 MyDataDev" description={error} />
@@ -77,6 +104,7 @@ export function AuthGate() {
 
   return (
     <ConfigProvider locale={zhCN}>
+      {messageContext}
       {owner && <div hidden={!unlocked} style={{ height: '100%' }}><Suspense fallback={<div className="auth-loading"><Spin tip="正在恢复工作台…" /></div>}><App key={owner} workspaceOwner={owner} workspaceLocked={!unlocked} /></Suspense></div>}
       {!unlocked && <main className="auth-page">
         <Card className="auth-card" variant="borderless">
