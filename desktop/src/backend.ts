@@ -6,7 +6,9 @@ import path from 'node:path';
 import type { DesktopPaths } from './paths.js';
 
 const HEALTH_TIMEOUT_MS = 60_000;
-const SHUTDOWN_TIMEOUT_MS = 30_000;
+const SHUTDOWN_REQUEST_TIMEOUT_MS = 5_000;
+// Spring 的 Web 请求最多等待 30 秒，之后后台任务、AI 和元数据队列还需要时间收尾。
+const SHUTDOWN_TIMEOUT_MS = 60_000;
 
 export type BackendStartOptions = {
   java: string;
@@ -70,10 +72,11 @@ export async function portAvailable(port: number) {
   });
 }
 
-export async function requestBackendShutdown(port: number, controlToken: string) {
+export async function requestBackendShutdown(port: number, controlToken: string, timeoutMs = SHUTDOWN_REQUEST_TIMEOUT_MS) {
   const response = await fetch(`http://127.0.0.1:${port}/internal/desktop/shutdown`, {
     method: 'POST',
-    headers: { 'X-MyDataDev-Desktop-Token': controlToken }
+    headers: { 'X-MyDataDev-Desktop-Token': controlToken },
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) throw new Error(`后端拒绝关闭请求（HTTP ${response.status}）。`);
 }
@@ -133,10 +136,21 @@ export class BackendManager {
   }
 
   async stop() {
-    if (!this.child || this.child.exitCode !== null) return;
+    if (!this.child || hasExited(this.child)) return;
+    const deadline = Date.now() + SHUTDOWN_TIMEOUT_MS;
     try {
-      await requestBackendShutdown(this.options.port, this.options.controlToken);
-      await this.waitForExit(SHUTDOWN_TIMEOUT_MS);
+      try {
+        await requestBackendShutdown(this.options.port, this.options.controlToken);
+      } catch {
+        // 请求可能已到达后端。macOS/Linux 的 SIGTERM 会运行 JVM 关闭钩子，
+        // 仍给 Spring 和正在收尾的任务留下时间，而不是立刻强杀。
+        if (this.options.platform === 'win32') {
+          await this.forceStop();
+          return;
+        }
+        if (!hasExited(this.child)) this.child.kill('SIGTERM');
+      }
+      await this.waitForExit(Math.max(1, deadline - Date.now()));
     } catch {
       await this.forceStop();
     } finally {
@@ -146,19 +160,23 @@ export class BackendManager {
 
   private async waitForExit(timeoutMs: number) {
     const child = this.child;
-    if (!child || child.exitCode !== null) return;
+    if (!child || hasExited(child)) return;
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('backend shutdown timeout')), timeoutMs);
-      child.once('exit', () => {
+      const exited = () => {
         clearTimeout(timer);
         resolve();
-      });
+      };
+      const timer = setTimeout(() => {
+        child.off('exit', exited);
+        reject(new Error('backend shutdown timeout'));
+      }, timeoutMs);
+      child.once('exit', exited);
     });
   }
 
   private async forceStop() {
     const child = this.child;
-    if (!child || child.exitCode !== null || !child.pid) return;
+    if (!child || hasExited(child) || !child.pid) return;
     if (this.options.platform === 'win32') {
       spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
     } else {
@@ -166,4 +184,8 @@ export class BackendManager {
       await this.waitForExit(5_000).catch(() => child.kill('SIGKILL'));
     }
   }
+}
+
+function hasExited(child: ChildProcess) {
+  return child.exitCode !== null || child.signalCode !== null;
 }

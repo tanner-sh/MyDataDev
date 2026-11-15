@@ -8,15 +8,24 @@ import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -90,6 +99,66 @@ class BackgroundTaskStreamTest {
         verify(emitter).complete();
     }
 
+    @Test
+    void completesAllSubscribersBeforeShutdownAndRejectsNewOnes() {
+        Fixture fixture = new Fixture();
+        SseEmitter closed = mock(SseEmitter.class);
+        SseEmitter active = mock(SseEmitter.class);
+        fixture.stream.register(7L, closed);
+        fixture.stream.register(9L, active);
+        doThrow(new IllegalStateException("already closed")).when(closed).complete();
+
+        fixture.stream.onContextClosed(new ContextClosedEvent(fixture.context));
+        fixture.stream.onContextClosed(new ContextClosedEvent(fixture.context));
+
+        verify(closed, times(1)).complete();
+        verify(active, times(1)).complete();
+        assertThat(fixture.stream.subscriberCount()).isZero();
+        assertThatThrownBy(() -> fixture.stream.register(7L, mock(SseEmitter.class)))
+                .isInstanceOfSatisfying(ResponseStatusException.class,
+                        error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+    }
+
+    @Test
+    void ignoresShutdownEventsFromAnotherContext() {
+        Fixture fixture = new Fixture();
+        SseEmitter emitter = mock(SseEmitter.class);
+        fixture.stream.register(7L, emitter);
+
+        fixture.stream.onContextClosed(new ContextClosedEvent(mock(ApplicationContext.class)));
+
+        assertThat(fixture.stream.subscriberCount()).isEqualTo(1);
+        verify(emitter, never()).complete();
+    }
+
+    @Test
+    void doesNotRegisterAnSseStreamAfterShutdownStarts() throws Exception {
+        Fixture fixture = new Fixture();
+        SseEmitter emitter = mock(SseEmitter.class);
+        CountDownLatch registering = new CountDownLatch(1);
+        CountDownLatch continueRegistration = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            registering.countDown();
+            if (!continueRegistration.await(5, TimeUnit.SECONDS)) throw new AssertionError("registration timed out");
+            return null;
+        }).when(emitter).onError(any());
+
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var registration = executor.submit(() -> fixture.stream.register(7L, emitter));
+            assertThat(registering.await(5, TimeUnit.SECONDS)).isTrue();
+            fixture.stream.onContextClosed(new ContextClosedEvent(fixture.context));
+            continueRegistration.countDown();
+
+            assertThatThrownBy(() -> registration.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ResponseStatusException.class);
+            assertThat(fixture.stream.subscriberCount()).isZero();
+        } finally {
+            continueRegistration.countDown();
+            executor.shutdownNow();
+        }
+    }
+
     private static BackupHistory running() {
         return new BackupHistory(1L, 2L, 7L, "RUNNING", "正在导出", null, null, Instant.now(), null);
     }
@@ -99,6 +168,7 @@ class BackgroundTaskStreamTest {
         private final RestoreService restores = mock(RestoreService.class);
         private final BackupHistoryRepository histories = mock(BackupHistoryRepository.class);
         private final SqlFileExecutionRepository sqlFiles = mock(SqlFileExecutionRepository.class);
+        private final ApplicationContext context = mock(ApplicationContext.class);
         private final BackgroundTaskStream stream;
 
         private Fixture() {
@@ -107,7 +177,7 @@ class BackgroundTaskStreamTest {
             active(List.of());
             // 任务模型里有 Instant：不注册 JSR-310 模块的话序列化会直接失败，那测的就不是推送逻辑了。
             ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
-            stream = new BackgroundTaskStream(restores, histories, sqlFiles, mapper, new AppProperties(), mock(com.example.dbadmin.repo.ScheduledQueryRepository.class));
+            stream = new BackgroundTaskStream(restores, histories, sqlFiles, mapper, new AppProperties(), mock(com.example.dbadmin.repo.ScheduledQueryRepository.class), context);
         }
 
         private void active(List<BackupHistory> backups) {

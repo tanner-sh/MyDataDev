@@ -6,9 +6,14 @@ import com.example.dbadmin.repo.SqlFileExecutionRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
@@ -42,17 +47,22 @@ public class BackgroundTaskStream {
     private final SqlFileExecutionRepository sqlFiles;
     private final ObjectMapper mapper;
     private final com.example.dbadmin.repo.ScheduledQueryRepository scheduled;
+    private final ApplicationContext applicationContext;
     private final long streamTimeoutMs;
     private final List<Subscriber> subscribers = new CopyOnWriteArrayList<>();
+    private final Object lifecycleLock = new Object();
+    private boolean stopping;
 
     public BackgroundTaskStream(RestoreService restores, BackupHistoryRepository histories,
                                 SqlFileExecutionRepository sqlFiles, ObjectMapper mapper,
-                                com.example.dbadmin.config.AppProperties properties, com.example.dbadmin.repo.ScheduledQueryRepository scheduled) {
+                                com.example.dbadmin.config.AppProperties properties, com.example.dbadmin.repo.ScheduledQueryRepository scheduled,
+                                ApplicationContext applicationContext) {
         this.restores = restores;
         this.histories = histories;
         this.sqlFiles = sqlFiles;
         this.mapper = mapper;
         this.scheduled = scheduled;
+        this.applicationContext = applicationContext;
         this.streamTimeoutMs = Math.max(60_000L, properties.getBackgroundTasks().getStreamTimeoutMinutes() * 60_000L);
     }
 
@@ -71,7 +81,6 @@ public class BackgroundTaskStream {
 
     private SseEmitter register(Long connectionId, SseEmitter emitter, boolean exportsOnly) {
         Subscriber subscriber = new Subscriber(connectionId, emitter, exportsOnly);
-        subscribers.add(subscriber);
         // 三个回调都只是摘链接：超时是正常寿命结束（浏览器会重连），错误多半是对端已经走了。
         emitter.onCompletion(() -> subscribers.remove(subscriber));
         emitter.onTimeout(() -> {
@@ -79,9 +88,33 @@ public class BackgroundTaskStream {
             emitter.complete();
         });
         emitter.onError(error -> subscribers.remove(subscriber));
+        synchronized (lifecycleLock) {
+            if (stopping) throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "服务正在关闭");
+            subscribers.add(subscriber);
+        }
         // 先推一份当前快照，界面不必等到下一次变化才有内容。
         publishTo(subscriber, snapshotJson(connectionId, exportsOnly));
         return emitter;
+    }
+
+    @EventListener
+    void onContextClosed(ContextClosedEvent event) {
+        if (event.getApplicationContext() != applicationContext) return;
+        List<Subscriber> closing;
+        synchronized (lifecycleLock) {
+            if (stopping) return;
+            stopping = true;
+            closing = new ArrayList<>(subscribers);
+            subscribers.clear();
+        }
+        // ContextClosedEvent 先于 Web 容器的优雅关闭阶段，主动结束状态推送才能释放长连接。
+        for (Subscriber subscriber : closing) {
+            try {
+                subscriber.emitter.complete();
+            } catch (RuntimeException error) {
+                log.debug("关闭后台任务推送通道失败", error);
+            }
+        }
     }
 
     int subscriberCount() {
