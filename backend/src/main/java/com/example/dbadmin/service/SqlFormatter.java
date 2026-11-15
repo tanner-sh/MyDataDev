@@ -43,6 +43,10 @@ public final class SqlFormatter {
     private static final int JOIN_CONDITION_INDENT = 4;
     /** CASE 分支相对 CASE 的缩进。 */
     private static final int CASE_INDENT = 4;
+    /** 建表字段与续行使用固定缩进，避免跟随很长的表名或字段名右移。 */
+    private static final int TABLE_INDENT = 4;
+    /** 很短的括号内容作为整体保留，避免把 NUMBER(28, 8) 等拆开。 */
+    private static final int COMPACT_INLINE_WIDTH = 40;
 
     /** 会独占一行的主子句；多词子句必须能整体匹配，否则 GROUP BY 会被拆成两段。 */
     private static final List<String> MAIN_CLAUSES = sortedByWords(List.of(
@@ -124,6 +128,7 @@ public final class SqlFormatter {
         /** 内联括号内最近一个逗号的折行落点，-1 表示当前不允许折行。 */
         private int wrapIndent = -1;
         private int index;
+        private int statementStart;
 
         private Renderer(List<Token> tokens) {
             this.tokens = tokens;
@@ -143,13 +148,20 @@ public final class SqlFormatter {
                 case LINE_COMMENT -> {
                     if (token.ownLine()) breakLine(blocks.peek().indent);
                     emit(token.text(), token);
+                    blocks.peek().breakAfterComments = false;
                     breakLine(blocks.peek().indent);
                     index++;
                 }
                 case BLOCK_COMMENT -> {
-                    if (token.ownLine()) breakLine(blocks.peek().indent);
+                    Block block = blocks.peek();
+                    if (token.ownLine()) breakLine(block.indent);
                     emit(token.text(), token);
                     index++;
+                    if (block.tableDefinition && ((block.breakAfterComments && !inlineCommentFollows())
+                            || (token.ownLine() && nextTokenStartsLine()))) {
+                        block.breakAfterComments = false;
+                        breakLine(block.indent);
+                    }
                 }
                 case OPEN -> openParen(token);
                 case CLOSE -> closeParen(token);
@@ -264,16 +276,28 @@ public final class SqlFormatter {
 
         private void openParen(Token token) {
             Block block = blocks.peek();
-            boolean subquery = startsSubquery(tokens, index);
-            emit("(", token);
+            boolean tableDefinition = blocks.size() == 1 && isTableDefinition(tokens, statementStart, index);
+            boolean subquery = !tableDefinition && startsSubquery(tokens, index);
+            boolean compact = !tableDefinition && !subquery && isCompactInline(tokens, index);
+            emit("(", token, tableDefinition);
             index++;
             int indent = out.column();
-            if (subquery) {
+            if (tableDefinition) {
+                blocks.push(Block.tableDefinition(block.indent));
+                breakLine(block.indent + TABLE_INDENT);
+            } else if (subquery) {
                 Block nested = Block.subquery(indent);
                 blocks.push(nested);
                 keepClauseInline = true;
             } else {
-                blocks.push(Block.inline(indent));
+                int continuationIndent = indent;
+                for (Block ancestor : blocks) {
+                    if (ancestor.tableDefinition) {
+                        continuationIndent = Math.min(indent, ancestor.indent + TABLE_INDENT);
+                        break;
+                    }
+                }
+                blocks.push(Block.inline(indent, continuationIndent, compact));
             }
             wrapIndent = -1;
         }
@@ -281,9 +305,16 @@ public final class SqlFormatter {
         private void closeParen(Token token) {
             // CASE 少写 END 时先把它丢掉，别让括号层级跟着错位。
             while (blocks.size() > 1 && blocks.peek().caseBlock) blocks.pop();
-            if (blocks.size() > 1) blocks.pop();
+            Block closing = blocks.size() > 1 ? blocks.pop() : null;
             keepClauseInline = false;
-            pendingNewLine = false;
+            if (closing != null && closing.tableDefinition) {
+                breakLine(closing.indent - TABLE_INDENT);
+            } else if (previous != null && previous.kind() == Kind.LINE_COMMENT && pendingNewLine) {
+                // 右括号不能接到单行注释末尾，否则会被注释掉。
+                breakLine(closing == null ? 0 : Math.max(0, closing.indent - 1));
+            } else {
+                pendingNewLine = false;
+            }
             emit(")", token);
             index++;
             wrapIndent = -1;
@@ -293,17 +324,32 @@ public final class SqlFormatter {
             Block block = blocks.peek();
             emit(",", token);
             index++;
-            if (block.subquery && LIST_CLAUSES.contains(block.clause)) {
+            if (block.tableDefinition) {
+                if (inlineCommentFollows()) block.breakAfterComments = true;
+                else breakLine(block.indent);
+            } else if (block.subquery && LIST_CLAUSES.contains(block.clause)) {
                 breakLine(block.listIndent);
                 wrapIndent = -1;
-            } else if (!block.subquery) {
-                wrapIndent = block.indent;
+            } else if (!block.subquery && !block.compactInline) {
+                wrapIndent = block.continuationIndent;
             }
+        }
+
+        /** 逗号后的同行注释属于上一项，等注释结束后再换行。 */
+        private boolean inlineCommentFollows() {
+            if (index >= tokens.size()) return false;
+            Token next = tokens.get(index);
+            return !next.ownLine() && (next.kind() == Kind.LINE_COMMENT || next.kind() == Kind.BLOCK_COMMENT);
+        }
+
+        private boolean nextTokenStartsLine() {
+            return index < tokens.size() && tokens.get(index).ownLine();
         }
 
         private void semicolon(Token token) {
             emit(";", token);
             index++;
+            statementStart = index;
             while (blocks.size() > 1) blocks.pop();
             blocks.peek().reset();
             keepClauseInline = false;
@@ -326,6 +372,10 @@ public final class SqlFormatter {
         }
 
         private void emit(String text, Token token) {
+            emit(text, token, false);
+        }
+
+        private void emit(String text, Token token, boolean forceSpace) {
             if (pendingBlankLine) {
                 out.blankLine();
                 pendingBlankLine = false;
@@ -335,7 +385,7 @@ public final class SqlFormatter {
                 out.newLine(pendingIndent);
                 pendingNewLine = false;
             }
-            boolean space = !out.lineEmpty() && needsSpace(beforePrevious, previous, token, previousUnary);
+            boolean space = !out.lineEmpty() && (forceSpace || needsSpace(beforePrevious, previous, token, previousUnary));
             if (wrapIndent >= 0 && !out.lineEmpty() && out.column() + text.length() + (space ? 1 : 0) > MAX_LINE_WIDTH) {
                 out.newLine(wrapIndent);
                 space = false;
@@ -377,6 +427,9 @@ public final class SqlFormatter {
         private int indent;
         private final boolean subquery;
         private final boolean caseBlock;
+        private final boolean tableDefinition;
+        private final boolean compactInline;
+        private final int continuationIndent;
         private String clause = "";
         private int clauseIndent;
         private int listIndent;
@@ -385,28 +438,38 @@ public final class SqlFormatter {
         private int joinIndent;
         private int joinLine = -1;
         private boolean betweenPending;
+        private boolean breakAfterComments;
 
-        private Block(int indent, boolean subquery, boolean caseBlock) {
+        private Block(int indent, boolean subquery, boolean caseBlock, boolean tableDefinition,
+                      int continuationIndent, boolean compactInline) {
             this.indent = indent;
             this.subquery = subquery;
             this.caseBlock = caseBlock;
+            this.tableDefinition = tableDefinition;
+            this.continuationIndent = continuationIndent;
+            this.compactInline = compactInline;
             this.listIndent = indent;
         }
 
         private static Block root() {
-            return new Block(0, true, false);
+            return new Block(0, true, false, false, 0, false);
         }
 
         private static Block subquery(int indent) {
-            return new Block(indent, true, false);
+            return new Block(indent, true, false, false, indent, false);
         }
 
-        private static Block inline(int indent) {
-            return new Block(indent, false, false);
+        private static Block tableDefinition(int parentIndent) {
+            int indent = parentIndent + TABLE_INDENT;
+            return new Block(indent, false, false, true, indent, false);
+        }
+
+        private static Block inline(int indent, int continuationIndent, boolean compact) {
+            return new Block(indent, false, false, false, continuationIndent, compact);
         }
 
         private static Block caseBlock(int indent) {
-            return new Block(indent, false, true);
+            return new Block(indent, false, true, false, indent, false);
         }
 
         /** AND / OR 换行后与子句关键字右端对齐：WHERE 下的 AND 缩进 2 格。 */
@@ -446,7 +509,16 @@ public final class SqlFormatter {
 
         private void append(String value) {
             text.append(value);
-            lineHasContent = true;
+            int lastNewline = value.lastIndexOf('\n');
+            if (lastNewline >= 0) {
+                for (int i = 0; i < value.length(); i++) {
+                    if (value.charAt(i) == '\n') line++;
+                }
+                lineStart = text.length() - (value.length() - lastNewline - 1);
+                lineHasContent = lastNewline < value.length() - 1;
+            } else {
+                lineHasContent = true;
+            }
         }
 
         private void newLine(int indent) {
@@ -500,7 +572,7 @@ public final class SqlFormatter {
     private static boolean spaceBeforeOpenParen(Token beforePrevious, Token previous) {
         return switch (previous.kind()) {
             case WORD -> KEYWORDS.contains(previous.upper()) || previous.upper().indexOf(' ') >= 0
-                    || isTableReference(beforePrevious);
+                    || isTableReference(beforePrevious) || isConstraintKey(beforePrevious, previous);
             case OPERATOR, COMMA, SEMICOLON -> true;
             case CLOSE, LITERAL -> true;
             default -> false;
@@ -513,6 +585,11 @@ public final class SqlFormatter {
     private static boolean isTableReference(Token beforePrevious) {
         return beforePrevious != null && beforePrevious.kind() == Kind.WORD
                 && TABLE_INTRODUCERS.contains(beforePrevious.upper());
+    }
+
+    private static boolean isConstraintKey(Token beforePrevious, Token previous) {
+        return "KEY".equals(previous.upper()) && beforePrevious != null && beforePrevious.kind() == Kind.WORD
+                && Set.of("PRIMARY", "FOREIGN", "UNIQUE").contains(beforePrevious.upper());
     }
 
     private static boolean isUnary(Token previous, Token token, boolean previousUnary) {
@@ -541,6 +618,72 @@ public final class SqlFormatter {
             if (token.kind() == Kind.LINE_COMMENT || token.kind() == Kind.BLOCK_COMMENT) continue;
             if (token.kind() == Kind.OPEN) return startsSubquery(tokens, scan);
             return token.kind() == Kind.WORD && ("SELECT".equals(token.upper()) || "WITH".equals(token.upper()));
+        }
+        return false;
+    }
+
+    private static final Set<String> CREATE_TABLE_MODIFIERS = Set.of(
+            "GLOBAL", "LOCAL", "PRIVATE", "TEMPORARY", "TEMP", "UNLOGGED", "EXTERNAL", "SHARDED", "DUPLICATED"
+    );
+
+    /** 只识别紧跟在 CREATE TABLE 表名之后的括号，不把 AS SELECT 等查询括号误判为字段列表。 */
+    private static boolean isTableDefinition(List<Token> tokens, int statementStart, int openIndex) {
+        int scan = nextNonComment(tokens, statementStart, openIndex);
+        if (!isWord(tokens, scan, openIndex, "CREATE")) return false;
+        scan = nextNonComment(tokens, scan + 1, openIndex);
+        if (isWord(tokens, scan, openIndex, "OR")) {
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+            if (!isWord(tokens, scan, openIndex, "REPLACE")) return false;
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+        }
+        while (scan < openIndex && tokens.get(scan).kind() == Kind.WORD
+                && CREATE_TABLE_MODIFIERS.contains(tokens.get(scan).upper())) {
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+        }
+        if (!isWord(tokens, scan, openIndex, "TABLE")) return false;
+        scan = nextNonComment(tokens, scan + 1, openIndex);
+        if (isWord(tokens, scan, openIndex, "IF")) {
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+            if (!isWord(tokens, scan, openIndex, "NOT")) return false;
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+            if (!isWord(tokens, scan, openIndex, "EXISTS")) return false;
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+        }
+        if (scan >= openIndex || tokens.get(scan).kind() != Kind.WORD) return false;
+        scan = nextNonComment(tokens, scan + 1, openIndex);
+        while (scan < openIndex && tokens.get(scan).kind() == Kind.DOT) {
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+            if (scan >= openIndex || tokens.get(scan).kind() != Kind.WORD) return false;
+            scan = nextNonComment(tokens, scan + 1, openIndex);
+        }
+        return scan == openIndex;
+    }
+
+    private static int nextNonComment(List<Token> tokens, int index, int end) {
+        while (index < end && (tokens.get(index).kind() == Kind.LINE_COMMENT
+                || tokens.get(index).kind() == Kind.BLOCK_COMMENT)) index++;
+        return index;
+    }
+
+    private static boolean isWord(List<Token> tokens, int index, int end, String word) {
+        return index < end && tokens.get(index).kind() == Kind.WORD && word.equals(tokens.get(index).upper());
+    }
+
+    /** 小括号内的短表达式保持完整；扫描设有宽度上限，嵌套很深时也不会反复遍历整条 SQL。 */
+    private static boolean isCompactInline(List<Token> tokens, int openIndex) {
+        int depth = 1;
+        int width = 0;
+        for (int scan = openIndex + 1; scan < tokens.size(); scan++) {
+            Token token = tokens.get(scan);
+            if (token.kind() == Kind.LINE_COMMENT || token.kind() == Kind.BLOCK_COMMENT
+                    || token.kind() == Kind.SEMICOLON || token.text().indexOf('\n') >= 0) return false;
+            if (token.kind() == Kind.OPEN) depth++;
+            if (token.kind() == Kind.CLOSE) {
+                depth--;
+                if (depth == 0) return true;
+            }
+            width += token.text().length() + 1;
+            if (width > COMPACT_INLINE_WIDTH) return false;
         }
         return false;
     }
@@ -594,7 +737,8 @@ public final class SqlFormatter {
                 Kind kind = segmentKind(text);
                 if (kind == Kind.LINE_COMMENT) text = text.stripTrailing();
                 tokens.add(newToken(kind, text, ownLine));
-                ownLine = false;
+                ownLine = kind == Kind.LINE_COMMENT && segmentEnd > index
+                        && (sql.charAt(segmentEnd - 1) == '\n' || sql.charAt(segmentEnd - 1) == '\r');
                 index = segmentEnd;
                 continue;
             }
