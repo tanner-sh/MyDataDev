@@ -22,7 +22,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 启动固定版本的官方达梦测试镜像
         run: bash scripts/start-dameng-test.sh
       - name: 配置普通账号和兼容模式

@@ -12,14 +12,15 @@ name: 夜间回归
 # 一个红了没人管的夜间任务，很快就会被当成常态。
 on:
   schedule:
-    # GitHub 的 cron 用 UTC：18:00 即北京时间凌晨 2 点。
-    - cron: '0 18 * * *'
+    # GitHub 的 cron 用 UTC：18:23 即北京时间凌晨 2:23，避开整点（:00）全球定时任务排队与限流高峰。
+    - cron: '23 18 * * *'
   workflow_dispatch:
   # 改这个文件或它调用的 package.yml 的 PR 也跑一遍，否则写错了要等到合并后的第一个晚上才知道。
   pull_request:
     paths:
       - .github/workflows/nightly.yml
       - .github/workflows/package.yml
+      - backend/.mvn/maven.config
 
 permissions:
   contents: read
@@ -29,8 +30,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # 单独由一个 runner 串行预热完整 Maven 缓存（包含 clean、test-compile 与 surefire-junit-platform），
+  # 避免下方 9 个数据库兼容作业同时回源 Maven Central 撞上 HTTP 429，也隔离 ci.yml 中 -DskipTests
+  # 写入的不完整缓存。
+  warmup:
+    name: 预热 Maven 依赖缓存
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 恢复或预热完整 Maven 仓库缓存
+        id: m2-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: 拉取全部测试与打包插件及依赖
+        if: steps.m2-cache.outputs.cache-hit != 'true'
+        working-directory: backend
+        run: |
+          find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
+          mvn clean test --batch-mode '-Dtest=DatabaseFamilyTest'
+          mvn package --batch-mode -DskipTests
+          find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
+
   mysql:
     name: MySQL ${{ matrix.version }}
+    needs: warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -57,7 +89,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       # 用 Ubuntu 自带的 8.0 客户端，与 CI 相同。产品调用的就是用户机器上的 mysqldump，
       # 旧客户端备份新服务端失败，同样是用户会遇到的问题。
       - name: 安装备份恢复客户端
@@ -87,6 +124,7 @@ jobs:
 
   postgresql:
     name: PostgreSQL ${{ matrix.version }}
+    needs: warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -112,7 +150,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       # pg_dump 不能比服务端旧，而新版 pg_dump 的输出又可能带旧服务端不认的设置（17 起会写
       # transaction_timeout），所以按服务端版本装同版本客户端，走 PostgreSQL 官方 apt 源。
       - name: 安装与服务端同版本的 pg_dump / pg_restore
@@ -144,6 +187,7 @@ jobs:
 
   mariadb:
     name: MariaDB ${{ matrix.version }}
+    needs: warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -170,7 +214,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 安装 MariaDB 客户端
         run: |
           sudo apt-get update
@@ -198,6 +247,7 @@ jobs:
 
   sqlserver:
     name: SQL Server ${{ matrix.version }}
+    needs: warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -222,7 +272,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 建 SQL Server 测试库
         env:
           CONTAINER: ${{ job.services.sqlserver.id }}
@@ -254,6 +309,7 @@ jobs:
 
   oracle:
     name: Oracle XE 21
+    needs: warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # CI 用的已经是最新的 Oracle Free 23，这里只补一个更旧的版本。
@@ -275,7 +331,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
         run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
@@ -307,7 +368,7 @@ jobs:
     # 还没合并的分支上的失败，会被开成一条「夜间回归失败」。被取消的一轮也不汇报：取消是人为的，
     # 既不是失败也不代表恢复。
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-    needs: [mysql, postgresql, mariadb, sqlserver, oracle, packaging]
+    needs: [warmup, mysql, postgresql, mariadb, sqlserver, oracle, packaging]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
