@@ -34,6 +34,7 @@ public class AppProperties {
     private final AiAgent aiAgent = new AiAgent();
     private final Auth auth = new Auth();
     private final AuditAlert auditAlert = new AuditAlert();
+    private final Migration migration = new Migration();
 
     public String getCryptoKeySource() {
         return cryptoKeySource;
@@ -111,6 +112,10 @@ public class AppProperties {
 
     public AuditAlert getAuditAlert() {
         return auditAlert;
+    }
+
+    public Migration getMigration() {
+        return migration;
     }
 
     /** Web 发行包的本地账号认证；桌面端和本地开发默认关闭。 */
@@ -629,5 +634,49 @@ public class AppProperties {
         public void setExtraSearchPaths(List<String> extraSearchPaths) { this.extraSearchPaths = extraSearchPaths == null ? new ArrayList<>() : new ArrayList<>(extraSearchPaths); }
         public int getProbeTimeoutSeconds() { return probeTimeoutSeconds; }
         public void setProbeTimeoutSeconds(int probeTimeoutSeconds) { this.probeTimeoutSeconds = probeTimeoutSeconds; }
+    }
+
+    /** 异构数据库完整迁移与标准制品（.mddpkg）相关配置（面向百 GB / 万表级大库）。 */
+    public static class Migration {
+        private String directory = "./migrations";
+        private long maxUploadBytes = 214_748_364_800L;
+        private long partMaxBytes = 128L * 1024 * 1024;
+        private long partMaxRows = 200_000L;
+        private int defaultConcurrency = 4;
+        private int maxConcurrency = 8;
+        private int batchMaxRows = 1000;
+        private long batchMaxBytes = 32L * 1024 * 1024;
+        private int largeLobThresholdBytes = 256 * 1024;
+        private int statementTimeoutSeconds = 28800;
+        private int artifactTtlHours = 168;
+        private int workerThreads = 2;
+        private int queueCapacity = 20;
+
+        public String getDirectory() { return directory; }
+        public void setDirectory(String directory) { this.directory = directory; }
+        public long getMaxUploadBytes() { return maxUploadBytes; }
+        public void setMaxUploadBytes(long maxUploadBytes) { this.maxUploadBytes = maxUploadBytes; }
+        public long getPartMaxBytes() { return partMaxBytes; }
+        public void setPartMaxBytes(long partMaxBytes) { this.partMaxBytes = partMaxBytes; }
+        public long getPartMaxRows() { return partMaxRows; }
+        public void setPartMaxRows(long partMaxRows) { this.partMaxRows = partMaxRows; }
+        public int getDefaultConcurrency() { return defaultConcurrency; }
+        public void setDefaultConcurrency(int defaultConcurrency) { this.defaultConcurrency = defaultConcurrency; }
+        public int getMaxConcurrency() { return maxConcurrency; }
+        public void setMaxConcurrency(int maxConcurrency) { this.maxConcurrency = maxConcurrency; }
+        public int getBatchMaxRows() { return batchMaxRows; }
+        public void setBatchMaxRows(int batchMaxRows) { this.batchMaxRows = batchMaxRows; }
+        public long getBatchMaxBytes() { return batchMaxBytes; }
+        public void setBatchMaxBytes(long batchMaxBytes) { this.batchMaxBytes = batchMaxBytes; }
+        public int getLargeLobThresholdBytes() { return largeLobThresholdBytes; }
+        public void setLargeLobThresholdBytes(int largeLobThresholdBytes) { this.largeLobThresholdBytes = largeLobThresholdBytes; }
+        public int getStatementTimeoutSeconds() { return statementTimeoutSeconds; }
+        public void setStatementTimeoutSeconds(int statementTimeoutSeconds) { this.statementTimeoutSeconds = statementTimeoutSeconds; }
+        public int getArtifactTtlHours() { return artifactTtlHours; }
+        public void setArtifactTtlHours(int artifactTtlHours) { this.artifactTtlHours = artifactTtlHours; }
+        public int getWorkerThreads() { return workerThreads; }
+        public void setWorkerThreads(int workerThreads) { this.workerThreads = workerThreads; }
+        public int getQueueCapacity() { return queueCapacity; }
+        public void setQueueCapacity(int queueCapacity) { this.queueCapacity = queueCapacity; }
     }
 }

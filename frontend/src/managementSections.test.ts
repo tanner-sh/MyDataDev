@@ -85,7 +85,7 @@ describe('management sections', () => {
   it('运行状态与导出传输各合成一项，导航从 13 项减到 11 项', () => {
     const items = managementNavigation().flatMap((group) => group.items);
     expect(items.find((item) => item.key === 'status')?.sections.map((section) => section.key)).toEqual(['sessions', 'server-info', 'pool']);
-    expect(items.find((item) => item.key === 'export')?.sections.map((section) => section.key)).toEqual(['schema-export', 'scheduled-exports', 'data-transfer']);
+    expect(items.find((item) => item.key === 'export')?.sections.map((section) => section.key)).toEqual(['schema-export', 'scheduled-exports', 'data-transfer', 'database-migration']);
     expect(items).toHaveLength(11);
     // 连接池是全局的：没选连接时「运行状态」照样能点进去，落在连接池上。
     const status = items.find((item) => item.key === 'status');

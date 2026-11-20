@@ -148,6 +148,7 @@ const SchemaSnapshotPanel = lazy(() => import('./components/SchemaSnapshotPanel'
 const SchemaExportPanel = lazy(() => import('./components/SchemaExportPanel').then((module) => ({ default: module.SchemaExportPanel })));
 const DataSearchPanel = lazy(() => import('./components/DataSearchPanel').then((module) => ({ default: module.DataSearchPanel })));
 const DataTransferPanel = lazy(() => import('./components/DataTransferPanel').then((module) => ({ default: module.DataTransferPanel })));
+const MigrationPanel = lazy(() => import('./components/MigrationPanel').then((module) => ({ default: module.MigrationPanel })));
 const ConnectionList = lazy(() => import('./components/ConnectionList').then((module) => ({ default: module.ConnectionList })));
 const ConnectionArchivePanel = lazy(() => import('./components/ConnectionArchivePanel').then((module) => ({ default: module.ConnectionArchivePanel })));
 const ConnectionPoolPanel = lazy(() => import('./components/ConnectionPoolPanel').then((module) => ({ default: module.ConnectionPoolPanel })));
@@ -4174,6 +4175,20 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
                     defaultConnectionId={selected?.id}
                     onRequestConfirmation={productionConfirmation.requestConfirmation}
                     onOpenTasks={openSqlFileTasks}
+                  />
+                </Suspense>
+              </div>
+            )}
+
+            {activeDrawer === 'database-migration' && (
+              <div className="management-section">
+                <header className="management-section-header"><Text strong>异构数据库类型转换与标准制品</Text></header>
+                <Suspense fallback={<PanelLoading text="正在加载数据库转换向导…" />}>
+                  <MigrationPanel
+                    connections={connections}
+                    defaultConnectionId={selected?.id}
+                    defaultSchema={explorerSchema}
+                    onRequestConfirmation={productionConfirmation.requestConfirmation}
                   />
                 </Suspense>
               </div>

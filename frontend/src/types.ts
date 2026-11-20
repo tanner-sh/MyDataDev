@@ -1118,3 +1118,249 @@ export type SqlCommandView = {
   entries: SqlCommandLogEntry[];
   hasMore: boolean;
 };
+
+/** 异构数据库完整迁移与标准制品（.mddpkg）。 */
+export type MigrationMode = 'ONLINE_DIRECT' | 'EXPORT_ARTIFACT' | 'IMPORT_ARTIFACT';
+export type MigrationConflictMode = 'FAIL' | 'SKIP' | 'TRUNCATE_AND_LOAD' | 'DROP_AND_RECREATE';
+export type IdentifierCasePolicy = 'PRESERVE' | 'LOWER' | 'UPPER';
+export type MigrationVerifyLevel = 'L1_COUNT' | 'L2_AGGREGATE' | 'L3_FULL_HASH';
+
+export type MigrationOptions = {
+  identifierCasePolicy: IdentifierCasePolicy;
+  conflictMode: MigrationConflictMode;
+  includeData: boolean;
+  includeIndexes: boolean;
+  includeForeignKeys: boolean;
+  includeCheckConstraints: boolean;
+  includeComments: boolean;
+  includeSequences: boolean;
+  includeProgramObjects: boolean;
+  createTargetSchemaIfMissing: boolean;
+  caseSensitiveCollation: boolean;
+  timezonePolicy: 'UTC' | 'LOCAL';
+  emptyStringToOraclePolicy: 'FAIL' | 'ALLOW_NULL' | 'SPACE_PLACEHOLDER';
+  pgNulBytePolicy: 'FAIL' | 'STRIP';
+  unboundedNumberPrecision: number;
+  unboundedNumberScale: number;
+  useOracleScnSnapshot: boolean;
+  verifyAfterMigration: boolean;
+  verifyLevel: MigrationVerifyLevel;
+  concurrency: number;
+  selectedTables: string[];
+  selectedProgramObjects: string[];
+  columnTypeOverrides: Record<string, string>;
+  programObjectOverrides: Record<string, string>;
+  tableNameMapping: Record<string, string>;
+  storageProfileId?: number | null;
+  artifactName?: string | null;
+};
+
+export type AssessmentFinding = {
+  severity: 'OK' | 'WARNING' | 'BLOCKER' | string;
+  code: string;
+  objectKind: string;
+  objectName: string;
+  columnName?: string | null;
+  message: string;
+  suggestion?: string | null;
+};
+
+export type ColumnMappingPreview = {
+  sourceName: string;
+  targetName: string;
+  sourceNativeType: string;
+  canonicalType: string;
+  targetType: string;
+  nullable: boolean;
+  overridden: boolean;
+  lob: boolean;
+  severity: string;
+  note?: string | null;
+};
+
+export type TableAssessment = {
+  tableId: string;
+  sourceName: string;
+  targetName: string;
+  estimatedRows?: number | null;
+  estimatedBytes?: number | null;
+  columnCount?: number;
+  detailsDeferred?: boolean;
+  hasLobColumns: boolean;
+  hasPrimaryKey: boolean;
+  primaryKeyColumns: string[];
+  indexCount: number;
+  foreignKeyCount: number;
+  checkConstraintCount: number;
+  columns: ColumnMappingPreview[];
+  createTableSql: string[];
+  postDataSql: string[];
+  sequenceSyncSql: string[];
+  findings: AssessmentFinding[];
+};
+
+export type ProgramObjectAssessment = {
+  key: string;
+  kind: string;
+  sourceName: string;
+  targetName: string;
+  translationMode: string;
+  sourceSql: string;
+  targetSql: string;
+  aiAssisted: boolean;
+  dependencies: string[];
+  findings: AssessmentFinding[];
+};
+
+export type MigrationAssessmentSummary = {
+  tableCount: number;
+  sequenceCount: number;
+  programObjectCount: number;
+  estimatedTotalRows: number;
+  estimatedTotalBytes: number;
+  okCount: number;
+  warningCount: number;
+  blockerCount: number;
+  hasLobTables: boolean;
+};
+
+export type MigrationAssessmentResponse = {
+  planToken: string;
+  mode: MigrationMode;
+  sourceDbType: string;
+  sourceVersion?: string | null;
+  sourceSchema?: string | null;
+  targetDbType?: string | null;
+  targetSchema?: string | null;
+  targetSchemaExists?: boolean | null;
+  createSchemaSql?: string[];
+  sameFamily: boolean;
+  canExecute: boolean;
+  aiTranslationAvailable: boolean;
+  summary: MigrationAssessmentSummary;
+  tables: TableAssessment[];
+  programObjects: ProgramObjectAssessment[];
+  globalFindings: AssessmentFinding[];
+  effectiveOptions: MigrationOptions;
+};
+
+export type AiTranslateObjectResponse = {
+  objectKey: string;
+  targetSql: string;
+  compiled: boolean;
+  compileMessage: string;
+  notes: string[];
+};
+
+export type MigrationArtifact = {
+  id: number;
+  name: string;
+  filePath: string;
+  storageProfileId?: number | null;
+  remotePath?: string | null;
+  fileSize: number;
+  checksum: string;
+  sourceDbType: string;
+  sourceVersion?: string | null;
+  sourceSchema?: string | null;
+  formatVersion: number;
+  tableCount: number;
+  totalRows: number;
+  totalBytes: number;
+  createdAt: string;
+  expiresAt?: string | null;
+};
+
+export type MigrationJob = {
+  id: number;
+  mode: MigrationMode;
+  sourceKind: string;
+  sourceConnectionId?: number | null;
+  sourceArtifactId?: number | null;
+  sourceDbType: string;
+  sourceSchema?: string | null;
+  targetConnectionId?: number | null;
+  targetDbType?: string | null;
+  targetSchema?: string | null;
+  outputArtifactId?: number | null;
+  conflictMode: string;
+  snapshotToken?: string | null;
+  status: string;
+  phase: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  totalRows: number;
+  migratedRows: number;
+  migratedBytes: number;
+  verifyStatus: string;
+  verifyReportJson?: string | null;
+  message?: string | null;
+  cancelRequested: boolean;
+  actor?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  createdAt: string;
+};
+
+export type MigrationItem = {
+  id: number;
+  jobId: number;
+  itemKind: string;
+  sourceName: string;
+  targetName: string;
+  tableId?: string | null;
+  executionOrder: number;
+  status: string;
+  sourceRows: number;
+  migratedRows: number;
+  migratedBytes: number;
+  totalParts: number;
+  completedParts: number;
+  verifyStatus: string;
+  errorMessage?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+};
+
+export type MigrationJobDetail = {
+  job: MigrationJob;
+  items: MigrationItem[];
+  sourceArtifact?: MigrationArtifact | null;
+  outputArtifact?: MigrationArtifact | null;
+};
+
+export type TableVerificationResult = {
+  tableId: string;
+  sourceName: string;
+  targetName: string;
+  status: string;
+  level: string;
+  sourceRowCount: number;
+  targetRowCount: number;
+  rowCountMatch: boolean;
+  aggregateMatch: boolean;
+  multisetHashMatch?: boolean | null;
+  sourceLobBytes: number;
+  targetLobBytes: number;
+  sourceHashHex?: string | null;
+  targetHashHex?: string | null;
+  mismatches: string[];
+  elapsedMs: number;
+};
+
+export type MigrationVerificationReport = {
+  jobId: number;
+  verifyMode: string;
+  verifyLevel: string;
+  overallStatus: string;
+  totalTables: number;
+  passedTables: number;
+  failedTables: number;
+  skippedTables: number;
+  totalRowsVerified: number;
+  totalLobBytesVerified: number;
+  verifiedAt: string;
+  tables: TableVerificationResult[];
+  notes: string[];
+};
