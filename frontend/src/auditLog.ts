@@ -156,7 +156,20 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SCHEDULED_QUERY_CREATE: { label: '新建定时导出', category: 'sql' },
   SCHEDULED_QUERY_UPDATE: { label: '修改定时导出', category: 'sql' },
   SCHEDULED_QUERY_DELETE: { label: '删除定时导出', category: 'sql' },
-  SCHEDULED_QUERY_RUN: { label: '执行定时导出', category: 'sql' }
+  SCHEDULED_QUERY_RUN: { label: '执行定时导出', category: 'sql' },
+  MIGRATION_ARTIFACT_UPLOAD: { label: '上传标准迁移制品', category: 'data' },
+  MIGRATION_ARTIFACT_DELETE: { label: '删除标准迁移制品', category: 'data', dangerous: true },
+  MIGRATION_ASSESS: { label: '评估数据库类型转换', category: 'schema' },
+  MIGRATION_AI_TRANSLATE: { label: 'AI 辅助转译迁移对象', category: 'ai' },
+  MIGRATION_START: { label: '启动数据库迁移转换', category: 'data', dangerous: true },
+  MIGRATION_RETRY: { label: '断点重试数据库迁移', category: 'data', dangerous: true },
+  MIGRATION_CANCEL_REQUEST: { label: '请求取消数据库迁移', category: 'data' },
+  MIGRATION_VERIFY: { label: '校验数据库迁移一致性', category: 'data' },
+  MIGRATION_EXPORT_SUCCESS: { label: '导出标准迁移制品完成', category: 'data' },
+  MIGRATION_CREATE_SCHEMA: { label: '自动创建目标 Schema/库', category: 'schema', dangerous: true },
+  MIGRATION_COMPLETE: { label: '数据库迁移转换完成', category: 'data' },
+  MIGRATION_CANCELLED: { label: '数据库迁移转换已取消', category: 'data' },
+  MIGRATION_FAILED: { label: '数据库迁移转换失败', category: 'data', dangerous: true }
 };
 
 export function auditActionLabel(action: string): string {

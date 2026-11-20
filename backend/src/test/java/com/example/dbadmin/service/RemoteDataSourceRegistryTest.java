@@ -293,6 +293,22 @@ class RemoteDataSourceRegistryTest {
                 .isNotEqualTo(registry.fingerprint(nullUsername, "null"));
     }
 
+    @Test
+    void optimizesBatchRewriteParametersForMySqlOceanBaseAndPostgreSqlWithoutDuplicating() {
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:mysql://127.0.0.1:3306/app"))
+                .isEqualTo("jdbc:mysql://127.0.0.1:3306/app?rewriteBatchedStatements=true");
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:oceanbase://127.0.0.1:2881/app?useSSL=false"))
+                .isEqualTo("jdbc:oceanbase://127.0.0.1:2881/app?useSSL=false&rewriteBatchedStatements=true");
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:mariadb://127.0.0.1:3306/app?rewriteBatchedStatements=false"))
+                .isEqualTo("jdbc:mariadb://127.0.0.1:3306/app?rewriteBatchedStatements=false");
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:postgresql://127.0.0.1:5432/app"))
+                .isEqualTo("jdbc:postgresql://127.0.0.1:5432/app?reWriteBatchedInserts=true");
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:postgresql://127.0.0.1:5432/app?reWriteBatchedInserts=true"))
+                .isEqualTo("jdbc:postgresql://127.0.0.1:5432/app?reWriteBatchedInserts=true");
+        assertThat(RemoteDataSourceRegistry.optimizeBatchJdbcUrl("jdbc:oracle:thin:@//127.0.0.1:1521/FREEPDB1"))
+                .isEqualTo("jdbc:oracle:thin:@//127.0.0.1:1521/FREEPDB1");
+    }
+
     /** 注册表只用 ObjectProvider 取可选的 MeterRegistry，测试里不需要指标。 */
     private static final class EmptyObjectProvider<T> implements ObjectProvider<T> {
         @Override

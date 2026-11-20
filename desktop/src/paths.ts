@@ -9,6 +9,8 @@ export type DesktopPaths = {
   /** 定时导出的产物目录。 */
   exports: string;
   sqlFiles: string;
+  /** 异构数据库迁移标准制品（.mddpkg）目录。 */
+  migrations: string;
   logs: string;
   secretFile: string;
 };
@@ -31,6 +33,7 @@ export function resolveDesktopPaths(platform: NodeJS.Platform, environment: Desk
     backups: platformPath.join(home, 'backups'),
     exports: platformPath.join(home, 'exports'),
     sqlFiles: platformPath.join(home, 'sql-files'),
+    migrations: platformPath.join(home, 'migrations'),
     logs: platformPath.join(home, 'logs'),
     secretFile: platformPath.join(home, 'desktop-secret.json')
   };

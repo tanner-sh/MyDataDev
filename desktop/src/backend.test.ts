@@ -21,6 +21,7 @@ function options(): BackendStartOptions {
       backups: '/data/MyDataDev/backups',
       exports: '/data/MyDataDev/exports',
       sqlFiles: '/data/MyDataDev/sql-files',
+      migrations: '/data/MyDataDev/migrations',
       logs: '/data/MyDataDev/logs',
       secretFile: '/data/MyDataDev/secret.json'
     },

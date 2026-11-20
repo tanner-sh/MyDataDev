@@ -19,6 +19,15 @@ const FIELD_WIDTH = { connection: 240, schema: 160, table: 180 } as const;
 
 const schemaCache = new Map<number, Promise<string[]>>();
 
+/** 目标库自动新建 Schema/数据库后清理候选缓存，让下一次下拉立刻看到新建命名空间。 */
+export function invalidateSchemaCache(connectionId?: number | null): void {
+  if (connectionId == null) {
+    schemaCache.clear();
+  } else {
+    schemaCache.delete(connectionId);
+  }
+}
+
 function loadSchemas(connectionId: number): Promise<string[]> {
   let pending = schemaCache.get(connectionId);
   if (!pending) {

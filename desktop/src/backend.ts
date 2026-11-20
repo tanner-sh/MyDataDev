@@ -97,6 +97,7 @@ export class BackendManager {
       mkdir(this.options.desktopPaths.backups, { recursive: true }),
       mkdir(this.options.desktopPaths.exports, { recursive: true }),
       mkdir(this.options.desktopPaths.sqlFiles, { recursive: true }),
+      mkdir(this.options.desktopPaths.migrations, { recursive: true }),
       mkdir(this.options.desktopPaths.logs, { recursive: true }),
       access(this.options.java),
       access(this.options.jar)

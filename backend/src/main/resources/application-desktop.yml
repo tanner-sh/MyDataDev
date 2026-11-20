@@ -27,6 +27,8 @@ app:
     directory: ${MYDATADEV_DESKTOP_HOME}/exports
   sql-file:
     directory: ${MYDATADEV_DESKTOP_HOME}/sql-files
+  migration:
+    directory: ${MYDATADEV_DESKTOP_HOME}/migrations
   desktop:
     control-token: ${MYDATADEV_DESKTOP_CONTROL_TOKEN}
     parent-pid: ${MYDATADEV_DESKTOP_PARENT_PID}

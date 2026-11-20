@@ -390,12 +390,8 @@ public class RemoteDataSourceRegistry {
         config.setInitializationFailTimeout(failFast ? 1 : -1);
         config.setPoolName("dbadmin-" + poolName + "-" + Integer.toUnsignedString(System.identityHashCode(config)));
 
-        // Enable batch rewrite for MySQL/MariaDB
-        String lowerUrl = jdbcUrl.toLowerCase();
-        if (lowerUrl.startsWith("jdbc:mysql:") || lowerUrl.startsWith("jdbc:mariadb:")) {
-            String separator = jdbcUrl.contains("?") ? "&" : "?";
-            config.setJdbcUrl(jdbcUrl + separator + "rewriteBatchedStatements=true");
-        }
+        // 为 MySQL / MariaDB / OceanBase / PostgreSQL 自动开启驱动级批量写入重写（避免 executeBatch 退化为逐条 INSERT）
+        config.setJdbcUrl(optimizeBatchJdbcUrl(jdbcUrl));
 
         if (!initStatements.isEmpty()) {
             // Hikari 的 connectionInitSql 只能执行一条语句；会话初始化常常需要好几条 SET，
@@ -408,6 +404,21 @@ public class RemoteDataSourceRegistry {
         }
         if (meterRegistry != null) config.setMetricsTrackerFactory(new MicrometerMetricsTrackerFactory(meterRegistry));
         return new HikariDataSource(config);
+    }
+
+    static String optimizeBatchJdbcUrl(String jdbcUrl) {
+        if (jdbcUrl == null || jdbcUrl.isBlank()) return jdbcUrl;
+        String lowerUrl = jdbcUrl.toLowerCase(java.util.Locale.ROOT);
+        if (lowerUrl.startsWith("jdbc:mysql:") || lowerUrl.startsWith("jdbc:mariadb:") || lowerUrl.startsWith("jdbc:oceanbase:")) {
+            if (!lowerUrl.contains("rewritebatchedstatements=")) {
+                return jdbcUrl + (jdbcUrl.contains("?") ? "&" : "?") + "rewriteBatchedStatements=true";
+            }
+        } else if (lowerUrl.startsWith("jdbc:postgresql:")) {
+            if (!lowerUrl.contains("rewritebatchedinserts=")) {
+                return jdbcUrl + (jdbcUrl.contains("?") ? "&" : "?") + "reWriteBatchedInserts=true";
+            }
+        }
+        return jdbcUrl;
     }
 
     private SQLException findSqlException(Throwable error) {

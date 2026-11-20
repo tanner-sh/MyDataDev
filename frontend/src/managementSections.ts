@@ -6,7 +6,7 @@ import type { ConnectionPermission } from './accessControl';
  * 纯数据 + 纯判断，放在组件外面：哪些分区在什么条件下可用，是一条能单测的规则，
  * 不该埋在 JSX 的三元表达式里。
  */
-export type ManagementSection = 'connections' | 'backups' | 'pool' | 'server-info' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'table-relations' | 'data-diff' | 'data-search' | 'data-transfer' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
+export type ManagementSection = 'connections' | 'backups' | 'pool' | 'server-info' | 'scheduled-exports' | 'schema-diff' | 'schema-snapshots' | 'schema-export' | 'table-relations' | 'data-diff' | 'data-search' | 'data-transfer' | 'database-migration' | 'mcp' | 'ai' | 'sessions' | 'audit' | 'users' | 'access';
 
 /**
  * 分区的分组。
@@ -83,6 +83,8 @@ export const MANAGEMENT_SECTIONS: ManagementSectionMeta[] = [
   // 传输把数据搬出源连接，与导出同档。两端的真正授权在服务端逐条连接校验（源端 EXPORT +
   // QUERY、目标端 DATA_WRITE）—— 这里只是入口的可见性，因为面板里选的连接未必是当前选中的这条。
   { key: 'data-transfer', label: '数据传输', group: 'data', entry: 'export', requiresPermission: 'EXPORT' },
+  // 异构数据库完整转换（11 种方言双向转换 + 标准制品 .mddpkg + 在线直迁），与导出传输同入口。
+  { key: 'database-migration', label: '数据库转换', group: 'data', entry: 'export', requiresPermission: 'EXPORT' },
   // 表关系的候选来自执行历史（只给名字对），判断影响所有人的 JOIN 补全：与看历史同档，要 QUERY。
   { key: 'table-relations', label: '表关系', group: 'data', requiresPermission: 'QUERY' },
   // 检索读的是业务数据本身，所以要 QUERY 而不是 VIEW_METADATA。

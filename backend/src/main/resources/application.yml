@@ -128,6 +128,20 @@ app:
     max-upload-bytes: 21474836480
     upload-ttl-hours: 24
     remote-cache-ttl-hours: 24
+  migration:
+    directory: ./migrations
+    max-upload-bytes: 214748364800
+    part-max-bytes: 134217728
+    part-max-rows: 200000
+    default-concurrency: 4
+    max-concurrency: 8
+    batch-max-rows: 1000
+    batch-max-bytes: 33554432
+    large-lob-threshold-bytes: 262144
+    statement-timeout-seconds: 28800
+    artifact-ttl-hours: 168
+    worker-threads: 2
+    queue-capacity: 20
   scheduled-query:
     # 定时导出的产物目录；每个任务只保留最近 keep-files 份 —— 一个每小时跑一次的任务
     # 一年会留下八千多个文件，没有人会去清理它们，磁盘却是会满的。

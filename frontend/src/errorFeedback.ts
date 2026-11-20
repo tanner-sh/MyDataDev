@@ -42,7 +42,7 @@ export function reportFailure(error: Parameters<typeof describeFailure>[0], path
 export function mayChangeData(path: string, method = 'GET') {
   if (['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) return false;
   if (/^\/data\/(?:table\/query|conflict-row)(?:\?|$)/.test(path)) return false;
-  return !/(?:\/test|\/preview|\/preflight|\/query-page|\/explain|\/format|\/export|\/count|\/search|\/auth\/status)(?:\?|$)/.test(path);
+  return !/(?:\/test|\/preview|\/preflight|\/query-page|\/explain|\/format|\/export|\/count|\/search|\/auth\/status|\/assess|\/ai-translate|\/verify)(?:\?|$)/.test(path);
 }
 
 export function diagnosticText(failure: FailureInfo) {
