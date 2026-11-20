@@ -14,7 +14,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - run: bash scripts/start-oceanbase-test.sh
       - name: 验证租户识别、模式校验及通用数据库功能
         working-directory: backend

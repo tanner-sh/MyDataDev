@@ -48,15 +48,16 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 拉取全部测试与打包插件及依赖
         if: steps.m2-cache.outputs.cache-hit != 'true'
         working-directory: backend
         run: |
           find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
           mvn clean test --batch-mode '-Dtest=DatabaseFamilyTest'
+          mvn package --batch-mode -DskipTests
           find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
 
   mysql:
@@ -91,9 +92,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       # 用 Ubuntu 自带的 8.0 客户端，与 CI 相同。产品调用的就是用户机器上的 mysqldump，
       # 旧客户端备份新服务端失败，同样是用户会遇到的问题。
       - name: 安装备份恢复客户端
@@ -152,9 +153,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       # pg_dump 不能比服务端旧，而新版 pg_dump 的输出又可能带旧服务端不认的设置（17 起会写
       # transaction_timeout），所以按服务端版本装同版本客户端，走 PostgreSQL 官方 apt 源。
       - name: 安装与服务端同版本的 pg_dump / pg_restore
@@ -216,9 +217,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 安装 MariaDB 客户端
         run: |
           sudo apt-get update
@@ -274,9 +275,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 建 SQL Server 测试库
         env:
           CONTAINER: ${{ job.services.sqlserver.id }}
@@ -333,9 +334,9 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.m2/repository
-          key: nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
           restore-keys: |
-            nightly-maven-v1-${{ runner.os }}-${{ runner.arch }}-
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
         run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'

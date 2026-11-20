@@ -21,16 +21,48 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # 由单个 runner 串行预热完整 Maven 缓存（含 clean、surefire-junit-platform 与 spring-boot 打包插件），
+  # 避免下游多作业同时回源触发 Maven Central 429，也杜绝 -DskipTests 作业抢先写入不完整缓存。
+  maven-warmup:
+    name: 预热 Maven 依赖缓存
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: 恢复或预热完整 Maven 仓库缓存
+        id: m2-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
+      - name: 拉取全部测试与打包插件及依赖
+        if: steps.m2-cache.outputs.cache-hit != 'true'
+        working-directory: backend
+        run: |
+          find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
+          mvn clean test --batch-mode '-Dtest=DatabaseFamilyTest'
+          mvn package --batch-mode -DskipTests
+          find "$HOME/.m2/repository" -name '*.lastUpdated' -delete 2>/dev/null || true
+
   oceanbase-compatibility:
     name: OceanBase MySQL 真实回归
+    needs: maven-warmup
     uses: ./.github/workflows/oceanbase-compatibility.yml
 
   dameng-compatibility:
     name: 达梦真实回归
+    needs: maven-warmup
     uses: ./.github/workflows/dameng-compatibility.yml
 
   database-compatibility:
     name: MySQL 与 PostgreSQL 真实回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -63,7 +95,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 安装真实备份恢复客户端
         run: |
           sudo apt-get update
@@ -101,6 +138,7 @@ jobs:
 
   mariadb-compatibility:
     name: MariaDB 真实回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # 单独一个作业，只为了装 mariadb-client：它与 mysql-client 在 apt 层面互斥（两者都提供
@@ -127,7 +165,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 安装 MariaDB 客户端
         run: |
           sudo apt-get update
@@ -154,6 +197,7 @@ jobs:
 
   sqlserver-compatibility:
     name: SQL Server 真实回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -173,7 +217,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 建 SQL Server 测试库
         run: |
           docker exec "$(docker ps --filter ancestor=mcr.microsoft.com/mssql/server:2022-latest --format '{{.ID}}')" \
@@ -198,6 +247,7 @@ jobs:
 
   oracle-compatibility:
     name: Oracle 真实回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
@@ -218,7 +268,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - name: 验证数据编辑、事务、DDL、导出及备份恢复往返
         working-directory: backend
         run: mvn test --batch-mode '-Dtest=Database*CompatibilityTest'
@@ -238,6 +293,7 @@ jobs:
 
   ui-smoke:
     name: Web 发行包浏览器回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -246,7 +302,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
@@ -273,6 +334,7 @@ jobs:
 
   backend:
     name: 后端测试
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -282,7 +344,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: 运行后端测试
         run: mvn test --batch-mode
@@ -346,6 +413,7 @@ jobs:
 
   upgrade:
     name: 旧版本升级回归
+    needs: maven-warmup
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -355,7 +423,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
+      - uses: actions/cache@v6
+        with:
+          path: ~/.m2/repository
+          key: maven-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('backend/pom.xml', 'backend/.mvn/maven.config') }}
+          restore-keys: |
+            maven-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - uses: actions/setup-node@v7
         with:
@@ -396,6 +469,7 @@ jobs:
     # 检查当成通过。这里必须真跑一次，并判失败。
     if: always()
     needs:
+      - maven-warmup
       - oceanbase-compatibility
       - dameng-compatibility
       - database-compatibility
