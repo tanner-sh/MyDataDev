@@ -5,6 +5,8 @@ import com.example.dbadmin.auth.WebAuthenticationService;
 import com.example.dbadmin.auth.OidcIdentityProvider;
 import com.example.dbadmin.auth.WebIdentity;
 import com.example.dbadmin.mcp.McpApiKeyAuthenticationFilter;
+import com.example.dbadmin.mcp.McpCancellationFilter;
+import com.example.dbadmin.mcp.McpStreamableHttpFilter;
 import com.example.dbadmin.repo.AuditRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
@@ -65,7 +67,8 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth.anyRequest().hasRole("MCP_AGENT"))
                 .addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class)
-                .addFilterAfter(new com.example.dbadmin.mcp.McpCancellationFilter(mapper, cancellations), McpApiKeyAuthenticationFilter.class)
+                .addFilterAfter(new McpCancellationFilter(mapper, cancellations), McpApiKeyAuthenticationFilter.class)
+                .addFilterAfter(new McpStreamableHttpFilter(), McpCancellationFilter.class)
                 .build();
     }
 
