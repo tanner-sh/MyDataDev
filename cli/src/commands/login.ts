@@ -1,11 +1,11 @@
 import path from 'node:path';
 import readline from 'node:readline';
 import { ApiClient } from '../client/http.js';
-import { normalizeServerUrl } from '../client/instance.js';
-import { loadConfig, resolveConfigPath, saveConfig } from '../config/profiles.js';
+import { normalizeServerUrl, sameServerUrl } from '../client/instance.js';
+import { loadConfig, resolveConfigPath, updateConfig } from '../config/profiles.js';
 import { CliError, ExitCode } from '../errors.js';
 import { formatTabular } from '../output/format.js';
-import type { OutputFormat, ProfileConfig, WhoAmI } from '../types.js';
+import type { OutputFormat, ProfileConfig, ResolvedInstance, WhoAmI } from '../types.js';
 
 export interface LoginOptions {
   server: string;
@@ -17,6 +17,7 @@ export interface LoginOptions {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   stdin?: NodeJS.ReadableStream;
+  env?: NodeJS.ProcessEnv;
 }
 
 export async function handleLogin(options: LoginOptions): Promise<void> {
@@ -26,26 +27,23 @@ export async function handleLogin(options: LoginOptions): Promise<void> {
   const url = normalizeServerUrl(options.server);
   const profileName = normalizeProfileName(options.profile || deriveProfileName(url));
 
-  // 1) 不带任何凭据探测 /api/system/info
-  const probeClient = new ApiClient(
-    { label: profileName, url, source: 'flag' },
-    { timeoutMs: options.timeoutMs, quiet: options.quiet, stderr }
-  );
-  const info = await probeClient.probeSystemInfo(true);
-
   const configPath = options.configPath ?? resolveConfigPath();
   const config = await loadConfig(configPath);
-  const existing = config.profiles[profileName];
+  const saved = config.profiles[profileName];
+  const existing = saved && sameServerUrl(saved.url, url) ? saved : undefined;
+  const instance: ResolvedInstance = { ...existing, label: profileName, url, token: undefined, source: 'profile' };
+  const clientOptions = { timeoutMs: options.timeoutMs, quiet: options.quiet, env: options.env, stderr };
+  // 仅使用同一地址已配置的网关信息；首次探测不发送 PAT。
+  const info = await new ApiClient(instance, clientOptions).probeSystemInfo(true);
+  const saveProfile = (token?: string) => updateConfig(configPath, (latest) => {
+    const profile = latest.profiles[profileName];
+    const sameTarget = profile && sameServerUrl(profile.url, url) ? profile : undefined;
+    latest.profiles[profileName] = { ...sameTarget, url, token, authMode: info.authMode };
+    latest.defaultProfile = profileName;
+  });
 
   if (info.authMode === 'DISABLED') {
-    config.profiles[profileName] = {
-      ...existing,
-      url,
-      token: undefined,
-      authMode: 'DISABLED'
-    };
-    config.defaultProfile = profileName;
-    await saveConfig(config, configPath);
+    await saveProfile();
     if (!options.quiet) {
       stdout.write(`✔ 已保存 profile "${profileName}"（${url}，无需令牌），已设为默认。\n`);
     }
@@ -65,33 +63,13 @@ export async function handleLogin(options: LoginOptions): Promise<void> {
   }
 
   // 3) 用该令牌校验身份
-  const authedClient = new ApiClient(
-    {
-      label: profileName,
-      url,
-      token,
-      headers: existing?.headers,
-      basicAuth: existing?.basicAuth,
-      caFile: existing?.caFile,
-      certFile: existing?.certFile,
-      keyFile: existing?.keyFile,
-      source: 'profile'
-    },
-    { timeoutMs: options.timeoutMs, quiet: options.quiet, stderr }
-  );
+  const authedClient = new ApiClient({ ...instance, token }, clientOptions);
   const whoami = await authedClient.requestJson<WhoAmI>('/api/auth/whoami');
   if (!whoami.authenticated) {
     throw new CliError(ExitCode.AUTH_ERROR, 'INVALID_ACCESS_TOKEN', '访问令牌无效、已过期或已吊销。');
   }
 
-  config.profiles[profileName] = {
-    ...existing,
-    url,
-    token,
-    authMode: info.authMode
-  };
-  config.defaultProfile = profileName;
-  await saveConfig(config, configPath);
+  await saveProfile(token);
   if (!options.quiet) {
     stdout.write(
       `✔ 已登录 ${profileName}（${whoami.username ?? 'unknown'}${whoami.role ? `, ${whoami.role}` : ''}），已设为默认 profile。\n`
@@ -107,13 +85,14 @@ export async function handleLogout(options: {
 }): Promise<void> {
   const stdout = options.stdout ?? process.stdout;
   const configPath = options.configPath ?? resolveConfigPath();
-  const config = await loadConfig(configPath);
-  const target = options.profile || config.defaultProfile;
-  if (!target || !config.profiles[target]) {
-    throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', '未找到可注销的 profile。');
-  }
-  delete config.profiles[target].token;
-  await saveConfig(config, configPath);
+  const target = await updateConfig(configPath, (config) => {
+    const target = options.profile || config.defaultProfile;
+    if (!target || !config.profiles[target]) {
+      throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', '未找到可注销的 profile。');
+    }
+    delete config.profiles[target].token;
+    return target;
+  });
   if (!options.quiet) {
     stdout.write(`✔ 已清除 profile "${target}" 中保存的访问令牌。\n`);
   }
@@ -155,19 +134,20 @@ export async function handleProfileUse(
 ): Promise<void> {
   const stdout = options.stdout ?? process.stdout;
   const configPath = options.configPath ?? resolveConfigPath();
-  const config = await loadConfig(configPath);
-  if (name === 'local' && !config.profiles['local']) {
-    config.defaultProfile = undefined;
-    await saveConfig(config, configPath);
-    if (!options.quiet) stdout.write('✔ 已切换回默认使用本机 MyDataDev Desktop。\n');
-    return;
+  const desktop = await updateConfig(configPath, (config) => {
+    if (name === 'local' && !config.profiles.local) {
+      config.defaultProfile = undefined;
+      return true;
+    }
+    if (!config.profiles[name]) {
+      throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
+    }
+    config.defaultProfile = name;
+    return false;
+  });
+  if (!options.quiet) {
+    stdout.write(desktop ? '✔ 已切换回默认使用本机 MyDataDev Desktop。\n' : `✔ 已将默认 profile 切换为 "${name}"。\n`);
   }
-  if (!config.profiles[name]) {
-    throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
-  }
-  config.defaultProfile = name;
-  await saveConfig(config, configPath);
-  if (!options.quiet) stdout.write(`✔ 已将默认 profile 切换为 "${name}"。\n`);
 }
 
 export async function handleProfileRm(
@@ -176,15 +156,13 @@ export async function handleProfileRm(
 ): Promise<void> {
   const stdout = options.stdout ?? process.stdout;
   const configPath = options.configPath ?? resolveConfigPath();
-  const config = await loadConfig(configPath);
-  if (!config.profiles[name]) {
-    throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
-  }
-  delete config.profiles[name];
-  if (config.defaultProfile === name) {
-    config.defaultProfile = undefined;
-  }
-  await saveConfig(config, configPath);
+  await updateConfig(configPath, (config) => {
+    if (!config.profiles[name]) {
+      throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
+    }
+    delete config.profiles[name];
+    if (config.defaultProfile === name) config.defaultProfile = undefined;
+  });
   if (!options.quiet) stdout.write(`✔ 已删除 profile "${name}"。\n`);
 }
 
@@ -206,40 +184,39 @@ export async function handleProfileSet(
 ): Promise<void> {
   const stdout = options.stdout ?? process.stdout;
   const configPath = options.configPath ?? resolveConfigPath();
-  const config = await loadConfig(configPath);
-  const profile: ProfileConfig | undefined = config.profiles[name];
-  if (!profile) {
-    throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
-  }
+  await updateConfig(configPath, (config) => {
+    const profile: ProfileConfig | undefined = config.profiles[name];
+    if (!profile) {
+      throw new CliError(ExitCode.USAGE_ERROR, 'PROFILE_NOT_FOUND', `找不到 profile：${name}`);
+    }
 
-  if (options.clearHeaders) {
-    delete profile.headers;
-  }
-  if (options.headers && options.headers.length > 0) {
-    profile.headers = { ...(profile.headers ?? {}) };
-    for (const pair of options.headers) {
-      const idx = pair.indexOf('=');
-      if (idx <= 0) {
-        throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_HEADER', `请求头格式应为 Name=Value：${pair}`);
+    if (options.clearHeaders) {
+      delete profile.headers;
+    }
+    if (options.headers && options.headers.length > 0) {
+      profile.headers = { ...(profile.headers ?? {}) };
+      for (const pair of options.headers) {
+        const idx = pair.indexOf('=');
+        if (idx <= 0) {
+          throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_HEADER', `请求头格式应为 Name=Value：${pair}`);
+        }
+        const key = pair.slice(0, idx).trim();
+        const val = pair.slice(idx + 1).trim();
+        profile.headers[key] = val;
       }
-      const key = pair.slice(0, idx).trim();
-      const val = pair.slice(idx + 1).trim();
-      profile.headers[key] = val;
     }
-  }
-  if (options.ca !== undefined) profile.caFile = options.ca ? path.resolve(options.ca) : undefined;
-  if (options.cert !== undefined) profile.certFile = options.cert ? path.resolve(options.cert) : undefined;
-  if (options.key !== undefined) profile.keyFile = options.key ? path.resolve(options.key) : undefined;
-  if (options.clearBasicAuth) {
-    delete profile.basicAuth;
-  } else if (options.basicUser || options.basicPassEnv) {
-    if (!options.basicUser || !options.basicPassEnv) {
-      throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_BASIC_AUTH', '配置 Basic Auth 需同时提供 --basic-user 和 --basic-pass-env。');
+    if (options.ca !== undefined) profile.caFile = options.ca ? path.resolve(options.ca) : undefined;
+    if (options.cert !== undefined) profile.certFile = options.cert ? path.resolve(options.cert) : undefined;
+    if (options.key !== undefined) profile.keyFile = options.key ? path.resolve(options.key) : undefined;
+    if (options.clearBasicAuth) {
+      delete profile.basicAuth;
+    } else if (options.basicUser || options.basicPassEnv) {
+      if (!options.basicUser || !options.basicPassEnv) {
+        throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_BASIC_AUTH', '配置 Basic Auth 需同时提供 --basic-user 和 --basic-pass-env。');
+      }
+      profile.basicAuth = { username: options.basicUser, passwordEnv: options.basicPassEnv };
     }
-    profile.basicAuth = { username: options.basicUser, passwordEnv: options.basicPassEnv };
-  }
-
-  await saveConfig(config, configPath);
+  });
   if (!options.quiet) stdout.write(`✔ 已更新 profile "${name}"。\n`);
 }
 

@@ -88,21 +88,24 @@ export function formatTabular(
   rows: unknown[][],
   rawJsonObject?: unknown
 ): string {
-  if (format === 'json') {
-    if (rawJsonObject !== undefined) return JSON.stringify(rawJsonObject, null, 2);
-    const objects = rows.map((row) => {
-      const obj: Record<string, unknown> = {};
-      headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
-      return obj;
+  if (format === 'json' && rawJsonObject !== undefined) return JSON.stringify(rawJsonObject, null, 2);
+  if (format === 'ndjson' || format === 'json') {
+    const reserved = new Set(headers);
+    const nextSuffix = new Map<string, number>();
+    const keys = headers.map((header) => {
+      let suffix = nextSuffix.get(header);
+      if (suffix === undefined) {
+        nextSuffix.set(header, 2);
+        return header;
+      }
+      let key = `${header}_${suffix++}`;
+      while (reserved.has(key)) key = `${header}_${suffix++}`;
+      reserved.add(key);
+      nextSuffix.set(header, suffix);
+      return key;
     });
-    return JSON.stringify(objects, null, 2);
-  }
-  if (format === 'ndjson') {
-    return rows.map((row) => {
-      const obj: Record<string, unknown> = {};
-      headers.forEach((h, i) => { obj[h] = row[i] ?? null; });
-      return JSON.stringify(obj);
-    }).join('\n');
+    const objects = rows.map((row) => Object.fromEntries(keys.map((key, i) => [key, row[i] ?? null])));
+    return format === 'ndjson' ? objects.map((row) => JSON.stringify(row)).join('\n') : JSON.stringify(objects, null, 2);
   }
   if (format === 'csv') {
     return formatCsv(headers, rows);

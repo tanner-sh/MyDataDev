@@ -44,6 +44,9 @@ npm install -g ./MyDataDev-1.0.0-cli.tgz
 
 如果本机 Desktop 未启动且未配置团队 profile，`mdd` 会提示先启动 MyDataDev 并返回退出码 `5`。
 
+CLI 只跟随同源 HTTP 重定向。使用同名 profile 登录新地址时，需要为新地址重新配置网关认证和 TLS。
+已同时设置 `MDD_SERVER` 和 `MDD_TOKEN` 时，使用指向另一实例的 `--server` 会报错。
+
 ---
 
 ## 三、登录与个人访问令牌（PAT）
@@ -122,9 +125,21 @@ mdd sql exec 订单库-dev -c "delete from temp_logs" --allow-unbounded-write
 mdd sql exec 订单库-prod -f fix.sql --confirm-production 订单库-prod
 mdd sql explain 订单库-dev -c "select * from orders where user_id = 42"
 
+# 手动事务（将 begin 返回的 id 填入 TX_ID）
+mdd sql tx begin 订单库-dev
+mdd sql tx status 订单库-dev
+mdd sql tx exec "$TX_ID" -c "update orders set status='CLOSED' where id=1"
+mdd sql tx rollback "$TX_ID"
+
+# 后台脚本（将 submit 返回的 id 填入 TASK_ID）
+mdd sql script submit 订单库-dev -f deploy.sql
+mdd sql script status "$TASK_ID"
+mdd sql script cancel "$TASK_ID"
+
 # 元数据浏览
 mdd meta namespaces 订单库-dev
 mdd meta objects 订单库-dev --schema public --type table
+mdd meta objects 订单库-dev --schema public --type table --page 1 --page-size 50
 mdd meta describe 订单库-dev orders
 mdd meta ddl 订单库-dev orders > orders.sql
 mdd meta search 订单库-dev user_id
@@ -132,6 +147,8 @@ mdd meta search 订单库-dev user_id
 # 导出（--format 指定格式，-o 指定输出文件）
 mdd export 订单库-dev --table orders --format csv --bom -o orders.csv
 mdd export 订单库-dev -c "select * from orders" --format json > orders.json
+mdd export 订单库-dev --table orders --format xlsx -o orders.xlsx
+mdd export 订单库-dev -c "select id, status from orders" --format sql --target-table orders -o orders.sql
 
 # 调用当前身份有权访问的业务 API（仅接受 /api/ 相对路径）
 mdd api GET /api/backups
@@ -140,6 +157,24 @@ mdd api POST /api/schema-diff --data @diff-request.json
 ```
 
 > 说明：`mdd api` 用于调用当前身份有权访问的 JSON/文本类业务 API，不包含需要 Web 会话才能调用的管理/令牌接口，也不承诺覆盖流式上传或 SSE。
+
+`meta objects --page` 从 0 开始，搭配 `--type` 时先按类型筛选再分页。`meta ddl` 默认输出可重定向到文件的 SQL 文本，可用 `--format json` 获取结构化结果。
+
+连接参数中的纯数字按连接 ID 解析。用 `name:123` 可按名称选择名为 `123` 的连接。REPL 按已选连接的 ID 执行 SQL 和元数据命令。
+
+`mdd status` 在已配置的 PAT 验证失败时返回退出码 `3`。`mdd api` 保留服务端响应中的数值文本，`-f` 支持精确传入大整数及小数。
+
+`sql exec -c` 执行单条 SQL。`sql exec -f` 提交整个文件，由服务端按数据库方言解析并顺序执行。普通语句按自动提交模式执行，遇错停止，已提交的语句会保留。同步文件只有一个成功结果时沿用单条 SQL 的输出格式。多个结果在 JSON 输出中包含 `status`、`executedCount` 和 `results`。脚本失败时退出码为 `1`。可以用 `--delimiter` 指定自定义分隔符，或用 `--allow-large-script` 确认同步运行达到提醒阈值的脚本。
+
+`sql query` 和 `sql exec` 请求超时时会尝试取消服务端执行，并提示是否收到服务端确认。重试写入前请核对执行结果。查询结果截断时，CSV 和 NDJSON 会在 stderr 提示。NDJSON 会为重复列名添加数字后缀，并保留原有列名。
+
+`sql tx exec`、`sql tx commit` 和 `sql tx rollback` 使用同一事务 ID，并须连接同一实例、使用同一账号。手动事务支持查询和普通 DML。超过服务端空闲时限后，事务会自动回滚。
+
+`sql script submit` 支持文件或 SQL 文本，提交成功后返回后台任务 ID。通过 `sql script status` 的 `status` 和 `successCount` 核对结果。默认逐条提交，取消时已提交的语句会保留。Oracle 和 OceanBase Oracle 支持 `--transaction-mode script`，可用 `--end-of-file commit` 指定正常结束时提交剩余事务，默认回滚。后台脚本中的对象名按连接的默认 Schema 解析，可以用限定名指定其他 Schema。Oracle DDL 的隐式提交仍按数据库行为处理。
+
+将查询结果导出为 SQL 时，如果 JDBC 无法提供唯一来源表，可用 `--target-table <table>` 指定 `INSERT` 目标。可使用一到三段限定名。
+
+使用 `-o` 时，只有响应格式与所选格式匹配且下载成功后才替换文件。若输出路径为符号链接，CLI 会更新链接指向的文件并保留链接。达到服务器导出上限时，CLI 会在 stderr 提示结果已截断，退出码仍为 `0`。
 
 ---
 
@@ -154,7 +189,7 @@ mdd api POST /api/schema-diff --data @diff-request.json
 | `4` | 预留：差异或漂移检测命中 |
 | `5` | 目标实例不可达，或本机 Desktop 未启动 |
 | `6` | CLI 与后端 `apiVersion` 不兼容 |
-| `130` | 用户中断（Ctrl-C 会同时通知后端取消当前 SQL） |
+| `130` | 用户中断（`sql query` 和 `sql exec` 会同时通知后端取消当前执行） |
 
 结果数据写入 `stdout`，提示与错误写入 `stderr`；`--format json` 下错误也以 JSON 输出到 `stderr`。
 

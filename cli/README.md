@@ -23,6 +23,7 @@ mdd
 mdd login --server https://db.corp.example --profile team
 mdd conn ls
 mdd sql query 订单库-dev -c "select 1"
+mdd sql script submit 订单库-dev -f deploy.sql
 ```
 
 更多文档见项目仓库中的 `docs/cli.md`。

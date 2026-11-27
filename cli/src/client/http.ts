@@ -265,6 +265,7 @@ export class ApiClient {
 
     return await new Promise<StreamHttpResponse>((resolve, reject) => {
       const transport = targetUrl.protocol === 'https:' ? https : http;
+      let response: http.IncomingMessage | undefined;
       const reqHeaders: Record<string, string> = { ...headers };
       if (bodyBuffer !== undefined) {
         reqHeaders['Content-Length'] = String(bodyBuffer.byteLength);
@@ -279,15 +280,24 @@ export class ApiClient {
           ...(targetUrl.protocol === 'https:' ? tls : {})
         },
         (res) => {
+          response = res;
           const status = res.statusCode ?? 0;
           if ([301, 302, 303, 307, 308].includes(status) && res.headers.location && redirectDepth < MAX_REDIRECTS) {
             res.resume();
-            const nextUrl = new URL(res.headers.location, targetUrl);
-            // 跨源重定向绝不转发凭据与自定义网关头
-            const nextHeaders = nextUrl.origin === baseOrigin ? headers : stripSensitiveHeaders(headers);
+            let nextUrl: URL;
+            try {
+              nextUrl = new URL(res.headers.location, targetUrl);
+            } catch {
+              reject(new CliError(ExitCode.EXECUTION_FAILED, 'INVALID_REDIRECT', '服务端返回了无效的重定向地址。'));
+              return;
+            }
+            if (nextUrl.origin !== baseOrigin || nextUrl.protocol !== targetUrl.protocol) {
+              reject(new CliError(ExitCode.EXECUTION_FAILED, 'CROSS_ORIGIN_REDIRECT', '服务端返回了跨源重定向，请直接配置正确的实例地址。'));
+              return;
+            }
             const nextMethod = status === 303 ? 'GET' : method;
             const nextBody = status === 303 ? undefined : bodyBuffer;
-            this.sendStream(nextUrl, nextMethod, nextHeaders, nextBody, options, redirectDepth + 1)
+            this.sendStream(nextUrl, nextMethod, headers, nextBody, options, redirectDepth + 1)
               .then(resolve, reject);
             return;
           }
@@ -296,10 +306,17 @@ export class ApiClient {
       );
 
       req.on('timeout', () => {
-        req.destroy(new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）`));
+        const error = new CliError(ExitCode.UNREACHABLE, 'REQUEST_TIMEOUT',
+          `请求超时（${Math.round(timeoutMs / 1000)}s）。`);
+        response?.destroy(error);
+        req.destroy(error);
       });
 
       req.on('error', (error: NodeJS.ErrnoException) => {
+        if (error instanceof CliError) {
+          reject(error);
+          return;
+        }
         if (options.signal?.aborted || error.name === 'AbortError') {
           reject(new CliError(ExitCode.INTERRUPTED, 'ABORTED', '操作已取消。', undefined, { cause: error }));
           return;
@@ -344,6 +361,15 @@ export class ApiClient {
         payload
       );
     }
+    if (code === 'SCRIPT_DELIMITER_DETECTED' && typeof payload.delimiter === 'string') {
+      return new CliError(ExitCode.USAGE_ERROR, code, `${message} 请用 --delimiter 指定脚本分隔符。`, payload);
+    }
+    if (code === 'LARGE_SCRIPT_CONFIRMATION_REQUIRED') {
+      return new CliError(ExitCode.USAGE_ERROR, code, `${message} 可改用 sql script submit，或用 --allow-large-script 确认同步执行。`, payload);
+    }
+    if (code === 'SQL_EXPORT_TARGET_REQUIRED') {
+      return new CliError(ExitCode.USAGE_ERROR, code, `${message} 查询导出可用 --target-table <table> 指定目标。`, payload);
+    }
     if (code === 'PRODUCTION_CONFIRMATION_REQUIRED') {
       const expected = typeof payload.confirmationText === 'string' ? payload.confirmationText : '<连接名>';
       return new CliError(
@@ -381,16 +407,6 @@ function resolveHeaderValue(raw: string, env: NodeJS.ProcessEnv): string {
     return env[varName] ?? '';
   }
   return raw;
-}
-
-function stripSensitiveHeaders(headers: Record<string, string>): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === 'authorization' || lower === 'cookie' || lower === 'proxy-authorization') continue;
-    result[key] = value;
-  }
-  return result;
 }
 
 function safeClientHost(): string {

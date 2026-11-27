@@ -23,6 +23,8 @@ import com.example.dbadmin.repo.AuditRepository;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/data")
 public class DataController {
@@ -88,10 +90,14 @@ public class DataController {
         access.require(request.query().connectionId(), ConnectionPermission.QUERY);
         String format = ExportFormats.normalize(request.format());
         DataEditService.TableExportQuery query = service.exportQuery(request.query());
+        String schemaName = request.query().schemaName();
+        String tableName = request.query().tableName();
+        List<String> targetTable = schemaName == null || schemaName.isBlank()
+                ? List.of(tableName) : List.of(schemaName, tableName);
         ExportService.PreparedExport prepared = exportService.prepareGenerated(
                 request.query().connectionId(), query.sql(), query.binder(), format, actor, productionConfirmation,
-                request.query().schemaName(),
-                "table:" + request.query().tableName() + " filters="
+                schemaName, targetTable,
+                "table:" + tableName + " filters="
                         + (request.query().filters() == null ? 0 : request.query().filters().size()));
         return ResponseEntity.ok()
                 .contentType(ExportFormats.contentType(format))

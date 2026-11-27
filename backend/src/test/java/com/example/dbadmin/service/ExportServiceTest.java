@@ -14,6 +14,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -292,7 +293,7 @@ class ExportServiceTest {
         ExportService.PreparedExport prepared = exportService.prepareGenerated(
                 1L, "SELECT id, name FROM export_values WHERE name = ?",
                 statement -> statement.setString(1, "Alice"),
-                "csv", "admin", null, null, "table:export_values");
+                "csv", "admin", null, null, null, "table:export_values");
         prepared.writeTo(output);
 
         String csv = output.toString(java.nio.charset.StandardCharsets.UTF_8);
@@ -308,10 +309,26 @@ class ExportServiceTest {
         exportService.prepareGenerated(
                 1L, "SELECT id FROM export_values WHERE name = ?",
                 statement -> statement.setString(1, "x' OR '1'='1"),
-                "csv", "admin", null, null, "table:export_values").writeTo(output);
+                "csv", "admin", null, null, null, "table:export_values").writeTo(output);
 
         // 只有表头，没有数据行。
         assertThat(output.toString(java.nio.charset.StandardCharsets.UTF_8).trim().lines().count()).isEqualTo(1);
+    }
+
+    @Test
+    void generatedSqlExportUsesTheKnownTableEvenWithoutJdbcColumnProvenance() throws Exception {
+        try (var connection = DriverManager.getConnection(databaseUrl, "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE TABLE archive.\" export values \"(id INT PRIMARY KEY)");
+            statement.execute("INSERT INTO archive.\" export values \" VALUES (2)");
+        }
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        exportService.prepareGenerated(1L, "SELECT id + 0 AS id FROM archive.\" export values \" WHERE id = ?",
+                statement -> statement.setInt(1, 2), "sql", "admin", null, "archive",
+                List.of("archive", " export values "), "table: export values ").writeTo(output);
+
+        assertThat(output.toString(StandardCharsets.UTF_8))
+                .contains("INSERT INTO \"archive\".\" export values \" (\"id\") VALUES (2);");
     }
 
     @Test

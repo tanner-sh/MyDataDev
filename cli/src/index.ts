@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { ApiClient, cliVersion } from './client/http.js';
 import { resolveInstance, type ResolveInstanceDeps } from './client/instance.js';
 import { handleApi } from './commands/api.js';
@@ -23,6 +23,8 @@ import {
   handleMetaSearch
 } from './commands/meta.js';
 import { handleSqlExec, handleSqlExplain, handleSqlQuery } from './commands/sql.js';
+import { handleScriptSubmit, handleScriptTask } from './commands/script.js';
+import { handleTransaction, handleTransactionExec } from './commands/transaction.js';
 import { handleStatus } from './commands/status.js';
 import { CliError, ExitCode } from './errors.js';
 import { formatErrorOutput, resolveOutputFormat } from './output/format.js';
@@ -51,11 +53,11 @@ function parseOutputFormat(raw: string | undefined): OutputFormat | undefined {
   return lower;
 }
 
-function parsePositiveInt(raw: string | undefined, flagName: string): number | undefined {
+function parsePositiveInt(raw: string | undefined, flagName: string, allowZero = false): number | undefined {
   if (raw === undefined) return undefined;
   const num = Number(raw);
-  if (!Number.isInteger(num) || num <= 0) {
-    throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_NUMBER', `${flagName} 必须是正整数：${raw}`);
+  if (!raw.trim() || !Number.isSafeInteger(num) || num < (allowZero ? 0 : 1)) {
+    throw new CliError(ExitCode.USAGE_ERROR, 'INVALID_NUMBER', `${flagName} 必须是${allowZero ? '非负整数' : '正整数'}：${raw}`);
   }
   return num;
 }
@@ -85,7 +87,9 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
     })
     .exitOverride();
 
-  const buildContext = async (): Promise<CommandContext> => {
+  const buildContext = async (
+    { useGlobalFormat = true, defaultFormat }: { useGlobalFormat?: boolean; defaultFormat?: OutputFormat } = {}
+  ): Promise<CommandContext> => {
     const rawOpts = program.opts<{
       profile?: string;
       server?: string;
@@ -94,7 +98,7 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
       quiet?: boolean;
       color?: boolean;
     }>();
-    const format = resolveOutputFormat(parseOutputFormat(rawOpts.format), isStdoutTty);
+    const format = resolveOutputFormat(parseOutputFormat(useGlobalFormat ? rawOpts.format : undefined) ?? defaultFormat, isStdoutTty);
     const timeoutSec = parsePositiveInt(rawOpts.timeout, '--timeout');
     const globalOpts: GlobalOptions = {
       profile: rawOpts.profile,
@@ -154,22 +158,25 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
   program
     .command('login')
     .description('登录团队 Web 服务（粘贴个人访问令牌；免认证部署自动跳过令牌）')
-    .requiredOption('--server <url>', '服务端地址')
+    .option('--server <url>', '服务端地址（必填）')
     .option('--profile <name>', '保存的 profile 名称')
     .option('--token-stdin', '从标准输入读取访问令牌')
-    .action(async (cmdOpts: { server: string; profile?: string; tokenStdin?: boolean }) => {
-      const rootOpts = program.opts<{ timeout?: string; quiet?: boolean }>();
+    .action(async (cmdOpts: { server?: string; profile?: string; tokenStdin?: boolean }) => {
+      const rootOpts = program.opts<{ server?: string; profile?: string; timeout?: string; quiet?: boolean }>();
+      const server = cmdOpts.server ?? rootOpts.server;
+      if (!server) throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_SERVER', '请指定 --server <url>。');
       const timeoutSec = parsePositiveInt(rootOpts.timeout, '--timeout');
       await handleLogin({
-        server: cmdOpts.server,
-        profile: cmdOpts.profile,
+        server,
+        profile: cmdOpts.profile ?? rootOpts.profile,
         tokenStdin: cmdOpts.tokenStdin,
         configPath: io.configPath,
         timeoutMs: timeoutSec ? timeoutSec * 1000 : undefined,
         quiet: Boolean(rootOpts.quiet),
         stdout,
         stderr,
-        stdin
+        stdin,
+        env
       });
     });
 
@@ -279,9 +286,11 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
     });
   sqlCmd
     .command('exec <conn>')
-    .description('执行写入、DDL 或其他单条 SQL 语句')
+    .description('执行单条 SQL，或用 -f 执行 SQL 脚本')
     .option('-c, --sql <sql>', 'SQL 语句')
-    .option('-f, --file <file>', 'SQL 文件路径')
+    .option('-f, --file <file>', 'SQL 脚本路径，按顺序执行')
+    .option('--delimiter <delimiter>', 'SQL 文件的自定义分隔符')
+    .option('--allow-large-script', '确认同步执行较大的 SQL 文件')
     .option('--schema <schema>', '默认 Schema / 数据库')
     .option('--max-rows <n>', '最大返回行数')
     .option('--confirm-production <name>', '生产连接二次确认（需与连接名完全一致）')
@@ -291,12 +300,70 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
       await handleSqlExec(ctx, conn, {
         sql: cmdOpts.sql,
         file: cmdOpts.file,
+        delimiter: cmdOpts.delimiter,
+        allowLargeScript: cmdOpts.allowLargeScript,
         schema: cmdOpts.schema,
         maxRows: parsePositiveInt(cmdOpts.maxRows, '--max-rows'),
         confirmProduction: cmdOpts.confirmProduction,
         allowUnboundedWrite: Boolean(cmdOpts.allowUnboundedWrite)
       });
     });
+
+  const txCmd = sqlCmd.command('tx').description('管理跨命令的手动事务');
+  txCmd
+    .command('begin <conn>')
+    .description('开始事务并返回事务 ID')
+    .option('--schema <schema>', '默认 Schema / 数据库')
+    .option('--confirm-production <name>', '生产连接二次确认（需与连接名完全一致）')
+    .action(async (conn: string, cmdOpts) => {
+      await handleTransaction(await buildContext(), 'begin', conn, cmdOpts);
+    });
+  txCmd
+    .command('status <conn>')
+    .description('查看当前身份在该连接上的活动事务')
+    .action(async (conn: string) => {
+      await handleTransaction(await buildContext(), 'status', conn);
+    });
+  txCmd
+    .command('exec <id>')
+    .description('在指定事务中执行查询或普通 DML')
+    .option('-c, --sql <sql>', 'SQL 语句')
+    .option('-f, --file <file>', 'SQL 文件路径')
+    .option('--max-rows <n>', '每条查询的最大返回行数')
+    .option('--allow-unbounded-write', '明确允许执行不带顶层 WHERE 的 UPDATE/DELETE')
+    .action(async (id: string, cmdOpts) => {
+      await handleTransactionExec(await buildContext(), id, {
+        ...cmdOpts,
+        maxRows: parsePositiveInt(cmdOpts.maxRows, '--max-rows')
+      });
+    });
+  txCmd.command('commit <id>').description('提交指定事务').action(async (id: string) => {
+    await handleTransaction(await buildContext(), 'commit', id);
+  });
+  txCmd.command('rollback <id>').description('回滚指定事务').action(async (id: string) => {
+    await handleTransaction(await buildContext(), 'rollback', id);
+  });
+
+  const scriptCmd = sqlCmd.command('script').description('提交、查询和取消后台 SQL 脚本');
+  scriptCmd
+    .command('submit <conn>')
+    .description('在后台执行 SQL 脚本并返回任务 ID')
+    .option('-c, --sql <sql>', '脚本文本')
+    .option('-f, --file <file>', 'SQL 脚本路径')
+    .option('--delimiter <delimiter>', '自定义分隔符')
+    .addOption(new Option('--transaction-mode <mode>', '事务模式，默认逐条提交').choices(['autocommit', 'script']))
+    .addOption(new Option('--end-of-file <action>', '脚本事务正常结束后的操作，默认回滚').choices(['commit', 'rollback']))
+    .option('--confirm-production <name>', '生产连接二次确认（需与连接名完全一致）')
+    .option('--allow-unbounded-write', '明确允许执行不带顶层 WHERE 的 UPDATE/DELETE')
+    .action(async (conn: string, cmdOpts) => {
+      await handleScriptSubmit(await buildContext(), conn, cmdOpts);
+    });
+  scriptCmd.command('status <id>').description('查看后台脚本状态').action(async (id: string) => {
+    await handleScriptTask(await buildContext(), 'status', id);
+  });
+  scriptCmd.command('cancel <id>').description('请求取消后台脚本').action(async (id: string) => {
+    await handleScriptTask(await buildContext(), 'cancel', id);
+  });
   sqlCmd
     .command('explain <conn>')
     .description('查看 SQL 执行计划')
@@ -327,12 +394,14 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
     .option('--schema <schema>', 'Schema 名称')
     .option('--type <type>', '过滤对象类型（如 table、view）')
     .option('--keyword <keyword>', '名称关键词过滤')
+    .option('--page <n>', '页号，从 0 开始')
     .option('--page-size <n>', '返回条数')
     .action(async (conn: string, cmdOpts) => {
       await handleMetaObjects(await buildContext(), conn, {
         schema: cmdOpts.schema,
         type: cmdOpts.type,
         keyword: cmdOpts.keyword,
+        page: parsePositiveInt(cmdOpts.page, '--page', true),
         pageSize: parsePositiveInt(cmdOpts.pageSize, '--page-size')
       });
     });
@@ -348,11 +417,11 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
     .description('导出对象 DDL')
     .option('--schema <schema>', 'Schema 名称')
     .action(async (conn: string, object: string, cmdOpts) => {
-      await handleMetaDdl(await buildContext(), conn, object, { schema: cmdOpts.schema });
+      await handleMetaDdl(await buildContext({ defaultFormat: 'table' }), conn, object, { schema: cmdOpts.schema });
     });
   metaCmd
     .command('search <conn> <keyword>')
-    .description('按关键词搜索对象与列')
+    .description('按关键词搜索数据库对象')
     .option('--schema <schema>', 'Schema 名称')
     .option('--limit <n>', '最大条数')
     .action(async (conn: string, keyword: string, cmdOpts) => {
@@ -369,18 +438,20 @@ export async function runCli(argv: string[], io: RunCliIo = {}): Promise<number>
     .option('-c, --sql <sql>', '导出查询 SQL')
     .option('-f, --file <file>', '从文件读取查询 SQL')
     .option('--schema <schema>', 'Schema 名称')
-    .option('--format <format>', '导出文件格式：csv | json | xlsx | sql', 'csv')
+    .option('--format <format>', '导出文件格式：csv | json | xlsx | sql（默认 csv）')
+    .option('--target-table <table>', '导出查询为 SQL 时，指定 INSERT 的目标表')
     .option('-o, --output <file>', '输出文件路径（不指定则输出到 stdout）')
     .option('--bom', '导出 CSV 时写入 UTF-8 BOM（便于 Excel 打开中文）')
     .option('--confirm-production <name>', '生产连接二次确认（需与连接名完全一致）')
     .action(async (conn: string, cmdOpts) => {
-      const ctx = await buildContext();
+      const ctx = await buildContext({ useGlobalFormat: false });
       await handleExport(ctx, conn, {
         table: cmdOpts.table,
         sql: cmdOpts.sql,
         file: cmdOpts.file,
         schema: cmdOpts.schema,
-        exportFormat: cmdOpts.format,
+        exportFormat: cmdOpts.format ?? program.opts<{ format?: string }>().format,
+        targetTable: cmdOpts.targetTable,
         output: cmdOpts.output,
         bom: Boolean(cmdOpts.bom),
         confirmProduction: cmdOpts.confirmProduction

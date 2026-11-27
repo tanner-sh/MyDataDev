@@ -120,7 +120,7 @@ export async function executeReplLine(
         '  meta objects [schema]          列出对象',
         '  meta describe <对象>            查看表结构',
         '  meta ddl <对象>                 查看对象 DDL',
-        '  meta search <关键词>            搜索对象与列',
+        '  meta search <关键词>            搜索数据库对象',
         '  sql query <SQL>                执行只读查询',
         '  sql exec <SQL>                 执行写操作/DDL',
         '  sql explain <SQL>              查看执行计划',
@@ -151,13 +151,13 @@ export async function executeReplLine(
       return true;
     }
     if (sub === 'info') {
-      const target = tokens[2] || state.connection?.name;
+      const target = tokens[2] ?? state.connection?.id;
       if (!target) throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_CONNECTION', '请先用 `conn use <连接>` 选中连接，或传入连接名。');
       await handleConnInfo(ctx, target);
       return true;
     }
     if (sub === 'test') {
-      const target = tokens[2] || state.connection?.name;
+      const target = tokens[2] ?? state.connection?.id;
       if (!target) throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_CONNECTION', '请先用 `conn use <连接>` 选中连接，或传入连接名。');
       await handleConnTest(ctx, target);
       return true;
@@ -167,7 +167,7 @@ export async function executeReplLine(
 
   if (cmd === 'meta') {
     const sub = (tokens[1] || '').toLowerCase();
-    const activeRef = state.connection?.name;
+    const activeRef = state.connection?.id;
     if (sub === 'namespaces') {
       const target = tokens[2] || activeRef;
       if (!target) throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_CONNECTION', '请先用 `conn use <连接>` 选择连接。');
@@ -207,15 +207,15 @@ export async function executeReplLine(
     const sub = (tokens[1] || '').toLowerCase();
     const restSql = stripSqlPrefix(line, tokens[0], tokens[1] || '');
     if (sub === 'query') {
-      await handleSqlQuery(ctx, String(state.connection.id), { sql: restSql, allowStdin: false, installSigint: false });
+      await handleSqlQuery(ctx, state.connection.id, { sql: restSql, allowStdin: false, installSigint: false });
       return true;
     }
     if (sub === 'exec') {
-      await handleSqlExec(ctx, String(state.connection.id), { sql: restSql, allowStdin: false, installSigint: false });
+      await handleSqlExec(ctx, state.connection.id, { sql: restSql, allowStdin: false, installSigint: false });
       return true;
     }
     if (sub === 'explain') {
-      await handleSqlExplain(ctx, String(state.connection.id), { sql: restSql, allowStdin: false, installSigint: false });
+      await handleSqlExplain(ctx, state.connection.id, { sql: restSql, allowStdin: false, installSigint: false });
       return true;
     }
     throw new CliError(ExitCode.USAGE_ERROR, 'UNKNOWN_SUBCOMMAND', `未知的 sql 子命令：${sub || '(空)'}`);
@@ -227,7 +227,7 @@ export async function executeReplLine(
       throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_CONNECTION', '请先用 `conn use <连接>` 选择连接后再执行 SQL。');
     }
     const sql = line.replace(/;\s*$/, '');
-    await handleSqlQuery(ctx, String(state.connection.id), { sql, allowStdin: false, installSigint: false });
+    await handleSqlQuery(ctx, state.connection.id, { sql, allowStdin: false, installSigint: false });
     return true;
   }
 

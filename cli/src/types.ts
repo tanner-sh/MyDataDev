@@ -32,6 +32,8 @@ export interface Connection {
 }
 
 export interface DatabaseServerInfo {
+  product?: string;
+  version?: string;
   productName?: string;
   productVersion?: string;
   driverName?: string;
@@ -45,6 +47,7 @@ export interface DatabaseServerInfo {
 }
 
 export interface ConnectionTestStep {
+  stage?: string;
   name?: string;
   label?: string;
   ok?: boolean;
@@ -76,6 +79,42 @@ export interface SqlResult {
   truncationReason?: string | null;
 }
 
+export interface SqlStatementResult {
+  index: number;
+  status: string;
+  errorMessage?: string | null;
+  result: SqlResult;
+}
+
+export interface SqlScriptResult {
+  status: string;
+  elapsedMs: number;
+  executedCount: number;
+  results: SqlStatementResult[];
+  transactionMessage?: string | null;
+  notices?: string[];
+}
+
+export interface SqlTransaction {
+  id: string;
+  connectionId: number;
+  schemaName?: string | null;
+  startedAt: string;
+  lastUsedAt: string;
+  statementCount: number;
+  idleTimeoutSeconds: number;
+}
+
+export interface SqlFileTask {
+  id: number;
+  status: string;
+  phase: string;
+  statementTotal: number | null;
+  statementCurrent: number;
+  successCount: number;
+  message?: string | null;
+}
+
 export interface MetadataObjectItem {
   schemaName?: string;
   name: string;
@@ -93,6 +132,7 @@ export interface MetadataResponse {
   totalObjects?: number;
   page?: number;
   pageSize?: number;
+  hasMore?: boolean;
   [key: string]: unknown;
 }
 
@@ -140,6 +180,7 @@ export interface ObjectSearchItem {
 }
 
 export interface ObjectSearchResponse {
+  hits?: ObjectSearchItem[];
   items?: ObjectSearchItem[];
   results?: ObjectSearchItem[];
   objects?: ObjectSearchItem[];

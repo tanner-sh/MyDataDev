@@ -26,11 +26,10 @@ export async function handleApi(
   }
   validateRelativeApiPath(apiPath);
 
-  if (options.data && options.fields && options.fields.length > 0) {
+  if (options.data !== undefined && options.fields && options.fields.length > 0) {
     throw new CliError(ExitCode.USAGE_ERROR, 'CONFLICTING_API_BODY', '不能同时指定 --data 和 -f 字段参数。');
   }
 
-  let body: unknown = undefined;
   let rawBody: string | undefined = undefined;
   const headers: Record<string, string> = {};
 
@@ -45,9 +44,8 @@ export async function handleApi(
     } else {
       rawBody = options.data;
     }
-    headers['Content-Type'] = 'application/json';
   } else if (options.fields && options.fields.length > 0) {
-    const obj: Record<string, unknown> = {};
+    const fields = new Map<string, string>();
     for (const pair of options.fields) {
       const eq = pair.indexOf('=');
       if (eq <= 0) {
@@ -55,31 +53,21 @@ export async function handleApi(
       }
       const key = pair.slice(0, eq).trim();
       const val = pair.slice(eq + 1);
-      obj[key] = parseFieldValue(val);
+      fields.set(key, encodeFieldValue(val));
     }
-    body = obj;
+    rawBody = `{${Array.from(fields, ([key, value]) => `${JSON.stringify(key)}:${value}`).join(',')}}`;
   }
+  if (rawBody !== undefined) headers['Content-Type'] = 'application/json';
 
   const response = await ctx.client.requestRaw(apiPath, {
     method,
     headers,
-    body,
     rawBody,
     productionConfirmation: options.confirmProduction
   });
 
   const text = response.body.toString('utf8');
   if (!text) return;
-  const contentType = String(response.headers['content-type'] ?? '');
-  if (contentType.includes('application/json')) {
-    try {
-      const parsed = JSON.parse(text);
-      ctx.stdout.write(JSON.stringify(parsed, null, 2) + '\n');
-      return;
-    } catch {
-      // fall through
-    }
-  }
   ctx.stdout.write(text.endsWith('\n') ? text : text + '\n');
 }
 
@@ -101,17 +89,16 @@ export function validateRelativeApiPath(apiPath: string): void {
   }
 }
 
-function parseFieldValue(raw: string): unknown {
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  if (raw === 'null') return null;
-  if (/^-?\d+(\.\d+)?$/.test(raw)) return Number(raw);
+function encodeFieldValue(raw: string): string {
+  if (raw === 'true' || raw === 'false' || raw === 'null') return raw;
+  if (/^-?\d+(\.\d+)?$/.test(raw)) return raw.replace(/^(-?)0+(?=\d)/, '$1');
   if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
     try {
-      return JSON.parse(raw);
-    } catch {
+      JSON.parse(raw);
       return raw;
+    } catch {
+      // 保持非 JSON 内容的字符串语义。
     }
   }
-  return raw;
+  return JSON.stringify(raw);
 }

@@ -17,6 +17,13 @@ export function normalizeServerUrl(raw: string): string {
   return trimmed;
 }
 
+export function sameServerUrl(left: string | undefined, right: string): boolean {
+  if (typeof left !== 'string') return false;
+  const normalized = (url: string) => url.trim().replace(/\/+$/, '');
+  const candidate = normalized(left);
+  return URL.canParse(candidate) && new URL(candidate).href === new URL(normalized(right)).href;
+}
+
 export interface ResolveInstanceDeps {
   env?: NodeJS.ProcessEnv;
   configPath?: string;
@@ -68,9 +75,14 @@ export async function resolveInstance(
 
   // 2) 显式 --server（绝不继承 profile 凭据）
   if (opts.server) {
+    const url = normalizeServerUrl(opts.server);
+    if (envToken && envServer && !sameServerUrl(envServer, url)) {
+      throw new CliError(ExitCode.USAGE_ERROR, 'TOKEN_SERVER_MISMATCH',
+        '--server 与 MDD_SERVER 不一致，请为目标实例单独配置访问令牌或使用其 profile。');
+    }
     return {
-      label: normalizeServerUrl(opts.server),
-      url: normalizeServerUrl(opts.server),
+      label: url,
+      url,
       token: envToken,
       source: 'flag'
     };
