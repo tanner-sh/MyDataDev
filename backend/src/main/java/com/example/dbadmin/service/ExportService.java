@@ -153,7 +153,7 @@ public class ExportService {
 
     public PreparedExport prepare(long connectionId, String sql, String format, String actor, String productionConfirmation, String schemaName, List<String> targetTableParts) throws Exception {
         return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, productionConfirmation,
-                schemaName, targetTableParts, abbreviate(sql));
+                schemaName, normalizeTargetTableParts(targetTableParts, format), abbreviate(sql));
     }
 
     /**
@@ -186,10 +186,12 @@ public class ExportService {
             String actor,
             String productionConfirmation,
             String schemaName,
+            List<String> targetTableParts,
             String auditDetail
     ) throws Exception {
+        // 表数据导出已经给出了用于查询的标识符，需要原样用于 INSERT。
         return prepareInternal(connectionId, sql, binder, format, actor, productionConfirmation,
-                schemaName, null, auditDetail);
+                schemaName, targetTableParts, auditDetail);
     }
 
     public PreparedExport prepareCancellable(long connectionId, String sql, String format, String actor,
@@ -230,7 +232,8 @@ public class ExportService {
     public PreparedExport prepareForAgent(long connectionId, String sql, String format, String actor, String schemaName,
             List<String> targetTableParts, int rowLimit, long maxBytes, int timeoutSeconds) throws Exception {
         if (rowLimit < 1 || rowLimit > EXPORT_MAX_ROWS) throw new IllegalArgumentException("导出行数必须在 1 到 " + EXPORT_MAX_ROWS + " 之间。");
-        return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, null, schemaName, targetTableParts,
+        return prepareInternal(connectionId, requireSingleQuery(sql), null, format, actor, null, schemaName,
+                normalizeTargetTableParts(targetTableParts, format),
                 abbreviate(sql), statement -> {}, rowLimit, false, Math.min(maxBytes, EXPORT_MAX_BYTES), timeoutSeconds);
     }
 
@@ -241,7 +244,8 @@ public class ExportService {
         if (!classifier.isParameterizedSelectQuery(parsed.sql())) throw new IllegalArgumentException("参数化导出只支持 SELECT 查询。");
         String sql = requireSingleQuery(parsed.sql());
         return prepareInternal(request.connectionId(), sql, statement -> SqlParameters.bind(statement, parsed, request.parameters()),
-                request.format(), actor, confirmation, request.schemaName(), request.targetTableParts(), abbreviate(request.sql()), onStatement,
+                request.format(), actor, confirmation, request.schemaName(), normalizeTargetTableParts(request.targetTableParts(), request.format()),
+                abbreviate(request.sql()), onStatement,
                 request.fullResult() ? Integer.MAX_VALUE - 1 : EXPORT_MAX_ROWS, true, EXPORT_MAX_BYTES, properties.getSql().getTimeoutSeconds());
     }
 
@@ -250,7 +254,6 @@ public class ExportService {
             List<String> targetTableParts, String auditDetail, java.util.function.Consumer<Statement> onStatement, int rowLimit,
             boolean redactFailure, long maxBytes, int timeoutSeconds) throws Exception {
         String normalizedFormat = normalizeFormat(format);
-        List<String> normalizedTarget = normalizeTargetTableParts(targetTableParts, normalizedFormat);
         DbConnection dbConnection = connections.require(connectionId);
         executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
         DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
@@ -275,7 +278,7 @@ public class ExportService {
             try (ResultSet rs = binder == null
                     ? statement.executeQuery(sql)
                     : ((java.sql.PreparedStatement) statement).executeQuery()) {
-                truncated = write(rs, normalizedFormat, output, dialect, normalizedTarget, rowLimit);
+                truncated = write(rs, normalizedFormat, output, dialect, targetTableParts, rowLimit);
             }
             long elapsed = (System.nanoTime() - started) / 1_000_000;
             audit.onConnection(actor, "SQL_EXPORT", connectionId, auditDetail);
@@ -615,7 +618,7 @@ public class ExportService {
     }
 
     private List<String> normalizeTargetTableParts(List<String> values, String format) {
-        if (!"sql".equals(format) || values == null || values.isEmpty()) return List.of();
+        if (!"sql".equalsIgnoreCase(format) || values == null || values.isEmpty()) return List.of();
         if (values.size() > 3) throw new IllegalArgumentException("INSERT 目标表最多支持三级限定名称。");
         List<String> normalized = values.stream().map(value -> value == null ? "" : value.trim()).toList();
         if (normalized.stream().anyMatch(String::isBlank)) throw new IllegalArgumentException("INSERT 目标表名称不能为空。");

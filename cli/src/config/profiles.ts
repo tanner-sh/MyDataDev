@@ -1,7 +1,9 @@
-import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { lock } from 'proper-lockfile';
+import { CliError, ExitCode } from '../errors.js';
 import type { CliConfigFile } from '../types.js';
 
 export function resolveConfigPath(
@@ -36,19 +38,43 @@ export async function loadConfig(configPath: string = resolveConfigPath()): Prom
   }
 }
 
-export async function saveConfig(
+export async function updateConfig<T>(configPath: string, change: (config: CliConfigFile) => T): Promise<T> {
+  const directory = path.dirname(configPath);
+  await mkdir(directory, { recursive: true, mode: process.platform === 'win32' ? undefined : 0o700 });
+  const file = path.join(await realpath(directory), path.basename(configPath));
+  const release = await lock(file, {
+    realpath: false,
+    retries: { retries: 30, minTimeout: 25, maxTimeout: 500 }
+  }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'ELOCKED') throw error;
+    throw new CliError(ExitCode.EXECUTION_FAILED, 'PROFILE_CONFIG_BUSY', 'CLI 配置正在被另一个进程更新，请稍后重试。');
+  });
+  try {
+    const config = await loadConfig(file);
+    const result = change(config);
+    await saveConfig(config, file);
+    return result;
+  } finally {
+    await release();
+  }
+}
+
+async function saveConfig(
   config: CliConfigFile,
   configPath: string = resolveConfigPath(),
   platform: NodeJS.Platform = process.platform
 ): Promise<void> {
-  const dir = path.dirname(configPath);
-  await mkdir(dir, { recursive: true, mode: platform === 'win32' ? undefined : 0o700 });
   const tempPath = `${configPath}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tempPath, JSON.stringify(config, null, 2) + '\n', {
-    encoding: 'utf8',
-    mode: platform === 'win32' ? undefined : 0o600
-  });
-  await rename(tempPath, configPath);
+  try {
+    await writeFile(tempPath, JSON.stringify(config, null, 2) + '\n', {
+      encoding: 'utf8',
+      mode: platform === 'win32' ? undefined : 0o600
+    });
+    await rename(tempPath, configPath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
   if (platform === 'win32') {
     restrictWindowsAcl(configPath);
   } else {

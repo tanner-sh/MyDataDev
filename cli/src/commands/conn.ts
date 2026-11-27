@@ -1,7 +1,7 @@
 import { CliError, ExitCode } from '../errors.js';
 import { formatKeyValue, formatTabular } from '../output/format.js';
 import type { Connection, ConnectionTestResponse, DatabaseServerInfo } from '../types.js';
-import { resolveConnection, type CommandContext } from './context.js';
+import { resolveConnection, type CommandContext, type ConnectionRef } from './context.js';
 
 export async function handleConnLs(ctx: CommandContext): Promise<void> {
   const connections = await ctx.client.requestJson<Connection[]>('/api/connections');
@@ -18,7 +18,7 @@ export async function handleConnLs(ctx: CommandContext): Promise<void> {
   );
 }
 
-export async function handleConnInfo(ctx: CommandContext, connRef: string): Promise<void> {
+export async function handleConnInfo(ctx: CommandContext, connRef: ConnectionRef): Promise<void> {
   const connection = await resolveConnection(ctx.client, connRef);
   let serverInfo: DatabaseServerInfo | null = null;
   try {
@@ -36,8 +36,10 @@ export async function handleConnInfo(ctx: CommandContext, connRef: string): Prom
     ['JDBC URL', connection.jdbcUrl]
   ];
   if (serverInfo) {
-    if (serverInfo.productName || serverInfo.productVersion) {
-      entries.push(['服务端', `${serverInfo.productName ?? ''} ${serverInfo.productVersion ?? ''}`.trim()]);
+    const product = serverInfo.product ?? serverInfo.productName;
+    const version = serverInfo.version ?? serverInfo.productVersion;
+    if (product || version) {
+      entries.push(['服务端', `${product ?? ''} ${version ?? ''}`.trim()]);
     }
     if (serverInfo.databaseName) entries.push(['数据库', serverInfo.databaseName]);
     if (serverInfo.currentSchema) entries.push(['当前 Schema', serverInfo.currentSchema]);
@@ -46,7 +48,7 @@ export async function handleConnInfo(ctx: CommandContext, connRef: string): Prom
   ctx.stdout.write(formatKeyValue(ctx.format, entries, { connection, serverInfo }) + '\n');
 }
 
-export async function handleConnTest(ctx: CommandContext, connRef: string): Promise<void> {
+export async function handleConnTest(ctx: CommandContext, connRef: ConnectionRef): Promise<void> {
   const connection = await resolveConnection(ctx.client, connRef);
   const result = await ctx.client.requestJson<ConnectionTestResponse>(`/api/connections/${connection.id}/test`, {
     method: 'POST',
@@ -61,7 +63,7 @@ export async function handleConnTest(ctx: CommandContext, connRef: string): Prom
     if (result.steps && result.steps.length > 0) {
       for (const step of result.steps) {
         const mark = step.ok === false ? '✖' : '·';
-        const label = step.label || step.name || 'step';
+        const label = step.stage || step.label || step.name || 'step';
         const detail = step.detail || step.message || '';
         const timing = typeof step.elapsedMs === 'number' ? ` (${step.elapsedMs}ms)` : '';
         ctx.stdout.write(`  ${mark} ${label}${timing}${detail ? `: ${detail}` : ''}\n`);

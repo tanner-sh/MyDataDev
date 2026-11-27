@@ -53,6 +53,17 @@ describe('resolveInstance', () => {
     });
   });
 
+  it('rejects rebinding a paired environment token to a different server or base path', async () => {
+    const env = { MDD_SERVER: 'https://team.example.com/app', MDD_TOKEN: 'mdd_pat_env_example' };
+    for (const server of ['https://other.example.com/app', 'https://team.example.com/other']) {
+      await expect(resolveInstance({ server }, { env })).rejects.toMatchObject({
+        exitCode: ExitCode.USAGE_ERROR, code: 'TOKEN_SERVER_MISMATCH'
+      });
+    }
+    await expect(resolveInstance({ server: 'https://TEAM.example.com:443/app/' }, { env }))
+      .resolves.toMatchObject({ token: env.MDD_TOKEN });
+  });
+
   it('uses MDD_SERVER and MDD_TOKEN as a pair over default profile', async () => {
     const resolved = await resolveInstance(
       {},

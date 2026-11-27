@@ -14,18 +14,19 @@ export interface CommandContext {
   configPath?: string;
 }
 
-export async function resolveConnection(client: ApiClient, ref: string): Promise<Connection> {
-  const trimmed = ref.trim();
-  if (!trimmed) {
+export type ConnectionRef = string | number;
+
+export async function resolveConnection(client: ApiClient, ref: ConnectionRef): Promise<Connection> {
+  const trimmed = String(ref).trim();
+  const name = trimmed.startsWith('name:') ? trimmed.slice(5) : trimmed;
+  if (!name) {
     throw new CliError(ExitCode.USAGE_ERROR, 'MISSING_CONNECTION', '请指定连接名称或 ID。');
   }
   const connections = await client.requestJson<Connection[]>('/api/connections');
-  if (/^\d+$/.test(trimmed)) {
-    const id = Number(trimmed);
-    const byId = connections.find((c) => c.id === id);
-    if (byId) return byId;
-  }
-  const exact = connections.filter((c) => c.name === trimmed);
+  const id = Number(trimmed);
+  const exact = typeof ref === 'number' || /^\d+$/.test(trimmed)
+    ? connections.filter((connection) => Number.isSafeInteger(id) && connection.id === id)
+    : connections.filter((connection) => connection.name === name);
   if (exact.length === 1) return exact[0];
   if (exact.length > 1) {
     const list = exact.map((c) => `  #${c.id} ${c.name} (${c.dbType}, ${c.environment})`).join('\n');

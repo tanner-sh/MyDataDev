@@ -482,6 +482,7 @@ public class SqlService {
                     jdbc.setMaxRows(Math.max(1, statementLimit + 1));
                     boolean statementChangesMetadata = changesMetadata(statement.sql());
                     metadataChanged = metadataChanged || statementChangesMetadata;
+                    requireScriptNotCancelled(registeredId, jdbc);
                     try {
                         boolean hasResult = tx == null ? jdbc.execute(statement.sql()) : tx.execute(jdbc, statement.sql(), index + 1);
                         SqlResult result;
@@ -539,6 +540,7 @@ public class SqlService {
                         break;
                     }
                 }
+                if ("SUCCESS".equals(status)) requireScriptNotCancelled(registeredId, jdbc);
             } finally {
                 executions.unregister(registeredId, jdbc);
             }
@@ -566,6 +568,13 @@ public class SqlService {
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor) throws Exception {
         return executeScript(connectionId, sql, requestedMaxRows, null, actor, null, null, null);
+    }
+
+    private void requireScriptNotCancelled(String executionId, Statement statement) {
+        if (executions.cancelRequested(executionId, statement)) {
+            throw new ApiProblemException(HttpStatus.CONFLICT, "SQL_CANCELLED",
+                    "脚本执行已取消。已提交的操作会保留。");
+        }
     }
 
     public SqlScriptResponse executeScript(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation) throws Exception {

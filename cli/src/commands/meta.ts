@@ -1,8 +1,8 @@
 import { formatTabular } from '../output/format.js';
-import type { MetadataResponse, ObjectDdlResponse, ObjectDetail, ObjectSearchResponse } from '../types.js';
-import { resolveConnection, type CommandContext } from './context.js';
+import type { MetadataObjectItem, MetadataResponse, ObjectDdlResponse, ObjectDetail, ObjectSearchResponse } from '../types.js';
+import { resolveConnection, type CommandContext, type ConnectionRef } from './context.js';
 
-export async function handleMetaNamespaces(ctx: CommandContext, connRef: string): Promise<void> {
+export async function handleMetaNamespaces(ctx: CommandContext, connRef: ConnectionRef): Promise<void> {
   const connection = await resolveConnection(ctx.client, connRef);
   const meta = await ctx.client.requestJson<MetadataResponse>(`/api/metadata/${connection.id}`);
   const namespaces = meta.namespaces ?? meta.schemas ?? meta.catalogs ?? [];
@@ -14,28 +14,43 @@ export async function handleMetaNamespaces(ctx: CommandContext, connRef: string)
 
 export async function handleMetaObjects(
   ctx: CommandContext,
-  connRef: string,
-  options: { schema?: string; type?: string; keyword?: string; pageSize?: number }
+  connRef: ConnectionRef,
+  options: { schema?: string; type?: string; keyword?: string; page?: number; pageSize?: number }
 ): Promise<void> {
   const connection = await resolveConnection(ctx.client, connRef);
   const query = new URLSearchParams();
   if (options.schema) query.set('schema', options.schema);
   if (options.keyword) query.set('keyword', options.keyword);
   if (options.pageSize) query.set('pageSize', String(options.pageSize));
-  const qs = query.toString();
-  const meta = await ctx.client.requestJson<MetadataResponse>(`/api/metadata/${connection.id}${qs ? `?${qs}` : ''}`);
-  let objects = meta.objects ?? [];
-  if (options.type) {
-    const wanted = options.type.trim().toUpperCase();
-    objects = objects.filter((item) => (item.type || '').toUpperCase().includes(wanted));
+  const wanted = options.type?.trim().toUpperCase();
+  const requestedPage = options.page ?? 0;
+  let backendPage = wanted ? 0 : requestedPage;
+  const fetchPage = (page: number) => {
+    query.set('page', String(page));
+    return ctx.client.requestJson<MetadataResponse>(`/api/metadata/${connection.id}?${query}`);
+  };
+  let meta = await fetchPage(backendPage);
+  const currentSchema = meta.currentSchema;
+  let objects: MetadataObjectItem[] = meta.objects ?? [];
+  if (wanted) {
+    const pageSize = meta.pageSize ?? options.pageSize ?? 200;
+    let remainingSkip = requestedPage * pageSize;
+    objects = [];
+    while (true) {
+      const matches = (meta.objects ?? []).filter((item) => (item.type || '').toUpperCase().includes(wanted));
+      objects.push(...matches.slice(remainingSkip, remainingSkip + pageSize - objects.length));
+      remainingSkip = Math.max(0, remainingSkip - matches.length);
+      if (objects.length >= pageSize || !meta.hasMore) break;
+      meta = await fetchPage(++backendPage);
+    }
   }
-  const rows = objects.map((obj) => [obj.schemaName || meta.currentSchema || '', obj.name, obj.type, obj.remarks || '']);
+  const rows = objects.map((obj) => [obj.schemaName || currentSchema || '', obj.name, obj.type, obj.remarks || '']);
   ctx.stdout.write(formatTabular(ctx.format, ['Schema', '名称', '类型', '备注'], rows, objects) + '\n');
 }
 
 export async function handleMetaDescribe(
   ctx: CommandContext,
-  connRef: string,
+  connRef: ConnectionRef,
   objectName: string,
   options: { schema?: string }
 ): Promise<void> {
@@ -68,7 +83,7 @@ export async function handleMetaDescribe(
 
 export async function handleMetaDdl(
   ctx: CommandContext,
-  connRef: string,
+  connRef: ConnectionRef,
   objectName: string,
   options: { schema?: string }
 ): Promise<void> {
@@ -86,7 +101,7 @@ export async function handleMetaDdl(
 
 export async function handleMetaSearch(
   ctx: CommandContext,
-  connRef: string,
+  connRef: ConnectionRef,
   keyword: string,
   options: { schema?: string; limit?: number }
 ): Promise<void> {
@@ -95,7 +110,7 @@ export async function handleMetaSearch(
   if (options.schema) query.set('schema', options.schema);
   if (options.limit) query.set('limit', String(options.limit));
   const res = await ctx.client.requestJson<ObjectSearchResponse>(`/api/metadata/${connection.id}/search?${query}`);
-  const items = res.items ?? res.results ?? res.objects ?? [];
+  const items = res.hits ?? res.items ?? res.results ?? res.objects ?? [];
   const rows = items.map((item) => [
     item.schemaName || '',
     item.name,

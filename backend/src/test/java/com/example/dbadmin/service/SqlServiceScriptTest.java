@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -19,11 +20,54 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class SqlServiceScriptTest {
+    @Test
+    void stopsBeforeTheNextStatementWhenCancellationArrivesBetweenStatements() throws Exception {
+        String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
+        String executionId = UUID.randomUUID().toString();
+        SqlExecutionRegistry executions = new SqlExecutionRegistry();
+        ConnectionService connections = mock(ConnectionService.class);
+        try (Connection realConnection = DriverManager.getConnection(url, "sa", "")) {
+            realConnection.createStatement().execute("CREATE TABLE users(id INT PRIMARY KEY)");
+            Connection connection = mock(Connection.class, delegatesTo(realConnection));
+            Statement realStatement = realConnection.createStatement();
+            Statement statement = mock(Statement.class, delegatesTo(realStatement));
+            doReturn(statement).when(connection).createStatement();
+            doAnswer(invocation -> {
+                boolean more = realStatement.getMoreResults(Statement.CLOSE_CURRENT_RESULT);
+                assertThat(executions.cancel(executionId)).isTrue();
+                return more;
+            }).when(statement).getMoreResults(Statement.CLOSE_CURRENT_RESULT);
+            when(connections.open(1)).thenReturn(connection);
+            when(connections.require(1)).thenReturn(new DbConnection(
+                    1L, "h2", "h2", url, "sa", "", "dev", false, Instant.now(), Instant.now()));
+            SqlService service = new SqlService(connections, new AppProperties(), mock(AuditRepository.class),
+                    new DialectRegistry(), mock(SqlHistoryRepository.class), mock(MetadataService.class),
+                    new SqlScriptSplitter(), new SqlStatementClassifier(), new ExecutionGuard(), executions,
+                    mock(DataEditService.class), new SqlExecutionMetrics());
+
+            assertThatThrownBy(() -> service.executeScript(
+                    1L, "INSERT INTO users VALUES (1); INSERT INTO users VALUES (2)",
+                    10, null, "tester", executionId, null, null, false))
+                    .isInstanceOfSatisfying(ApiProblemException.class,
+                            problem -> assertThat(problem.code()).isEqualTo("SQL_CANCELLED"));
+
+            try (var check = DriverManager.getConnection(url, "sa", "");
+                 var result = check.createStatement().executeQuery("SELECT id FROM users")) {
+                assertThat(result.next()).isTrue();
+                assertThat(result.getInt(1)).isEqualTo(1);
+                assertThat(result.next()).isFalse();
+            }
+        }
+    }
+
     @Test
     void executesMultipleStatementsAndReturnsEachResult() throws Exception {
         String url = "jdbc:h2:mem:" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
