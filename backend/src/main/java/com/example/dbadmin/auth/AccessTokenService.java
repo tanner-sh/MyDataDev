@@ -360,9 +360,10 @@ public class AccessTokenService {
     }
 
     private String generateId() {
-        byte[] bytes = new byte[12];
+        byte[] bytes = new byte[10];
         random.nextBytes(bytes);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        // 令牌格式为 mdd_pat_<id>_<secret>，id 绝不能包含下划线，使用 20 位十六进制串既满足 VARCHAR(24) 又避免分隔符冲突。
+        return HexFormat.of().formatHex(bytes);
     }
 
     private String generateSecret() {

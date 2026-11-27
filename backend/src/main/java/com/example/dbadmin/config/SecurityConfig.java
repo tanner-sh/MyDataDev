@@ -225,6 +225,9 @@ public class SecurityConfig {
             boolean patChain
     ) {
         if (patChain) {
+            // StreamingResponseBody 等异步响应在初始 REQUEST 阶段已完成 PAT 认证与授权；
+            // 无状态链不保存 Session SecurityContext，异步恢复分派时需放行容器内部 ASYNC 分派。
+            auth.dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ASYNC).permitAll();
             auth.requestMatchers("/api/auth/tokens/**", "/api/auth/login", "/api/auth/logout").denyAll();
         } else {
             auth.requestMatchers(HttpMethod.GET, "/api/system/info", "/api/auth/status", "/actuator/health", "/oauth2/**", "/login/oauth2/**").permitAll();

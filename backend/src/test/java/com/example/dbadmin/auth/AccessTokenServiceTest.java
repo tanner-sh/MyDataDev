@@ -201,6 +201,16 @@ class AccessTokenServiceTest {
                 .satisfies(ex -> assertThat(((ApiProblemException) ex).status()).isEqualTo(HttpStatus.CONFLICT));
     }
 
+    @Test
+    void generatedTokenIdsNeverContainDelimiterAndAlwaysAuthenticate() {
+        AccessTokenService service = serviceWithMode("LOCAL", null);
+        for (int i = 0; i < 200; i++) {
+            var created = service.create(new CreateAccessTokenRequest("loop-" + i, 7, "LISTED", List.of(10L)), localUser.identity());
+            assertThat(created.tokenInfo().id()).matches("^[0-9a-f]{20}$");
+            assertThat(service.authenticate(created.token(), "127.0.0.1")).isPresent();
+        }
+    }
+
     private static final class MutableClock extends Clock {
         private final AtomicReference<Instant> current;
 
