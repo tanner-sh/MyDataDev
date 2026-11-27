@@ -262,7 +262,7 @@ public class MigrationOrchestrator {
         Path outputPath = dir.resolve(fileName);
 
         try (MddPackageWriter writer = new MddPackageWriter(
-                outputPath, objectMapper, plan.sourceSchema(), "1.0.0",
+                outputPath, objectMapper, plan.sourceSchema(), "1.0.1",
                 properties.getMigration().getPartMaxBytes(), properties.getMigration().getPartMaxRows())) {
 
             if (poolSize > 0) {

@@ -97,7 +97,7 @@ public final class MddPackageWriter implements AutoCloseable {
         Files.deleteIfExists(tempPath);
         this.mapper = objectMapper.copy().enable(SerializationFeature.INDENT_OUTPUT);
         this.schema = schema;
-        this.generatorVersion = generatorVersion == null ? "1.0.0" : generatorVersion;
+        this.generatorVersion = generatorVersion == null ? "1.0.1" : generatorVersion;
         this.partMaxBytes = Math.max(4L * 1024 * 1024, partMaxBytes);
         this.partMaxRows = Math.max(1_000L, partMaxRows);
         this.fileDigest = RowDigestAccumulator.sha256();

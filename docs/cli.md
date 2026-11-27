@@ -25,7 +25,7 @@ npm install -g @mydatadev/cli
 无法访问公共 npm 的内网环境，可从 GitHub Release 下载 `MyDataDev-<version>-cli.tgz` 离线安装：
 
 ```bash
-npm install -g ./MyDataDev-1.0.0-cli.tgz
+npm install -g ./MyDataDev-1.0.1-cli.tgz
 ```
 
 ---
