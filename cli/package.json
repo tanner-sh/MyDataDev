@@ -4,6 +4,15 @@
   "license": "Apache-2.0",
   "description": "MyDataDev command-line interface (mdd)",
   "author": "Tanner",
+  "homepage": "https://github.com/tanner-sh/MyDataDev#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tanner-sh/MyDataDev.git",
+    "directory": "cli"
+  },
+  "bugs": {
+    "url": "https://github.com/tanner-sh/MyDataDev/issues"
+  },
   "type": "module",
   "bin": {
     "mdd": "dist/mdd.js"
