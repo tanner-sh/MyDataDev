@@ -1364,3 +1364,34 @@ export type MigrationVerificationReport = {
   tables: TableVerificationResult[];
   notes: string[];
 };
+
+export type AccessTokenScope = 'LISTED' | 'ALL';
+
+export type AccessTokenItem = {
+  id: string;
+  userId: number;
+  username?: string | null;
+  displayName?: string | null;
+  name: string;
+  connectionScope: AccessTokenScope;
+  connectionIds: number[];
+  expiresAt: string;
+  lastUsedAt?: string | null;
+  lastUsedIp?: string | null;
+  revokedAt?: string | null;
+  createdAt: string;
+  active: boolean;
+};
+
+export type CreatedAccessToken = {
+  tokenInfo: AccessTokenItem;
+  token: string;
+};
+
+export type TokenConnectionOption = {
+  id: number;
+  name: string;
+  dbType: string;
+  environment: string;
+  shared: boolean;
+};

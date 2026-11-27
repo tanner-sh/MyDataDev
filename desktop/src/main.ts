@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
@@ -13,7 +14,9 @@ import {
   Tray
 } from 'electron';
 import { BackendManager, requestBackendShutdown, waitForHealthyBackend } from './backend.js';
-import { bundledBackendPaths, resolveDesktopPaths, type DesktopPaths } from './paths.js';
+import { handleSquirrelCliEvent, installCliCommand } from './cli-install.js';
+import { removeCliRuntimeEndpoint, writeCliRuntimeEndpoint } from './cli-runtime.js';
+import { bundledBackendPaths, bundledCliPaths, resolveDesktopPaths, type DesktopPaths } from './paths.js';
 import { loadOrCreateDesktopSecret } from './secret-store.js';
 import { quitAfterWindowConsent, quitWindowGate } from './quit.js';
 import {
@@ -53,6 +56,10 @@ let controlToken = process.env.MYDATADEV_DESKTOP_CONTROL_TOKEN || '';
 let quitting = false;
 let closingForQuit = false;
 let quitStarted = false;
+
+if (started && process.platform === 'win32') {
+  handleSquirrelCliEvent(process.argv, process.execPath, process.resourcesPath);
+}
 
 const shouldStart = !started && app.requestSingleInstanceLock();
 if (!shouldStart) app.quit();
@@ -116,6 +123,7 @@ function createTray() {
       { type: 'separator' },
       { label: '打开数据目录', click: () => void shell.openPath(desktopPaths.home) },
       { label: '打开日志目录', click: () => void shell.openPath(desktopPaths.logs) },
+      { label: '安装命令行工具 mdd', click: () => void handleInstallCliCommand() },
       { type: 'separator' },
       { label: '退出 MyDataDev', click: () => void requestQuit(true) }
     ]));
@@ -142,7 +150,23 @@ async function hasActiveOperations() {
   return results.some(result => result.status === 'fulfilled' && result.value);
 }
 
+async function handleInstallCliCommand() {
+  const result = await installCliCommand({
+    execPath: process.execPath,
+    resourcesPath: process.resourcesPath,
+    userHome: app.getPath('home')
+  });
+  await dialog.showMessageBox({
+    type: result.ok ? 'info' : 'warning',
+    title: result.ok ? '命令行工具 mdd 已安装' : '安装命令行工具失败',
+    message: result.message
+  });
+}
+
 async function stopBackend() {
+  if (desktopPaths) {
+    await removeCliRuntimeEndpoint(desktopPaths);
+  }
   if (backend) await backend.stop();
   else if (controlToken) await requestBackendShutdown(backendPort, controlToken).catch(() => undefined);
 }
@@ -191,6 +215,11 @@ async function startBackend() {
   if (isDevelopment) {
     if (!controlToken) throw new Error('桌面开发模式缺少控制 Token。');
     await waitForHealthyBackend(backendPort);
+    await writeCliRuntimeEndpoint(desktopPaths, {
+      pid: process.pid,
+      port: backendPort,
+      version: app.getVersion()
+    });
     return false;
   }
 
@@ -212,15 +241,66 @@ async function startBackend() {
     environment: process.env
   });
   await backend.start();
+  await writeCliRuntimeEndpoint(desktopPaths, {
+    pid: process.pid,
+    port: backendPort,
+    version: app.getVersion()
+  });
   return secret.insecureLinuxFallback;
 }
 
 async function runSmokeTest() {
-  console.log('桌面冒烟：验证首页与 MCP 认证边界…');
+  console.log('桌面冒烟：验证首页、system/info、MCP 认证边界与内置 mdd CLI…');
   const home = await fetch(uiUrl);
   if (!home.ok || !(await home.text()).includes('MyDataDev')) throw new Error('桌面首页烟测失败。');
+  const sysInfoRes = await fetch(`http://127.0.0.1:${backendPort}/api/system/info`);
+  if (!sysInfoRes.ok) throw new Error(`/api/system/info 烟测失败，实际状态 ${sysInfoRes.status}。`);
+  const sysInfo = await sysInfoRes.json() as { mode?: string; apiVersion?: number };
+  if (sysInfo.mode !== 'desktop' || sysInfo.apiVersion !== 1) {
+    throw new Error(`/api/system/info 返回异常：${JSON.stringify(sysInfo)}`);
+  }
   const mcp = await fetch(`http://127.0.0.1:${UI_PORT}/mcp`);
   if (mcp.status !== 401) throw new Error(`MCP 未认证烟测失败，实际状态 ${mcp.status}。`);
+
+  if (app.isPackaged) {
+    const cliLauncher = bundledCliPaths(process.resourcesPath, process.platform).launcher;
+    const cliEnv = { ...process.env, MYDATADEV_DESKTOP_HOME: desktopPaths.home };
+    const statusRun = spawnSync(cliLauncher, ['status', '--format', 'json'], {
+      env: cliEnv,
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+      timeout: 20_000
+    });
+    if (statusRun.status !== 0 || !statusRun.stdout.includes('"mode": "desktop"')) {
+      throw new Error(`内置 mdd status 烟测失败（exit=${statusRun.status}）：${statusRun.stderr || statusRun.stdout}`);
+    }
+    // 通过 API 建一条 H2 内存连接，再用内置 mdd REPL 选中该连接并连续执行两次只读查询
+    const createdConn = await fetch(`http://127.0.0.1:${backendPort}/api/connections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User': 'admin' },
+      body: JSON.stringify({
+        name: 'desktop-smoke-h2',
+        dbType: 'h2',
+        environment: 'dev',
+        jdbcUrl: 'jdbc:h2:mem:desktop_smoke_cli;DB_CLOSE_DELAY=-1',
+        username: 'sa',
+        password: '',
+        readonly: false
+      })
+    });
+    if (!createdConn.ok) throw new Error(`桌面冒烟创建 H2 连接失败：${createdConn.status}`);
+    const replRun = spawnSync(cliLauncher, ['repl'], {
+      env: cliEnv,
+      input: 'conn ls\nconn use desktop-smoke-h2\nselect 1 as n;\nselect 2 as m;\nexit\n',
+      encoding: 'utf8',
+      shell: process.platform === 'win32',
+      timeout: 25_000
+    });
+    if (replRun.status !== 0 || !replRun.stdout.includes('desktop-smoke-h2') || !replRun.stdout.includes('2')) {
+      throw new Error(`内置 mdd repl 烟测失败（exit=${replRun.status}）：${replRun.stderr || replRun.stdout}`);
+    }
+  }
+
   quitting = true;
   // 关后端也在看门狗的覆盖范围内：卡在这一步同样是「冒烟永远不结束」，
   // 而且还会给 CI 机器留下一个没人回收的后端进程。所以先关干净，再撤看门狗。

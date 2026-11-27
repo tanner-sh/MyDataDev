@@ -9,6 +9,7 @@ import java.util.Map;
 
 @ConfigurationProperties(prefix = "app")
 public class AppProperties {
+    private String version = "0.0.0";
     /**
      * 主密钥来源。常规 Web/开发模式使用受保护文件，桌面发行版由 Electron 从系统安全存储
      * 解密后通过子进程标准输入交付，避免把明文密钥放进环境变量或命令行。
@@ -35,6 +36,14 @@ public class AppProperties {
     private final Auth auth = new Auth();
     private final AuditAlert auditAlert = new AuditAlert();
     private final Migration migration = new Migration();
+
+    public String getVersion() {
+        return version;
+    }
+
+    public void setVersion(String version) {
+        this.version = version;
+    }
 
     public String getCryptoKeySource() {
         return cryptoKeySource;

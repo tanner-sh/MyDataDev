@@ -9,7 +9,7 @@
   </p>
 
   <p>
-    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><img src="https://img.shields.io/badge/release-v0.10.2-0A7C42?style=flat-square" alt="当前版本 0.10.2" /></a>
+    <a href="https://github.com/tanner-sh/MyDataDev/releases/latest"><img src="https://img.shields.io/badge/release-v1.0.0-0A7C42?style=flat-square" alt="当前版本 1.0.0" /></a>
     <img src="https://img.shields.io/badge/license-Apache_2.0-D22128?style=flat-square" alt="Apache License 2.0" />
     <img src="https://img.shields.io/badge/platform-macOS_%C2%B7_Windows_%C2%B7_Linux_%C2%B7_Web-555?style=flat-square" alt="支持的平台" />
   </p>
@@ -366,6 +366,7 @@ node scripts/build-web-bundle.mjs
 | --- | --- |
 | [Web 发行包部署说明](docs/web-deploy.md) | 反向代理、认证模式、主密钥接管与升级步骤 |
 | [桌面版开发与发行说明](docs/desktop.md) | 数据目录、打包、签名与 GitHub Actions 发行 |
+| [CLI 命令行说明（`mdd`）](docs/cli.md) | 本机 Desktop 与 CI 接入、个人访问令牌、命令参考与退出码 |
 | [MCP Server 说明](docs/mcp-server.md) | Agent 配置、客户端接入与安全边界 |
 | [AI 助手接入方案](docs/ai-assistant.md) | 架构、隐私边界与推进记录 |
 | [工作台功能打磨说明](docs/product-polish.md) | 升级行为与验收要点 |
@@ -382,7 +383,7 @@ node scripts/build-web-bundle.mjs
 
 ## 当前状态
 
-MyDataDev 当前版本为 `0.10.2`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。
+MyDataDev 当前版本为 `1.0.0`，主要面向本机与可信私有网络使用。项目仍在持续完善中；建议在重要数据库上先使用只读账号和测试环境验证，再逐步启用写入、备份与恢复能力。
 
 ---
 

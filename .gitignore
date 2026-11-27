@@ -20,6 +20,11 @@ desktop/resources/
 desktop/release-assets/
 desktop/.dev-data/
 
+cli/node_modules/
+cli/dist/
+cli/LICENSE
+cli/NOTICE
+
 /release-assets/
 /build/
 

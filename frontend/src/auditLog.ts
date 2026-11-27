@@ -33,6 +33,7 @@ type ActionMeta = { label: string; category: AuditCategory; dangerous?: boolean 
  */
 const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   SQL_EXECUTE: { label: '执行 SQL', category: 'sql' },
+  SQL_QUERY: { label: '只读 SQL 查询', category: 'sql' },
   SQL_EXECUTE_SCRIPT: { label: '执行 SQL 脚本', category: 'sql' },
   SQL_QUERY_PAGE: { label: '查询结果翻页', category: 'sql' },
   SQL_EXPLAIN: { label: '查看执行计划', category: 'sql' },
@@ -146,6 +147,9 @@ const ACTIONS: Readonly<Record<string, ActionMeta>> = {
   AUTH_LOGIN: { label: '用户登录', category: 'security' },
   AUTH_LOGIN_FAILED: { label: '登录失败', category: 'security', dangerous: true },
   AUTH_LOGOUT: { label: '用户退出', category: 'security' },
+  ACCESS_TOKEN_CREATE: { label: '创建访问令牌', category: 'security' },
+  ACCESS_TOKEN_UPDATE_SCOPE: { label: '修改访问令牌连接范围', category: 'security' },
+  ACCESS_TOKEN_REVOKE: { label: '吊销访问令牌', category: 'security', dangerous: true },
   AUTHORIZATION_DENIED: { label: '系统权限被拒绝', category: 'security', dangerous: true },
   TABLE_VIEW: { label: '查看表数据', category: 'data' },
   BACKUP_DOWNLOAD: { label: '下载备份', category: 'backup' },

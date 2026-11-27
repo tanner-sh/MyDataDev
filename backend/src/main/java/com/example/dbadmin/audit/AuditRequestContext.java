@@ -5,9 +5,20 @@ public record AuditRequestContext(
         String remoteAddress,
         String forwardedFor,
         String userAgent,
-        String requestId
+        String requestId,
+        String channel,
+        String tokenId,
+        String clientDeclared
 ) {
     private static final ThreadLocal<AuditRequestContext> CURRENT = new ThreadLocal<>();
+
+    public AuditRequestContext(String remoteAddress, String forwardedFor, String userAgent, String requestId) {
+        this(remoteAddress, forwardedFor, userAgent, requestId, "web", null, null);
+    }
+
+    public AuditRequestContext withPat(String tokenId) {
+        return new AuditRequestContext(remoteAddress, forwardedFor, userAgent, requestId, "cli", tokenId, null);
+    }
 
     public static AuditRequestContext current() {
         return CURRENT.get();

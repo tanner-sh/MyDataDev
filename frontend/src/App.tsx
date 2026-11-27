@@ -156,6 +156,7 @@ const McpSettingsPanel = lazy(() => import('./components/McpSettingsPanel').then
 const AiSettingsPanel = lazy(() => import('./components/AiSettingsPanel').then((module) => ({ default: module.AiSettingsPanel })));
 const UserManagementPanel = lazy(() => import('./components/UserManagementPanel').then((module) => ({ default: module.UserManagementPanel })));
 const AccessManagementPanel = lazy(() => import('./components/AccessManagementPanel').then((module) => ({ default: module.AccessManagementPanel })));
+const AccessTokenModal = lazy(() => import('./components/AccessTokenModal').then((module) => ({ default: module.AccessTokenModal })));
 const DatabaseServerInfoPanel = lazy(() => import('./components/DatabaseServerInfoPanel').then((module) => ({ default: module.DatabaseServerInfoPanel })));
 const SessionPanel = lazy(() => import('./components/SessionPanel').then((module) => ({ default: module.SessionPanel })));
 const AuditLogPanel = lazy(() => import('./components/AuditLogPanel').then((module) => ({ default: module.AuditLogPanel })));
@@ -246,6 +247,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
   /** 顶栏正中间留给 SQL 工作台常用按钮的位置（见 AppHeader 的 toolbarSlotRef）。 */
   const [headerToolbarSlot, setHeaderToolbarSlot] = useState<HTMLDivElement | null>(null);
   const [headerContextSlot, setHeaderContextSlot] = useState<HTMLDivElement | null>(null);
+  const [accessTokenModalOpen, setAccessTokenModalOpen] = useState(false);
   // SQL 标签页这组状态在 hooks/useSqlTabs（规则在 sqlTabs.ts，有测试）。
   const {
     sqlTabs, setSqlTabs, sqlTabsRef, activeSqlTabId, setActiveSqlTabId, activeSqlTabIdRef, activeSqlTab,
@@ -3749,6 +3751,7 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           onToggleExplorer={toggleExplorerFromHeader}
           onSelectConnection={selectConnectionFromHeader}
           onOpenManagement={openManagementFromHeader}
+          onOpenAccessTokens={() => setAccessTokenModalOpen(true)}
           onOpenBackgroundTasks={openBackgroundTasksFromHeader}
           onToggleTheme={toggleThemeFromHeader}
           toolbarSlotRef={setHeaderToolbarSlot}
@@ -4256,6 +4259,12 @@ export default function App({ workspaceOwner = 'local', workspaceLocked = false 
           </div>
         </div>
       </Drawer>
+
+      {accessTokenModalOpen && (
+        <Suspense fallback={null}>
+          <AccessTokenModal open onClose={() => setAccessTokenModalOpen(false)} />
+        </Suspense>
+      )}
 
       {/*
         连接表单独立于「管理」抽屉：它从抽屉里的连接列表打开，两者会同屏叠放，

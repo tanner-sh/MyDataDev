@@ -12,6 +12,8 @@ export type DesktopPaths = {
   /** 异构数据库迁移标准制品（.mddpkg）目录。 */
   migrations: string;
   logs: string;
+  /** CLI 运行时发现目录（cli-endpoint.json）。 */
+  runtime: string;
   secretFile: string;
 };
 
@@ -35,6 +37,7 @@ export function resolveDesktopPaths(platform: NodeJS.Platform, environment: Desk
     sqlFiles: platformPath.join(home, 'sql-files'),
     migrations: platformPath.join(home, 'migrations'),
     logs: platformPath.join(home, 'logs'),
+    runtime: platformPath.join(home, 'runtime'),
     secretFile: platformPath.join(home, 'desktop-secret.json')
   };
 }
@@ -44,5 +47,14 @@ export function bundledBackendPaths(resourcesPath: string, platform: NodeJS.Plat
   return {
     java: platformPath.join(resourcesPath, 'runtime', 'bin', platform === 'win32' ? 'java.exe' : 'java'),
     jar: platformPath.join(resourcesPath, 'backend', 'mydatadev-backend.jar')
+  };
+}
+
+export function bundledCliPaths(resourcesPath: string, platform: NodeJS.Platform) {
+  const platformPath = platform === 'win32' ? path.win32 : path.posix;
+  return {
+    entry: platformPath.join(resourcesPath, 'cli', 'mdd.js'),
+    binDir: platformPath.join(resourcesPath, 'cli', 'bin'),
+    launcher: platformPath.join(resourcesPath, 'cli', 'bin', platform === 'win32' ? 'mdd.cmd' : 'mdd')
   };
 }

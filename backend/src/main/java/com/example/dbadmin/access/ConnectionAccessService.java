@@ -1,6 +1,7 @@
 package com.example.dbadmin.access;
 
 import com.example.dbadmin.api.ApiProblemException;
+import com.example.dbadmin.auth.AccessTokenAuthentication;
 import com.example.dbadmin.auth.WebIdentity;
 import com.example.dbadmin.auth.WebIdentityContext;
 import com.example.dbadmin.dto.AccessControlDtos.ConnectionAccessResponse;
@@ -87,12 +88,33 @@ public class ConnectionAccessService {
         this.connections = connections;
     }
 
+    private Optional<Set<Long>> tokenConnectionWhitelist() {
+        return WebIdentityContext.currentAccessToken()
+                .filter(AccessTokenAuthentication::isListedScope)
+                .map(AccessTokenAuthentication::allowedConnectionIds);
+    }
+
+    private void requireTokenWhitelist(long connectionId, String requiredPermission) {
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
+        if (whitelist.isEmpty() || whitelist.get().contains(connectionId)) return;
+        String actor = currentIdentity().map(WebIdentity::username).orElse("anonymous");
+        audit.onConnection(actor, "CONNECTION_ACCESS_DENIED", connectionId,
+                "requiredPermission=" + requiredPermission + ", reason=token_scope");
+        throw new ApiProblemException(
+                HttpStatus.FORBIDDEN,
+                "CONNECTION_ACCESS_DENIED",
+                "当前访问令牌没有该连接的访问权限。"
+        );
+    }
+
     private boolean unrestricted() {
+        if (tokenConnectionWhitelist().isPresent()) return false;
         WebIdentity identity = currentIdentity().orElse(null);
         return identity == null || "ADMIN".equals(identity.role());
     }
 
     public void require(long connectionId, ConnectionPermission permission) {
+        requireTokenWhitelist(connectionId, permission.name());
         WebIdentity identity = currentIdentity().orElse(null);
         // 桌面/开发模式没有 WebIdentity；MCP 继续由自己的 Agent 白名单做显式连接授权。
         if (identity == null || "ADMIN".equals(identity.role())) return;
@@ -221,6 +243,7 @@ public class ConnectionAccessService {
     }
 
     public void requireAnyAccess(long connectionId) {
+        requireTokenWhitelist(connectionId, "ANY");
         WebIdentity identity = currentIdentity().orElse(null);
         if (identity == null || "ADMIN".equals(identity.role())) return;
         if (!repository.hasAnyAccess(connectionId, identity.userId())) {
@@ -236,17 +259,28 @@ public class ConnectionAccessService {
             return;
         }
         WebIdentity identity = currentIdentity().orElse(null);
-        if (identity != null && !"ADMIN".equals(identity.role())) {
-            audit.global(identity.username(), "CONNECTION_ACCESS_DENIED", "connection-scope",
+        if (tokenConnectionWhitelist().isPresent() || (identity != null && !"ADMIN".equals(identity.role()))) {
+            String actor = identity == null ? "anonymous" : identity.username();
+            audit.global(actor, "CONNECTION_ACCESS_DENIED", "connection-scope",
                     "requiredPermission=" + permission.name());
             throw new ApiProblemException(HttpStatus.FORBIDDEN, "CONNECTION_SCOPE_REQUIRED", "当前账号只能查看已授权连接的记录。");
         }
     }
 
     public void requireAnyConnection(ConnectionPermission permission) {
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
         WebIdentity identity = currentIdentity().orElse(null);
-        if (identity == null || "ADMIN".equals(identity.role())) return;
-        if (!repository.allowedConnectionIds(identity.userId(), permission).isEmpty()) return;
+        if (identity == null) return;
+        if ("ADMIN".equals(identity.role())) {
+            if (whitelist.isEmpty() || !repository.existingConnectionIds(whitelist.get()).isEmpty()) return;
+            audit.global(identity.username(), "CONNECTION_ACCESS_DENIED", "connections",
+                    "requiredPermission=" + permission.name() + ", reason=token_scope");
+            throw new ApiProblemException(HttpStatus.FORBIDDEN, "CONNECTION_ACCESS_DENIED",
+                    "当前访问令牌没有任何连接的" + permissionLabel(permission) + "权限。");
+        }
+        Set<Long> allowed = repository.allowedConnectionIds(identity.userId(), permission);
+        if (whitelist.isPresent()) allowed.retainAll(whitelist.get());
+        if (!allowed.isEmpty()) return;
         audit.global(identity.username(), "CONNECTION_ACCESS_DENIED", "connections",
                 "requiredPermission=" + permission.name());
         throw new ApiProblemException(HttpStatus.FORBIDDEN, "CONNECTION_ACCESS_DENIED",
@@ -254,10 +288,14 @@ public class ConnectionAccessService {
     }
 
     public List<BackupTask> visibleBackupTasks(List<BackupTask> tasks) {
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
         WebIdentity identity = currentIdentity().orElse(null);
-        if (identity == null || "ADMIN".equals(identity.role())) return tasks;
+        List<BackupTask> scoped = whitelist.isEmpty()
+                ? tasks
+                : tasks.stream().filter(task -> whitelist.get().contains(task.connectionId())).toList();
+        if (identity == null || "ADMIN".equals(identity.role())) return scoped;
         Set<Long> allowed = repository.allowedConnectionIds(identity.userId(), ConnectionPermission.BACKUP_RESTORE);
-        return tasks.stream().filter(task -> allowed.contains(task.connectionId())).toList();
+        return scoped.stream().filter(task -> allowed.contains(task.connectionId())).toList();
     }
 
     public ConnectionPermission permissionFor(SqlStatementClassifier.Kind kind) {
@@ -269,10 +307,14 @@ public class ConnectionAccessService {
     }
 
     public List<ConnectionResponse> visibleConnections(List<ConnectionResponse> connections) {
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
         WebIdentity identity = currentIdentity().orElse(null);
-        if (identity == null || "ADMIN".equals(identity.role())) return connections;
+        List<ConnectionResponse> scoped = whitelist.isEmpty()
+                ? connections
+                : connections.stream().filter(connection -> whitelist.get().contains(connection.id())).toList();
+        if (identity == null || "ADMIN".equals(identity.role())) return scoped;
         Set<Long> visible = repository.allowedConnectionIds(identity.userId());
-        return connections.stream().filter(connection -> visible.contains(connection.id())).toList();
+        return scoped.stream().filter(connection -> visible.contains(connection.id())).toList();
     }
 
     /**
@@ -283,6 +325,8 @@ public class ConnectionAccessService {
         if (connectionIds.size() > 500) throw new IllegalArgumentException("单次最多查询 500 条连接权限");
         Set<Long> requested = new LinkedHashSet<>(connectionIds);
         requested.remove(null);
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
+        if (whitelist.isPresent()) requested.retainAll(whitelist.get());
         if (requested.isEmpty()) return Map.of();
         WebIdentity identity = currentIdentity().orElse(null);
         List<ConnectionPermission> all = List.of(ConnectionPermission.values());
@@ -305,6 +349,8 @@ public class ConnectionAccessService {
     }
 
     public boolean can(long connectionId, ConnectionPermission permission) {
+        Optional<Set<Long>> whitelist = tokenConnectionWhitelist();
+        if (whitelist.isPresent() && !whitelist.get().contains(connectionId)) return false;
         WebIdentity identity = currentIdentity().orElse(null);
         return identity == null || "ADMIN".equals(identity.role())
                 || repository.hasAccess(connectionId, identity.userId(), permission);

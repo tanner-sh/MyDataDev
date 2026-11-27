@@ -15,4 +15,14 @@ public final class WebIdentityContext {
         return authentication != null && authentication.getPrincipal() instanceof WebIdentity identity
                 ? Optional.of(identity) : Optional.empty();
     }
+
+    public static Optional<AccessTokenAuthentication> currentAccessToken() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication instanceof AccessTokenAuthentication pat
+                ? Optional.of(pat) : Optional.empty();
+    }
+
+    public static boolean isAccessTokenRequest() {
+        return currentAccessToken().isPresent();
+    }
 }

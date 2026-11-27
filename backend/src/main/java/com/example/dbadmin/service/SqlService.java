@@ -95,6 +95,71 @@ public class SqlService {
         return executeBound(connectionId, sql, requestedMaxRows, actor, executionId, productionConfirmation, schemaName, unscopedMutationConfirmed, null, null);
     }
 
+    /**
+     * 明确的只读单语句查询路径：拒绝任何非查询语句，并在强制只读/回滚事务范围内执行，
+     * 同时保留生产连接确认、执行取消注册、审计与历史记录。
+     */
+    public SqlResult executeReadOnlyQuery(
+            long connectionId,
+            String sql,
+            Integer requestedMaxRows,
+            String actor,
+            String executionId,
+            String productionConfirmation,
+            String schemaName
+    ) throws Exception {
+        String executionSql = singleStatement(connectionId, sql, "只读查询");
+        if (classifier.classify(executionSql) != SqlStatementClassifier.Kind.QUERY) {
+            throw new ApiProblemException(
+                    HttpStatus.BAD_REQUEST,
+                    "READONLY_QUERY_REQUIRED",
+                    "只读查询接口仅允许执行单条 SELECT/SHOW/EXPLAIN 查询，写操作请使用 sql exec。"
+            );
+        }
+        DbConnection dbConnection = connections.require(connectionId);
+        executionGuard.requireQueryAllowed(dbConnection, SqlStatementClassifier.Kind.QUERY, productionConfirmation);
+        int maxRows = normalizeMaxRows(requestedMaxRows);
+        long started = System.nanoTime();
+        try (Connection connection = openConnection(connectionId, schemaName);
+             ReadOnlyQueryScope ignored = ReadOnlyQueryScope.begin(connection, true);
+             Statement statement = connection.createStatement();
+             var cancellation = RequestCancellation.watch(statement)) {
+            DatabaseDialect dialect = dialectRegistry.dialectFor(dbConnection);
+            dialect.configureReadStatement(connection, statement, Math.min(maxRows + 1, 500), properties.getSql().getTimeoutSeconds());
+            statement.setMaxRows(maxRows + 1);
+            String registeredId = executions.register(executionId, connectionId, statement);
+            try {
+                RequestCancellation.check();
+                boolean hasResult = statement.execute(executionSql);
+                if (!hasResult) {
+                    throw new ApiProblemException(
+                            HttpStatus.BAD_REQUEST,
+                            "READONLY_QUERY_REQUIRED",
+                            "只读查询未返回结果集，已拒绝该语句。"
+                    );
+                }
+                audit.onConnection(actor, "SQL_QUERY", connectionId, abbreviate(sql));
+                try (ResultSet rs = statement.getResultSet()) {
+                    SqlResult result = SqlResultReader.withColumnSources(
+                            SqlResultReader.readResult(rs, started, maxRows, dialect),
+                            rs, connection, dbConnection, connectionId, schemaName, executionSql, dialect
+                    );
+                    history.insert(connectionId, sql, "QUERY", "SUCCESS", result.elapsedMs(), null, actor);
+                    metrics.success(SqlExecutionMetrics.KIND_QUERY, started);
+                    return result;
+                }
+            } catch (Exception error) {
+                throw executions.translateCancel(registeredId, statement, error);
+            } finally {
+                executions.unregister(registeredId, statement);
+            }
+        } catch (Exception e) {
+            history.insert(connectionId, sql, "QUERY", "FAILED", elapsed(started), error(e), actor);
+            metrics.failure(SqlExecutionMetrics.KIND_QUERY, started, e);
+            throw e;
+        }
+    }
+
     /** MCP 的 db_execute 走这里：超时由 MCP 设置决定，其余（生产确认、审计、历史、缓存失效）与界面同一条路。 */
     public SqlResult execute(long connectionId, String sql, Integer requestedMaxRows, String actor, String executionId, String productionConfirmation,
                              String schemaName, boolean unscopedMutationConfirmed, int timeoutSeconds) throws Exception {

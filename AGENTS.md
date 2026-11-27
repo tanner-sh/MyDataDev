@@ -14,6 +14,8 @@
   - `src/components`：页面和复用组件。
   - `src/api.ts`、`src/types.ts`、`src/utils.ts`：客户端公共能力。
   - `src/styles.css`：全局布局和组件样式。
+- `desktop/`：Electron 桌面外壳与打包脚本。
+- `cli/`：TypeScript 命令行客户端（`@mydatadev/cli`，命令 `mdd`）。
 
 ## 构建、测试与本地开发命令
 
@@ -49,6 +51,8 @@ npm run build         # TypeScript 检查并构建生产资源
 ```bash
 cd backend && mvn test
 cd frontend && npm run build
+cd cli && npm test && npm run build
+cd desktop && npm test && npm run build:main
 ```
 
 同一组命令由 `.github/workflows/ci.yml` 在每次推送与每个 PR 上再跑一遍（后端测试、前端测试与构建、桌面端测试与主进程构建）。本地先跑是为了早点知道结果，不是为了替代 CI。
