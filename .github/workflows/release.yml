@@ -151,10 +151,45 @@ jobs:
           path: release-assets/*
           if-no-files-found: error
 
+  cli-pack:
+    name: CLI 离线安装包
+    needs: verify-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MYDATADEV_RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify-ci.outputs.commit }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - name: 校验版本并打包 CLI tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          node desktop/scripts/check-versions.mjs
+          (cd cli && npm ci && npm test && npm run build)
+          mkdir -p release-assets
+          version=$(node -p "require('./cli/package.json').version")
+          tgz=$(cd cli && npm pack --silent | tail -n 1)
+          mv "cli/$tgz" "release-assets/MyDataDev-${version}-cli.tgz"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mydatadev-cli
+          path: release-assets/*
+          if-no-files-found: error
+
   release:
     name: 创建 GitHub Release
     if: github.ref_type == 'tag'
-    needs: [verify-ci, build, web]
+    needs: [verify-ci, build, web, cli-pack]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -215,3 +250,45 @@ jobs:
               --notes-file "$RUNNER_TEMP/release-notes.md" \
               --title "MyDataDev $RELEASE_TAG"
           fi
+
+  publish-cli:
+    name: 发布 @mydatadev/cli 到 npm
+    if: github.ref_type == 'tag'
+    needs: [verify-ci, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # 仅此发布作业申请 OIDC 令牌用于 npm Trusted Publishing，无需长期保存 NPM_TOKEN。
+      id-token: write
+    env:
+      MYDATADEV_RELEASE_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify-ci.outputs.commit }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+
+      - name: 升级 npm CLI 以满足 Trusted Publishing 要求
+        run: npm install -g npm@latest
+
+      - name: 校验版本、构建并发布到 npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          node desktop/scripts/check-versions.mjs
+          cd cli
+          npm ci
+          npm test
+          npm run build
+          dist_tag="latest"
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            dist_tag="next"
+          fi
+          npm publish --provenance --access public --tag "$dist_tag"

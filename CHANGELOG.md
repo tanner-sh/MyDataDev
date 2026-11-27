@@ -6,6 +6,22 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-27
+
+### 新增
+
+- 新增官方命令行工具 MyDataDev CLI（`@mydatadev/cli`，命令 `mdd`），与 Web 和桌面版同层维护，支持交互模式（`mdd` / `mdd repl`）和单次命令（`status`、`login/logout/profile`、`conn`、`sql query|exec|explain`、`meta`、`export`、`api`），支持 `table`/`json`/`ndjson`/`csv` 输出和语义化退出码。
+- 桌面版安装包内置 `mdd`（复用 Electron 自带 Node 运行时），启动后写入受保护的本机 runtime 发现文件，托盘提供「安装命令行工具 mdd」，Windows Squirrel 安装与升级自动维护不随版本号变化的 `bin\mdd.cmd` 中转脚本与用户级 `PATH`。
+- 后端新增个人访问令牌（PAT，格式 `mdd_pat_<id>_<secret>`）与连接白名单（与账号权限取交集，支持拦截共享连接）、独立无状态 PAT 安全链、`GET /api/system/info`、`GET /api/auth/whoami` 和强制只读的 `POST /api/sql/query` 接口；审计日志自动归属 `via=cli, token=<id>`。
+- Web 顶栏新增「个人访问令牌（CLI）」管理弹窗，用户管理面板新增管理员查看与一键吊销全部用户令牌的视图。
+- 新增 `scripts/cli-smoke.mjs` 端到端冒烟、CI 三平台 CLI 矩阵及发布工作流中的离线 `.tgz` 与 npm Trusted Publishing 自动发布作业。
+
+### 升级注意
+
+- 启动时由 Flyway 执行 V32，新增 `app_access_token` 与 `app_access_token_connection` 两张元数据库表。升级前请备份数据目录及主密钥，降级时恢复升级前备份。
+- 独立安装 `@mydatadev/cli` 需要 Node.js >= 22；已安装桌面版的用户可直接使用内置 `mdd`，无需额外安装 Node。
+- 团队 Web 部署若启用了 OIDC/SSO，身份平台的角色与分组变更在下次 SSO 登录时同步；如需立刻收回某个 CLI 令牌的权限，请由管理员在 Web 端直接吊销令牌。
+
 ## [0.10.2] - 2026-11-24
 
 ### 新增

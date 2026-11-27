@@ -86,11 +86,11 @@ public class AuditRepository {
 
     private void write(String actor, String action, Long connectionId, String target, String detail) {
         // 参数在提交时就截断并固定下来，后台线程不再依赖调用方的任何可变状态。
+        AuditRequestContext context = AuditRequestContext.current();
         String safeActor = truncate(actor == null || actor.isBlank() ? "anonymous" : actor, 120);
         String safeAction = truncate(action, 80);
         String safeTarget = truncate(target, 500);
-        String safeDetail = truncate(detail, 100_000);
-        AuditRequestContext context = AuditRequestContext.current();
+        String safeDetail = truncate(enrichDetail(detail, context), 100_000);
         String remoteAddress = truncate(context == null ? null : context.remoteAddress(), 120);
         String forwardedFor = truncate(context == null ? null : context.forwardedFor(), 500);
         String userAgent = truncate(context == null ? null : context.userAgent(), 1_000);
@@ -360,6 +360,18 @@ public class AuditRepository {
     private String truncate(String value, int maximumLength) {
         if (value == null || value.length() <= maximumLength) return value;
         return value.substring(0, maximumLength);
+    }
+
+    private static String enrichDetail(String detail, AuditRequestContext context) {
+        if (context == null) return detail;
+        String suffix = null;
+        if ("cli".equals(context.channel()) && context.tokenId() != null) {
+            suffix = "via=cli, token=" + context.tokenId();
+        } else if (context.clientDeclared() != null && !"mcp".equals(context.channel())) {
+            suffix = "via=" + context.clientDeclared() + " [client-declared]";
+        }
+        if (suffix == null) return detail;
+        return detail == null || detail.isBlank() ? suffix : detail + "; " + suffix;
     }
 
     /** 审计查询条件。所有字段都已归一化：空串一律转成 null。 */

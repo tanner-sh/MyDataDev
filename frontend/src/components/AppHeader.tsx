@@ -2,6 +2,7 @@ import { Badge, Button, Dropdown, Select, Space, Tag, Tooltip, Typography } from
 import {
   CloudServerOutlined,
   DatabaseOutlined,
+  KeyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MoonOutlined,
@@ -33,6 +34,8 @@ type AppHeaderProps = {
   onSelectConnection: (connection: Connection) => void;
   /** 打开管理抽屉（默认落在连接管理）。 */
   onOpenManagement: () => void;
+  /** 打开当前用户的个人访问令牌（CLI）管理弹窗。 */
+  onOpenAccessTokens?: () => void;
   /** 根据运行中的任务类型打开对应页面。 */
   onOpenBackgroundTasks: (kind: BackgroundTaskKind) => void;
   onToggleTheme: () => void;
@@ -61,6 +64,7 @@ export const AppHeader = memo(function AppHeader({
   onToggleExplorer,
   onSelectConnection,
   onOpenManagement,
+  onOpenAccessTokens,
   onOpenBackgroundTasks,
   onToggleTheme,
   toolbarSlotRef,
@@ -191,6 +195,11 @@ export const AppHeader = memo(function AppHeader({
             onClick={onToggleTheme}
           />
         </Tooltip>
+        {isAuthenticationEnabled() && onOpenAccessTokens && (
+          <Tooltip title="个人访问令牌（CLI）">
+            <Button type="text" className="header-icon-button" icon={<KeyOutlined />} aria-label="访问令牌" onClick={onOpenAccessTokens} />
+          </Tooltip>
+        )}
         {isAuthenticationEnabled() && (
           <Tooltip title={`${authenticatedDisplayName()}（${authenticatedUsername()}），点击退出`}>
             <Button type="text" className="header-icon-button" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => void logout()} />

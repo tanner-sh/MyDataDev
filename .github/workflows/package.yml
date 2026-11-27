@@ -61,6 +61,7 @@ jobs:
           cache-dependency-path: |
             frontend/package-lock.json
             desktop/package-lock.json
+            cli/package-lock.json
 
       - uses: actions/setup-java@v6
         with:
@@ -98,6 +99,10 @@ jobs:
       - name: 安装桌面端依赖
         run: npm ci
         working-directory: desktop
+
+      - name: 安装 CLI 依赖
+        run: npm ci
+        working-directory: cli
 
       - name: 安装 Linux 打包工具
         if: runner.os == 'Linux'

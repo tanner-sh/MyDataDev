@@ -69,6 +69,7 @@ spring:
           # Leave the optional server-to-client ping scheduler disabled.
 
 app:
+  version: '@project.version@'
   crypto-key-source: FILE
   crypto-key-file: ./secrets/mydatadev-master.key
   auth:

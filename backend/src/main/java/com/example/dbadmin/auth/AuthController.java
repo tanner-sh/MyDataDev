@@ -49,6 +49,38 @@ public class AuthController {
         return authStatus(authenticated, identity, csrfToken);
     }
 
+    @GetMapping("/whoami")
+    public com.example.dbadmin.dto.AccessTokenDtos.WhoAmIResponse whoAmI(Authentication authentication) {
+        if (!authenticationService.enabled()) {
+            return new com.example.dbadmin.dto.AccessTokenDtos.WhoAmIResponse(
+                    true, "DISABLED", "admin", "admin", "ADMIN", null, null, null, null
+            );
+        }
+        if (authentication instanceof AccessTokenAuthentication pat) {
+            WebIdentity id = pat.getPrincipal();
+            return new com.example.dbadmin.dto.AccessTokenDtos.WhoAmIResponse(
+                    true,
+                    "PAT",
+                    id.username(),
+                    id.displayName(),
+                    id.role(),
+                    pat.tokenId(),
+                    pat.tokenName(),
+                    pat.connectionScope(),
+                    pat.isListedScope() ? pat.allowedConnectionIds().stream().sorted().toList() : null
+            );
+        }
+        WebIdentity id = identity(authentication);
+        if (id == null) {
+            return new com.example.dbadmin.dto.AccessTokenDtos.WhoAmIResponse(
+                    false, "NONE", null, null, null, null, null, null, null
+            );
+        }
+        return new com.example.dbadmin.dto.AccessTokenDtos.WhoAmIResponse(
+                true, "SESSION", id.username(), id.displayName(), id.role(), null, null, null, null
+        );
+    }
+
     @PostMapping("/login")
     public ResponseEntity<?> login(
             @Valid @RequestBody LoginRequest request,

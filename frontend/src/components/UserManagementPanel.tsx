@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
+import { Alert, Button, Divider, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { api } from '../api';
 import { authenticatedUsername } from '../auth';
+import type { AccessTokenItem } from '../types';
 import type { WebUser, WebUserForm } from '../users';
 import { formatDateTime } from '../utils';
 
@@ -10,6 +11,7 @@ const { Text } = Typography;
 
 export function UserManagementPanel() {
   const [users, setUsers] = useState<WebUser[]>([]);
+  const [tokens, setTokens] = useState<AccessTokenItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<WebUser | 'new'>();
@@ -22,7 +24,12 @@ export function UserManagementPanel() {
     setLoading(true);
     setError('');
     try {
-      setUsers(await api<WebUser[]>('/admin/users'));
+      const [userList, tokenList] = await Promise.all([
+        api<WebUser[]>('/admin/users'),
+        api<AccessTokenItem[]>('/admin/tokens')
+      ]);
+      setUsers(userList);
+      setTokens(tokenList);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '用户列表加载失败');
     } finally {
@@ -80,6 +87,16 @@ export function UserManagementPanel() {
     }
   }
 
+  async function revokeToken(token: AccessTokenItem) {
+    try {
+      await api<void>(`/admin/tokens/${token.id}`, { method: 'DELETE' });
+      messageApi.success(`已吊销令牌「${token.name}」`);
+      await load();
+    } catch (cause) {
+      messageApi.error(cause instanceof Error ? cause.message : '令牌吊销失败');
+    }
+  }
+
   return (
     <div className="management-section user-management-panel">
       {messageContext}
@@ -115,6 +132,80 @@ export function UserManagementPanel() {
                 <Button type="link" size="small" danger disabled={user.username === currentUsername || user.provider !== 'LOCAL'}>删除</Button>
               </Popconfirm>
             </Space>
+          }
+        ]}
+      />
+      <Divider style={{ margin: '16px 0 12px' }} />
+      <header className="management-section-header">
+        <div>
+          <Text strong>CLI 访问令牌（全部用户）</Text>
+          <div><Text type="secondary">管理员可查看全部用户的个人访问令牌并随时吊销。</Text></div>
+        </div>
+      </header>
+      <Table<AccessTokenItem>
+        rowKey="id"
+        size="small"
+        loading={loading}
+        dataSource={tokens}
+        pagination={false}
+        scroll={{ x: 820 }}
+        columns={[
+          {
+            title: '所属用户',
+            dataIndex: 'username',
+            width: 140,
+            render: (_, item) => <Text strong>{item.username || `#${item.userId}`}</Text>
+          },
+          {
+            title: '令牌名称 / ID',
+            dataIndex: 'name',
+            width: 170,
+            render: (_, item) => (
+              <Space orientation="vertical" size={0}>
+                <Text>{item.name}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{item.id}</Text>
+              </Space>
+            )
+          },
+          {
+            title: '范围',
+            dataIndex: 'connectionScope',
+            width: 130,
+            render: (_, item) =>
+              item.connectionScope === 'ALL'
+                ? <Tag color="gold">全部连接</Tag>
+                : <Tag color="blue">{item.connectionIds.length} 条指定连接</Tag>
+          },
+          {
+            title: '状态',
+            dataIndex: 'active',
+            width: 90,
+            render: (_, item) =>
+              item.revokedAt ? <Tag>已吊销</Tag> : item.active ? <Tag color="green">生效中</Tag> : <Tag>已过期</Tag>
+          },
+          { title: '过期时间', dataIndex: 'expiresAt', width: 150, render: (value: string) => formatDateTime(value) },
+          {
+            title: '最近使用',
+            dataIndex: 'lastUsedAt',
+            width: 150,
+            render: (_, item) => item.lastUsedAt ? formatDateTime(item.lastUsedAt) : '未使用'
+          },
+          {
+            title: '操作',
+            key: 'actions',
+            width: 80,
+            fixed: 'right',
+            render: (_, item) => (
+              <Popconfirm
+                title={`吊销 ${item.username || item.userId} 的令牌「${item.name}」？`}
+                okText="吊销"
+                cancelText="取消"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => void revokeToken(item)}
+              >
+                <Button type="link" size="small" danger disabled={Boolean(item.revokedAt)}>吊销</Button>
+              </Popconfirm>
+            )
           }
         ]}
       />

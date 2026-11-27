@@ -8,6 +8,7 @@ const projectDirectory = path.resolve(desktopDirectory, '..');
 
 const desktopPackage = JSON.parse(await readFile(path.join(desktopDirectory, 'package.json'), 'utf8'));
 const frontendPackage = JSON.parse(await readFile(path.join(projectDirectory, 'frontend', 'package.json'), 'utf8'));
+const cliPackage = JSON.parse(await readFile(path.join(projectDirectory, 'cli', 'package.json'), 'utf8'));
 const pom = await readFile(path.join(projectDirectory, 'backend', 'pom.xml'), 'utf8');
 const backendVersion = pom.match(/<artifactId>web-db-admin<\/artifactId>\s*<version>([^<]+)<\/version>/)?.[1];
 const expected = desktopPackage.version;
@@ -15,6 +16,7 @@ const expected = desktopPackage.version;
 const versions = {
   desktop: expected,
   frontend: frontendPackage.version,
+  cli: cliPackage.version,
   backend: backendVersion
 };
 for (const [component, version] of Object.entries(versions)) {

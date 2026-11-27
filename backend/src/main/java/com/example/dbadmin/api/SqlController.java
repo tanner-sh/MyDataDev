@@ -54,6 +54,18 @@ public class SqlController {
         return sqlService.execute(request.connectionId(), request.sql(), request.maxRows(), actor, request.executionId(), productionConfirmation, request.schemaName(), request.unscopedMutationConfirmed());
     }
 
+    /** 明确的只读查询入口（供 CLI `sql query` 等场景使用）：在服务端强制只读范围并拒绝写入/DDL，同时保留生产确认与取消语义。 */
+    @PostMapping("/query")
+    public SqlResult query(
+            @Valid @RequestBody SqlRequest request,
+            @RequestHeader(value = "X-User", required = false) String actor,
+            @RequestHeader(value = "X-Production-Confirmation", required = false) String productionConfirmation
+    ) throws Exception {
+        access.require(request.connectionId(), ConnectionPermission.QUERY);
+        return sqlService.executeReadOnlyQuery(request.connectionId(), request.sql(), request.maxRows(), actor,
+                request.executionId(), productionConfirmation, request.schemaName());
+    }
+
     @PostMapping("/parameters")
     public java.util.List<String> parameters(@Valid @RequestBody com.example.dbadmin.dto.ApiDtos.SqlParameterParseRequest request) {
         return com.example.dbadmin.service.SqlParameters.parse(request.sql(), request.dbType()).names();

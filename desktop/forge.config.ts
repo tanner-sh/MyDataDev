@@ -50,9 +50,12 @@ const config: ForgeConfig = {
       ignoredEntry('tsconfig.json')
     ],
     icon,
+    // 注意：内置 CLI（resources/cli/bin/mdd）通过 ELECTRON_RUN_AS_NODE=1 复用 Electron 自带的 Node 运行时。
+    // 当前未关闭 RunAsNode fuse；若未来出于安全加固关闭该 fuse，必须把 resources/cli 改为独立打包的 SEA 二进制。
     extraResource: [
       path.join(directory, 'resources', 'backend'),
       path.join(directory, 'resources', 'runtime'),
+      path.join(directory, 'resources', 'cli'),
       path.join(directory, 'assets', 'icon.png')
     ]
   },
