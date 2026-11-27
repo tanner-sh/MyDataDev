@@ -11,7 +11,7 @@ const MAX_REDIRECTS = 3;
 declare const __MDD_VERSION__: string | undefined;
 
 export function cliVersion(): string {
-  return typeof __MDD_VERSION__ === 'string' ? __MDD_VERSION__ : '1.0.0';
+  return typeof __MDD_VERSION__ === 'string' ? __MDD_VERSION__ : '1.0.1';
 }
 
 export interface RequestOptions {
